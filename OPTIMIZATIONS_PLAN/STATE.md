@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for the CP3 review-and-fix session; apply verdicts, then start CP4 at T14.
-* Active checkpoint: CP3 (`in_progress` — review session running).
+* Next action: start CP4 — pick the first `todo` task (T14) and spawn its implementing session.
+* Active checkpoint: none (CP3 `done`; CP4 `open`).
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -34,11 +34,11 @@ commit ranges only.
 | T06 | Consolidate gircap captures + shared bundle | completed | CP2 | CP2 review: completed |
 | T07 | Hand-build minimal bundles for delete-a-doc | completed | CP2 | CP2 review: completed |
 | T08 | Cache gircap byte tables + shrink chunk | completed | CP2 | CP2 review: completed (partial scope accepted; old.blk shrink deferred to F15) |
-| T09 | Cut sled2redb spelling test 8 → 2–3 | pending_review | CP3 | 37d11fb5; see review range |
-| T10 | Drop sled2redb flush + redundant reopens | pending_review | CP3 | 2 commits fea93769..f342d32e; product flush removal + test reopens |
-| T11 | Replace girsync publish fixed sleeps | pending_review | CP3 | 2 commits fa3546dd..f7eb3995; see review range |
-| T12 | Replace girpr panic-ordering sleep | pending_review | CP3 | c33dfe0e; see review range |
-| T13 | Add gircap zero-backoff retry hook | pending_review | CP3 | 2 commits 4fdde5e4..1fe87a27; see review range |
+| T09 | Cut sled2redb spelling test 8 → 2–3 | completed | CP3 | CP3 review: completed |
+| T10 | Drop sled2redb flush + redundant reopens | completed | CP3 | CP3 review: completed (product flush removal validated) |
+| T11 | Replace girsync publish fixed sleeps | completed | CP3 | CP3 review: completed |
+| T12 | Replace girpr panic-ordering sleep | completed | CP3 | CP3 review: completed |
+| T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
 | T14 | Reduce girpr trace-level logging | todo | CP4 | |
 | T15 | Remove girpr `--help`/argument spawns | todo | CP4 | |
 | T16 | Consolidate girpr multi-run parity tests | todo | CP4 | |
@@ -53,7 +53,7 @@ commit ranges only.
 |---|---|---|---|
 | CP1 | T01–T05 | done | girsync fixtures & cache backend |
 | CP2 | T06–T08 | done | gircap capture consolidation & fixtures |
-| CP3 | T09–T13 | in_progress | sled2redb conversions & fixed sleeps |
+| CP3 | T09–T13 | done | sled2redb conversions & fixed sleeps |
 | CP4 | T14–T18 | open | girpr spawns, logging & redundant merges |
 | CP5 | T19–T20 | open | ignored tests & final guardrail audit |
 
@@ -71,11 +71,11 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T06 | `575c7ed0..9096e118` | completed |
 | T07 | `a1de5165..81988899` | completed |
 | T08 | `66ac441b..6bcd4b87` | completed (partial accepted) |
-| T09 | `0c7e0b20..37d11fb5` | — |
-| T10 | `aa9c1add..f342d32e` | — |
-| T11 | `fa0a7687..f7eb3995` | — |
-| T12 | `326acea9..c33dfe0e` | — |
-| T13 | `fbf8d14c..1fe87a27` | — |
+| T09 | `0c7e0b20..37d11fb5` | completed |
+| T10 | `aa9c1add..f342d32e` | completed |
+| T11 | `fa0a7687..f7eb3995` | completed |
+| T12 | `326acea9..c33dfe0e` | completed |
+| T13 | `fbf8d14c..1fe87a27` | completed |
 
 ## Follow-ups
 
@@ -100,14 +100,14 @@ are done and a review session has decided the batches.
 | F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | proposed | CP2 review: KEEP — dedupe the two minimal-bundle writers. |
 | F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | proposed | CP2 review: KEEP — the deferred old.blk shrink. |
 | F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | proposed | CP2 review: KEEP — relevant to CPU-bound gircap. |
-| F18 | In-process spelling check relies on the hand-built `the_converter_command()` mirror; if the binary's `Args` derive drifts from the mirror without affecting `--help`, the pin won't catch it. An authoritative in-process parse would expose/move `Args` from `main.rs` into the library (product change). | T09 implementer | proposed | Out of T09 scope; reviewer decides. |
-| F19 | Removing the one remaining ~200 ms reopen in `convert_sled_dir_to_redb_file` would require exposing written records or accepting a caller-provided handle in the converter's product API. | T10 implementer | proposed | Recommend leaving it as the contract test; reviewer decides. |
-| F20 | Capture actual before/after nextest timing for the sled2redb suite to confirm the reopen savings (report's P1 estimate bundled this with T09). | T10 implementer | proposed | Optional measurement; reviewer decides. |
-| F21 | Extend the T11 one-shot gate to carry a "claim created" notification so `wait_for_published` becomes fully event-driven instead of polling 100x10 ms (not dead time, but returns eagerly). | T11 implementer | proposed | Minor; reviewer decides. |
-| F22 | T12's `FILE_PANIC_GATE` is a `thread_local` relying on `#[tokio::test]`'s current-thread runtime; a multi_thread flavor would hide the gate. Consider a runtime-flavor-independent hook if such a change is anticipated. | T12 implementer | proposed | Reviewer decides. |
-| F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | proposed | Reviewer decides. |
-| F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | proposed | Reviewer decides. |
-| F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | proposed | Reviewer decides. |
+| F18 | In-process spelling check relies on the hand-built `the_converter_command()` mirror; if the binary's `Args` derive drifts from the mirror without affecting `--help`, the pin won't catch it. An authoritative in-process parse would expose/move `Args` from `main.rs` into the library (product change). | T09 implementer | removed | CP3 review: drift gap narrow (help pin + in-process asserts + 2 end-to-end conversions); moving Args into library disproportionate. |
+| F19 | Removing the one remaining ~200 ms reopen in `convert_sled_dir_to_redb_file` would require exposing written records or accepting a caller-provided handle in the converter's product API. | T10 implementer | removed | CP3 review: conflicts with accepted T10 design (one reopen is the round-trip contract); not worth product-API change. |
+| F20 | Capture actual before/after nextest timing for the sled2redb suite to confirm the reopen savings (report's P1 estimate bundled this with T09). | T10 implementer | removed | CP3 review: moot — report deleted at completion; speedup already demonstrated. |
+| F21 | Extend the T11 one-shot gate to carry a "claim created" notification so `wait_for_published` becomes fully event-driven instead of polling 100x10 ms (not dead time, but returns eagerly). | T11 implementer | removed | CP3 review: polling is bounded, non-dead-time; marginal. |
+| F22 | T12's `FILE_PANIC_GATE` is a `thread_local` relying on `#[tokio::test]`'s current-thread runtime; a multi_thread flavor would hide the gate. Consider a runtime-flavor-independent hook if such a change is anticipated. | T12 implementer | removed | CP3 review: speculative runtime-flavor change; gate fails loudly (5 s timeout) if flipped, so no silent gap. |
+| F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | removed | CP3 review: literal is established across hyp.rs/stream.rs/retry.rs; exposing private const marginal. |
+| F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | proposed | CP3 review: KEEP — guards a real acceptance criterion (broken hook would still pass, just 500 ms slower). |
+| F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | proposed | CP3 review: KEEP — cheap unit test for production-safety criterion. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -129,3 +129,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T11 implemented: in `cache/open.rs`, replaced `PUBLISH_PAUSED` thread-local + 500 ms sleep in `pause_publish()` with a test-only `#[cfg(test)]` one-shot mpsc gate; the four publish tests release the sender only after observing the claim (dropped sender on panic prevents hangs). In `cache/write.rs`, replaced the 150 ms interval sleep with a `#[cfg(test)]` `backdate_last_commit` hook. Production behavior untouched. The 5 affected tests passed 10/10 consecutive runs (~0.2-0.3 s each, down from ~2 s); full 24-test cache filter passed. Report's 300 ms girpr panic sleep (T12) and 500 ms gircap retry sleep (T13) are separate tasks, untouched.
 * T12 implemented (commit c33dfe0e): both sleeps validated present first. In `src/repair/file/mod.rs`, replaced the 300 ms tokio sleep in `a_panic_is_observed_before_a_slower_earlier_task` with a `#[cfg(test)]` oneshot gate — the join loop signals on observing a panicked task, task 0 waits; 5 s timeout + dropped sender prevent hangs. In `src/repair/phases/manifest.rs`, removed the 5 ms `ShortSleep` struct/impl and unused `SleepFuture` import, switched test to `NoSleep`, added an "after 5 attempts" error-chain assertion. Only test-only timing paths in product files changed. 2 affected tests 10/10, full girpr --lib 453 pass/0 fail/2 ignored, clippy -D warnings clean. Product change touches test-only paths — reviewer to scrutinize.
 * T13 implemented (2 commits): validated code matched report. Added `ZeroSleep` sleeper in `http/transport.rs` (exported from `http/mod.rs`) returning an immediately-ready future; default-off test-only env hook `GIRCAP_TEST_ZERO_BACKOFF=1` read in `run::capture` selects `Fetcher::with_sleeper(..., ZeroSleep)` instead of `Fetcher::new(..., RealSleep)` (deliberately not cfg(test) so it works on the spawned binary). Retry test sets the hook only on its own child via new `run_with_env`/`capture_with_env` helpers; 503/retry + request-log assertions intact. Production RetryPolicy (500 ms) and Fetcher::new untouched. capture_layout 37/37, fmt clean. Product code changed (test-only default-off hook) — reviewer to scrutinize.
+* CP3 review done (no fix/revert commits; tree clean at `7308c6f1`): verdicts T09–T13 all `completed`. Product changes in T10 (flush removal), T11/T12 (test-only cfg hooks), T13 (default-off env hook) all validated: production behavior/backoff/durability unchanged, deterministic gates, no flakiness (repeated runs). Suites re-run: convert 17/17, sled2redb 17/17, cache 89/89, girpr --lib 453/453, capture_layout 37/37. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25. Removed: F18, F19, F20, F21, F22, F23 (reasons in table). No new follow-ups.
