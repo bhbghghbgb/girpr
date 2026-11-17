@@ -10,11 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T04** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T04** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop. T04 is the last task in
+  CP2, so on success run the CP2 review checkpoint before starting T05.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 review done.
-* Active checkpoint: CP2 (`open`). Status: T03 `pending_review`, T04 `todo`.
+* Active checkpoint: CP2 (`open`). Status: T03 `pending_review`, T04 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -35,7 +35,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | completed | P0 | CP1 | impl `a0a45fc8`; CP1 review confirmed completed. 19 self-tests → 4 tables (49→34), all cases preserved (several assertions strengthened); no product/process/golden code touched. |
 | T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
 | T03 | Consolidate remaining low-risk root-unit cases | pending_review | P0 | CP2 | commits `5e8d593f..185cfa4c` (3 test-only bullets done). REVIEW FLAG: implementer kept the `live_count` column in the reuse table (derivable from `live`, only non-redundant for all-dead rows) to preserve the original explicit assertion — reviewer may judge it unnecessary. |
-| T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
+| T04 | Table-drive sync hash dedup/order asserts | in_progress | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
 | T06 | sled2redb removes + usage-error parametrization | todo | P0 | CP3 | |
 | T07 | `crates/log` + `tempdir` low-risk merges | todo | P0 | CP3 | |
