@@ -84,26 +84,79 @@ impl BundleVariant {
     }
 }
 
+/// FNV-1a 64 over a sequence of bytes. A few lines, no dependency, and enough
+/// spread to key a temp directory on. Only change detection matters here, not
+/// cryptographic use.
+fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ byte as u64).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Collect every Rust source file under `dir` (recursively) into `out`.
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Fingerprint of the capture product source: every `.rs` under `src/` plus the
+/// crate manifest, keyed by relative path and content.
+///
+/// The shared bundle is a capture of the current product code, so a change to
+/// what `capture` writes must invalidate it even when the test-side world is
+/// untouched. Paths are sorted so the hash never depends on directory iteration
+/// order, and the bytes come from the one source tree every process reads — the
+/// bundle is published under a cross-process file lock, so all processes must
+/// agree on the key.
+fn capture_source_key(manifest_dir: &Path) -> u64 {
+    let mut files = Vec::new();
+    collect_rs_files(&manifest_dir.join("src"), &mut files);
+    files.push(manifest_dir.join("Cargo.toml"));
+    files.sort();
+
+    let mut bytes = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(manifest_dir)
+            .expect("under the crate root");
+        bytes.extend_from_slice(rel.to_string_lossy().as_bytes());
+        bytes.push(0); // separator so path bytes cannot blend into content
+        let content =
+            std::fs::read(&file).unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+        bytes.extend_from_slice(&content);
+    }
+    fnv1a(bytes)
+}
+
 /// A stable key for the tree a variant is built from.
 ///
-/// The fingerprint is over this file, which is where [`World::all_shapes`]
-/// lives. If the world changes (a chunk shrinks, a file is added) the bundle is
-/// rebuilt rather than reusing a capture of the old world — a stale bundle is
-/// self-consistent, so `verify` would not notice it and only the assertions
-/// that assume the current world would silently drift. The format byte lets a
-/// future change to this fixture force a rebuild without touching the world.
+/// Two fingerprints are folded in. The first is over this file, which is where
+/// [`World::all_shapes`] lives: if the world changes (a chunk shrinks, a file is
+/// added) the bundle is rebuilt rather than reusing a capture of the old world —
+/// a stale bundle is self-consistent, so `verify` would not notice it and only
+/// the assertions that assume the current world would silently drift. The
+/// second is over the capture product source, so a change to what `capture`
+/// writes invalidates the bundle even when the world is untouched. The format
+/// byte lets a future change to this fixture force a rebuild without touching
+/// either source.
 fn bundle_source_key() -> String {
-    const FORMAT: u32 = 1;
-    let source = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"))
-        .expect("read the shared fixture's own source");
-    // FNV-1a 64: a few lines, no dependency, and enough spread to key a temp
-    // directory on. Only change detection matters here, not cryptographic use.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in source {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{FORMAT}-{hash:016x}")
+    const FORMAT: u32 = 2;
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let world = fnv1a(
+        std::fs::read(manifest_dir.join("tests/common/mod.rs"))
+            .expect("read the shared fixture's own source"),
+    );
+    let capture = capture_source_key(manifest_dir);
+    format!("{FORMAT}-{world:016x}-{capture:016x}")
 }
 
 /// A path into one capture written to a stable location on disk and shared by
