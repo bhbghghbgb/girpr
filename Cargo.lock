@@ -595,6 +595,7 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
+ "fs2",
  "girpr-log",
  "girpr-tempdir",
  "md-5",

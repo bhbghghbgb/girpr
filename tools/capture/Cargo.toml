@@ -78,6 +78,11 @@ chrono = { version = "0.4.45", features = ["clock"] }
 [dev-dependencies]
 # `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
 serde_json = "1.0.154"
+# The shared read-only bundle fixture (`tests/common/mod.rs`) takes a real
+# cross-process file lock so parallel `nextest` processes capture the default
+# bundle once and then all read the same on-disk tree. Already in the lock file
+# through `sled`; no new dependency is fetched.
+fs2 = "0.4.3"
 # The scratch-directory helper, shared with the repair binary and with
 # `girsync`: one name, one construction and one cleanup for every test in the
 # workspace. A dev-dependency, because nothing that ships creates a scratch

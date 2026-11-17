@@ -37,8 +37,209 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+use fs2::FileExt;
+use girpr_tempdir::TempDir;
+
+// ------------------------------------------------- the shared read-only bundle
+
+/// One capture variant, shared by every suite that reads "a document from the
+/// default bundle".
+///
+/// The three variants are kept distinct on purpose: a lower gzip threshold is a
+/// *different tree* (the rule fires where it does not at the default), and a
+/// raised decompression ceiling is a different recorded number. Reusing one
+/// variant's bundle to answer another's assertion would hide exactly the thing
+/// the assertion is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleVariant {
+    /// `World::all_shapes()` with no extra flags.
+    Default,
+    /// A threshold low enough that the gzip rule both fires and declines.
+    GzipThreshold,
+    /// A raised `max_decompressed_bytes` ceiling.
+    Ceiling,
+}
+
+impl BundleVariant {
+    fn key(self) -> &'static str {
+        match self {
+            BundleVariant::Default => "default",
+            BundleVariant::GzipThreshold => "gzip1000",
+            BundleVariant::Ceiling => "ceiling123456",
+        }
+    }
+
+    fn extra(self) -> &'static [&'static str] {
+        match self {
+            BundleVariant::Default => &[],
+            // Small enough to split a 1.5 KB manifest from a 400 B meta file.
+            BundleVariant::GzipThreshold => &["--gzip-threshold", "1000"],
+            BundleVariant::Ceiling => &["--max-decompressed-bytes", "123456"],
+        }
+    }
+}
+
+/// A stable key for the tree a variant is built from.
+///
+/// The fingerprint is over this file, which is where [`World::all_shapes`]
+/// lives. If the world changes (a chunk shrinks, a file is added) the bundle is
+/// rebuilt rather than reusing a capture of the old world — a stale bundle is
+/// self-consistent, so `verify` would not notice it and only the assertions
+/// that assume the current world would silently drift. The format byte lets a
+/// future change to this fixture force a rebuild without touching the world.
+fn bundle_source_key() -> String {
+    const FORMAT: u32 = 1;
+    let source = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"))
+        .expect("read the shared fixture's own source");
+    // FNV-1a 64: a few lines, no dependency, and enough spread to key a temp
+    // directory on. Only change detection matters here, not cryptographic use.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in source {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{FORMAT}-{hash:016x}")
+}
+
+/// A path into one capture written to a stable location on disk and shared by
+/// every test that asks for the same [`BundleVariant`].
+///
+/// `cargo nextest` runs each test in its own process, so a process-global
+/// `OnceLock` cannot share a capture: the processes never coexist. The sharing
+/// is therefore on disk. Whichever process takes a file lock first performs
+/// the one capture and publishes the finished tree by rename; every other
+/// process blocks on the same lock, sees a complete tree, and reads it. Under
+/// `cargo test` (one process, many threads) the same lock still serialises the
+/// first build, so both runners are race-free.
+///
+/// The tree is **read-only by contract**: no test writes into it. A test that
+/// must change a document copies the tree into its own scratch first. It is
+/// kept under [`girpr_tempdir::root`] so a leftover from a killed run is
+/// recognisable as this project's, and it is reused across runs rather than
+/// deleted — removal is what would race with a process still reading it.
+pub struct SharedBundle {
+    bundle: PathBuf,
+}
+
+impl Deref for SharedBundle {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.bundle
+    }
+}
+
+impl AsRef<Path> for SharedBundle {
+    fn as_ref(&self) -> &Path {
+        &self.bundle
+    }
+}
+
+/// Return the on-disk bundle for `variant`, capturing it first if nobody has.
+///
+/// The tree has the same shape as any default capture against
+/// [`World::all_shapes`], so every assertion that reads a document from a
+/// capture applies to it unchanged.
+pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
+    let key = format!("gircap-shared-{}-{}", variant.key(), bundle_source_key());
+    let root = girpr_tempdir::root();
+    std::fs::create_dir_all(&root).expect("create the shared fixture root");
+    let dir = root.join(&key);
+    let lock = root.join(format!("{key}.lock"));
+
+    let guard = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock)
+        .unwrap_or_else(|e| panic!("open {}: {e}", lock.display()));
+    guard
+        .lock_exclusive()
+        .unwrap_or_else(|e| panic!("lock {}: {e}", lock.display()));
+
+    // `checksums.json` is written in close-out, after every other document and
+    // after the tree is assembled: its presence means the capture finished.
+    // A tree with a manifest but no checksums is one a builder died halfway
+    // through, and is safe to clear while holding the lock.
+    let complete =
+        dir.join("MANIFEST.json").is_file() && dir.join("verify/checksums.json").is_file();
+    if !complete {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .unwrap_or_else(|e| panic!("clear {}: {e}", dir.display()));
+        }
+        let staging = TempDir::new("gircap-shared", variant.key());
+        let out = staging.join("artifacts");
+        let mock = Mock::start(World::all_shapes());
+        let out_arg = out.to_string_lossy().into_owned();
+        let mut argv: Vec<String> = vec![
+            "capture".into(),
+            "--out".into(),
+            out_arg,
+            "--hyp-base".into(),
+            mock.hyp_base(),
+            "--sophon-base".into(),
+            mock.sophon_base(),
+        ];
+        argv.extend(variant.extra().iter().map(|s| s.to_string()));
+        let borrowed: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+        capture_ok(&borrowed);
+        drop(mock);
+        let built = find_bundle(&out);
+        std::fs::rename(&built, &dir)
+            .unwrap_or_else(|e| panic!("publish {} to {}: {e}", built.display(), dir.display()));
+    }
+
+    guard
+        .unlock()
+        .unwrap_or_else(|e| panic!("unlock {}: {e}", lock.display()));
+    SharedBundle { bundle: dir }
+}
+
+/// Run `capture` and require it to succeed. Only the healthy variants are built
+/// through the shared fixture, so a non-zero exit is a broken fixture, not a
+/// result to interpret.
+fn capture_ok(args: &[&str]) {
+    let mut path = std::env::current_exe().expect("the test binary has a path");
+    path.pop();
+    if path.ends_with("deps") {
+        path.pop();
+    }
+    let out = std::process::Command::new(path.join("gircap.exe"))
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
+    assert!(
+        out.status.success(),
+        "shared capture failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The one bundle under `dir`, whichever way the layout nests it.
+fn find_bundle(dir: &Path) -> PathBuf {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        if d.join("MANIFEST.json").is_file() {
+            return d;
+        }
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            let mut subs: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            subs.sort();
+            stack.extend(subs.into_iter().rev());
+        }
+    }
+    panic!("no bundle under {}", dir.display());
+}
 
 // ---------------------------------------------------------------- the world
 
