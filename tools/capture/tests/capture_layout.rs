@@ -397,36 +397,17 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
 /// the same complaint. What matters here is that it is refused at all, and that
 /// the refusal names the file rather than leaving the operator to guess between
 /// five candidates.
+///
+/// `materialize` reads the bundle through the same door: without it the
+/// requirement would be `verify`-only, and `materialize` would happily rebuild
+/// and re-list a bundle that `verify` refuses — the shape of an inconsistency a
+/// reader meets as a bug in `verify`. Both commands are checked below.
 #[test]
 fn a_bundle_without_the_error_shapes_document_does_not_verify() {
     let (_scratch, bundle) = minimal_bundle("noshapes");
     let file = bundle.join("api/error_shapes.json");
     assert!(file.is_file(), "the writer wrote it");
     std::fs::remove_file(&file).unwrap();
-
-    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
-    assert_ne!(
-        v.code, 0,
-        "a bundle without its error shapes must not verify clean:\n{}{}",
-        v.stdout, v.stderr
-    );
-    assert!(
-        format!("{}{}", v.stdout, v.stderr).contains("error_shapes.json"),
-        "the refusal must name the document:\n{}{}",
-        v.stdout,
-        v.stderr
-    );
-}
-
-/// And the same for `materialize`, which reads the bundle through the same door.
-///
-/// Without this the requirement would be `verify`-only, and the other two
-/// commands would happily rebuild and re-list a bundle that `verify` refuses —
-/// which is the shape of an inconsistency a reader meets as a bug in `verify`.
-#[test]
-fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required() {
-    let (_scratch, bundle) = minimal_bundle("noshapes2");
-    std::fs::remove_file(bundle.join("api/error_shapes.json")).unwrap();
     let dir = bundle.to_string_lossy().to_string();
 
     for cmd in [
@@ -454,33 +435,14 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
 /// A capture that saw no non-2xx still writes the document, with an empty
 /// `responses` list: absence would be indistinguishable from "this tool never
 /// looked", which is exactly the ambiguity `error_shapes.json` was made required
-/// to remove.
+/// to remove. `materialize` agrees through the same door, so both commands are
+/// checked below.
 #[test]
 fn a_bundle_without_the_error_responses_document_does_not_verify() {
     let (_scratch, bundle) = minimal_bundle("noresps");
     let file = bundle.join("api/error_responses.json");
     assert!(file.is_file(), "the writer wrote it even with no failures");
     std::fs::remove_file(&file).unwrap();
-
-    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
-    assert_ne!(
-        v.code, 0,
-        "a bundle without its error responses must not verify clean:\n{}{}",
-        v.stdout, v.stderr
-    );
-    assert!(
-        format!("{}{}", v.stdout, v.stderr).contains("error_responses.json"),
-        "the refusal must name the document:\n{}{}",
-        v.stdout,
-        v.stderr
-    );
-}
-
-/// And `materialize` agrees, through the same door.
-#[test]
-fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_required() {
-    let (_scratch, bundle) = minimal_bundle("noresps2");
-    std::fs::remove_file(bundle.join("api/error_responses.json")).unwrap();
     let dir = bundle.to_string_lossy().to_string();
 
     for cmd in [

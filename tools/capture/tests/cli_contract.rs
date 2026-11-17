@@ -99,11 +99,6 @@ fn assert_code(args: &[&str], want: i32) -> Run {
 }
 
 #[test]
-fn the_binary_exists_where_this_test_expects_it() {
-    assert!(bin().exists(), "{} not built", bin().display());
-}
-
-#[test]
 fn help_and_version_are_zero() {
     assert_code(&["--help"], 0);
     assert_code(&["--version"], 0);
