@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T09** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T10** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P1 tasks). CP1, CP2, CP3 reviews done.
-* Active checkpoint: CP4 (`open`). Status: T09 `in_progress`.
+* Active checkpoint: CP4 (`open`). Status: T09 `pending_review`, T10 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -39,7 +40,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T06 | sled2redb removes + usage-error parametrization | completed | P0 | CP3 | impl `e72f5859`; CP3 review completed. Subsumed help + temp-name tests removed, 4 usage-error cases parametrized (integration 16→11). Strict pins and convert.rs:515 (F03) intact. |
 | T07 | `crates/log` + `tempdir` low-risk merges | completed | P0 | CP3 | commits `bd151a08..ef7fbfc1`; CP3 review completed. 3 tests removed; tempdir pairs folded keeping every assertion; log policy still asserted via LogPlan::resolve. |
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
-| T09 | Consolidate `run_lock.rs` case clusters | in_progress | P1 | CP4 | |
+| T09 | Consolidate `run_lock.rs` case clusters | pending_review | P1 | CP4 | impl `327fd01e` (test-only, tests/run_lock.rs). Validated first: file guards the test-support helper, not product lock behavior (product anchors repair_offline.rs:348/408/441 intact). 15 → 5 tests; one end-to-end cleanup case retained with real Lock::acquire/remove. All dimensions asserted; run_lock 5/5 pass. No flags. |
 | T10 | Consolidate `purge.rs` classifier early tests | todo | P1 | CP4 | |
 | T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
@@ -70,7 +71,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T06 | e72f5859 (single commit) | completed |
 | T07 | bd151a08..ef7fbfc1 (2 commits) | completed |
 | T08 | 11e108ce..79c52b93 (2 commits) | completed (skips confirmed) |
-| T09 | — | — |
+| T09 | 327fd01e (single commit) | — |
 | T10 | — | — |
 | T11 | — | — |
 | T12 | — | — |
@@ -98,6 +99,8 @@ effect) so the final follow-up phase is meaningful.
 | F11 | Factor the repeated 'branch call was issued / no getBuild followed / no config bump' checks in `repair_offline.rs` into a shared assertion helper. | T08 implementer | proposed | CP3 reviewer kept: real duplication, concrete refactor; does not merge complementary cases. |
 | F12 | Re-examine whether the `audio_langs=en-us` process-level assertion in the merged plan test is redundant with the `REPORT` unit tests in `src/report/`; if so, narrow the binary-level check to the no-scope case. | T08 implementer | proposed | CP3 reviewer kept: concrete question raised by the reviewed merge (assertion now applied to all three scopes). |
 | F13 | ~~In `repair_offline.rs:514/560`, derive the `expect_no_branch_endpoint_in_text` flag from `case.failure == BranchFailure::terminal(-1001)` instead of storing it per row.~~ | T08 implementer | removed | CP3 reviewer pruned: micro-refactor within T08's table; feasible but not worth tracking. |
+| F14 | Add a shared test-only argv builder for the repeated `["--game-path", ..., "--biz", "hk4e_global"]` shape in the two consolidated CLI-heavy run_lock tests. | T09 implementer | proposed | Would churn tests/run_lock.rs again; reviewer judges whether duplication is worth it. |
+| F15 | Split `tests/common/run_lock.rs` into per-consumer modules to remove the `#[allow(dead_code)]` on `mode_takes_lock` (needed because artifact_bridge.rs includes only part of the module). | T09 implementer | proposed | Test-support refactor outside T09; LOW need. Reviewer may prune. |
 
 ## Follow-up batches
 
