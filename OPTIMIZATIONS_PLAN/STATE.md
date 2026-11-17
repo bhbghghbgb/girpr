@@ -10,11 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T02** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T02** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop. T02 is the last task in
+  CP1, so on success run the CP1 review checkpoint before starting T03.
 * Active batch: none. Phase: implementation (P0 tasks).
-* Active checkpoint: CP1 (`open`). Status: T01 `pending_review`, T02 `todo`.
+* Active checkpoint: CP1 (`open`). Status: T01 `pending_review`, T02 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -33,7 +33,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | ID | Title | Status | Priority | Checkpoint | Notes |
 |---|---|---|---|---|---|
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | pending_review | P0 | CP1 | impl commit `a0a45fc8`; 15 test functions removed (49→34), no coverage lost per implementer |
-| T02 | Remove duplicated fixture-helper meta-tests | todo | P0 | CP1 | |
+| T02 | Remove duplicated fixture-helper meta-tests | in_progress | P0 | CP1 | |
 | T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
