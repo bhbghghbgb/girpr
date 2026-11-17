@@ -163,18 +163,19 @@ mod tests {
     use std::process::ExitCode;
 
     #[test]
-    fn a_single_job_keeps_runtime_headroom_on_one_core() {
-        assert!(worker_threads(1, 1) >= 2);
-    }
-
-    #[test]
-    fn host_parallelism_wins_when_it_exceeds_the_file_window() {
-        assert_eq!(worker_threads(8, 1), 8);
-    }
-
-    #[test]
-    fn a_huge_file_window_saturates_instead_of_overflowing() {
-        assert_eq!(worker_threads(1, usize::MAX), usize::MAX);
+    fn worker_threads_arithmetic() {
+        // (host parallelism, file window, expected worker count)
+        for (available, jobs, expected) in [
+            (1usize, 1usize, 2usize),    // one core, one job: keep runtime headroom
+            (8, 1, 8),                   // host parallelism wins over a small window
+            (1, usize::MAX, usize::MAX), // a huge window saturates, no overflow
+        ] {
+            assert_eq!(
+                worker_threads(available, jobs),
+                expected,
+                "worker_threads({available}, {jobs})"
+            );
+        }
     }
 
     #[test]
