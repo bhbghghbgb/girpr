@@ -6,12 +6,18 @@
 //! produces, and that clap's own `2` never leaks into the "2 = metadata/network"
 //! slot (docs/02 §1).
 //!
-//! The argument cases fail *during* argument handling, so no game directory is
-//! ever touched. The post-parse cases (`--jobs 0`, bad `--audio`, a bad
-//! `--include` glob) do reach `logging::init_tracing`, so they leave a
+//! Pure argument/help cases now run in process through clap directly (see
+//! [`real_help`] and [`usage_rejection`]): rendering `--help` and classifying a
+//! bad argument need no process spawn, no runtime and no tracing. A small set of
+//! real binary cases remains to pin the process-level contract: a bad flag
+//! exits 1, `--help` exits 0, and post-parse usage errors carry their exact
+//! stderr text.
+//!
+//! Those post-parse binary cases (`--jobs 0`, bad `--audio`, a bad `--include`
+//! glob) do reach `logging::init_tracing`, so they leave a
 //! `logs/girpr_<ts>.log` beside the built binary — inside the gitignored
-//! `target/` tree. The two `--log-file` cases are the exception: they name
-//! their own destination (in a scratch dir) instead, which is what they are for.
+//! `target/` tree. The `--log-file` cases are the exception: they name their
+//! own destination (in a scratch dir) instead, which is what they are for.
 //!
 //! The data-plane goldens at the end are the other kind of case: they need the
 //! mock HoYoPlay/Sophon server in `tests/common`, because `REPORT`/`PLAN` are
@@ -393,8 +399,7 @@ fn help_entry_stops_before_an_entry_with_a_short_alias() {
 #[test]
 fn help_entry_finds_the_help_option_behind_its_short_alias() {
     // The real help renders the one short alias it has as `  -h, --help`.
-    let (_, stdout, _) = run(&["--help"]);
-    let help = help_entry(&stdout, "--help");
+    let help = help_entry(real_help(), "--help");
     assert!(
         help.starts_with(&format!("{HELP_SHORT_OPTION_INDENT}-h, --help")),
         "the --help entry starts at its short-alias line:\n{help}"
@@ -402,21 +407,53 @@ fn help_entry_finds_the_help_option_behind_its_short_alias() {
     assert!(help.contains("Print help"), "{help}");
 }
 
-/// The real `--help` output, captured once.
+/// The binary's file name, which clap uses as the displayed program name in
+/// `--help`. On Windows this includes `.exe`; using the real name keeps the
+/// in-process capture byte-identical to what the process prints.
+fn bin_name() -> String {
+    std::path::Path::new(env!("CARGO_BIN_EXE_girpr"))
+        .file_name()
+        .expect("the binary path has a file name")
+        .to_str()
+        .expect("the binary name is UTF-8")
+        .to_string()
+}
+
+/// The real `--help` output, rendered in process once.
 ///
-/// The layout constants above are claims about clap, and the fixture tests
-/// only ever build text *from* those claims. The tests below check the claims
-/// against the text clap actually writes, so they all read the same capture:
-/// the binary's help cannot change while the suite runs, and one process is
-/// enough to see it.
+/// `main.rs` renders `--help` by handing clap's `DisplayHelp` error to `print()`;
+/// doing the same here — with the binary's own file name as argv[0] — produces
+/// the exact same text (long help, including the `girpr[.exe]` program name)
+/// without spawning a process or installing tracing. The layout constants above
+/// are claims about clap, and the fixture tests only build text *from* those
+/// claims; the tests below check the claims against what clap actually writes,
+/// so they all read the same render.
 fn real_help() -> &'static str {
     static HELP: OnceLock<String> = OnceLock::new();
     HELP.get_or_init(|| {
-        let (code, stdout, stderr) = run(&["--help"]);
-        assert_eq!(code, 0, "--help exits 0:\n{stderr}");
-        stdout
+        let name = bin_name();
+        Args::try_parse_from([name.as_str(), "--help"])
+            .expect_err("--help is clap's DisplayHelp error")
+            .render()
+            .to_string()
     })
     .as_str()
+}
+
+/// Why `args` is rejected as a usage error, computed in process.
+///
+/// A bad argument is refused either by clap while parsing (which the binary
+/// maps to exit 1 before tracing starts) or by `Args::into_ctx`'s post-parse
+/// validation (also exit 1). Both are "usage" failures; this returns the
+/// explanation for either, or `None` when the arguments are actually accepted.
+/// It lets the argument-classification cases run without spawning a process.
+fn usage_rejection(args: &[&str]) -> Option<String> {
+    let name = bin_name();
+    let argv = std::iter::once(name.as_str()).chain(args.iter().copied());
+    match Args::try_parse_from(argv) {
+        Err(e) => Some(e.to_string()),
+        Ok(a) => a.into_ctx().err().map(|e| e.to_string()),
+    }
 }
 
 /// The width of a help line's leading indent.
@@ -714,18 +751,26 @@ fn argument_errors_exit_one_not_two() {
         ],
     ];
     for args in cases {
-        let (code, _, stderr) = run(&args);
-        assert_eq!(code, 1, "{args:?} should exit 1, got {code} ({stderr})");
-        assert!(
-            !stderr.is_empty(),
-            "{args:?} should explain itself on stderr"
-        );
+        let explanation =
+            usage_rejection(&args).unwrap_or_else(|| panic!("{args:?} should be a usage error"));
+        assert!(!explanation.is_empty(), "{args:?} should explain itself");
     }
+
+    // One real spawn pins the process-level contract this test is named for:
+    // a bad flag exits 1 (never clap's default 2, the metadata/network slot)
+    // and explains itself on stderr. The other cases are classified in process
+    // above — the same rejection, without paying for a process each.
+    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "-x"]);
+    assert_eq!(code, 1, "a bad flag should exit 1, got {code} ({stderr})");
+    assert!(
+        !stderr.is_empty(),
+        "a bad flag should explain itself on stderr"
+    );
 }
 
 #[test]
 fn help_text_lists_every_documented_flag() {
-    let (_, stdout, _) = run(&["--help"]);
+    let stdout = real_help();
     for flag in [
         "--game-path",
         "--biz",
@@ -763,8 +808,8 @@ fn help_text_lists_every_documented_flag() {
 
 #[test]
 fn help_names_jobs_and_keeps_the_compatibility_alias_discoverable() {
-    let (_, stdout, _) = run(&["--help"]);
-    let jobs = help_entry(&stdout, "--jobs");
+    let stdout = real_help();
+    let jobs = help_entry(stdout, "--jobs");
     assert!(jobs.contains("--jobs"), "{jobs}");
     assert!(
         jobs.contains("--io-threads"),
@@ -913,7 +958,7 @@ fn plan_out_help_documents_every_serialized_field() {
     // the operator-facing description of the document, so it must name the
     // whole shape the binary writes. `help_text_lists_every_documented_flag`
     // only checks flag names and cannot catch a stale JSON shape.
-    let (_, stdout, _) = run(&["--help"]);
+    let stdout = real_help();
     assert!(
         stdout.contains("mode,extra_bytes"),
         "the --plan-out help omits the serialized fields:\n{stdout}"
