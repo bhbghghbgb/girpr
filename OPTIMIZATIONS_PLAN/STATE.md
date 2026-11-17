@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T04, then advance per the loop.
-* Active checkpoint: CP1 (`open`); T01, T02 `pending_review`, T03 `skipped`, T04 `in_progress`.
+* Next action: CP1 batch is now complete — run the CP1 review phase (section 4) before any new task.
+* Active checkpoint: CP1 (`open`, all tasks terminal); T01, T02, T04 `pending_review`, T03 `skipped`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -29,7 +29,7 @@ commit ranges only.
 | T01 | Lower heartbeat fixture via test hook | pending_review | CP1 | implemented in 833f6d6a; see review range below |
 | T02 | Default `run_binary_raw` to memory cache | pending_review | CP1 | implemented in eb6afaf2; see review range below |
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; no changes. See context. |
-| T04 | Shrink rw_threads 96-file fixture | in_progress | CP1 | |
+| T04 | Shrink rw_threads 96-file fixture | pending_review | CP1 | implemented in c7b9c1c0; see review range below |
 | T05 | Shrink `as_done` 11 MB fixture | todo | CP1 | |
 | T06 | Consolidate gircap captures + shared bundle | todo | CP2 | |
 | T07 | Hand-build minimal bundles for delete-a-doc | todo | CP2 | |
@@ -66,6 +66,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 |---|---|---|
 | T01 | `ae60730d..833f6d6a` | — |
 | T02 | `c1e2fb04..eb6afaf2` | — |
+| T04 | `f84883a7..c7b9c1c0` | — |
 
 ## Follow-ups
 
@@ -80,6 +81,9 @@ are done and a review session has decided the batches.
 | F04 | Debug assertion in `run_binary`/`run_binary_raw` rejecting a redundant `GIRSYNC_TEST_CACHE` in `envs`, to keep "one clear default" enforced against regressions. | T02 implementer | proposed | Enforces the helper invariant; reviewer decides. |
 | F05 | On next report regeneration, account for already-landed R1 memory-cache work so §6.1 B5/C7 are not re-flagged as outstanding. | T03 implementer | proposed | Report is temporary and deleted at completion; reviewer decides if moot. |
 | F06 | One-line note in `common/mod.rs` near `opts()` pointing readers to the `*_mem` variants, to avoid re-introducing file backends in semantic suites. | T03 implementer | proposed | Documentation/readability only; reviewer decides. |
+| F07 | In `through_the_binary.rs`, reuse one directory across passes of `update_hashes_the_same_set_at_every_limit` instead of 6 fresh 40-file trees — needs per-pass cache isolation to avoid leaking cache rows. | T04 implementer | proposed | Low payoff (~0.5 s), needs care; reviewer decides. |
+| F08 | Reduce per-pad byte size below 512 B in the rw_threads fixture (pads only need stat-equality + identical content). | T04 implementer | proposed | Marginal; count was the dominant cost. |
+| F09 | Debug assertion/comment tying `PAD_COUNT` to the max `pool_size()` in `settings()` to guard the "more files than workers" invariant against future worker increases. | T04 implementer | proposed | Invariant guard; reviewer decides. |
 
 ## Context / decisions
 
