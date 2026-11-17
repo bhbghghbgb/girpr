@@ -33,10 +33,17 @@ fn sync_reports_the_same_actions_under_every_rw_setting() {
         (set, n)
     };
 
+    // Build the fixture once. `sync` reads src but mutates dst, so src is shared
+    // across every pass while each pass gets a pristine clone of the original
+    // dst. That keeps all six runs answering the same question without paying
+    // to write the whole 2-sided fixture six times.
+    let t = temp_root("rw_sync");
+    let (src, dst_template) = fixture(&t);
+
     let mut baseline: Option<(BTreeSet<String>, usize)> = None;
-    for flags in flag_spellings() {
-        let t = temp_root("rw_sync");
-        let (src, dst) = fixture(&t);
+    for (i, flags) in flag_spellings().into_iter().enumerate() {
+        let dst = t.subdir(&format!("dst_{i}"));
+        clone_tree(&dst_template, &dst);
         let (code, recs) = run_env(
             &argv("sync", &src, &dst, &flags),
             &[("GIRSYNC_TEST_CACHE", "memory")],

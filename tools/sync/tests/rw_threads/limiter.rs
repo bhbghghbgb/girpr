@@ -116,8 +116,11 @@ fn every_rw_setting_answers_the_same_question() {
 
     drop_caches(&src, &dst);
     let baseline = resolve_overlapping(&src, &dst, &common, RwLimits::default());
+    // Proportional to the pad count (the old guard was >50 of 96 pads). Every
+    // pad is a stat-equal pair that only a digest can settle, so this still
+    // demands that a real majority of them were hashed on the src side.
     assert!(
-        baseline.0.1.hashed > 50,
+        baseline.0.1.hashed > PAD_COUNT / 2,
         "the fixture must force real hashing (src hashed {}), or the comparison \
          below is vacuous",
         baseline.0.1.hashed

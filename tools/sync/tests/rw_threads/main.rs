@@ -106,6 +106,15 @@ fn settings() -> Vec<(&'static str, RwLimits)> {
 /// fixture's `Spec` type requires.
 const PAD: [u8; 512] = [b'x'; 512];
 
+/// How many identical pad files the fixture carries.
+///
+/// Kept strictly above the widest worker pool the suite exercises —
+/// `split(4,4)` in [`settings`] is 8 workers — so "more files than workers",
+/// the invariant these tests exist to pin, still holds with room for every
+/// worker to be handed more than one item. 16 is a sixth of the original 96,
+/// which is where most of this suite's fixture-write and re-hash cost came from.
+const PAD_COUNT: usize = 16;
+
 /// A tree with every kind of work in the plan: stat-equal pairs that only a
 /// digest can settle, a pair settled by size, a src-only and a dst-only path, a
 /// directory and an empty file.
@@ -122,13 +131,35 @@ fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
         ("sub/nested.txt", Some(b"nested"), Some(b"nest")),
         ("emptydir", Some(&[]), None),
     ];
-    // 96 files against a widest tested pool of 8 workers: twelve items per worker,
-    // so the loop is exercised over many hand-offs rather than trivially once.
-    for i in 0..96usize {
+    // More pad files than the widest tested pool of 8 workers, so every worker
+    // has to come back for another item rather than the loop finishing trivially.
+    for i in 0..PAD_COUNT {
         let rel: &'static str = Box::leak(format!("pad{i:02}.bin").into_boxed_str());
         spec.push((rel, Some(&PAD[..]), Some(&PAD[..])));
     }
     pair(t, &spec, &["md5"], false)
+}
+
+/// Recursively clone a directory tree, preserving file mtimes.
+///
+/// Several tests run the same command more than once over one fixture. `sync`
+/// mutates its destination, so each pass needs a pristine destination; building
+/// the whole `Spec` fixture again per pass is what made these tests slow. A
+/// plain byte copy is enough — the fixture's content and mtimes are carried
+/// across unchanged, so every pass answers exactly the same question.
+fn clone_tree(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&dst).unwrap();
+            clone_tree(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).unwrap();
+            common::sync_mtime(&src, &dst);
+        }
+    }
 }
 
 /// Action events `sync` emits, as opposed to the records that describe why.
