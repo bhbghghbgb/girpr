@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T18) and spawn its implementing session.
-* Active checkpoint: CP4 (`open`); T14, T15, T16, T17 `pending_review`.
+* Next action: wait for implementing session on T18; after it finishes, CP4 is complete — run the CP4 review phase.
+* Active checkpoint: CP4 (`open`); T14, T15, T16, T17 `pending_review`, T18 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -43,7 +43,7 @@ commit ranges only.
 | T15 | Remove girpr `--help`/argument spawns | pending_review | CP4 | ac507a7c; see review range |
 | T16 | Consolidate girpr multi-run parity tests | pending_review | CP4 | b51e0395; see review range |
 | T17 | Merge girsync dry-run/hard-link groups | pending_review | CP4 | 15e79270; see review range |
-| T18 | Merge redundant gircap read/verify groups | todo | CP4 | |
+| T18 | Merge redundant gircap read/verify groups | in_progress | CP4 | |
 | T19 | Tidy ignored tests | todo | CP5 | |
 | T20 | Guardrail audit (hooks, no temp→`Z:`) | todo | CP5 | |
 
