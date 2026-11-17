@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{File, Mock, World};
+use common::{BundleVariant, File, Mock, World, shared_bundle};
 use gircap::report::percent_decode;
 use girpr_tempdir::TempDir;
 
@@ -167,7 +167,7 @@ fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
 /// assertion here that would be false about a real regression.
 #[test]
 fn a_capture_leaves_no_failed_selfcheck_rows() {
-    let (_m, _s, _r, bundle) = capture_ok("green");
+    let bundle = shared_bundle(BundleVariant::Default);
     let raw = std::fs::read(bundle.join("verify/selfcheck.json")).expect("selfcheck written");
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(doc["result"], "pass");
@@ -227,7 +227,7 @@ fn every_request_the_capture_made_went_to_the_mock() {
 /// that is **not** a failure must say so.
 #[test]
 fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
-    let (_m, _s, _r, bundle) = capture_ok("shapes");
+    let bundle = shared_bundle(BundleVariant::Default);
     let bytes = std::fs::read(bundle.join("api/error_shapes.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
     let rows = doc["shapes"].as_array().unwrap();
@@ -327,7 +327,7 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
 /// prefix that 404s everything would satisfy it.
 #[test]
 fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
-    let (_m, _s, _r, bundle) = capture_ok("wrongbuild");
+    let bundle = shared_bundle(BundleVariant::Default);
     let raw = std::fs::read(bundle.join("api/error_shapes.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let rows = doc["shapes"].as_array().unwrap();
@@ -813,7 +813,7 @@ fn split_inventory<'a>(paths: &[&'a str]) -> (Vec<&'a str>, BTreeMap<&'a str, us
 /// those digests, and `bundle_diff` covers the ones that move.
 #[test]
 fn the_inventory_documents_describe_the_same_bundle() {
-    let (_m, _s, _r, bundle) = capture_ok("inv");
+    let bundle = shared_bundle(BundleVariant::Default);
     let read = |p: &str| -> String { std::fs::read_to_string(bundle.join(p)).expect(p) };
     let json = |p: &str| -> serde_json::Value { serde_json::from_str(&read(p)).expect(p) };
 
@@ -1049,7 +1049,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
 /// them apart.
 #[test]
 fn the_selfcheck_document_asserts_what_it_always_asserted() {
-    let (_m, _s, _r, bundle) = capture_ok("sc");
+    let bundle = shared_bundle(BundleVariant::Default);
     let s: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(bundle.join("verify/selfcheck.json")).unwrap(),
     )
@@ -1418,7 +1418,7 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
 /// rebuild, with no network involved in either step.
 #[test]
 fn the_captured_bundle_verifies_offline() {
-    let (_m, _s, _r, bundle) = capture_ok("verify");
+    let bundle = shared_bundle(BundleVariant::Default);
     let r = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
     assert_eq!(r.code, 0, "verify failed:\n{}\n{}", r.stdout, r.stderr);
     let s = r.summary();
@@ -1516,7 +1516,7 @@ fn the_captured_bundle_is_found_by_list() {
 /// absent from the matrix, and that is what the selection's own tests pin.
 #[test]
 fn the_matrix_names_every_class_and_says_what_happened_to_it() {
-    let (_m, _s, _r, bundle) = capture_ok("matrix");
+    let bundle = shared_bundle(BundleVariant::Default);
     let raw = std::fs::read(bundle.join("MANIFEST.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let rows = doc["matrix"].as_array().expect("a matrix");
@@ -2097,7 +2097,7 @@ fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
 /// -202`, and the tool reads that as "no such tag" rather than as a build.
 #[test]
 fn the_probe_records_an_unservable_tag_rather_than_pretending() {
-    let (_m, _s, _r, bundle) = capture_ok("probe");
+    let bundle = shared_bundle(BundleVariant::Default);
     let raw = std::fs::read(bundle.join("api/tag_probe.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let tags = doc["results"].as_array().expect("one row per tag probed");
