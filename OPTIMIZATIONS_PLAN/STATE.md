@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T20; after it finishes, CP5 is complete — run the CP5 review phase.
-* Active checkpoint: CP5 (`open`); T19 `pending_review`, T20 `in_progress`.
+* Next action: CP5 batch complete — run the CP5 review-and-fix phase (section 4), then handle follow-ups per section 5.
+* Active checkpoint: CP5 (`open`, all tasks terminal) — set to `in_progress` in the review step.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -45,7 +45,7 @@ commit ranges only.
 | T17 | Merge girsync dry-run/hard-link groups | completed | CP4 | CP4 review: completed |
 | T18 | Merge redundant gircap read/verify groups | completed | CP4 | CP4 review: completed (§6.2-3 deferral accepted as N/A) |
 | T19 | Tidy ignored tests | pending_review | CP5 | 2 commits a82d4d81..36719f62; see review range |
-| T20 | Guardrail audit (hooks, no temp→`Z:`) | in_progress | CP5 | |
+| T20 | Guardrail audit (hooks, no temp→`Z:`) | completed | CP5 | clean audit, no changes; see context |
 
 ## Review checkpoints
 
@@ -82,6 +82,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T17 | `319270b7..15e79270` | completed |
 | T18 | `6c165bc5..9b8b5128` | completed (partial accepted) |
 | T19 | `6fc38676..36719f62` | — |
+| T20 | (no implementation commits — clean audit) | — |
 
 ## Follow-ups
 
@@ -158,3 +159,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T18 implemented (commit 9b8b5128): §6.2-5 done — merged two `every_command_that_reads_a_bundle_agrees_*` cases into their `a_bundle_without_*_does_not_verify` partners (folding materialize loop, all assertions preserved incl. upfront is_file + verify/materialize refuse + name the doc), dropped trivial `the_binary_exists_where_this_test_expects_it`. §6.2-3 judged NOT APPLICABLE: after T06 only one test verifies the shared bundle; the six `offline_bundle.rs` reverify sites use distinct freshly-built/mutated `Bundle::build` fixtures, not the shared bundle — no per-shared-bundle verification redundancy left, so no cross-process verify cache forced (per guardrail). Report's "three agree cases / rejection twin at 498" was a miscount (two exist; line 498 partner has no agree twin — left intact, noted). gircap 865 pass/3 skip (3 fewer = 3 removed tests), fmt/clippy -D warnings clean. No product code; verify::reverify untouched. Reviewer to judge partial scope.
 * CP4 review done (one fix commit `937438db` for T15; tree clean at `937438db`): verdicts T14/T16/T17 `completed`, T15 `completed (fixed)`, T18 `completed` (§6.2-3 deferral accepted as N/A). T15 fix added a self-verifying byte-identity guard in `help_exits_zero` (`assert_eq!(stdout, real_help())`) reusing the existing --help spawn, no added process. Review confirmed T14's stale-report deviation (old :1210/:1278 read no log; logs in separate TempDir outside snapshot), every `.log()` assertion maps to an info!/debug! emission; T16/T17/T18 merges dropped no assertion/parity relation; T18 §6.2-3 confirmed single consumer. Suites re-run: repair_machinery 28/28, cli_contract 49/49, repair_scan/machinery/writer 64/64, sync 46 pass/1 skip, gircap 81/81. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25, F26, F29, F31. Removed: F27, F28, F30, F32, F33, F34, F35, F36, F37, F38 (reasons in table). No new follow-ups.
 * T19 implemented (2 commits): validated all three anchors. Tidy 1 (artifact_bridge share) SKIPPED as stale — suite already uses process-wide `Suite` (OnceCell) verifying once + one Bridge (`c4224d3e`/`a2cfdfb6` ancestors); under nextest each case is a separate process, cross-process cache rejected as runaway (F37). Tidy 2 DONE — peak_heap `CHUNK_BYTES` 2_162_302 -> 262_144, doc prose made scale-independent; ~1.95 s -> ~0.05 s. Tidy 3 DELETED (stale) — `rows_for_a_directory_created_and_removed_in_one_run_are_dropped` reproduced "a row survived for Sub", doc labelled it a known limitation (documented in tools/sync/README.md:462-469), making it pass would need a product change not clearly correct. Verification: ignored-only 12 run/12 pass (was 13/1 fail), girsync sync 46 pass, fmt/clippy clean. No product code.
+* T20 completed (clean audit, no code changes; tree clean at `9fc486a9`): all three hooks present/unchanged in `.config/nextest-test-env` (working tree + HEAD); setup scripts `test-hooks-unix`/`test-hooks-windows` in `.config/nextest.toml` intact and wired to all(); `.gitattributes` LF pin intact with LF-only bytes (`DURABILITY` parses as "none"); full-tree `Z:` search found only the temporary report + `tests/scripts/io-profile/` measurement scripts (legitimate instruments), no committed temp-dir redirect; `git log -S` for Z:/TMPDIR over .config + crates returned no commits; temp helper `crates/tempdir/src/lib.rs::root` still `std::env::temp_dir().join(ROOT)`. No regression to revert; Z: not needed. Gate `cargo nextest run --workspace` PASS: 2236 run/2236 pass/12 skip (110.6 s). No follow-ups.
