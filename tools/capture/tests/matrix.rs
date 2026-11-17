@@ -13,7 +13,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{DEGENERATE_PATH, Mock, World};
+use common::{BundleVariant, DEGENERATE_PATH, Mock, World, shared_bundle};
 use girpr_tempdir::TempDir;
 
 fn bin() -> PathBuf {
@@ -184,8 +184,11 @@ impl Captured {
 /// to widen `--audio` or pick another pair.
 #[test]
 fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
-    let c = captured("classes", World::all_shapes(), &[]);
-    let rows = c.matrix();
+    let bundle = shared_bundle(BundleVariant::Default);
+    let rows = json(&bundle.join("MANIFEST.json"))["matrix"]
+        .as_array()
+        .expect("a matrix")
+        .clone();
     assert_eq!(rows.len(), 6, "one row per patch shape");
     for r in &rows {
         // An unfulfilled row must say why. A `covered_by` row says which
@@ -542,8 +545,8 @@ fn admitted_costs(bundle: &std::path::Path) -> Vec<(String, u64)> {
 /// The diff the run computed, read back off disk, agrees with the rows.
 #[test]
 fn the_diff_on_disk_matches_the_files_the_captures_name() {
-    let c = captured("diff", World::all_shapes(), &[]);
-    let d = c.diff();
+    let bundle = shared_bundle(BundleVariant::Default);
+    let d = json(&bundle.join("diff/paths.diff.json"));
     assert_eq!(d["fields"], serde_json::json!(["game", "en-us"]));
     let counts = &d["counts"];
     let common = counts["common"].as_u64().expect("common");
