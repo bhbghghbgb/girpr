@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T08) and spawn its implementing session.
-* Active checkpoint: CP2 (`open`); T06, T07 `pending_review`.
+* Next action: wait for implementing session on T08; after it finishes, CP2 is complete — run the CP2 review phase.
+* Active checkpoint: CP2 (`open`); T06, T07 `pending_review`, T08 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -33,7 +33,7 @@ commit ranges only.
 | T05 | Shrink `as_done` 11 MB fixture | completed | CP1 | implemented in a2ddea53; CP1 review: completed |
 | T06 | Consolidate gircap captures + shared bundle | pending_review | CP2 | 5 commits be7314ff..9096e118; see review range |
 | T07 | Hand-build minimal bundles for delete-a-doc | pending_review | CP2 | 3 commits 7e4ca155..81988899; see review range |
-| T08 | Cache gircap byte tables + shrink chunk | todo | CP2 | |
+| T08 | Cache gircap byte tables + shrink chunk | in_progress | CP2 | |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
 | T10 | Drop sled2redb flush + redundant reopens | todo | CP3 | |
 | T11 | Replace girsync publish fixed sleeps | todo | CP3 | |
