@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: CP4 batch complete — run the CP4 review-and-fix phase (section 4) before starting CP5.
-* Active checkpoint: CP4 (`open`, all tasks terminal) — set to `in_progress` in the review step.
+* Next action: wait for the CP4 review-and-fix session; apply verdicts, then start CP5 at T19.
+* Active checkpoint: CP4 (`in_progress` — review session running).
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -54,7 +54,7 @@ commit ranges only.
 | CP1 | T01–T05 | done | girsync fixtures & cache backend |
 | CP2 | T06–T08 | done | gircap capture consolidation & fixtures |
 | CP3 | T09–T13 | done | sled2redb conversions & fixed sleeps |
-| CP4 | T14–T18 | open | girpr spawns, logging & redundant merges |
+| CP4 | T14–T18 | in_progress | girpr spawns, logging & redundant merges |
 | CP5 | T19–T20 | open | ignored tests & final guardrail audit |
 
 ## Commit ranges for review
