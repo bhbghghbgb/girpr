@@ -326,6 +326,15 @@ impl<'a> CacheWrite<'a> {
         Ok(())
     }
 
+    /// Test-only: pretend the last commit happened `by` earlier than it did.
+    ///
+    /// This lets an interval-trigger test simulate a long hash between
+    /// mutations deterministically, without sleeping on the wall clock.
+    #[cfg(test)]
+    fn backdate_last_commit(&mut self, by: Duration) {
+        self.last_commit -= by;
+    }
+
     /// Commit all pending mutations. This is the `flush()` analogue: after
     /// it returns, the mutations survive a process kill — unless the
     /// test-only `GIRSYNC_TEST_DURABILITY=none` switch lowered the write's
@@ -582,8 +591,10 @@ mod tests {
         let mut w = c.begin_write_with(limits).unwrap();
         w.put("a", &sized_rec(1)).unwrap();
         assert_eq!(w.dirty, 1);
-        // Simulate a long hash of a huge file between mutations.
-        std::thread::sleep(Duration::from_millis(150));
+        // Simulate a long hash of a huge file between mutations by backdating
+        // the last commit past the interval, so the next put trips the trigger
+        // without a wall-clock sleep.
+        w.backdate_last_commit(Duration::from_secs(1));
         w.put("b", &sized_rec(1)).unwrap();
         assert_eq!(w.dirty, 0, "interval trigger committed");
         assert!(w.get("a").unwrap().is_some());
