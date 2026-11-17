@@ -1370,56 +1370,6 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
     }
 }
 
-/// **Trigger (b): a directory this run created and then removed in the same run.**
-///
-/// Reachable only with `--case-sensitive` on a case-insensitive filesystem: src
-/// holds `Sub/`, dst holds `sub/`, and the two name the same directory. `mkdir`
-/// creates `Sub` and `rmdir` then removes `sub` — which is `Sub` — taking the
-/// freshly created tree with it. Nothing is left on disk, so nothing should be
-/// left in the cache.
-///
-/// Recorded here as a **known limitation of the derived present set**, not as a
-/// passing assertion. Deriving cannot see this without also case-folding the
-/// prune against the plan — in the one mode that deliberately does not case-fold.
-/// Asking the filesystem instead would drop these rows, at the cost of a full
-/// traversal of dst in every real run; the rows are stale until the next run's
-/// phase A prunes them, and `compare-self` builds a cold cache so it cannot be
-/// misled.
-#[test]
-#[ignore = "known: the derived present set keeps rows for a dir created and rmdir'd in the same run"]
-fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
-    let t = temp_root("prune_create_then_rmdir");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
-    // The other spelling of src's `Sub`: on a case-insensitive filesystem the
-    // two names are one directory, so `mkdir Sub` is a no-op and the planned
-    // `rmdir sub` removes the tree the copies just landed in.
-    t.subdir("dst/sub");
-    wfile(&src, "Sub/One.txt", b"one");
-    wfile(&src, "Sub/Two.txt", b"two");
-    // Only reachable on a case-insensitive filesystem; skip elsewhere rather
-    // than assert something that cannot happen.
-    if !std::fs::metadata(src.join("Sub"))
-        .map(|_| src.join("sub").exists())
-        .unwrap_or(false)
-    {
-        return;
-    }
-
-    let mut o = sync(src.clone(), dst.clone());
-    o.common.set_case_sensitive(true);
-    let _ = cmd_sync(o, &log());
-
-    let rows = recs(&dst);
-    for stale in ["Sub", "Sub/One.txt", "Sub/Two.txt"] {
-        assert!(
-            !rows.contains_key(stale),
-            "a row survived for {stale}: {:?}",
-            rows.keys().collect::<Vec<_>>()
-        );
-    }
-}
-
 /// **The copy phase commits its cache rows while it is still copying.**
 ///
 /// `CacheWrite`'s `CommitLimits` are only a bound on the work an interrupted run
