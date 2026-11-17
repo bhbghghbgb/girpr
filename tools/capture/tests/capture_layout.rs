@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{BundleVariant, File, Mock, World, shared_bundle};
+use common::{BundleVariant, File, Mock, World, minimal_bundle, shared_bundle};
 use gircap::report::percent_decode;
 use girpr_tempdir::TempDir;
 
@@ -385,10 +385,9 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
 /// five candidates.
 #[test]
 fn a_bundle_without_the_error_shapes_document_does_not_verify() {
-    let (_m, _s, r, bundle) = capture_ok("noshapes");
-    assert_eq!(r.code, 0);
+    let (_scratch, bundle) = minimal_bundle("noshapes");
     let file = bundle.join("api/error_shapes.json");
-    assert!(file.is_file(), "the capture wrote it");
+    assert!(file.is_file(), "the writer wrote it");
     std::fs::remove_file(&file).unwrap();
 
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
@@ -412,8 +411,7 @@ fn a_bundle_without_the_error_shapes_document_does_not_verify() {
 /// which is the shape of an inconsistency a reader meets as a bug in `verify`.
 #[test]
 fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required() {
-    let (_m, _s, r, bundle) = capture_ok("noshapes2");
-    assert_eq!(r.code, 0);
+    let (_scratch, bundle) = minimal_bundle("noshapes2");
     std::fs::remove_file(bundle.join("api/error_shapes.json")).unwrap();
     let dir = bundle.to_string_lossy().to_string();
 
@@ -445,10 +443,9 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
 /// to remove.
 #[test]
 fn a_bundle_without_the_error_responses_document_does_not_verify() {
-    let (_m, _s, r, bundle) = capture_ok("noresps");
-    assert_eq!(r.code, 0);
+    let (_scratch, bundle) = minimal_bundle("noresps");
     let file = bundle.join("api/error_responses.json");
-    assert!(file.is_file(), "the capture wrote it even with no failures");
+    assert!(file.is_file(), "the writer wrote it even with no failures");
     std::fs::remove_file(&file).unwrap();
 
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
@@ -468,8 +465,7 @@ fn a_bundle_without_the_error_responses_document_does_not_verify() {
 /// And `materialize` agrees, through the same door.
 #[test]
 fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_required() {
-    let (_m, _s, r, bundle) = capture_ok("noresps2");
-    assert_eq!(r.code, 0);
+    let (_scratch, bundle) = minimal_bundle("noresps2");
     std::fs::remove_file(bundle.join("api/error_responses.json")).unwrap();
     let dir = bundle.to_string_lossy().to_string();
 
@@ -496,10 +492,9 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_require
 /// And the same for `diagnostics/rejections.json`.
 #[test]
 fn a_bundle_without_the_rejection_document_does_not_verify() {
-    let (_m, _s, r, bundle) = capture_ok("norej");
-    assert_eq!(r.code, 0);
+    let (_scratch, bundle) = minimal_bundle("norej");
     let file = bundle.join("diagnostics/rejections.json");
-    assert!(file.is_file(), "the capture wrote it even with no refusals");
+    assert!(file.is_file(), "the writer wrote it even with no refusals");
     std::fs::remove_file(&file).unwrap();
 
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
