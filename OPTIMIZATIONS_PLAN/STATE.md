@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T11** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T12** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`open`). Status: T11 `in_progress`.
+* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -41,7 +42,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | completed | P1 | CP4 | impl `327fd01e`; CP4 review completed. 15 → 5 tests, every assertion preserved, end-to-end cleanup case retained with real Lock::acquire/remove; product lock code untouched (repair_offline.rs anchors intact). run_lock 5/5 pass. |
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
-| T11 | Trim `migration_lock.rs` clear duplicates | in_progress | P1 | CP5 | |
+| T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length strengthened by 7bf6731b; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row assertion; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. migration_lock 11/11 pass. |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
 
@@ -72,7 +73,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T08 | 11e108ce..79c52b93 (2 commits) | completed (skips confirmed) |
 | T09 | 327fd01e (single commit) | completed |
 | T10 | 564b341b (single commit) | completed |
-| T11 | — | — |
+| T11 | — (skipped, no commits) | skipped, to be confirmed by CP5 review |
 | T12 | — | — |
 | T13 | — | — |
 
@@ -102,6 +103,7 @@ effect) so the final follow-up phase is meaningful.
 | F15 | ~~Split `tests/common/run_lock.rs` into per-consumer modules to remove the `#[allow(dead_code)]` on `mode_takes_lock`.~~ | T09 implementer | removed | CP4 reviewer pruned: LOW-need test-support refactor outside scope. |
 | F16 | ~~`a_blacklisted_path_is_kept_by_the_cleanup` (still present) mixes a pure classifier assertion with real plan_purge/apply_purge I/O; move only the pure row into the parametrized table.~~ | T10 implementer | removed | CP4 reviewer pruned: no test-count benefit; pure+I/O layering is intentional. |
 | F17 | ~~Doc-comment notes on `cached_keys_classify_every_keep_rule`: visibility computation only in scope tests; group 'everything else purges' rows under a provenance comment.~~ | T10 implementer | removed | CP4 reviewer pruned: already done by commit `564b341b` (provenance comment at lines 853–857 plus per-group comments). |
+| F18 | Document which `tools/sync/tests/migration_lock.rs` tests are deliberately file-backend-specific (backups, snapshots, record side, dry-run byte-identity) despite the file's backend-agnostic header, so a future audit does not re-flag them as out of place. | T11 implementer | proposed | Cosmetic doc clarification following T11's verified skip. |
 
 ## Follow-up batches
 
@@ -141,3 +143,9 @@ deliberate deviations from a task file, why a task was skipped/reverted,
 checkpoint boundary changes, and anything else needed to resume. Write these as
 short, context-only statements — no session ids, dates, machine data or
 chronological change log.
+
+* T11 skipped: report §D.4 '≈' overlaps in `migration_lock.rs` are thematic,
+  not property-identical; all five candidates carry unique assertions. Do not
+  revisit unless the code changes; whole-target deletion is HIGH risk.
+* Watch (not a coverage issue): `migration_lock.rs` `cache_snapshot` compares
+  mtime and is filesystem-timing-sensitive; note only if it flakes in CI.
