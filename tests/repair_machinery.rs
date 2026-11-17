@@ -48,6 +48,7 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use common::{
@@ -60,17 +61,47 @@ use girpr_tempdir::TempDir;
 // the harness
 // ---------------------------------------------------------------------------
 
+/// The file-log level a run asks for.
+///
+/// The per-chunk download records parsed by [`downloaded_chunks`] are emitted
+/// at `trace`; everything else this suite asserts in the log is `debug` or
+/// above. So `Debug` is the default and trace is opt-in, which keeps the
+/// spawned binary from writing (and this harness from reading) a full trace
+/// log on every run.
+#[derive(Clone, Copy)]
+enum LogLevel {
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+}
+
 /// One `girpr` invocation's result, with its NDJSON records indexed by name.
 struct Run {
     code: i32,
     records: BTreeMap<String, serde_json::Value>,
     stdout: String,
     stderr: String,
-    /// The trace log the run wrote.
-    log: String,
+    /// Where the run's log file was written. Read lazily via [`Run::log`] so
+    /// the many runs that never inspect their log do not pay for the read.
+    log_path: PathBuf,
+    log_cache: OnceLock<String>,
 }
 
 impl Run {
+    /// The run's log file contents, read at most once per `Run`.
+    fn log(&self) -> &str {
+        self.log_cache
+            .get_or_init(|| std::fs::read_to_string(&self.log_path).unwrap_or_default())
+    }
+
     fn record(&self, event: &str) -> &serde_json::Value {
         self.records
             .get(event)
@@ -147,11 +178,18 @@ impl Rig {
         .expect("write config.ini");
     }
 
-    /// Run the real binary against the rig's install.
+    /// Run the real binary against the rig's install at the default `debug`
+    /// file-log level. Use [`Rig::run_at_level`] for the few runs whose log
+    /// assertions need `trace` records.
     ///
     /// `--io-threads` is the deprecated alias for `--jobs`; this rig keeps one
     /// run on it so the integration suite still exercises the alias.
     async fn run(&self, args: &[&str]) -> Run {
+        self.run_at_level(LogLevel::Debug, args).await
+    }
+
+    /// Run the real binary, writing the log file at the requested level.
+    async fn run_at_level(&self, level: LogLevel, args: &[&str]) -> Run {
         let n = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = self.logs.join(format!("girpr-{n}.log"));
         let mut all: Vec<String> = vec![
@@ -169,12 +207,12 @@ impl Rig {
             "json".into(),
             "--log-file".into(),
             log.display().to_string(),
-            // The log file's own level, which is a knob of its own: the
-            // chunk-level records this test reads are `trace`, and the file
-            // defaults to `debug`. `--log-level` would only change the
-            // console.
+            // The log file's own level, which is a knob of its own: `--log-level`
+            // would only change the console. Only the per-chunk download
+            // records need `trace`; every other log assertion in this suite is
+            // satisfied by `debug`, so that is the default and trace is opt-in.
             "--log-file-level".into(),
-            "trace".into(),
+            level.as_str().into(),
         ];
         all.extend(args.iter().map(|s| s.to_string()));
         let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -200,7 +238,8 @@ impl Rig {
             records,
             stdout,
             stderr,
-            log: std::fs::read_to_string(&log).unwrap_or_default(),
+            log_path: log,
+            log_cache: OnceLock::new(),
         }
     }
 }
@@ -552,13 +591,13 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
         );
     }
     assert_eq!(
-        in_place_chunk_stats(&scanned.log),
-        in_place_chunk_stats(&plain.log),
+        in_place_chunk_stats(scanned.log()),
+        in_place_chunk_stats(plain.log()),
         "the per-file chunk accounting must be identical"
     );
     assert!(
         scanned
-            .log
+            .log()
             .contains("reusing the plan scan in the in-place writer"),
         "the scanned run must take the guarded reuse on an unchanged file"
     );
@@ -822,10 +861,10 @@ async fn the_three_tiers_produce_the_same_file() {
     assert_eq!(by_shortage.read("game/shift.dat"), want);
     assert_eq!(run.num("summary", "ram_bytes"), 0, "nothing was staged");
     assert!(
-        run.log
+        run.log()
             .contains("the moving bytes do not fit the RAM budget"),
         "the refusal has to be said, not merely acted on\n{}",
-        run.log
+        run.log()
     );
 }
 
@@ -840,10 +879,10 @@ async fn a_refused_reservation_is_not_the_same_thing_as_staging_nothing() {
     let run = by_mode.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        !run.log
+        !run.log()
             .contains("the moving bytes do not fit the RAM budget"),
         "the mode is not a shortage\n{}",
-        run.log
+        run.log()
     );
 
     let by_shortage = Rig::start(&spec).await;
@@ -851,10 +890,10 @@ async fn a_refused_reservation_is_not_the_same_thing_as_staging_nothing() {
     let run = by_shortage.run(&["--max-ram-bytes", "16"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log
+        run.log()
             .contains("the moving bytes do not fit the RAM budget"),
         "the shortage has to be said\n{}",
-        run.log
+        run.log()
     );
 }
 
@@ -877,9 +916,9 @@ async fn a_uniform_upward_shift_keeps_every_source_in_the_descending_order() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log.contains("ascending=false"),
+        run.log().contains("ascending=false"),
         "the content moved later, so the descending order is the one that keeps it\n{}",
-        run.log
+        run.log()
     );
     assert_eq!(
         rig.mock.chunk_hits(),
@@ -898,9 +937,9 @@ async fn a_uniform_downward_shift_keeps_every_source_in_the_ascending_order() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log.contains("ascending=true"),
+        run.log().contains("ascending=true"),
         "the content moved earlier, so the ascending order is the one that keeps it\n{}",
-        run.log
+        run.log()
     );
     assert_eq!(
         rig.mock.chunk_hits(),
@@ -927,11 +966,11 @@ async fn a_mixed_shift_keeps_the_larger_half() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log
+        run.log()
             .contains(&format!("salvaged={n_down} of={}", n_down + n_up)),
         "the ascending order keeps the {n_down} that moved down, and not the \
          {n_up} that moved up\n{}",
-        run.log
+        run.log()
     );
     let asked = rig.mock.chunk_hits();
     assert_eq!(
@@ -968,9 +1007,9 @@ async fn a_tie_goes_to_the_ascending_order() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log.contains("ascending=true"),
+        run.log().contains("ascending=true"),
         "a tie goes to the ascending order\n{}",
-        run.log
+        run.log()
     );
     assert_eq!(rig.read("game/tie.dat"), lay_out(&spec.new[0].chunks));
 }
@@ -1009,15 +1048,15 @@ async fn the_dead_tail_is_released_before_the_first_write() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log.contains("trimming the dead tail"),
+        run.log().contains("trimming the dead tail"),
         "the dead tail is released before the first write\n{}",
-        run.log
+        run.log()
     );
     assert!(
-        !run.log
+        !run.log()
             .contains("a reuse candidate reaches past the target's end"),
         "and it is not deferred as well\n{}",
-        run.log
+        run.log()
     );
     // The file ends at the target's size, with the tail gone.
     assert_eq!(rig.read("game/shrink.dat"), lay_out(&spec.new[0].chunks));
@@ -1048,15 +1087,15 @@ async fn a_source_past_the_end_defers_the_trim() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log
+        run.log()
             .contains("a reuse candidate reaches past the target's end"),
         "the trim waits for the end\n{}",
-        run.log
+        run.log()
     );
     assert!(
-        !run.log.contains("trimming the dead tail"),
+        !run.log().contains("trimming the dead tail"),
         "and it is not released eagerly as well\n{}",
-        run.log
+        run.log()
     );
     assert_eq!(rig.read("game/shrink.dat"), lay_out(&spec.new[0].chunks));
 }
@@ -1082,12 +1121,12 @@ async fn a_file_that_does_not_shrink_is_not_trimmed() {
     let run = rig.run(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        !run.log.contains("trimming the dead tail")
+        !run.log().contains("trimming the dead tail")
             && !run
-                .log
+                .log()
                 .contains("a reuse candidate reaches past the target's end"),
         "a file that does not shrink has no dead tail\n{}",
-        run.log
+        run.log()
     );
 }
 
@@ -1548,11 +1587,15 @@ async fn the_trace_logs_download_records_agree_with_the_servers_request_log() {
 
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    // This is the one run that needs the per-chunk download records, which
+    // are emitted at `trace`; everywhere else `debug` is enough.
+    let run = rig
+        .run_at_level(LogLevel::Trace, &["--max-ram-bytes", "0"])
+        .await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
 
     let asked: BTreeSet<String> = rig.mock.chunk_hits().into_iter().collect();
-    let logged = downloaded_chunks(&run.log);
+    let logged = downloaded_chunks(run.log());
     assert_eq!(
         logged, asked,
         "the trace log's download records must agree with the server's request log"
