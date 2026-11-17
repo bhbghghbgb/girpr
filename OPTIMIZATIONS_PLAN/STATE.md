@@ -10,11 +10,12 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T10** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop. T10 is the last task in
-  CP4, so on success run the CP4 review checkpoint before starting T11.
-* Active batch: none. Phase: implementation (P1 tasks). CP1, CP2, CP3 reviews done.
-* Active checkpoint: CP4 (`open`). Status: T09 `pending_review`, T10 `in_progress`.
+* Next action: run the **CP4 review checkpoint** (both tasks now `pending_review`):
+  set CP4 `in_progress`, commit, then spawn one review-and-fix session with the
+  T09/T10 pointers, commit ranges and parity notes recorded in STATE.md.
+  Do not start T11 until CP4 is `done`.
+* Active batch: CP4 (T09, T10). Phase: review (P1 tasks). CP1, CP2, CP3 reviews done.
+* Active checkpoint: CP4 (`in_progress` pending state commit). Status: T09 `pending_review`, T10 `pending_review`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -41,7 +42,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T07 | `crates/log` + `tempdir` low-risk merges | completed | P0 | CP3 | commits `bd151a08..ef7fbfc1`; CP3 review completed. 3 tests removed; tempdir pairs folded keeping every assertion; log policy still asserted via LogPlan::resolve. |
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | pending_review | P1 | CP4 | impl `327fd01e` (test-only, tests/run_lock.rs). Validated first: file guards the test-support helper, not product lock behavior (product anchors repair_offline.rs:348/408/441 intact). 15 → 5 tests; one end-to-end cleanup case retained with real Lock::acquire/remove. All dimensions asserted; run_lock 5/5 pass. No flags. |
-| T10 | Consolidate `purge.rs` classifier early tests | in_progress | P1 | CP4 | |
+| T10 | Consolidate `purge.rs` classifier early tests | pending_review | P1 | CP4 | impl `564b341b` (test-only, src/repair/purge.rs). 4 early tests removed (purge 27→23). Parity established: classify_purge_path == classify_purge_path_visible when visible=true; all 16 distinct cases verified under both fixtures (only extra set members dir/manifest.dat, mods/blacklisted.dat, no relocated row equals them); 8 rows moved into cached_keys table, 8 were duplicates; kept tests byte-for-byte unchanged. No flags. |
 | T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
@@ -53,7 +54,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | CP1 | T01–T02 | done | root CLI self-tests + root-unit fixture dedup; T01 completed, T02 completed (fixed e4439122) |
 | CP2 | T03–T04 | done | remaining root-unit merges + sync hash table; T03 completed (fixed cd80083b), T04 completed |
 | CP3 | T05–T08 | done | capture, sled2redb, small crates, root-integration merges; T05/T06/T07 completed, T08 completed (skips confirmed). No review fixes needed. |
-| CP4 | T09–T10 | open | `run_lock.rs` + `purge.rs` (verification-required) |
+| CP4 | T09–T10 | in_progress | `run_lock.rs` + `purge.rs` (verification-required); T09 327fd01e, T10 564b341b |
 | CP5 | T11–T13 | open | `migration_lock.rs`, capture medium, cross-binary log policy |
 
 ## Commit ranges for review
@@ -72,7 +73,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T07 | bd151a08..ef7fbfc1 (2 commits) | completed |
 | T08 | 11e108ce..79c52b93 (2 commits) | completed (skips confirmed) |
 | T09 | 327fd01e (single commit) | — |
-| T10 | — | — |
+| T10 | 564b341b (single commit) | — |
 | T11 | — | — |
 | T12 | — | — |
 | T13 | — | — |
@@ -101,6 +102,8 @@ effect) so the final follow-up phase is meaningful.
 | F13 | ~~In `repair_offline.rs:514/560`, derive the `expect_no_branch_endpoint_in_text` flag from `case.failure == BranchFailure::terminal(-1001)` instead of storing it per row.~~ | T08 implementer | removed | CP3 reviewer pruned: micro-refactor within T08's table; feasible but not worth tracking. |
 | F14 | Add a shared test-only argv builder for the repeated `["--game-path", ..., "--biz", "hk4e_global"]` shape in the two consolidated CLI-heavy run_lock tests. | T09 implementer | proposed | Would churn tests/run_lock.rs again; reviewer judges whether duplication is worth it. |
 | F15 | Split `tests/common/run_lock.rs` into per-consumer modules to remove the `#[allow(dead_code)]` on `mode_takes_lock` (needed because artifact_bridge.rs includes only part of the module). | T09 implementer | proposed | Test-support refactor outside T09; LOW need. Reviewer may prune. |
+| F16 | `a_blacklisted_path_is_kept_by_the_cleanup` (still present) mixes a pure classifier assertion with real plan_purge/apply_purge I/O; move only the pure row into the parametrized table and keep the I/O part as an integration-style test. | T10 implementer | proposed | Not one of T10's four; reviewer decides relevance. |
+| F17 | Doc-comment notes on `cached_keys_classify_every_keep_rule`: (a) `classify_purge_path` visibility computation is now only exercised by the dedicated scope tests; (b) group the relocated 'everything else purges' rows under a provenance comment if needed. | T10 implementer | proposed | Doc tidy; reviewer may prune. |
 
 ## Follow-up batches
 
