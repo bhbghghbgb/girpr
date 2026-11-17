@@ -92,6 +92,13 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> 
 /// `run_binary` above is the happy-path form; a case whose point is the exit
 /// code needs the raw output, because the assertion is on stderr and on what was
 /// *not* written.
+///
+/// Like `run_binary`, this defaults the child to the in-memory cache: most
+/// callers assert on the console records or the filesystem, not on cache-file
+/// bytes, and should not pay for a 1 MB redb create per binary run. A test that
+/// *does* inspect on-disk cache bytes opts out by passing an explicit
+/// `("GIRSYNC_TEST_CACHE", "file")` in `envs`; because this default is set before
+/// `envs`, the caller's value wins.
 fn run_binary_raw(
     src: &Path,
     dst: &Path,
@@ -107,6 +114,7 @@ fn run_binary_raw(
         .arg("--output")
         .arg("json")
         .args(extra)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .envs(envs.iter().copied())
         .output()
         .expect("spawn girsync")
@@ -435,12 +443,11 @@ fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
     wfile(&dst, "other.txt", b"same");
     sync_mtime(&src.join("Other.txt"), &dst.join("other.txt"));
 
-    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
     for extra in [
         &["--include", "*.txt", "--dry-run"][..],
         &["--include", "*.txt"][..],
     ] {
-        let out = run_binary_raw(&src, &dst, extra, &envs);
+        let out = run_binary_raw(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -483,12 +490,11 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
     std::fs::hard_link(src.join("b.txt"), dst.join("a.txt"))
         .expect("hard links need no privilege on this host");
 
-    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
     for extra in [
         &["--exclude", "b.txt"][..],
         &["--exclude", "b.txt", "--hash-all-of", "none"][..],
     ] {
-        let out = run_binary_raw(&src, &dst, extra, &envs);
+        let out = run_binary_raw(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -533,9 +539,8 @@ fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
     std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt"))
         .expect("hard links need no privilege on this host");
 
-    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
     for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
-        let out = run_binary_raw(&src, &dst, extra, &envs);
+        let out = run_binary_raw(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -560,12 +565,12 @@ fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
 
     // The default plan deletes the extra name before the copy, which reduces the
     // count to one. The dry run must reach that decision too.
-    let dry = run_binary(&src, &dst, &["--dry-run"], &envs);
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
     assert_eq!(paths(&dry, "delete"), ["shared.txt"], "{dry:?}");
     assert_eq!(paths(&dry, "copy"), ["a.txt"], "{dry:?}");
     assert_eq!(rfile(&dst, "a.txt"), b"OLD", "the dry run changed nothing");
 
-    let real = run_binary(&src, &dst, &[], &envs);
+    let real = run_binary(&src, &dst, &[], &[]);
     assert_eq!(paths(&real, "delete"), ["shared.txt"], "{real:?}");
     assert_eq!(paths(&real, "copy"), ["a.txt"], "{real:?}");
     assert_eq!(rfile(&dst, "a.txt"), b"NEW");
@@ -590,9 +595,8 @@ fn a_case_only_hard_link_is_the_same_decision_in_both_modes() {
     std::fs::hard_link(dst.join("A.txt"), dst.join("shared.txt"))
         .expect("hard links need no privilege on this host");
 
-    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
     for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
-        let out = run_binary_raw(&src, &dst, extra, &envs);
+        let out = run_binary_raw(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -725,12 +729,7 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     wfile(&dst, ".girsync_case_tmp.1/keep.txt", b"KEEP");
     wfile(&dst, ".girsync_case_tmp.2", b"PRECIOUS-DIR");
 
-    let recs = run_binary(
-        &src,
-        &dst,
-        &["--keep-extra"],
-        &[("GIRSYNC_TEST_CACHE", "memory")],
-    );
+    let recs = run_binary(&src, &dst, &["--keep-extra"], &[]);
 
     let renames: Vec<&str> = recs
         .iter()
@@ -817,7 +816,8 @@ fn a_nested_case_rename_rekeys_the_destination_map_and_cache() {
     }
 
     // The binary with the real cache: the rows it leaves are the assertion.
-    let out = run_binary_raw(&src, &dst, &[], &[]);
+    // Opt out of the memory default — `recs(&dst)` below reads the on-disk rows.
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_CACHE", "file")]);
     assert!(
         out.status.success(),
         "sync failed: {}\n{}",
@@ -898,7 +898,7 @@ fn a_case_rename_of_a_very_long_name_succeeds() {
     wfile(&dst, &lower, b"payload");
     sync_mtime(&src.join(&upper), &dst.join(&lower));
 
-    let recs = run_binary(&src, &dst, &[], &[("GIRSYNC_TEST_CACHE", "memory")]);
+    let recs = run_binary(&src, &dst, &[], &[]);
     let renames: Vec<&str> = recs
         .iter()
         .filter(|r| r["event"] == "rename")
@@ -926,15 +926,7 @@ fn a_failed_case_rename_leaves_no_record() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw(
-        &src,
-        &dst,
-        &[],
-        &[
-            ("GIRSYNC_TEST_CACHE", "memory"),
-            ("GIRSYNC_TEST_FAIL_RENAME", "data.txt"),
-        ],
-    );
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_RENAME", "data.txt")]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -978,10 +970,7 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
         &src,
         &dst,
         &[],
-        &[
-            ("GIRSYNC_TEST_CACHE", "memory"),
-            ("GIRSYNC_TEST_FAIL_RENAME_STEP1", "data.txt"),
-        ],
+        &[("GIRSYNC_TEST_FAIL_RENAME_STEP1", "data.txt")],
     );
     assert_eq!(
         out.status.code(),
@@ -1030,10 +1019,7 @@ fn a_failed_case_rename_step2_rolls_back() {
         &src,
         &dst,
         &[],
-        &[
-            ("GIRSYNC_TEST_CACHE", "memory"),
-            ("GIRSYNC_TEST_FAIL_RENAME_STEP2", "data.txt"),
-        ],
+        &[("GIRSYNC_TEST_FAIL_RENAME_STEP2", "data.txt")],
     );
     assert_eq!(
         out.status.code(),
@@ -1200,15 +1186,7 @@ fn a_copied_file_carries_the_sources_timestamp() {
         .unwrap();
 
     for no_fsync in ["0", "1"] {
-        let out = run_binary_raw(
-            &src,
-            &dst,
-            &[],
-            &[
-                ("GIRSYNC_TEST_CACHE", "memory"),
-                ("GIRSYNC_TEST_NO_FSYNC", no_fsync),
-            ],
-        );
+        let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", no_fsync)]);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -1739,6 +1717,9 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
         &dst,
         &[],
         &[
+            // This case inspects on-disk cache rows via `recs(&dst)`, so opt out
+            // of the memory default. `NO_FSYNC=0` is left intact.
+            ("GIRSYNC_TEST_CACHE", "file"),
             ("GIRSYNC_TEST_FAIL_FLUSH", "a.bin"),
             ("GIRSYNC_TEST_NO_FSYNC", "0"),
         ],
@@ -1759,8 +1740,16 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
         "a cache row must not claim a copy whose flush failed"
     );
 
-    // No resume: the rerun copies it and caches it.
-    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", "0")]);
+    // No resume: the rerun copies it and caches it. Still reads `recs(&dst)`.
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "file"),
+            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -1974,8 +1963,9 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
     sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
 
     // Real file caches: with the in-memory backend there is no `girpr-cache`
-    // entry on disk to rename.
-    let out = run_binary_raw(&src, &dst, &[], &[]);
+    // entry on disk to rename, so opt out of the memory default throughout.
+    let envs = [("GIRSYNC_TEST_CACHE", "file")];
+    let out = run_binary_raw(&src, &dst, &[], &envs);
     assert!(
         out.status.success(),
         "initial sync failed: {}",
@@ -1999,7 +1989,7 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
     assert_eq!(cache_name, "GIRPR-CACHE", "the fixture renamed the cache");
 
     // Dry run: the cache is tool state, so nothing is planned for it.
-    let out = run_binary_raw(&src, &dst, &["--dry-run"], &[]);
+    let out = run_binary_raw(&src, &dst, &["--dry-run"], &envs);
     assert!(
         out.status.success(),
         "dry run failed: {}",
@@ -2019,7 +2009,7 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
     assert_eq!(summary["deleted"], 0, "the cache is not deleted: {summary}");
 
     // A real run neither copies the cache nor damages dst's live cache.
-    let out = run_binary_raw(&src, &dst, &[], &[]);
+    let out = run_binary_raw(&src, &dst, &[], &envs);
     assert!(
         out.status.success(),
         "sync after the rename failed: {}",
