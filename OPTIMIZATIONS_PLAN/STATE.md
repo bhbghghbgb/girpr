@@ -10,14 +10,13 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn one implementing session for **Batch B** (F11, F12) with the
-  scope/pointers recorded in the Follow-up batches table, then a review session
-  for it. Run batches in order B → C → A (small/concrete first, largest last).
-  After all batches are `done` and no actionable follow-ups remain, make the
-  final cleanup commit (delete OPTIMIZATIONS_PLAN/ and
-  docs/08-test-suite-reduction-audit.md, verify no implementation file refers
-  to either).
-* Active batch: **Batch B** (`in_progress`). Phase: follow-ups (§5). CP1–CP5 all `done`.
+* Next action: spawn one **review session for Batch B** (F11, F12) with the
+  batch's scope/pointers and commit range recorded below. Do not start Batch C
+  until Batch B is `done`. After all batches are `done` and no actionable
+  follow-ups remain, make the final cleanup commit (delete OPTIMIZATIONS_PLAN/
+  and docs/08-test-suite-reduction-audit.md, verify no implementation file
+  refers to either).
+* Active batch: **Batch B** (`pending_review`). Phase: follow-ups (§5). CP1–CP5 all `done`.
 * Active checkpoint: none (`done`). Status: all 13 tasks terminal.
 * Blocked on user: no.
 
@@ -112,6 +111,8 @@ effect) so the final follow-up phase is meaningful.
 | F20 | Restore a compact synthetic self-test proving `check_golden` REJECTS bad event sequences (reorder, duplicate terminal, misplaced progress, renamed event) - T13 removed the only such test (batch C). | T13 implementer | scheduled | Batching review kept (low priority): real gap in test-helper mutation coverage; real goldens only hit the happy path. |
 | F21 | ~~Strengthen gircap/girsync env-prefix assertions to verify `girpr_log::env_options` reads those exact names end-to-end.~~ | T13 implementer | removed | CP5 reviewer pruned: tautological strengthening needing racy env mutation; env_options covered generically in crates/log. |
 | F22 | ~~Remove the now-unused `default_log_path()` wrappers in girpr and girsync after T13's unit-duplicate removals.~~ | T13 implementer | removed | CP5 reviewer pruned: minor dead-code cleanup, no coverage/test-count value; girpr wrapper tied to an intra-doc link. |
+| F23 | If other repair integration binaries (`repair_scope.rs`, `repair_limits.rs`, `repair_post.rs`) repeat the 'no getBuild / no config bump' invariant, promote `assert_metadata_phase_stopped` from `tests/repair_offline.rs` into `tests/common/mod.rs` - after validating the pattern actually repeats there. | Batch B implementer | proposed | Conditional; test-only. Reviewer may prune as speculative. |
+| F24 | Close the F12 end-to-end gap: multi-language formatting (`audio_langs=en-us,ja-jp`) is asserted only in `src/report/tests.rs`; add a single process case with `--audio en-us,ja-jp` if end-to-end multi-language resolution matters. | Batch B implementer | proposed | Low priority; adds a test back. Reviewer decides. |
 
 ## Follow-up batches
 
@@ -123,7 +124,7 @@ the same separate state commits as the task/checkpoint loop. Statuses: `open` �
 
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
-| B | F11, F12 | in_progress | — | — | Root repair integration cleanup: `tests/repair_offline.rs` shared assertion helper for repeated branch-issued / no-getBuild / no-config-bump checks (allow per-case omissions); `tests/repair_plan.rs` narrow `audio_langs=en-us` assertion to the no-scope case. Pointers: report §C kept L143-148, `OPTIMIZATIONS_PLAN/tasks/T08-root-integration-optional-merges.md`, `tests/repair_offline.rs:470-733`, `tests/repair_plan.rs:150-205`, `src/report/tests.rs:405-460`. No case merges, no coverage loss, no product code. | Run first (small/concrete). |
+| B | F11, F12 | pending_review | 6b82c98a..614f3aa4 (2 test-only commits) | — | Root repair integration cleanup: `tests/repair_offline.rs` shared assertion helper for repeated branch-issued / no-getBuild / no-config-bump checks (allow per-case omissions); `tests/repair_plan.rs` narrow `audio_langs=en-us` assertion to the no-scope case. Pointers: report §C kept L143-148, `OPTIMIZATIONS_PLAN/tasks/T08-root-integration-optional-merges.md`, `tests/repair_offline.rs:470-733`, `tests/repair_plan.rs:150-205`, `src/report/tests.rs:405-460`. No case merges, no coverage loss, no product code. | Run first (small/concrete). |
 | C | F09, F20 | open | — | — | Coverage hardening: add `cargo nextest run --release -p girpr-log` to the documented gate in `README.md:437-456` (no CI config exists - do not create one; skip if no appropriate place); restore a compact synthetic `check_golden` rejection self-test in `tests/cli_contract.rs` (reorder, duplicate terminal, misplaced progress, renamed event => Err). Pointers: report §F.4 L218-220, T07/T13 task files, `crates/log/src/plan.rs:273-297,420-443`, `README.md:430-456`, `.config/nextest.toml`, `tests/cli_contract.rs:1702-1770`. Note F20 adds a test back (low priority). | Run second. |
 | A | F01 | open | — | — | Shared tempdir helper extraction: move the verbatim `tests/common/mod.rs` from `tools/sync` and `tools/sled2redb` into the existing `girpr-tempdir` crate; rewire both test targets; leave root/capture `common/mod.rs` separate. Pointers: report cross-cutting L226-233, `tools/sync/tests/common/mod.rs`, `tools/sled2redb/tests/common/mod.rs`, `crates/tempdir/src/lib.rs`. F01 targets `common/mod.rs`, not T06's rewritten `convert.rs`. Test-only; preserve all helper behavior. | Run last (largest refactor, single item). |
 
