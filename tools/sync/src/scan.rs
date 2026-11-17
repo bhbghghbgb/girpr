@@ -219,6 +219,22 @@ pub fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> 
 mod tests {
     use super::*;
 
+    /// The production heartbeat period is the default: with the test hook unset
+    /// the walk uses 2,000 entries, so a small fixture does not silently turn the
+    /// heartbeat into a per-entry event. The nextest harness sets no
+    /// `GIRSYNC_TEST_HEARTBEAT_ENTRIES` (see `.config/nextest-test-env`), so each
+    /// test process sees the default; pin it here against a hook leaking into the
+    /// shared environment or against a change to the constant itself.
+    #[test]
+    fn the_heartbeat_period_defaults_to_the_production_2000() {
+        assert_eq!(HEARTBEAT_ENTRIES, 2000);
+        assert_eq!(
+            heartbeat_entries(),
+            2000,
+            "GIRSYNC_TEST_HEARTBEAT_ENTRIES must be unset for this test"
+        );
+    }
+
     /// Pruning is asserted as the *set* of surviving rels, which is the property
     /// every caller depends on, rather than as the order the walk happened to
     /// produce. It covers both halves of the decision that a `girpr-cache*` entry
