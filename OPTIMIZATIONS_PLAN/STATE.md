@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for the CP4 review-and-fix session; apply verdicts, then start CP5 at T19.
-* Active checkpoint: CP4 (`in_progress` — review session running).
+* Next action: start CP5 — pick the first `todo` task (T19) and spawn its implementing session.
+* Active checkpoint: none (CP4 `done`; CP5 `open`).
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -39,11 +39,11 @@ commit ranges only.
 | T11 | Replace girsync publish fixed sleeps | completed | CP3 | CP3 review: completed |
 | T12 | Replace girpr panic-ordering sleep | completed | CP3 | CP3 review: completed |
 | T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
-| T14 | Reduce girpr trace-level logging | pending_review | CP4 | 32d12ebe; see review range |
-| T15 | Remove girpr `--help`/argument spawns | pending_review | CP4 | ac507a7c; see review range |
-| T16 | Consolidate girpr multi-run parity tests | pending_review | CP4 | b51e0395; see review range |
-| T17 | Merge girsync dry-run/hard-link groups | pending_review | CP4 | 15e79270; see review range |
-| T18 | Merge redundant gircap read/verify groups | pending_review | CP4 | 9b8b5128; §6.2-5 done, §6.2-3 N/A — reviewer to judge |
+| T14 | Reduce girpr trace-level logging | completed | CP4 | CP4 review: completed (stale-report deviation confirmed) |
+| T15 | Remove girpr `--help`/argument spawns | completed (fixed) | CP4 | CP4 review: completed (fixed) — byte-identity guard in 937438db |
+| T16 | Consolidate girpr multi-run parity tests | completed | CP4 | CP4 review: completed |
+| T17 | Merge girsync dry-run/hard-link groups | completed | CP4 | CP4 review: completed |
+| T18 | Merge redundant gircap read/verify groups | completed | CP4 | CP4 review: completed (§6.2-3 deferral accepted as N/A) |
 | T19 | Tidy ignored tests | todo | CP5 | |
 | T20 | Guardrail audit (hooks, no temp→`Z:`) | todo | CP5 | |
 
@@ -54,7 +54,7 @@ commit ranges only.
 | CP1 | T01–T05 | done | girsync fixtures & cache backend |
 | CP2 | T06–T08 | done | gircap capture consolidation & fixtures |
 | CP3 | T09–T13 | done | sled2redb conversions & fixed sleeps |
-| CP4 | T14–T18 | in_progress | girpr spawns, logging & redundant merges |
+| CP4 | T14–T18 | done | girpr spawns, logging & redundant merges |
 | CP5 | T19–T20 | open | ignored tests & final guardrail audit |
 
 ## Commit ranges for review
@@ -76,11 +76,11 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T11 | `fa0a7687..f7eb3995` | completed |
 | T12 | `326acea9..c33dfe0e` | completed |
 | T13 | `fbf8d14c..1fe87a27` | completed |
-| T14 | `49457928..32d12ebe` | — |
-| T15 | `f7392a76..ac507a7c` | — |
-| T16 | `aeefde5c..b51e0395` | — |
-| T17 | `319270b7..15e79270` | — |
-| T18 | `6c165bc5..9b8b5128` | — |
+| T14 | `49457928..32d12ebe` | completed |
+| T15 | `f7392a76..ac507a7c` (+ fix `937438db`) | completed (fixed) |
+| T16 | `aeefde5c..b51e0395` | completed |
+| T17 | `319270b7..15e79270` | completed |
+| T18 | `6c165bc5..9b8b5128` | completed (partial accepted) |
 
 ## Follow-ups
 
@@ -113,19 +113,19 @@ are done and a review session has decided the batches.
 | F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | removed | CP3 review: literal is established across hyp.rs/stream.rs/retry.rs; exposing private const marginal. |
 | F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | proposed | CP3 review: KEEP — guards a real acceptance criterion (broken hook would still pass, just 500 ms slower). |
 | F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | proposed | CP3 review: KEEP — cheap unit test for production-safety criterion. |
-| F26 | Add a `run_no_log()` variant to repair_machinery that omits `--log-file`/`--log-file-level` entirely for tests that never read the log, eliminating log-creation IO (debug builds write no log file without `--log-file`). | T14 implementer | proposed | Reviewer decides. |
-| F27 | Assert chunk outcomes from the binary's `--output json` NDJSON records (`download_bytes`, etc.) instead of parsing log text in `downloaded_chunks`/`in_place_chunk_stats`, reducing coupling to the log format. | T14 implementer | proposed | Reviewer decides. |
-| F28 | Use a `warn` default log level in repair_machinery, with the ~8 log-asserting tests explicitly requesting `debug`; marginal gain given kilobyte fixtures. | T14 implementer | proposed | Reviewer decides. |
-| F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; consider whether the spelling-parity test's process cost is worth it. | T15 implementer | proposed | Implementer left intact to honour "assertions unchanged"; reviewer decides. |
-| F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | proposed | Reviewer decides. |
-| F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | Out of scope; reviewer decides. |
-| F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | proposed | Reviewer decides. |
-| F33 | Merge the three repaired `repair_scan.rs` tests into one table-driven test over modes (inplace/temp/ordered) centralizing "scanned estimate == real download" via `--plan-out`; higher coverage risk. | T16 implementer | proposed | Reviewer decides. |
-| F34 | The cross-root hard-link test could share the T17 fixture too, but needs a third link and `--exclude`, raising complexity/risk for little gain — kept separate deliberately. | T17 implementer | proposed | Reviewer decides. |
-| F35 | Some remaining hard-link refusal spawns could be in-process `cmd_sync` assertions, but that changes what is asserted (exit code/stderr -> error value). | T17 implementer | proposed | Reviewer decides. |
-| F36 | On case-insensitive hosts the case-only hard-link dimension now emits an `eprintln!` skip line instead of a nextest "skipped" test; revisit if a visible skip marker is preferred. | T17 implementer | proposed | Reviewer decides. |
-| F37 | If future tests verify the T06 shared bundle in more than one place, add a `verified_shared_bundle(variant)` helper that verifies once under the file lock and caches the summary on disk keyed by the bundle fingerprint (race-free). | T18 implementer | proposed | No dedup gain today (single consumer); reviewer decides. |
-| F38 | Add a `materialize` refusal assertion to `a_bundle_without_the_rejection_document_does_not_verify` for symmetry with error_shapes/error_responses — this is added coverage, not redundancy removal. | T18 implementer | proposed | Out of T18 scope; reviewer decides. |
+| F26 | Add a `run_no_log()` variant to repair_machinery that omits `--log-file`/`--log-file-level` entirely for tests that never read the log, eliminating log-creation IO (debug builds write no log file without `--log-file`). | T14 implementer | proposed | CP4 review: KEEP — real bounded IO win; snapshots unaffected. |
+| F27 | Assert chunk outcomes from the binary's `--output json` NDJSON records (`download_bytes`, etc.) instead of parsing log text in `downloaded_chunks`/`in_place_chunk_stats`, reducing coupling to the log format. | T14 implementer | removed | CP4 review: maintainability refactor, no runtime win; log assertions must stay unchanged. |
+| F28 | Use a `warn` default log level in repair_machinery, with the ~8 log-asserting tests explicitly requesting `debug`; marginal gain given kilobyte fixtures. | T14 implementer | removed | CP4 review: marginal; debug default already applied. |
+| F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; convert via `usage_rejection`, keep one for exact stderr. | T15 implementer | proposed | CP4 review: KEEP — genuine bounded win. |
+| F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | removed | CP4 review: moot — confirmed debug builds write no default log file (logging.rs:183-200). |
+| F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | CP4 review: KEEP — product-hook decision for a future review. |
+| F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | removed | CP4 review: cosmetic cross-binary assertion dedup. |
+| F33 | Merge the three repaired `repair_scan.rs` tests into one table-driven test over modes (inplace/temp/ordered) centralizing "scanned estimate == real download" via `--plan-out`; higher coverage risk. | T16 implementer | removed | CP4 review: high coverage risk; T16 deliberately conservative. |
+| F34 | The cross-root hard-link test could share the T17 fixture too, but needs a third link and `--exclude`, raising complexity/risk for little gain — kept separate deliberately. | T17 implementer | removed | CP4 review: implementer deemed not worth complexity/risk. |
+| F35 | Some remaining hard-link refusal spawns could be in-process `cmd_sync` assertions, but that changes what is asserted (exit code/stderr -> error value). | T17 implementer | removed | CP4 review: would weaken exit-code/stderr assertions to error values. |
+| F36 | On case-insensitive hosts the case-only hard-link dimension now emits an `eprintln!` skip line instead of a nextest "skipped" test; revisit if a visible skip marker is preferred. | T17 implementer | removed | CP4 review: cosmetic host-dependent skip marker. |
+| F37 | If future tests verify the T06 shared bundle in more than one place, add a `verified_shared_bundle(variant)` helper that verifies once under the file lock and caches the summary on disk keyed by the bundle fingerprint (race-free). | T18 implementer | removed | CP4 review: single consumer today — invites runaway. |
+| F38 | Add a `materialize` refusal assertion to `a_bundle_without_the_rejection_document_does_not_verify` for symmetry with error_shapes/error_responses — this is added coverage, not redundancy removal. | T18 implementer | removed | CP4 review: added coverage, not redundancy removal; out of scope. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -153,3 +153,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T16 implemented (commit b51e0395): stale report line numbers; implementer mapped actual parity relations across repair_scan/repair_machinery/repair_writer. Genuine mode-vs-mode/tier-vs-tier relations already each asserted in exactly one place (repair_machinery.rs); repair_writer.rs flagged tests are single-spawn/single-mode with unique assertions — left untouched per "keep both when relations differ". Only real redundancy was in repair_scan.rs: two scanned-estimate-vs-real-download tests each spawned twice (--print-plan + repair) — consolidated to one `--scan --plan-out` run each, comparing per-file est_download_bytes sum to SUMMARY download_bytes; chunk_hits assertions kept. 2 spawns cut (16->14 run_binary calls). repair_scan/machinery/writer 64/64, clippy/fmt clean. No product code.
 * T17 implemented (commit 15e79270): anchors current. D8 — merged `run_sync_dry_run_writes_nothing` + `…creates_no_cache` into one single-run test asserting all original checks (rw-limit-2, both files unchanged, no cache/backup on both sides, compare_mem==4 and compare==4); left ignore-cache test alone. D9 — added `seed_dst_hard_link_pair` fixture, merged the two dst-pair hard-link tests into one asserting all three dimensions in a single dry/real spawn pair (ordinary inode untouched, case-only inode untouched + renamed-before-refusal, no COPY, hazard named, default-plan delete-then-succeed parity on a separate fixture); kept cross-root test separate (different shape). Hard-link spawns 8->6; dry-run 2 tests->1. sync 46 pass/1 skip, fmt clean. No product code.
 * T18 implemented (commit 9b8b5128): §6.2-5 done — merged two `every_command_that_reads_a_bundle_agrees_*` cases into their `a_bundle_without_*_does_not_verify` partners (folding materialize loop, all assertions preserved incl. upfront is_file + verify/materialize refuse + name the doc), dropped trivial `the_binary_exists_where_this_test_expects_it`. §6.2-3 judged NOT APPLICABLE: after T06 only one test verifies the shared bundle; the six `offline_bundle.rs` reverify sites use distinct freshly-built/mutated `Bundle::build` fixtures, not the shared bundle — no per-shared-bundle verification redundancy left, so no cross-process verify cache forced (per guardrail). Report's "three agree cases / rejection twin at 498" was a miscount (two exist; line 498 partner has no agree twin — left intact, noted). gircap 865 pass/3 skip (3 fewer = 3 removed tests), fmt/clippy -D warnings clean. No product code; verify::reverify untouched. Reviewer to judge partial scope.
+* CP4 review done (one fix commit `937438db` for T15; tree clean at `937438db`): verdicts T14/T16/T17 `completed`, T15 `completed (fixed)`, T18 `completed` (§6.2-3 deferral accepted as N/A). T15 fix added a self-verifying byte-identity guard in `help_exits_zero` (`assert_eq!(stdout, real_help())`) reusing the existing --help spawn, no added process. Review confirmed T14's stale-report deviation (old :1210/:1278 read no log; logs in separate TempDir outside snapshot), every `.log()` assertion maps to an info!/debug! emission; T16/T17/T18 merges dropped no assertion/parity relation; T18 §6.2-3 confirmed single consumer. Suites re-run: repair_machinery 28/28, cli_contract 49/49, repair_scan/machinery/writer 64/64, sync 46 pass/1 skip, gircap 81/81. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25, F26, F29, F31. Removed: F27, F28, F30, F32, F33, F34, F35, F36, F37, F38 (reasons in table). No new follow-ups.
