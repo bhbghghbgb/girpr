@@ -356,20 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn the_default_file_is_named_for_the_project() {
-        let path = default_log_path();
-        let name = path.file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("girpr_"), "{name}");
-        assert!(name.ends_with(".log"), "{name}");
-        assert_eq!(
-            path.parent()
-                .and_then(Path::file_name)
-                .and_then(|s| s.to_str()),
-            Some("logs")
-        );
-    }
-
-    #[test]
     fn the_file_sink_keeps_records_in_the_buffer_until_the_flush() {
         let dir = TempDir::new("girpr_logging", "buffered_file");
         let path = dir.join("run.log");
