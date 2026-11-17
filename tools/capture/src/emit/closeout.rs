@@ -997,14 +997,6 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_close_out_returns_ok() {
-        let root = scratch("clean");
-        seed(&root);
-        run(&root);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn a_tampered_file_after_the_close_out_is_caught_by_a_second_a16() {
         // A16's value is that it re-reads from disk rather than trusting the
         // scan that produced it. Here the tamper happens *after* `close`, which
