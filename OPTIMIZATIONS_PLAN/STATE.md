@@ -10,11 +10,10 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T12** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T12** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop.
 * Active batch: none. Phase: implementation (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `todo`.
+* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -43,7 +42,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T09 | Consolidate `run_lock.rs` case clusters | completed | P1 | CP4 | impl `327fd01e`; CP4 review completed. 15 → 5 tests, every assertion preserved, end-to-end cleanup case retained with real Lock::acquire/remove; product lock code untouched (repair_offline.rs anchors intact). run_lock 5/5 pass. |
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
 | T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length strengthened by 7bf6731b; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row assertion; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. migration_lock 11/11 pass. |
-| T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
+| T12 | Capture: remove redundant process test; fold assertion-free test | in_progress | P1 | CP5 | |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
 
 ## Review checkpoints
