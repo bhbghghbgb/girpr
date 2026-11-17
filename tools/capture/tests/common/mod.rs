@@ -245,6 +245,177 @@ fn find_bundle(dir: &Path) -> PathBuf {
     panic!("no bundle under {}", dir.display());
 }
 
+// --------------------------------------------------------------- a minimal bundle
+
+/// Write the smallest directory `gircap::verify::Bundle::open` accepts, using
+/// the crate's own value types so a reader change cannot leave a stale
+/// hand-rolled fixture.
+///
+/// The "delete a document" and "missing manifest field" tests need a bundle that
+/// is valid in every respect *except* the one thing they break: otherwise the
+/// refusal they assert could be about a broken fixture rather than the missing
+/// document. Capturing a whole bundle for each such test is wasteful, so this
+/// writes the same set of documents the writers would, empty where the assertion
+/// does not care. The returned `TempDir` owns the tree and removes it on drop.
+pub fn minimal_bundle(name: &str) -> (TempDir, PathBuf) {
+    use gircap::blobs::ChunkIndex;
+    use gircap::emit::index::{
+        Biz_, Build, Capture, Checksums, Manifest, SelectionPool, Tool, Totals, Versions,
+    };
+    use gircap::emit::selfcheck::{Counts, Result_, Selfcheck};
+    use gircap::http::ErrorResponses;
+    use gircap::http::probe::ErrorShapes;
+    use gircap::pathmap::PathMapDocument;
+    use gircap::rejections::RejectionsDocument;
+
+    let scratch = TempDir::new("gircap-minimal", name);
+    let root = scratch.join("bundle");
+    std::fs::create_dir_all(&root).expect("bundle root");
+
+    let write = |rel: &str, value: serde_json::Value| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("makes dirs");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&value).expect("serializes"),
+        )
+        .expect("writes");
+    };
+    let v = gircap::SCHEMA_VERSION;
+
+    // A manifest with every field the reader wants, so a test that removes a
+    // required field fails on *that field* and not on another missing one.
+    let manifest = Manifest {
+        schema_version: v,
+        tool: Tool {
+            name: "gircap".into(),
+            version: "test".into(),
+        },
+        capture: Capture {
+            id: name.into(),
+            captured_at: "20260101T000000Z".into(),
+            host_os: "test".into(),
+            tool_argv: vec![],
+            tool_argv_raw: vec![],
+            complete: true,
+        },
+        biz: Biz_ {
+            id: "biz".into(),
+            launcher_id: String::new(),
+            game_id: String::new(),
+            channel: String::new(),
+            sub_channel: String::new(),
+            cps: String::new(),
+            hyp_base: String::new(),
+            sophon_base: String::new(),
+        },
+        versions: Versions {
+            new: Build {
+                tag: "2.0.0".into(),
+                build_id: "new-build".into(),
+                source: "test".into(),
+            },
+            old: Build {
+                tag: "1.0.0".into(),
+                build_id: "old-build".into(),
+                source: "test".into(),
+            },
+            diff_tags: vec![],
+        },
+        field: "game".into(),
+        audio: vec![],
+        gzip_threshold: 0,
+        max_decompressed_bytes: 0,
+        selection_pool: SelectionPool {
+            fields: vec![],
+            manifest_entries: BTreeMap::new(),
+            note: String::new(),
+        },
+        totals: Totals {
+            files_captured: 0,
+            chunks_blobs: 0,
+            bytes_downloaded: 0,
+            bytes_on_disk: 0,
+        },
+        matrix: vec![],
+        files: vec![],
+        totals_by_set: BTreeMap::new(),
+    };
+    write(
+        "MANIFEST.json",
+        serde_json::to_value(manifest).expect("serializes"),
+    );
+    write(
+        "chunks/index.json",
+        serde_json::to_value(ChunkIndex::build(vec![])).expect("serializes"),
+    );
+    write(
+        "verify/checksums.json",
+        serde_json::to_value(Checksums {
+            schema_version: v,
+            algorithm: "sha256".into(),
+            entries: vec![],
+            file_count: 0,
+            total_bytes: 0,
+        })
+        .expect("serializes"),
+    );
+    write(
+        "verify/selfcheck.json",
+        serde_json::to_value(Selfcheck {
+            schema_version: v,
+            result: Result_::Pass,
+            counts: Counts {
+                total: 0,
+                passed: 0,
+                failed: 0,
+            },
+            assertions: vec![],
+            matrix: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "api/error_shapes.json",
+        serde_json::to_value(ErrorShapes {
+            schema_version: v,
+            shapes: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "api/error_responses.json",
+        serde_json::to_value(ErrorResponses {
+            schema_version: v,
+            budget_bytes: 0,
+            total_retained_bytes: 0,
+            responses: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "diagnostics/rejections.json",
+        serde_json::to_value(RejectionsDocument {
+            schema_version: v,
+            cap_bytes: 0,
+            total: 0,
+            omitted: 0,
+            rejections: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "diagnostics/path_map.json",
+        serde_json::to_value(PathMapDocument {
+            schema_version: v,
+            entries: vec![],
+        })
+        .expect("serializes"),
+    );
+
+    (scratch, root)
+}
+
 // ---------------------------------------------------------------- the world
 
 /// A path whose patch shape answers no matrix class: one chunk, no reuse.
