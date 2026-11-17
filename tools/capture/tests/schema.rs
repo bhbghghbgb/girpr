@@ -8,159 +8,10 @@
 
 mod common;
 
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use common::{Mock, World};
+use common::{BundleVariant, shared_bundle};
 use girpr_tempdir::TempDir;
-
-fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().expect("the test binary has a path");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join("gircap.exe")
-}
-
-fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(bin())
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    (
-        out.status.code().expect("not killed"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-/// A capture on disk, and the scratch root that owns it.
-///
-/// The root is a [`TempDir`], so the tree is removed when this value is
-/// dropped — which, for a test, is when the test ends. The bundle inside it
-/// is what the assertions read, and nothing writes to it once the capture has
-/// finished.
-///
-/// It derefs to the bundle's path, so a test reads `b.join("MANIFEST.json")`
-/// rather than reaching into the struct: the bundle is what the test is
-/// about, and the root is only how the bundle is kept alive.
-struct CapturedBundle {
-    /// The scratch root. Never read — it is held for its `Drop`, which is
-    /// what removes the tree.
-    _root: TempDir,
-    /// The bundle directory inside the root.
-    bundle: PathBuf,
-}
-
-impl Deref for CapturedBundle {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.bundle
-    }
-}
-
-impl AsRef<Path> for CapturedBundle {
-    fn as_ref(&self) -> &Path {
-        &self.bundle
-    }
-}
-
-/// Build a capture into a fresh scratch root, and hand back the bundle.
-///
-/// **The root is removed with the returned value.** A test that binds it to a
-/// local pays for one capture and leaves nothing behind; a test that lets it
-/// die with the statement still leaves nothing behind. Every tree in this
-/// suite is built this way — see the `girpr-tempdir` crate for what the name
-/// carries and why a killed run's leftover cannot be mistaken for a fixture.
-///
-/// The listener goes away with the call too. The capture has finished writing
-/// by the time [`run`] returns, so the mock has nothing left to answer and
-/// its socket is released rather than leaked into the rest of the run.
-fn capture_into(prefix: &str, extra: &[&str]) -> CapturedBundle {
-    let root = TempDir::new(prefix, "bundle");
-    let mock = Mock::start(World::all_shapes());
-    let out = root.join("artifacts");
-    let hyp_base = mock.hyp_base();
-    let sophon_base = mock.sophon_base();
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut argv = vec![
-        "capture",
-        "--out",
-        &out_arg,
-        "--hyp-base",
-        &hyp_base,
-        "--sophon-base",
-        &sophon_base,
-    ];
-    argv.extend_from_slice(extra);
-    let (code, stdout, stderr) = run(&argv);
-    assert_eq!(code, 0, "{stdout}\n{stderr}");
-    // The capture has exited and the bundle is on disk; the mock has nothing
-    // left to answer, so it goes with this function rather than outliving it.
-    drop(mock);
-    let bundle = find_bundle(&out);
-    CapturedBundle {
-        _root: root,
-        bundle,
-    }
-}
-
-/// One capture, written for this test and owned by it.
-///
-/// **Every test builds its own.** `cargo nextest` runs each test in its own
-/// process, so a capture shared between tests is a capture shared between
-/// processes that never exist at the same time: the sharing a `OnceLock` gave
-/// under `cargo test` cannot survive the runner this project uses.
-///
-/// The cost is one capture per test — about half a second each. What it buys
-/// is that no test can see another's tree, and that the tree is removed when
-/// the test ends rather than when the machine's temp cleaner gets round to it.
-///
-/// A test that needs the bundle twice binds it to a local and pays for one
-/// capture; a test that needs it once lets the temporary die with the
-/// statement.
-fn bundle() -> CapturedBundle {
-    capture_into("gircap-schema", &[])
-}
-
-/// A capture with a threshold low enough that the gzip rule both fires and
-/// declines.
-///
-/// Separate from [`bundle`] because a lower threshold is a *different tree*,
-/// and a test that reused the default bundle could never see the rule fire.
-fn gzipped() -> CapturedBundle {
-    capture_into(
-        "gircap-gzip",
-        // Small enough to split a 1.5 KB manifest from a 400 B meta file.
-        &["--gzip-threshold", "1000"],
-    )
-}
-
-fn find_bundle(dir: &std::path::Path) -> PathBuf {
-    let mut dirs = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        if d.join("MANIFEST.json").is_file() {
-            dirs.push(d);
-            continue;
-        }
-        if let Ok(rd) = std::fs::read_dir(&d) {
-            let mut subs: Vec<PathBuf> = rd
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            subs.sort();
-            stack.extend(subs.into_iter().rev());
-        }
-    }
-    dirs.into_iter()
-        .next()
-        .unwrap_or_else(|| panic!("no bundle under {}", dir.display()))
-}
 
 fn json(path: &std::path::Path) -> serde_json::Value {
     let raw = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -178,6 +29,44 @@ fn keys(v: &serde_json::Value) -> Vec<&str> {
     k
 }
 
+/// Every assertion that reads a document from the default bundle, in one test.
+///
+/// These used to be one `#[test]` and one capture apiece — nineteen captures of
+/// the same default tree, each reading a single document. `cargo nextest` gives
+/// each test its own process, so an in-process `OnceLock` could not share that
+/// capture; the fixture in `common` shares it on disk under a file lock, and
+/// grouping the assertions here removes the per-test capture entirely. Every
+/// assertion below is byte-for-byte the one the old individual test made; only
+/// the `let b = bundle()` line moved up into this single call.
+///
+/// The two capture *variants* that are not the default keep their own tests —
+/// [`the_gzip_variant_records_its_encoding_decisions`] and
+/// [`the_ceiling_variant_records_the_ceiling_it_used`] — because their trees
+/// differ. The two manifest-key deletion tests are left for the task that
+/// hand-builds minimal bundles; they still copy this bundle before breaking
+/// their copy.
+#[test]
+fn the_default_bundle_documents_have_the_stable_schema() {
+    let shared = shared_bundle(BundleVariant::Default);
+    let b: &Path = &shared;
+    every_document_carries_the_crate_schema_version(b);
+    the_manifest_index_key_set_is_the_documented_one(b);
+    a_capture_records_the_exact_bytes_of_its_arguments(b);
+    the_error_responses_document_has_the_documented_shape(b);
+    the_rejection_document_exists_and_is_empty_for_a_healthy_capture(b);
+    the_path_map_exists_and_is_empty_for_a_healthy_capture(b);
+    the_chunk_index_key_set_is_the_documented_one(b);
+    the_gzip_threshold_is_recorded_in_the_manifest(b);
+    checksums_cover_every_file_and_re_hash_to_what_they_record(b);
+    the_checksum_totals_agree_with_the_entries(b);
+    the_manifest_file_list_is_a_prefix_of_the_complete_one(b);
+    the_api_bodies_are_byte_exact_and_the_generated_one_is_marked(b);
+    the_request_log_is_one_json_object_per_line_in_sequence_order(b);
+    a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises(b);
+    a_removed_capture_carries_an_expectation_a_consumer_can_assert(b);
+    every_capture_carries_expectations_so_none_is_assert_against_nothing(b);
+}
+
 // ------------------------------------------------------------------ the schema
 
 /// Every generated document declares the same schema version, and it is the
@@ -186,9 +75,7 @@ fn keys(v: &serde_json::Value) -> Vec<&str> {
 /// A reader that finds two versions in one bundle cannot tell whether the
 /// difference is a version or a bug, and the only cheap defence is that there is
 /// one number to compare.
-#[test]
-fn every_document_carries_the_crate_schema_version() {
-    let b = bundle();
+fn every_document_carries_the_crate_schema_version(b: &Path) {
     let want = gircap::SCHEMA_VERSION;
     let mut checked = 0;
     for rel in [
@@ -221,9 +108,8 @@ fn every_document_carries_the_crate_schema_version() {
 ///
 /// This is the document a downstream tool reads first, and a rename here is a
 /// silent breaking change to everything that reads it.
-#[test]
-fn the_manifest_index_key_set_is_the_documented_one() {
-    let doc = json(&bundle().join("MANIFEST.json"));
+fn the_manifest_index_key_set_is_the_documented_one(b: &Path) {
+    let doc = json(&b.join("MANIFEST.json"));
     assert_eq!(
         keys(&doc),
         vec![
@@ -269,9 +155,7 @@ fn the_manifest_index_key_set_is_the_documented_one() {
 /// non-Unicode argument (an unpaired surrogate in `--out`, say) recoverable at
 /// all. The two lists must stay aligned, and the bytes must be in the encoding
 /// `host_os` names.
-#[test]
-fn a_capture_records_the_exact_bytes_of_its_arguments() {
-    let b = bundle();
+fn a_capture_records_the_exact_bytes_of_its_arguments(b: &Path) {
     let doc = json(&b.join("MANIFEST.json"));
     let lossy = doc["capture"]["tool_argv"]
         .as_array()
@@ -316,9 +200,7 @@ fn a_capture_records_the_exact_bytes_of_its_arguments() {
 /// names a file of a different length from `retained_bytes` would make the
 /// index lie about what it kept, so both are checked on whatever rows this
 /// capture happened to produce.
-#[test]
-fn the_error_responses_document_has_the_documented_shape() {
-    let b = bundle();
+fn the_error_responses_document_has_the_documented_shape(b: &Path) {
     let doc = json(&b.join("api/error_responses.json"));
     assert_eq!(
         keys(&doc),
@@ -381,9 +263,7 @@ fn the_error_responses_document_has_the_documented_shape() {
 /// one this fixture can pin. The rows themselves are asserted where they are
 /// produced: `capture_layout`'s hostile-manifest tests read a real refusal back
 /// from disk.
-#[test]
-fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture() {
-    let b = bundle();
+fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture(b: &Path) {
     let doc = json(&b.join("diagnostics/rejections.json"));
     assert_eq!(
         keys(&doc),
@@ -404,9 +284,7 @@ fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture() {
 
 /// And the mapping document, whose empty state says "nothing needed escaping"
 /// rather than leaving a reader to guess whether it was written at all.
-#[test]
-fn the_path_map_exists_and_is_empty_for_a_healthy_capture() {
-    let b = bundle();
+fn the_path_map_exists_and_is_empty_for_a_healthy_capture(b: &Path) {
     let doc = json(&b.join("diagnostics/path_map.json"));
     assert_eq!(
         keys(&doc),
@@ -419,8 +297,8 @@ fn the_path_map_exists_and_is_empty_for_a_healthy_capture() {
 /// A raised decompression ceiling is recorded, not silently replaced by the
 /// default on read: it is the number every decode in the bundle was bounded by.
 #[test]
-fn a_capture_records_the_decompression_ceiling_it_used() {
-    let b = capture_into("gircap-ceiling", &["--max-decompressed-bytes", "123456"]);
+fn the_ceiling_variant_records_the_ceiling_it_used() {
+    let b = shared_bundle(BundleVariant::Ceiling);
     let doc = json(&b.join("MANIFEST.json"));
     assert_eq!(doc["max_decompressed_bytes"], 123_456);
 }
@@ -441,7 +319,7 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
     // wrote is what every other assertion reads, and this one is about a
     // bundle that has been broken on purpose.
     let dir = TempDir::new("gircap-no-threshold", "copy");
-    copy_tree(&bundle(), &dir);
+    copy_tree(shared_bundle(BundleVariant::Default).as_ref(), &dir);
 
     let path = dir.join("MANIFEST.json");
     let mut doc: serde_json::Value =
@@ -468,7 +346,7 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
 #[test]
 fn a_manifest_without_the_decompression_ceiling_does_not_open() {
     let dir = TempDir::new("gircap-no-ceiling", "copy");
-    copy_tree(&bundle(), &dir);
+    copy_tree(shared_bundle(BundleVariant::Default).as_ref(), &dir);
 
     let path = dir.join("MANIFEST.json");
     let mut doc: serde_json::Value =
@@ -501,9 +379,8 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
 
 /// The chunk index's key set, pinned. A blob entry is what `materialize` reads
 /// back, so a rename here is a rename of the tool's own reconstruction input.
-#[test]
-fn the_chunk_index_key_set_is_the_documented_one() {
-    let doc = json(&bundle().join("chunks/index.json"));
+fn the_chunk_index_key_set_is_the_documented_one(b: &Path) {
+    let doc = json(&b.join("chunks/index.json"));
     assert_eq!(keys(&doc), vec!["blobs", "schema_version", "sets"]);
     let blob = &doc["blobs"][0];
     assert_eq!(
@@ -587,8 +464,8 @@ fn the_gzip_rule_fires_above_the_threshold_and_not_below() {
 /// or a test - can choose where the boundary is, and a rule that can only ever
 /// fire at 1 MiB is untestable without a 1 MiB fixture.
 #[test]
-fn a_capture_records_which_documents_it_gzipped_and_why() {
-    let b = gzipped();
+fn the_gzip_variant_records_its_encoding_decisions() {
+    let b = shared_bundle(BundleVariant::GzipThreshold);
     // The small documents are stored plain and the large ones are `.gz`, and
     // `checksums.json` - the complete list - says which is which.
     let checksums = json(&b.join("verify/checksums.json"));
@@ -663,9 +540,8 @@ fn a_capture_records_which_documents_it_gzipped_and_why() {
 }
 
 /// The threshold itself is recorded, so a reader knows the rule the run used.
-#[test]
-fn the_gzip_threshold_is_recorded_in_the_manifest() {
-    let doc = json(&bundle().join("MANIFEST.json"));
+fn the_gzip_threshold_is_recorded_in_the_manifest(b: &Path) {
+    let doc = json(&b.join("MANIFEST.json"));
     assert_eq!(
         doc["gzip_threshold"].as_u64(),
         Some(1_048_576),
@@ -678,9 +554,7 @@ fn the_gzip_threshold_is_recorded_in_the_manifest() {
 
 /// `checksums.json` covers every file under the root and re-hashes to what it
 /// recorded, which is A16 read back off disk.
-#[test]
-fn checksums_cover_every_file_and_re_hash_to_what_they_record() {
-    let b = bundle();
+fn checksums_cover_every_file_and_re_hash_to_what_they_record(b: &Path) {
     let raw = std::fs::read(b.join("verify/checksums.json")).unwrap();
     let c: gircap::emit::index::Checksums = serde_json::from_slice(&raw).unwrap();
     let (ok, detail) = c.a16(&b);
@@ -712,9 +586,8 @@ fn checksums_cover_every_file_and_re_hash_to_what_they_record() {
 }
 
 /// The counts are self-consistent, so a reader can use either number.
-#[test]
-fn the_checksum_totals_agree_with_the_entries() {
-    let c = json(&bundle().join("verify/checksums.json"));
+fn the_checksum_totals_agree_with_the_entries(b: &Path) {
+    let c = json(&b.join("verify/checksums.json"));
     let entries = c["entries"].as_array().unwrap();
     assert_eq!(c["file_count"].as_u64().unwrap(), entries.len() as u64);
     let bytes: u64 = entries.iter().map(|e| e["bytes"].as_u64().unwrap()).sum();
@@ -750,9 +623,7 @@ fn collect(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
 /// A document that hashes itself has no fixed point, so the file that cannot
 /// list itself is the one file not in it. A reader who assumes otherwise will
 /// report `README.md` as missing.
-#[test]
-fn the_manifest_file_list_is_a_prefix_of_the_complete_one() {
-    let b = bundle();
+fn the_manifest_file_list_is_a_prefix_of_the_complete_one(b: &Path) {
     let manifest = json(&b.join("MANIFEST.json"));
     let raw = std::fs::read(b.join("verify/checksums.json")).unwrap();
     let checksums: gircap::emit::index::Checksums = serde_json::from_slice(&raw).unwrap();
@@ -792,9 +663,7 @@ fn the_manifest_file_list_is_a_prefix_of_the_complete_one() {
 /// The mock renders them compactly, so "byte-exact" here means the file is the
 /// server's own JSON - one line, no re-indenting. A capture that re-serialized
 /// through a typed view would come out pretty-printed and this would catch it.
-#[test]
-fn the_api_bodies_are_byte_exact_and_the_generated_one_is_marked() {
-    let b = bundle();
+fn the_api_bodies_are_byte_exact_and_the_generated_one_is_marked(b: &Path) {
     let configs = std::fs::read_to_string(b.join("api/getGameConfigs.json")).unwrap();
     assert_eq!(
         configs.lines().count(),
@@ -836,9 +705,8 @@ fn the_api_bodies_are_byte_exact_and_the_generated_one_is_marked() {
 
 /// `api/requests.ndjson` records every request, one JSON object per line, in
 /// sequence order.
-#[test]
-fn the_request_log_is_one_json_object_per_line_in_sequence_order() {
-    let text = std::fs::read_to_string(bundle().join("api/requests.ndjson")).unwrap();
+fn the_request_log_is_one_json_object_per_line_in_sequence_order(b: &Path) {
+    let text = std::fs::read_to_string(b.join("api/requests.ndjson")).unwrap();
     let mut last = 0;
     let mut n = 0;
     for line in text.lines() {
@@ -868,9 +736,7 @@ fn the_request_log_is_one_json_object_per_line_in_sequence_order() {
 /// Asserted on the emitted JSON rather than on the struct: the struct cannot
 /// represent a missing plan, so a struct-level assertion would pass whatever the
 /// writer wrote.
-#[test]
-fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
-    let b = bundle();
+fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises(b: &Path) {
     let added = json(&b.join("patchmaps/added.json"));
 
     // §13: "for `added` there is no `old`, and every `plan` entry is `FETCH`
@@ -928,9 +794,7 @@ fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
     assert!(added["expectations"]["result_path"].is_string());
 }
 
-#[test]
-fn a_removed_capture_carries_an_expectation_a_consumer_can_assert() {
-    let b = bundle();
+fn a_removed_capture_carries_an_expectation_a_consumer_can_assert(b: &Path) {
     let removed = json(&b.join("patchmaps/removed.json"));
 
     assert!(removed["new"].is_null(), "`removed` has no new side");
@@ -957,9 +821,7 @@ fn a_removed_capture_carries_an_expectation_a_consumer_can_assert() {
     );
 }
 
-#[test]
-fn every_capture_carries_expectations_so_none_is_assert_against_nothing() {
-    let b = bundle();
+fn every_capture_carries_expectations_so_none_is_assert_against_nothing(b: &Path) {
     let mut checked = 0;
     for entry in std::fs::read_dir(b.join("patchmaps")).expect("patchmaps/") {
         let p = entry.expect("entry").path();
