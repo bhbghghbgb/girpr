@@ -84,8 +84,17 @@ impl Run {
 type BTreeMap<K, V> = std::collections::BTreeMap<K, V>;
 
 fn run(args: &[&str]) -> Run {
-    let out = Command::new(bin())
-        .args(args)
+    run_with_env(args, &[])
+}
+
+/// `run` with extra environment variables set on the child process.
+fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> Run {
+    let mut cmd = Command::new(bin());
+    cmd.args(args);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let out = cmd
         .output()
         .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
     Run {
@@ -97,6 +106,11 @@ fn run(args: &[&str]) -> Run {
 
 /// `gircap capture` against `mock`, writing into `scratch.out()`.
 fn capture(mock: &Mock, scratch: &Scratch, extra: &[&str]) -> Run {
+    capture_with_env(mock, scratch, extra, &[])
+}
+
+/// `capture` with extra environment variables set on the capture child.
+fn capture_with_env(mock: &Mock, scratch: &Scratch, extra: &[&str], env: &[(&str, &str)]) -> Run {
     let mut args: Vec<String> = vec![
         "capture".into(),
         "--out".into(),
@@ -108,7 +122,7 @@ fn capture(mock: &Mock, scratch: &Scratch, extra: &[&str]) -> Run {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run(&borrowed)
+    run_with_env(&borrowed, env)
 }
 
 /// The one bundle under a scratch root, whichever way the layout nests it.
@@ -1200,7 +1214,14 @@ fn a_retried_request_is_recorded_as_retried() {
     let armed = "/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e";
     let mock = Mock::start(World::all_shapes()).fail_once_for(armed);
     let scratch = Scratch::new("retry");
-    let r = capture(&mock, &scratch, &["--jobs", "1"]);
+    // The 503 is still armed, fetched and recorded as a retry; only the 500 ms
+    // production backoff is skipped in the child via the test-only hook.
+    let r = capture_with_env(
+        &mock,
+        &scratch,
+        &["--jobs", "1"],
+        &[("GIRCAP_TEST_ZERO_BACKOFF", "1")],
+    );
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
     let bundle = bundle_in(&scratch.out());
 
