@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T04) and spawn its implementing session.
-* Active checkpoint: CP1 (`open`); T01, T02 `pending_review`, T03 `skipped`.
+* Next action: wait for implementing session on T04, then advance per the loop.
+* Active checkpoint: CP1 (`open`); T01, T02 `pending_review`, T03 `skipped`, T04 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -29,7 +29,7 @@ commit ranges only.
 | T01 | Lower heartbeat fixture via test hook | pending_review | CP1 | implemented in 833f6d6a; see review range below |
 | T02 | Default `run_binary_raw` to memory cache | pending_review | CP1 | implemented in eb6afaf2; see review range below |
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; no changes. See context. |
-| T04 | Shrink rw_threads 96-file fixture | todo | CP1 | |
+| T04 | Shrink rw_threads 96-file fixture | in_progress | CP1 | |
 | T05 | Shrink `as_done` 11 MB fixture | todo | CP1 | |
 | T06 | Consolidate gircap captures + shared bundle | todo | CP2 | |
 | T07 | Hand-build minimal bundles for delete-a-doc | todo | CP2 | |
