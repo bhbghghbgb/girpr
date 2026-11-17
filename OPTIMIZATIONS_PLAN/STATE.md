@@ -10,13 +10,15 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: run the **CP5 review checkpoint** (all tasks terminal: T11 skipped,
-  T12/T13 `pending_review`): set CP5 `in_progress`, commit, then spawn one
-  review-and-fix session with the T11/T12/T13 pointers, commit ranges and the
-  review flags recorded in the task notes. CP5 review is the final checkpoint;
-  after it, handle surviving follow-ups per section 5, then do the final cleanup.
-* Active batch: CP5 (T11, T12, T13). Phase: review (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`in_progress` pending state commit). Status: T11 `skipped`, T12 `pending_review` (partial), T13 `pending_review`.
+* Next action: **follow-up batching phase** (ORCHESTRATION.md §5). All 13 tasks
+  terminal and all 5 checkpoints `done`. Spawn a review session first to decide
+  how to batch the surviving follow-ups (F01,F03,F09,F11,F12,F20); it may add or
+  delete follow-ups. Record the resulting batches in STATE.md, then implement
+  and review one batch at a time with the same separate state commits. After no
+  actionable follow-ups remain, make the final cleanup commit (delete
+  OPTIMIZATIONS_PLAN/ and docs/08-test-suite-reduction-audit.md, verify no refs).
+* Active batch: none. Phase: follow-ups. CP1–CP5 all `done`.
+* Active checkpoint: none (`done`). Status: all tasks terminal.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -44,9 +46,9 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | completed | P1 | CP4 | impl `327fd01e`; CP4 review completed. 15 → 5 tests, every assertion preserved, end-to-end cleanup case retained with real Lock::acquire/remove; product lock code untouched (repair_offline.rs anchors intact). run_lock 5/5 pass. |
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
-| T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length strengthened by 7bf6731b; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row assertion; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. migration_lock 11/11 pass. |
-| T12 | Capture: remove redundant process test; fold assertion-free test | pending_review | P1 | CP5 | PARTIAL: impl `2202ea9f` (test-only, closeout.rs) removed assertion-free `a_clean_close_out_returns_ok` (fully redundant; neighbours assert more). REVIEW FLAG: bullet 1 `a_bad_log_level_is_refused_by_the_parser` (cli_contract.rs:214) SKIPPED/test kept - exit code and stderr-name assertions are covered, but its `r.stdout.is_empty()` assertion exists NOWHERE else in the capture tree (the named stdout-contract tests assert different things). Reviewer must confirm skip or fix by pinning stdout-empty into a neighbour first. |
-| T13 | Cross-binary log-file policy reduction | pending_review | P1 | CP5 | commits `d1905b33..7f19b8d6` (4 test-only). All sub-parts done, none skipped. 19 tests removed: girpr cli_contract 34→27 + logging 6→5; gircap cli_contract 30→24 + logging 3→3; girsync output 21→16 + logging 2→2. girpr keeps 5 E2E process tests, gircap/girsync one smoke + env-prefix unit assertion. Every removed case maps to a crates/log unit test or retained case; log policy implementation untouched; workspace 0 failures. |
+| T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. CP5 review CONFIRMED skip. |
+| T12 | Capture: remove redundant process test; fold assertion-free test | completed (fixed) | P1 | CP5 | impl `2202ea9f` + review fix `edc1d76d` (both test-only). Closeout assertion-free test removed; reviewer applied F19 fix: pinned the unique process-level stdout-empty guarantee into `every_argument_error_is_one` (12 parser-refusal cases) and deleted the redundant `a_bad_log_level_is_refused_by_the_parser`. Full task complete; workspace green. |
+| T13 | Cross-binary log-file policy reduction | completed | P1 | CP5 | commits `d1905b33..7f19b8d6` (4 test-only); CP5 review completed. 19 tests removed; all sub-parts done. girpr keeps 5 E2E process tests; gircap/girsync one smoke each + env-prefix unit. Every removed case has a retained equivalent; log policy implementation untouched. Full workspace nextest 2154 passed / 12 ignored / 0 failures. |
 
 ## Review checkpoints
 
@@ -56,7 +58,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | CP2 | T03–T04 | done | remaining root-unit merges + sync hash table; T03 completed (fixed cd80083b), T04 completed |
 | CP3 | T05–T08 | done | capture, sled2redb, small crates, root-integration merges; T05/T06/T07 completed, T08 completed (skips confirmed). No review fixes needed. |
 | CP4 | T09–T10 | done | `run_lock.rs` + `purge.rs` (verification-required); T09 and T10 both completed, parity independently confirmed, no review fixes needed |
-| CP5 | T11–T13 | in_progress | `migration_lock.rs`, capture medium, cross-binary log policy; T11 skipped, T12 2202ea9f (partial), T13 d1905b33..7f19b8d6 |
+| CP5 | T11–T13 | done | `migration_lock.rs`, capture medium, cross-binary log policy; T11 skip confirmed, T12 completed (fixed edc1d76d), T13 completed. All checkpoints done. |
 
 ## Commit ranges for review
 
@@ -75,9 +77,9 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T08 | 11e108ce..79c52b93 (2 commits) | completed (skips confirmed) |
 | T09 | 327fd01e (single commit) | completed |
 | T10 | 564b341b (single commit) | completed |
-| T11 | — (skipped, no commits) | skipped, to be confirmed by CP5 review |
-| T12 | 2202ea9f (single commit; bullet 1 skipped) | — |
-| T13 | d1905b33..7f19b8d6 (4 commits) | — |
+| T11 | — (skipped, no commits) | skipped (CP5 confirmed) |
+| T12 | 2202ea9f + fix edc1d76d | completed (fixed) |
+| T13 | d1905b33..7f19b8d6 (4 commits) | completed |
 
 ## Follow-ups
 
@@ -105,11 +107,11 @@ effect) so the final follow-up phase is meaningful.
 | F15 | ~~Split `tests/common/run_lock.rs` into per-consumer modules to remove the `#[allow(dead_code)]` on `mode_takes_lock`.~~ | T09 implementer | removed | CP4 reviewer pruned: LOW-need test-support refactor outside scope. |
 | F16 | ~~`a_blacklisted_path_is_kept_by_the_cleanup` (still present) mixes a pure classifier assertion with real plan_purge/apply_purge I/O; move only the pure row into the parametrized table.~~ | T10 implementer | removed | CP4 reviewer pruned: no test-count benefit; pure+I/O layering is intentional. |
 | F17 | ~~Doc-comment notes on `cached_keys_classify_every_keep_rule`: visibility computation only in scope tests; group 'everything else purges' rows under a provenance comment.~~ | T10 implementer | removed | CP4 reviewer pruned: already done by commit `564b341b` (provenance comment at lines 853–857 plus per-group comments). |
-| F18 | Document which `tools/sync/tests/migration_lock.rs` tests are deliberately file-backend-specific (backups, snapshots, record side, dry-run byte-identity) despite the file's backend-agnostic header, so a future audit does not re-flag them as out of place. | T11 implementer | proposed | Cosmetic doc clarification following T11's verified skip. |
-| F19 | To realize T12 bullet 1 safely: first fold the unique process-level `r.stdout.is_empty()` guarantee into a neighbouring argument-error test (e.g. extend `every_argument_error_is_one` across its case table), then delete `a_bad_log_level_is_refused_by_the_parser`. The cli/mod.rs:1002 and cli_contract.rs:214 tests pin different layers and can only be consolidated after stdout-empty is pinned elsewhere. | T12 implementer | proposed | Preserves coverage while saving one test; evaluate with T12 review. |
-| F20 | Consider restoring a compact synthetic self-test proving `check_golden` REJECTS bad event sequences - T13 removed the only such test (real goldens only exercise the happy path). | T13 implementer | proposed | Adds a test back; reviewer must judge if mutation-detection of the test helper matters. |
-| F21 | Strengthen gircap/girsync env-prefix assertions to verify `girpr_log::env_options` reads those exact names end-to-end; currently they pin only `PROJECT.to_ascii_uppercase()`. | T13 implementer | proposed | Needs env mutation (racy under parallel tests); env_options is covered generically in crates/log. Reviewer likely prunes. |
-| F22 | Remove the now-unused `default_log_path()` wrappers in girpr and girsync after T13's unit-duplicate removals (no warnings emitted); girpr's is referenced by an intra-doc link at src/logging.rs:19, so needs care. | T13 implementer | proposed | Minor cleanup only; reviewer decides. |
+| F18 | ~~Document which `tools/sync/tests/migration_lock.rs` tests are deliberately file-backend-specific despite the file's backend-agnostic header.~~ | T11 implementer | removed | CP5 reviewer pruned: cosmetic doc note only; no coverage/test-count value. |
+| F19 | ~~Pin process-level stdout-empty into a neighbouring test, then delete `a_bad_log_level_is_refused_by_the_parser`.~~ | T12 implementer | removed | CP5 reviewer resolved: implemented as fix commit `edc1d76d`, T12 now complete. |
+| F20 | Consider restoring a compact synthetic self-test proving `check_golden` REJECTS bad event sequences - T13 removed the only such test (real goldens only exercise the happy path). | T13 implementer | proposed | CP5 reviewer kept (low priority): real gap in test-helper mutation coverage. Adds a test back; batching review to judge. |
+| F21 | ~~Strengthen gircap/girsync env-prefix assertions to verify `girpr_log::env_options` reads those exact names end-to-end.~~ | T13 implementer | removed | CP5 reviewer pruned: tautological strengthening needing racy env mutation; env_options covered generically in crates/log. |
+| F22 | ~~Remove the now-unused `default_log_path()` wrappers in girpr and girsync after T13's unit-duplicate removals.~~ | T13 implementer | removed | CP5 reviewer pruned: minor dead-code cleanup, no coverage/test-count value; girpr wrapper tied to an intra-doc link. |
 
 ## Follow-up batches
 
