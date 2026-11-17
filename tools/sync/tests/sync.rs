@@ -8,8 +8,8 @@ use girsync::rw::RwLimits;
 
 use common::{
     compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
-    log, parse_ndjson, recs_of, rfile, strip_ansi, sync, sync_dry, sync_mem, sync_mtime, temp_root,
-    update, update_mem, wfile,
+    log, parse_ndjson, recs_of, rfile, skip_if_no_link, strip_ansi, sync, sync_dry, sync_mem,
+    sync_mtime, temp_root, update, update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheOpen, TestCacheBackend, load_all_records, open_db};
 use girsync::{BackupPolicy, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};

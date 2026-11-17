@@ -647,6 +647,10 @@ dependencies = [
 [[package]]
 name = "girpr-tempdir"
 version = "0.1.0"
+dependencies = [
+ "girsync",
+ "serde_json",
+]
 
 [[package]]
 name = "girsync"

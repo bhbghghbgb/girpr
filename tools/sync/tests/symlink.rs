@@ -20,8 +20,8 @@ mod common;
 use std::path::Path;
 
 use common::{
-    dir_link, entry_names, file_link, is_link, log, parse_ndjson, recs_of, rfile, sync_mem,
-    temp_root, wfile,
+    dir_link, entry_names, file_link, is_link, log, parse_ndjson, recs_of, rfile,
+    skip_if_case_insensitive, skip_if_no_link, sync_mem, temp_root, wfile,
 };
 use girsync::scan::walk_live;
 use girsync::{cmd_compare_self, cmd_sync};

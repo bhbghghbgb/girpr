@@ -65,6 +65,19 @@
 // Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+/// Shared test fixtures for the dev tools that scratch trees here.
+///
+/// A test-support surface, not part of the scratch-directory API the shipped
+/// programs use: it holds the file/link/cache helpers that `girsync` and
+/// `sled2redb` used to keep as byte-identical copies in their own `tests/`
+/// directories. Each tool reaches them through a thin `tests/common/mod.rs`
+/// re-export, leaving every call site unchanged.
+///
+/// The module pulls in `girsync` to build the option types the fixtures hand to
+/// the code under test. That dependency is test-support only — nothing in the
+/// shipped programs links against this crate at all.
+pub mod test_support;
+
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

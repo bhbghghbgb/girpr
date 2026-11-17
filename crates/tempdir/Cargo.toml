@@ -13,3 +13,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# Shared test fixtures (the `test_support` module) build the option types the
+# dev tools' tests hand to girsync. This is a test-support surface only: the
+# crate itself is a dev-dependency of every project that uses it, so nothing
+# that ships links against either of these.
+girsync = { path = "../../tools/sync" }
+serde_json = "1.0.154"
