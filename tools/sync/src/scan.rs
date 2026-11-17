@@ -29,9 +29,21 @@ pub const HEARTBEAT_ENTRIES: usize = 2000;
 /// is default-off and production is unchanged. Deliberately not `cfg(test)`:
 /// the slow suites spawn the real binary and set the variable on the child.
 fn heartbeat_entries() -> usize {
-    std::env::var("GIRSYNC_TEST_HEARTBEAT_ENTRIES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
+    heartbeat_entries_from(
+        std::env::var("GIRSYNC_TEST_HEARTBEAT_ENTRIES")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// The pure part of [`heartbeat_entries`], so the parse/filter contract can be
+/// unit-tested without relying on the ambient environment being unset (nextest
+/// runs tests as parallel threads in one process). An unset, non-numeric or
+/// zero value falls back to the production period; only a positive integer
+/// overrides it. This is exactly the chain [`heartbeat_entries`] used before
+/// the extraction, so production behaviour is unchanged.
+fn heartbeat_entries_from(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(HEARTBEAT_ENTRIES)
 }
@@ -233,6 +245,25 @@ mod tests {
             2000,
             "GIRSYNC_TEST_HEARTBEAT_ENTRIES must be unset for this test"
         );
+    }
+
+    /// The hook's parse/filter contract, in-process: unset, non-numeric and
+    /// zero (and negative) all leave the production period in place; only a
+    /// positive integer overrides it. Testing the pure helper means these
+    /// branches do not depend on the ambient env being unset (which would race
+    /// with the other tests sharing this process).
+    #[test]
+    fn heartbeat_entries_from_defaults_except_for_a_positive_override() {
+        for unset_or_bad in [None, Some("abc"), Some(""), Some("0"), Some("-1")] {
+            assert_eq!(
+                heartbeat_entries_from(unset_or_bad),
+                2000,
+                "{unset_or_bad:?} must keep the production period"
+            );
+        }
+        assert_eq!(heartbeat_entries_from(Some("1")), 1);
+        assert_eq!(heartbeat_entries_from(Some("7")), 7);
+        assert_eq!(heartbeat_entries_from(Some("2000")), 2000);
     }
 
     /// Pruning is asserted as the *set* of surviving rels, which is the property
