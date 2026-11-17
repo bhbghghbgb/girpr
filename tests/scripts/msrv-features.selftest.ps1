@@ -4,8 +4,8 @@
 Checks the MSRV script's feature rules against a synthetic member.
 
 .DESCRIPTION
-No member of the workspace has two optional features today — `girsync` has one
-— so a real run of `check-msrv.ps1` never reaches the branch that checks a
+No member of the workspace has two optional features today — none has any —
+so a real run of `check-msrv.ps1` never reaches the branch that checks a
 combination of features. That branch is therefore driven here with a synthetic
 member and a synthetic build: the rules are the script's own, taken from
 `msrv-features.ps1`, and the builds are answers this script makes up.

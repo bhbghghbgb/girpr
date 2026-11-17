@@ -1,0 +1,43 @@
+[package]
+name = "sled2redb"
+version = "0.1.0"
+edition = "2024"
+# redb 4.1.0 (pulled in by girsync) needs 1.89; nothing else here needs more.
+rust-version = "1.89"
+description = "Dev-only one-shot converter from a legacy sled cache directory to a redb cache file, extracted from girsync"
+
+# A tools-only subset of the shared policy, the same one the other two dev
+# tools use. A panic in a dev tool is a failed developer run, not a failed
+# repair of a user's install, so `unwrap_used`/`expect_used` stay warnings.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[lib]
+name = "sled2redb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sled2redb"
+path = "src/main.rs"
+
+[dependencies]
+# The converter reads a legacy sled database and writes the redb cache through
+# girsync's public cache/hash/util/report API. `sled` is a plain dependency of
+# this crate alone; girsync itself has no sled in its graph at all.
+girsync = { path = "../sync" }
+sled = "0.34"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+# `tests/convert.rs` builds legacy sled fixtures with the two hash crates and
+# shares the workspace's scratch-directory policy with the other dev tools.
+md-5 = "0.10"
+sha2 = "0.10"
+girpr-tempdir = { path = "../../crates/tempdir" }

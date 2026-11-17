@@ -1,7 +1,7 @@
 # The workspace's test runner.
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
-# `girpr-log`, `girpr-tempdir`, `gircap` and `girsync`. This file is where the
+# `girpr-log`, `girpr-tempdir`, `gircap`, `girsync` and `sled2redb`. This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
 #

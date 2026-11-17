@@ -78,7 +78,7 @@ fn main() {
     // line this binary formats itself. The log file is written when it is asked
     // for, exactly as it is for `girsync` itself.
     let _guard = girsync::init_tracing(girsync::logging::Level::Info, None, None, false);
-    match girsync::convert::sled_to_redb(&args.sled_dir, &args.redb_path, args.force) {
+    match sled2redb::convert::sled_to_redb(&args.sled_dir, &args.redb_path, args.force) {
         Ok(c) => Record::keyed("converted")
             .put("src", args.sled_dir.display().to_string())
             .put("dst", args.redb_path.display().to_string())

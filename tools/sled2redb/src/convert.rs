@@ -2,7 +2,7 @@
 //!
 //! Reads a legacy `<root>/girpr-cache` sled directory (JSON values, hex
 //! digests under the `\0meta` reservation) and writes a new redb file with
-//! the binary codec from [`crate::cache`]. Hex digests are decoded to raw
+//! the binary codec from [`girsync::cache`]. Hex digests are decoded to raw
 //! bytes; unknown algorithms pass through untouched.
 //!
 //! **The conversion is atomic for a file destination.** The new cache is
@@ -25,7 +25,7 @@
 //! reused and a folder can be shared between hosts.
 //!
 //! Used by the `sled2redb` binary and covered by `tests/convert.rs`. This is
-//! the only module that still touches `sled`.
+//! the only module in this crate that touches `sled`; girsync never does.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::hash::DigestSet;
+use girsync::hash::DigestSet;
 
 /// Reserved sled key holding the schema meta blob.
 const OLD_META_KEY: &str = "\0meta";
@@ -192,7 +192,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
     let old =
         sled::open(sled_dir).with_context(|| format!("open sled db {}", sled_dir.display()))?;
     let mut case_sensitive = true;
-    let mut recs: Vec<(String, crate::cache::FileRec)> = Vec::new();
+    let mut recs: Vec<(String, girsync::cache::FileRec)> = Vec::new();
     for kv in old.iter() {
         let (k, v) = kv.context("read sled entry")?;
         if k.as_ref() == OLD_META_KEY.as_bytes() {
@@ -216,7 +216,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
         }
         recs.push((
             rel,
-            crate::cache::FileRec {
+            girsync::cache::FileRec {
                 kind: o.kind,
                 size: o.size,
                 mtime_ns: o.mtime_ns,
@@ -228,10 +228,10 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
     old.flush().ok();
     drop(old);
 
-    let cache = crate::cache::open_db(
+    let cache = girsync::cache::open_db(
         temp,
         case_sensitive,
-        crate::cache::CacheOpen::ReadWrite {
+        girsync::cache::CacheOpen::ReadWrite {
             ignore_cache: false,
             backup_first: false,
             retain: None,
@@ -271,7 +271,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
 fn replace_destination(temp: &Path, dst: &Path) -> Result<()> {
     let legacy_dir = dst.is_dir();
     if legacy_dir {
-        crate::cache::remove_cache_path(dst)?;
+        girsync::cache::remove_cache_path(dst)?;
     }
     std::fs::rename(temp, dst).with_context(|| {
         if legacy_dir {
@@ -308,7 +308,7 @@ fn replace_destination(temp: &Path, dst: &Path) -> Result<()> {
 /// any of them is tool state rather than content.
 fn claim_temp_sibling(dst: &Path) -> Result<PathBuf> {
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
-    let stamp = format!("{}-{}", std::process::id(), crate::util::ts_now());
+    let stamp = format!("{}-{}", std::process::id(), girsync::util::ts_now());
     for n in 1..=MAX_CLAIM_ATTEMPTS {
         let cand = parent.join(temp_candidate_name(&stamp, n));
         // Ask first whether the name is taken: `create_new` on an existing
@@ -405,7 +405,7 @@ mod tests {
         for n in 1..=3 {
             let name = temp_candidate_name(stamp, n);
             assert!(
-                crate::util::is_cache_rel(&name),
+                girsync::util::is_cache_rel(&name),
                 "`{name}` is the tool's own state, not content"
             );
         }

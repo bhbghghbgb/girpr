@@ -19,9 +19,8 @@ path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
 tests travel with the code they exercise). A path in the table is relative to
 `src/`; a row spells the whole path — `src/…` — in three cases: a path
 relative to `src/` that is a bare name another file in the tree shares
-(`link.rs`, which the plan directory's own `link.rs` shares), a file the module
-tree holds only in a test build (`#[cfg(test)]`), and a separate binary target
-(`src/bin/sled2redb.rs`).
+(`link.rs`, which the plan directory's own `link.rs` shares), and a file the
+module tree holds only in a test build (`#[cfg(test)]`).
 
 | File | Responsibility |
 | --- | --- |
@@ -45,8 +44,6 @@ tree holds only in a test build (`#[cfg(test)]`), and a separate binary target
 | `cache/db/` | `mod.rs` (the facade), `cachedb.rs` (`CacheDb`: the read/write-or-read-only handle), `handle.rs` (`Handle`: the type that says whether a handle can write), `backend.rs` (the page-cache size, the redb builder and the in-memory registry) |
 | `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
 | `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |
-| `convert.rs` | the one-shot `sled` → `redb` cache converter — the only module that still touches `sled`, behind the `convert` feature |
-| `src/bin/sled2redb.rs` | the converter's command line: the `sled2redb` binary — the two paths, `--force` and `--output`, and the same `report::Record` writer `girsync` uses; a separate binary target behind the `convert` feature, so a default build has no such binary |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
 | `effective/entry.rs` | the entries (`EffRec`, `SideEntry`, `SideScan`, `ScanStats`, `SideCapability`) and the cache write rule (`merge_row`) |
@@ -113,63 +110,18 @@ two values in one occurrence — is refused before the run starts. The default i
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
-`sled2redb <SLED_DIR> <REDB_PATH>` takes `--force` and the same `--output`. The
-flags go on either side of the two paths — `sled2redb --force <SLED_DIR>
-<REDB_PATH>` and `sled2redb <SLED_DIR> <REDB_PATH> --force` are the same run —
-and `--output=json` is the same as `--output json`. It is not in a default
-build: the converter is behind the `convert` feature, so it is built with
-`cargo build -p girsync --features convert --bin sled2redb` — see
-[Build features](#build-features). A usage error in it exits `3`, not clap's `2`:
-the converter shares one failure code with a failed conversion, so every way it
-can fail is `3` — while `girsync` itself keeps `2` for a parse error.
 
-**It has no `--version`.** The converter declares no version, so the flag is an
-unknown one: the run fails with `3` like any other usage error, and no version
-line is printed.
+### Legacy sled caches
 
-**A conversion is atomic for a file destination.** The new cache is written
-into a temporary beside the destination and moved onto it only once it is
-whole, so the destination is either the old cache or the new one — never a
-half-written mixture, and never a file that opens as a valid cache. A
-conversion that fails leaves the previous cache exactly as it was under
-`--force`, and leaves no destination at all without it; the temporary is
-removed either way, so nothing of the tool's own is left in the folder.
+girsync itself is redb-only: a legacy sled cache directory is rejected with a
+message telling you to rebuild with `--ignore-cache` or convert it first. The
+one-shot converter is now a **separate tool** — `sled2redb` in `tools/sled2redb`
+— built and tested with `cargo build -p sled2redb` and `cargo nextest run -p
+sled2redb`. Its command is `sled2redb <SLED_DIR> <REDB_PATH>` with `--force` and
+`--output text|json`; the flags go on either side of the two paths, a usage
+error exits `3`, and there is no `--version`. The full behaviour and rationale
+live in [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
-The temporary is named inside the tool's own namespace —
-`girpr-cache-convert-<pid>-<ts>.redb`, or `girpr-cache-convert-<pid>-<ts>_2.redb`
-and its `_3`, `_4`, … spellings when a name of that shape is already taken —
-because it is written into the folder the destination cache lives in. Every
-spelling of it is inside that namespace, so a conversion that is killed before
-it could clean up after itself therefore leaves tool state there, not a file
-the next run would mirror out of a source folder or delete as an extra in a
-destination one. **That family of names is bounded** — the plain name and the
-`_2` … `_1000` spellings, a thousand candidates in all — so a conversion that
-finds every one of them taken fails with exit `3` rather than trying forever.
-
-**Nothing reclaims that temporary.** The retention bound
-([Backups and failures](#backups-and-failures)) ranges over a cache's
-published copies — the `girpr-cache-backup-*` copies and the `girpr-cache-old-*`
-snapshots — and not over the converter's temporary, so a leftover stays in the
-folder until you remove it by hand. That is deliberate: a temporary is the
-file a live conversion is writing, and a sweep that could not tell a live one
-from a dead one would take the copy a running conversion is making. The name
-carries the process id, so a leftover says which run left it.
-
-That process id is for **you**, not for the tool: it cannot answer "is a
-conversion still writing this?". A process id is **reused**, so the number in
-the name may belong to an unrelated process by now — the check would either
-keep a stale temporary forever or take a live one away. And the folder can be
-**shared between hosts** (a network folder, a container mount, a synced
-directory), where the number was minted in a process table this machine cannot
-ask about at all; a container has the same problem inside one host, because
-its process ids belong to its own namespace. So the id names the run for a
-reader, and a leftover is yours to remove.
-
-Replacing a **legacy sled directory** is the one step that is not atomic: the
-directory has to be removed before the new file can take its name, so a
-failure in that window leaves no cache at all. The error says so when it
-happens. The source directory is left alone either way — the conversion never
-writes to it, so deleting it is your call.
 
 `--no-backup` and `--backup-retain N` are on every subcommand too — see
 [Backups and failures](#backups-and-failures).
@@ -204,9 +156,9 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   person running the tool typed.
 - **A log file that cannot be opened is a warning, never a failure.**
 - **`sled2redb` writes one too**, and names it `girsync_<timestamp>.log`: the
-  policy names log files after the *project*, and the converter is part of
-  this one. It is a one-shot migration, and a migration that fails should
-  leave a record of how far it got.
+  policy names log files after the *project*, and the converter — now a
+  separate tool — is a one-shot migration for this one. A migration that fails
+  should leave a record of how far it got.
 - **The log events name what produced them.** The walk reports itself in
   `scan start`, `scan progress: walk` and `scan done`. A **folder** side's
   effective map is built in two phases — one that walks the tree and consults
@@ -1334,8 +1286,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   content. The family of those spellings is bounded, and stops at the
   thousandth suffix.
   Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
-  convert once with `sled2redb <old-dir> <new-file>` — the converter is behind
-  the `convert` feature, see [Build features](#build-features)).
+  convert once with `sled2redb <old-dir> <new-file>` — the standalone converter
+  in `tools/sled2redb`).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
@@ -1544,25 +1496,19 @@ cargo build -p girsync
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
-### Build features
+### Build and the legacy converter
 
-The default build has no `sled` in it. `sled` was used by exactly one thing —
-the one-shot converter that reads a legacy sled cache directory and writes a
-redb one — so it is behind the `convert` feature, along with the `sled2redb`
-binary and the converter's own cases:
+girsync has no optional features and no `sled` in its dependency graph. The
+one-shot legacy-format converter moved out to its own workspace member:
 
 ```powershell
-cargo build -p girsync                                     # the default: no sled, no converter
-cargo build -p girsync --features convert --bin sled2redb  # the converter
-cargo nextest run -p girsync --features convert --test convert  # the converter's end-to-end cases
-cargo nextest run -p girsync --features convert              # the whole suite, the converter's cases among them
+cargo build -p girsync                 # no sled, no converter
+cargo build -p sled2redb               # the standalone converter
+cargo nextest run -p sled2redb         # its end-to-end cases
 ```
 
-The feature is additive and off by default: `girsync` itself behaves the same
-either way, and `girsync::convert::sled_to_redb` is present exactly when the
-feature is on. Without it the converter is not built and its cases do not run,
-so a default `cargo nextest run -p girsync` does not touch the legacy format at
-all.
+A default `cargo nextest run -p girsync` does not touch the legacy format at
+all; see [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
 Same, machine-readable — `--output json` on stdout, logs still on stderr:
 
@@ -1599,11 +1545,8 @@ is added. `cargo nextest list -p girsync` prints them all, one per line, and
 `cargo nextest list -p girsync --run-ignored only` prints the `#[ignore]`d ones
 on their own.
 
-The converter's cases are behind the `convert` feature, so they are not in that
-run: `cargo nextest run -p girsync --features convert --test convert` runs
-the end-to-end ones, and `cargo nextest run -p girsync --features convert` runs
-the whole suite with the converter's own cases in it — see
-[Build features](#build-features).
+The converter's cases are not in that run either: they live with the separate
+tool, and `cargo nextest run -p sled2redb` runs them.
 
 **A green run is not full link coverage.** Some end-to-end cases need
 primitives a regular user cannot always create: Windows without developer mode
@@ -1808,10 +1751,9 @@ them; `--dry-run` costs the same again.
   narrates on stderr), `public_surface.rs` (what a caller reaches without a
   dependency of its own), `symlink.rs` (links in the walk, in the copy and in
   the deletion plan), `migration_lock.rs` (a backend-agnostic behaviour lock for
-  the cache layer), `convert.rs` (the converter's cases — behind the `convert`
-  feature, so a default run does not build that target at all), with shared
-  fixtures in `tests/common/mod.rs`. They run against the public API, so
-  anything they touch must stay `pub`.
+  the cache layer), with shared fixtures in `tests/common/mod.rs`. The
+  converter's own cases moved with it to `tools/sled2redb/tests/convert.rs`.
+  They run against the public API, so anything they touch must stay `pub`.
 
   The six largest are **directories**: each is a test target at
   `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`

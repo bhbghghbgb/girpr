@@ -668,8 +668,8 @@ fn a_backup_record_is_offered_no_repopulation() {
 /// Trust asks "re-read rather than reuse", and a record has nothing to re-read:
 /// it has no filesystem. Folding trust into availability would make
 /// `--no-trust-cached-hashes src` fatal for every record, including one holding
-/// exactly the right digests - which is what `convert.rs`'s unrequested-algorithm
-/// case does, so this is a live hazard and not a hypothetical.
+/// exactly the right digests - which is what `tools/sled2redb/tests/convert.rs`'s
+/// unrequested-algorithm case does, so this is a live hazard and not hypothetical.
 ///
 /// Availability is `cached` plus `hashable`, and trust is absent from it on purpose.
 #[test]

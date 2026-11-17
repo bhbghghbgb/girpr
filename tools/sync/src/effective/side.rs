@@ -235,9 +235,9 @@ pub fn open_folder_cache(
     let db_path = root.join(CACHE_PREFIX);
     // Test-only: semantic suites that assert sync results (not the cache file)
     // run against an in-memory redb cache, skipping the 1 MB create + fsync
-    // per command. Cache-focused tests (migration_lock, convert, and anything
-    // asserting girpr-cache* on disk) keep TestCacheBackend::File and the real
-    // file.
+    // per command. Cache-focused tests (migration_lock, and anything asserting
+    // girpr-cache* on disk) keep TestCacheBackend::File and the real file. The
+    // converter's cases live with the separate `sled2redb` tool now.
     //
     // The backend was decided once, at command start, and travels on
     // `common`: `CommonOpts::try_from` reads `GIRSYNC_TEST_CACHE` there, so

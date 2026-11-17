@@ -313,9 +313,9 @@ the completed `*_tmp` prefix and continuing it.
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
 `cargo build` and `cargo test` at the workspace root build the product
-(`girpr`). The two dev tools (`gircap`, `girsync`) are workspace members but
-not default members, so a root command does not compile them; check them
-explicitly when working on them. `--workspace` is the everything command.
+(`girpr`). The three dev tools (`gircap`, `girsync`, `sled2redb`) are workspace
+members but not default members, so a root command does not compile them; check
+them explicitly when working on them. `--workspace` is the everything command.
 
 Every member declares its own `rust-version`. To check that each one still
 builds with exactly that toolchain, rather than only with the newest compiler
@@ -363,11 +363,12 @@ them. The `msrv` workflow runs the self-test before the script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
-copy. Both are development-only and are not part of the shipped product. They
+copy; `tools/sled2redb/` (`sled2redb`) converts a legacy sled cache to redb.
+All three are development-only and are not part of the shipped product. They
 share the workspace lockfile but are built on request:
 
 ```powershell
-cargo check -p girsync -p gircap
+cargo check -p girsync -p gircap -p sled2redb
 cargo build --workspace
 ```
 
@@ -426,9 +427,9 @@ plane always carries each string value as a quoted string.
 
 ## Logging
 
-One policy, three programs: this binary and the two dev tools (`gircap`,
-`girsync`). It lives in `crates/log/` and is the only thing they share that
-ships.
+One policy, four programs: this binary and the three dev tools (`gircap`,
+`girsync`, `sled2redb`). It lives in `crates/log/` and is the only thing they
+share that ships.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is
@@ -463,24 +464,25 @@ ships.
   durable record of the run, not a live feed, and an exit that skips the flush
   (such as `kill -9`) can lose the tail.
 - The **format** is not shared: this binary writes a human-readable text log,
-  meant to be read with `grep 'path=<file>'`; the two dev tools write JSON
+  meant to be read with `grep 'path=<file>'`; the three dev tools write JSON
   lines, meant to be parsed.
 
 ## Testing (offline by construction)
 
 The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
 the prebuilt release for the platform. Every crate in the workspace (`girpr`,
-`girpr-log`, `girpr-tempdir`, `gircap`, `girsync`) runs its suite with it, and
-[`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
+`girpr-log`, `girpr-tempdir`, `gircap`, `girsync`, `sled2redb`) runs its suite
+with it, and [`.config/nextest.toml`](.config/nextest.toml) holds the shared
+defaults.
 
 ```powershell
 cargo nextest run             # this package's offline suite (ignored tests excluded)
-cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
-cargo check -p girsync -p gircap # the dev tools, which a root command does not build
+cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync, sled2redb
+cargo check -p girsync -p gircap -p sled2redb # the dev tools, which a root command does not build
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
 cargo clippy -p girpr --all-targets -- -D warnings
-cargo clippy -p girsync -p gircap --all-targets -- -D warnings
+cargo clippy -p girsync -p gircap -p sled2redb --all-targets -- -D warnings
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
 # builds gircap first so the `gircap verify` precondition executes
@@ -524,10 +526,10 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   policy file. Re-test the options before moving these allowances to a config
   file.
 
-- **The two dev tools opt into a smaller lint subset.** `girsync` and `gircap`
-  set `[lints.rust] unsafe_code = "deny"` and `[lints.clippy] all = "warn"`
-  themselves instead of inheriting the workspace table, and the command above
-  checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
+- **The three dev tools opt into a smaller lint subset.** `girsync`, `gircap`
+  and `sled2redb` set `[lints.rust] unsafe_code = "deny"` and
+  `[lints.clippy] all = "warn"` themselves instead of inheriting the workspace
+  table, and the command above checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
   deliberately absent: for a repair run a panic is a failed run, while for a
   dev tool it is a failed developer run, and those paths may assert. The one
   deliberate `unsafe` is the Windows handle call in `tools/sync/src/hardlink.rs`,

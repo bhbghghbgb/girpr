@@ -613,7 +613,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sled",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1628,6 +1627,22 @@ dependencies = [
  "libc",
  "log",
  "parking_lot",
+]
+
+[[package]]
+name = "sled2redb"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "girpr-tempdir",
+ "girsync",
+ "md-5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sled",
+ "tracing",
 ]
 
 [[package]]

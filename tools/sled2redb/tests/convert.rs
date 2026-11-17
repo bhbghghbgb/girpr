@@ -8,10 +8,10 @@ mod common;
 use clap::ValueEnum;
 use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
-use girsync::convert::CONVERT_TEMP_PREFIX;
 use girsync::report::OutputFormat;
 use md5::Md5;
 use sha2::Digest;
+use sled2redb::convert::CONVERT_TEMP_PREFIX;
 use std::collections::HashMap;
 
 fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json::Value {
@@ -26,7 +26,7 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
 /// Run the converter binary and hand back its exit code, stdout and stderr.
 ///
 /// The binary is spawned rather than the library called because the arguments
-/// and the exit code live in the binary: `girsync::convert::sled_to_redb` has
+/// and the exit code live in the binary: `sled2redb::convert::sled_to_redb` has
 /// no opinion about how the run was spelled.
 fn run_converter<I>(args: I) -> (i32, String, String)
 where
@@ -197,7 +197,7 @@ fn convert_sled_dir_to_redb_file() {
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    let c = girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
+    let c = sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
     assert_eq!((c.files, c.dirs), (2, 1));
     assert!(dst.is_file(), "destination is a redb file");
     assert!(src.is_dir(), "source sled dir is left untouched");
@@ -263,10 +263,10 @@ fn convert_refuses_to_overwrite_without_force() {
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
-    assert!(girsync::convert::sled_to_redb(&src, &dst, false).is_err());
+    sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
+    assert!(sled2redb::convert::sled_to_redb(&src, &dst, false).is_err());
     // ...but succeeds with --force semantics.
-    let c = girsync::convert::sled_to_redb(&src, &dst, true).unwrap();
+    let c = sled2redb::convert::sled_to_redb(&src, &dst, true).unwrap();
     assert_eq!((c.files, c.dirs), (2, 1));
 }
 
@@ -275,7 +275,7 @@ fn convert_rejects_missing_source() {
     let t = temp_root("convert_missing");
     let work = t.subdir("w");
     assert!(
-        girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
+        sled2redb::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
             .is_err()
     );
 }
@@ -298,7 +298,7 @@ fn a_failed_conversion_leaves_no_destination_and_no_temporary() {
     let src = work.join("legacy-cache-bad");
     let dst = work.join("girpr-cache");
 
-    let err = girsync::convert::sled_to_redb(&src, &dst, false).unwrap_err();
+    let err = sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap_err();
     let msg = format!("{:#}", err);
     assert!(
         msg.contains("bad.txt") && msg.contains("md5"),
@@ -333,10 +333,10 @@ fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
     let bad = work.join("legacy-cache-bad");
     let dst = work.join("girpr-cache");
 
-    girsync::convert::sled_to_redb(&good, &dst, false).unwrap();
+    sled2redb::convert::sled_to_redb(&good, &dst, false).unwrap();
     let before = std::fs::read(&dst).unwrap();
 
-    let err = girsync::convert::sled_to_redb(&bad, &dst, true).unwrap_err();
+    let err = sled2redb::convert::sled_to_redb(&bad, &dst, true).unwrap_err();
     assert!(
         format!("{:#}", err).contains("bad.txt"),
         "the failure names the row it could not decode: {:#}",
@@ -379,7 +379,7 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
+    sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
     {
         let db = sled::open(&src).unwrap();
         db.insert(
@@ -390,7 +390,7 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
         db.flush().unwrap();
     }
 
-    let c = girsync::convert::sled_to_redb(&src, &dst, true).unwrap();
+    let c = sled2redb::convert::sled_to_redb(&src, &dst, true).unwrap();
     assert_eq!((c.files, c.dirs), (3, 1));
     assert!(dst.is_file(), "the destination is a redb file");
 
@@ -424,7 +424,7 @@ fn a_successful_conversion_creates_the_destination_and_no_temporary() {
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    let c = girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
+    let c = sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
     assert_eq!((c.files, c.dirs), (2, 1));
     assert!(dst.is_file(), "the destination is a redb file");
     assert_eq!(
