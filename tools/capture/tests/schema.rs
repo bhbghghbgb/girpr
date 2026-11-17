@@ -10,8 +10,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{BundleVariant, shared_bundle};
-use girpr_tempdir::TempDir;
+use common::{BundleVariant, minimal_bundle, shared_bundle};
 
 fn json(path: &std::path::Path) -> serde_json::Value {
     let raw = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -315,11 +314,9 @@ fn the_ceiling_variant_records_the_ceiling_it_used() {
 /// schema has no such defaults; this makes that true of the last one.
 #[test]
 fn a_manifest_without_the_gzip_threshold_does_not_open() {
-    // A copy, because this test rewrites the manifest: the bundle the capture
-    // wrote is what every other assertion reads, and this one is about a
-    // bundle that has been broken on purpose.
-    let dir = TempDir::new("gircap-no-threshold", "copy");
-    copy_tree(shared_bundle(BundleVariant::Default).as_ref(), &dir);
+    // A minimal bundle, broken on purpose: the key is removed below so the
+    // refusal must be about the field, not about a capture this test never made.
+    let (_scratch, dir) = minimal_bundle("no-threshold");
 
     let path = dir.join("MANIFEST.json");
     let mut doc: serde_json::Value =
@@ -345,8 +342,7 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
 /// nobody recorded.
 #[test]
 fn a_manifest_without_the_decompression_ceiling_does_not_open() {
-    let dir = TempDir::new("gircap-no-ceiling", "copy");
-    copy_tree(shared_bundle(BundleVariant::Default).as_ref(), &dir);
+    let (_scratch, dir) = minimal_bundle("no-ceiling");
 
     let path = dir.join("MANIFEST.json");
     let mut doc: serde_json::Value =
@@ -363,18 +359,6 @@ fn a_manifest_without_the_decompression_ceiling_does_not_open() {
         err.contains("max_decompressed_bytes"),
         "the refusal must name the field: {err}"
     );
-}
-
-fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
-    std::fs::create_dir_all(to).expect("scratch");
-    for e in std::fs::read_dir(from).expect("readable").flatten() {
-        let target = to.join(e.file_name());
-        if e.file_type().expect("file type").is_dir() {
-            copy_tree(&e.path(), &target);
-        } else {
-            std::fs::copy(e.path(), &target).expect("copy file");
-        }
-    }
 }
 
 /// The chunk index's key set, pinned. A blob entry is what `materialize` reads
