@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T05) and spawn its implementing session.
-* Active checkpoint: CP1 (`open`); T01, T02, T04 `pending_review`, T03 `skipped`, T05 `todo`.
+* Next action: wait for implementing session on T05; after it finishes, CP1 is complete — run the CP1 review phase.
+* Active checkpoint: CP1 (`open`); T01, T02, T04 `pending_review`, T03 `skipped`, T05 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -30,7 +30,7 @@ commit ranges only.
 | T02 | Default `run_binary_raw` to memory cache | pending_review | CP1 | implemented in eb6afaf2; see review range below |
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; no changes. See context. |
 | T04 | Shrink rw_threads 96-file fixture | pending_review | CP1 | implemented in c7b9c1c0; see review range below |
-| T05 | Shrink `as_done` 11 MB fixture | todo | CP1 | |
+| T05 | Shrink `as_done` 11 MB fixture | in_progress | CP1 | |
 | T06 | Consolidate gircap captures + shared bundle | todo | CP2 | |
 | T07 | Hand-build minimal bundles for delete-a-doc | todo | CP2 | |
 | T08 | Cache gircap byte tables + shrink chunk | todo | CP2 | |
