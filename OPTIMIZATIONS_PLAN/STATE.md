@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T06** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T07** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 and CP2 reviews done.
-* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `in_progress`.
+* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `pending_review`, T07 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -36,7 +37,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T03 | Consolidate remaining low-risk root-unit cases | completed (fixed) | P0 | CP2 | commits `5e8d593f..185cfa4c`, review fix `cd80083b`. All 3 bullets done (−9 tests); the four distinct salvage_order cases kept separate. Review fix derived `live_count` in the reuse table loop instead of storing a redundant column, retaining the all-dead explicit check. No product logic changed. |
 | T04 | Table-drive sync hash dedup/order asserts | completed | P0 | CP2 | impl `6f6a47af` (test-only); CP2 review confirmed completed. Four cases → `dedup_keeps_first_seen_order` table (41→38), 8 assertions preserved, parse-vs-parse_any via fn pointer. Review flags judged not worth changing (nested grouping keeps one comment per regression; named struct unnecessary for 4 fixed rows). |
 | T05 | Remove capture no-op test; merge same-function pairs | pending_review | P0 | CP3 | commits `0e8496e9..30e15ae4` (test-only). No-op removed + 4 pairs merged (670→665 tests, −5); manifest/proto.rs equality assertion kept, only misleading doc dropped. REVIEW FLAG: the 5th pair `config/tests.rs:411/483` was SKIPPED per guardrail - 411 is end-to-end rejection across bad tags, 483 checks the 'device' diagnostic content via tag_shape_problem; implementer says a reviewer could fold 483 into 411 by adding a `.contains("device")` assertion. Reviewer must confirm skip or fix. |
-| T06 | sled2redb removes + usage-error parametrization | in_progress | P0 | CP3 | |
+| T06 | sled2redb removes + usage-error parametrization | pending_review | P0 | CP3 | impl `e72f5859` (test-only, tools/sled2redb/tests/convert.rs). Removed subsumed help + temp-name tests, parametrized 4 usage-error cases (integration 16→11, −5). Strict help pin, src/convert.rs:410, and convert.rs:515 conversions (F03) left intact. No flags. |
 | T07 | `crates/log` + `tempdir` low-risk merges | todo | P0 | CP3 | |
 | T08 | `repair_plan` scope table + optional root-integration merges | todo | P0 | CP3 | |
 | T09 | Consolidate `run_lock.rs` case clusters | todo | P1 | CP4 | |
@@ -67,7 +68,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T03 | 5e8d593f..185cfa4c + fix cd80083b | completed (fixed) |
 | T04 | 6f6a47af (single commit) | completed |
 | T05 | 0e8496e9..30e15ae4 (2 commits) | — |
-| T06 | — | — |
+| T06 | e72f5859 (single commit) | — |
 | T07 | — | — |
 | T08 | — | — |
 | T09 | — | — |
@@ -92,6 +93,7 @@ effect) so the final follow-up phase is meaningful.
 | F05 | If later tasks add more `catch_unwind` assertions in other integration-test binaries, move the `panic_message` helper into `tests/common/mod.rs` to avoid duplicating the panic-downcast logic per test binary. | T01 implementer | proposed | Only if duplication actually arises; test-only. |
 | F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | CP1 reviewer kept; skip `run_lock.rs` clusters (T09 folds those). Do not force. |
 | F07 | ~~Fold `the_runtime_keeps_a_worker_beyond_every_file_window` (main.rs) into T03's `worker_threads_arithmetic` table using exact-value rows; saves one test.~~ | T03 implementer | removed | CP2 reviewer pruned: saves only 1 test while replacing a general `> jobs` headroom invariant (already covered by exact-value + saturation rows) with exact examples; runaway risk. |
+| F08 | If more sled2redb usage-error shapes with distinct assertions are added later, replace the parametrized test's `is_version` boolean with a per-row assertion closure so special-case checks stay data-driven rather than becoming a widening `if` chain. | T06 implementer | proposed | Conditional on future additions; test-only. Reviewer may prune as speculative. |
 
 ## Follow-up batches
 
