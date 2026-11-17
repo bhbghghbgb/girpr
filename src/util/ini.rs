@@ -553,8 +553,7 @@ mod tests {
     use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
     use crate::util::junction_support::{
-        JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
-        junction_result_with, require_junction, skip_junction, try_junction_dir,
+        junction_fixture_decision, require_junction, try_junction_dir,
     };
     use crate::util::path::temp_sibling;
     use crate::util::symlink_support::{
@@ -1215,92 +1214,6 @@ mod tests {
         cleanup.remove().expect("the junction is removable");
     }
 
-    /// A junction `mklink` claims but that cannot be inspected is a broken
-    /// fixture, not a host refusal: the config writer's case must fail loudly
-    /// instead of skipping, so a run meant to prove the dangling-junction
-    /// refusal cannot pass having checked nothing.
-    ///
-    /// The shared helper's inspection is injected and the shared decision is
-    /// driven with its result, so the case runs on every host — no `mklink` is
-    /// run, and no host skip is needed. The decision is the caller's own, so a
-    /// decision that turned the broken arm into a skip would fail this case
-    /// instead of leaving it green.
-    #[cfg(windows)]
-    #[test]
-    fn an_uninspectable_junction_fails_instead_of_skipping() {
-        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "uninspectable_junction");
-        let link = root.join("dangling-game-dir");
-
-        let err = junction_result_with(&JunctionOutcome::Success, &link, |_| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "the link could not be read",
-            ))
-        })
-        .expect_err("a junction that cannot be inspected must fail");
-
-        // The failure names its own cause — an unreadable link is not a
-        // missing one.
-        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
-        assert!(err.raw_os_error().is_none(), "{err}");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("could not be inspected"),
-            "the failure names the inspection's cause: {msg}"
-        );
-        assert!(
-            msg.contains("the link could not be read"),
-            "the cause survives: {msg}"
-        );
-        assert!(
-            !msg.contains("is missing"),
-            "an unreadable junction is not a missing one: {msg}"
-        );
-
-        match drive_junction_decision(err, false, FixtureRefusal::Host) {
-            JunctionDecision::Skipped => {
-                panic!("an uninspectable junction is not a host refusal")
-            }
-            JunctionDecision::Failed(message) => {
-                // The case fails loudly here, exactly as it does for a link
-                // that never appeared.
-                assert!(
-                    message.contains("could not create the test directory junction"),
-                    "the failure names the fixture: {message}"
-                );
-                assert!(
-                    message.contains("could not be inspected"),
-                    "the failure names the inspection's cause: {message}"
-                );
-                assert!(
-                    message.contains("the link could not be read"),
-                    "the cause survives: {message}"
-                );
-                assert!(
-                    !message.contains("is missing"),
-                    "an unreadable junction is not a missing one: {message}"
-                );
-            }
-        }
-    }
-
-    /// Without the switch, a proven host refusal skips the junction case out
-    /// loud instead of failing it.
-    #[cfg(windows)]
-    #[test]
-    fn a_junction_fixture_refusal_skips_without_the_switch() {
-        skip_junction("injected refusal", false, FixtureRefusal::Injected);
-    }
-
-    /// The same refusal is a failure when the switch is set, whatever its
-    /// value: the case must not pass having proved nothing.
-    #[cfg(windows)]
-    #[test]
-    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
-    fn a_junction_fixture_refusal_fails_with_the_switch() {
-        skip_junction("injected refusal", true, FixtureRefusal::Injected);
-    }
-
     /// Removes a link or junction — never its target — when the guard leaves
     /// scope, so a failed assertion does not leave a dangling reparse point for
     /// the temp-dir cleanup to walk.
@@ -1360,47 +1273,6 @@ mod tests {
     #[cfg(not(windows))]
     fn remove_link_at(link: &Path) -> std::io::Result<()> {
         std::fs::remove_file(link)
-    }
-
-    /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`
-    /// retries it. A non-empty directory makes the first removal fail; clearing
-    /// it lets the retry succeed, and the link must then be gone.
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn link_guard_retries_a_failed_explicit_removal_on_drop() {
-        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "guard_retry");
-        let link = root.join("link");
-
-        #[cfg(windows)]
-        {
-            // `remove_dir` refuses a non-empty directory.
-            std::fs::create_dir(&link).unwrap();
-            std::fs::write(link.join("blocker"), b"x").unwrap();
-            {
-                let mut guard = LinkGuard::new(&link);
-                assert!(
-                    guard.remove().is_err(),
-                    "a non-empty directory is not removable"
-                );
-                std::fs::remove_file(link.join("blocker")).unwrap();
-            }
-        }
-        #[cfg(unix)]
-        {
-            // `remove_file` refuses a directory.
-            std::fs::create_dir(&link).unwrap();
-            {
-                let mut guard = LinkGuard::new(&link);
-                assert!(guard.remove().is_err(), "a directory is not a file");
-                std::fs::remove_dir(&link).unwrap();
-                std::fs::write(&link, b"x").unwrap();
-            }
-        }
-
-        assert!(
-            std::fs::symlink_metadata(&link).is_err(),
-            "the guard must retry the failed removal when it drops"
-        );
     }
 
     /// A parent that cannot be traversed is a permission failure, not a

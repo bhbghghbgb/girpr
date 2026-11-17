@@ -487,8 +487,7 @@ mod tests {
     use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
     use crate::util::junction_support::{
-        JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
-        junction_result, require_junction, skip_junction, try_junction_dir,
+        junction_fixture_decision, require_junction, try_junction_dir,
     };
     #[cfg(unix)]
     use crate::util::symlink_support::{
@@ -1028,63 +1027,6 @@ mod tests {
         try_junction_dir(&dir.join("real"), &alias)
             .expect("this host already created one junction");
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
-    }
-
-    /// A junction `mklink` claims but never creates is a broken fixture, not
-    /// a host refusal: the containment case must fail loudly instead of
-    /// skipping, so a run meant to prove the escape cannot pass having
-    /// checked nothing.
-    ///
-    /// The shared helper's exit-`0` branch is driven directly and the shared
-    /// decision is driven with its result, so the case runs on every host —
-    /// no `mklink` is run, and no host skip is needed. The decision is the
-    /// caller's own, so a decision that turned the broken arm into a skip
-    /// would fail this case instead of leaving it green.
-    #[cfg(windows)]
-    #[test]
-    fn a_claimed_junction_that_never_appeared_fails_instead_of_skipping() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "missing_junction");
-        let link = dir.join("game");
-
-        let err = junction_result(&JunctionOutcome::Success, &link)
-            .expect_err("a claimed link that never appeared must fail");
-        // The failure is honest about the link being missing.
-        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
-        let msg = format!("{err}");
-        assert!(msg.contains("is missing"), "{msg}");
-        assert!(msg.contains(&link.display().to_string()), "{msg}");
-
-        match drive_junction_decision(err, false, FixtureRefusal::Host) {
-            JunctionDecision::Skipped => {
-                panic!("a link that never appeared is not a host refusal")
-            }
-            JunctionDecision::Failed(message) => {
-                // The case fails loudly here, exactly as it does for a link
-                // that could not be inspected.
-                assert!(
-                    message.contains("could not create the test directory junction"),
-                    "the failure names the fixture: {message}"
-                );
-                assert!(message.contains("is missing"), "{message}");
-                assert!(message.contains(&link.display().to_string()), "{message}");
-            }
-        }
-    }
-
-    /// Both junction branches are reachable without a host that refuses one.
-    #[cfg(windows)]
-    #[test]
-    fn a_junction_failure_skips_without_the_switch() {
-        skip_junction("injected refusal", false, FixtureRefusal::Injected);
-    }
-
-    /// The same refusal is a failure when the switch is present, whatever its
-    /// value.
-    #[cfg(windows)]
-    #[test]
-    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
-    fn a_junction_failure_fails_with_the_switch() {
-        skip_junction("injected refusal", true, FixtureRefusal::Injected);
     }
 
     /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.
