@@ -417,25 +417,6 @@ mod tests {
         assert_eq!(stamp.as_bytes()[22], b'Z');
     }
 
-    /// The shape of the default is the same in every build. What differs is
-    /// whether the default is *used*.
-    ///
-    /// This test is the shape, and it is deliberately not conditional: the
-    /// path a release build would write is the path a debug build would write
-    /// if it were asked to, and a change to the shape has to be a change in
-    /// every build.
-    #[test]
-    fn a_debug_build_and_a_release_build_name_the_default_the_same_way() {
-        // The build under test is the build the policy is about, so the
-        // assertion is the policy itself: the default is written in a release
-        // build and not in a debug one.
-        assert_eq!(
-            default_file_is_written(),
-            !cfg!(debug_assertions),
-            "a release build writes a log file by default; a debug build does not"
-        );
-    }
-
     /// A debug build writes no file by default, and a release build writes the
     /// timestamped default.
     ///
