@@ -215,9 +215,9 @@ mod tests {
     }
 
     /// The small, single-rule boundary cases of the salvage decision, as a
-    /// table: each row is one `salvage_order` call plus the direction, liveness
-    /// and live count it must produce. The four multi-chunk worked cases below
-    /// stay as named tests because each asserts a distinct higher-level rule.
+    /// table: each row is one `salvage_order` call plus the direction and
+    /// liveness it must produce. The four multi-chunk worked cases below stay
+    /// as named tests because each asserts a distinct higher-level rule.
     #[test]
     fn salvage_order_source_boundary_cases() {
         struct Case {
@@ -227,7 +227,6 @@ mod tests {
             usable: u64,
             ascending: bool,
             live: Vec<bool>,
-            live_count: usize,
             // r == o survives both directions, not just the one picked.
             both_directions: bool,
         }
@@ -240,7 +239,6 @@ mod tests {
                 usable: 64,
                 ascending: true,
                 live: vec![true],
-                live_count: 1,
                 both_directions: false,
             },
             // r < o: descending keeps it, ascending does not.
@@ -251,7 +249,6 @@ mod tests {
                 usable: 64,
                 ascending: false,
                 live: vec![true],
-                live_count: 1,
                 both_directions: false,
             },
             // r == o: correct where it belongs, safe in either direction.
@@ -262,7 +259,6 @@ mod tests {
                 usable: 64,
                 ascending: true,
                 live: vec![true],
-                live_count: 1,
                 both_directions: true,
             },
             // A source at 61 reaches past the end of a 64-byte file.
@@ -273,7 +269,6 @@ mod tests {
                 usable: 64,
                 ascending: true,
                 live: vec![false],
-                live_count: 0,
                 both_directions: false,
             },
             Case {
@@ -283,7 +278,6 @@ mod tests {
                 usable: 64,
                 ascending: true,
                 live: vec![false],
-                live_count: 0,
                 both_directions: false,
             },
             Case {
@@ -293,7 +287,6 @@ mod tests {
                 usable: 64,
                 ascending: true,
                 live: vec![false, false],
-                live_count: 0,
                 both_directions: false,
             },
             // A source at 16 reaches past the end of a 16-byte file.
@@ -304,7 +297,6 @@ mod tests {
                 usable: 16,
                 ascending: true,
                 live: vec![false],
-                live_count: 0,
                 both_directions: false,
             },
         ];
@@ -315,14 +307,17 @@ mod tests {
             usable,
             ascending,
             live,
-            live_count,
             both_directions,
         } in cases
         {
             let order = salvage_order(&chunks, &sources, usable);
             assert_eq!(order.ascending, ascending, "{label}: direction");
             assert_eq!(order.live, live, "{label}: live sources");
-            assert_eq!(order.live_count(), live_count, "{label}: live count");
+            assert_eq!(
+                order.live_count(),
+                live.iter().filter(|&&kept| kept).count(),
+                "{label}: live count"
+            );
             if both_directions {
                 assert_eq!(
                     survives(chunks.iter(), &sources, usable, true),
