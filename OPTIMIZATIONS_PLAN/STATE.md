@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T16) and spawn its implementing session.
-* Active checkpoint: CP4 (`open`); T14, T15 `pending_review`.
+* Next action: wait for implementing session on T16, then advance per the loop.
+* Active checkpoint: CP4 (`open`); T14, T15 `pending_review`, T16 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -41,7 +41,7 @@ commit ranges only.
 | T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
 | T14 | Reduce girpr trace-level logging | pending_review | CP4 | 32d12ebe; see review range |
 | T15 | Remove girpr `--help`/argument spawns | pending_review | CP4 | ac507a7c; see review range |
-| T16 | Consolidate girpr multi-run parity tests | todo | CP4 | |
+| T16 | Consolidate girpr multi-run parity tests | in_progress | CP4 | |
 | T17 | Merge girsync dry-run/hard-link groups | todo | CP4 | |
 | T18 | Merge redundant gircap read/verify groups | todo | CP4 | |
 | T19 | Tidy ignored tests | todo | CP5 | |
