@@ -466,41 +466,10 @@ fn a_record_reaches_the_file_log_at_the_default_log_level() {
             .is_some_and(|f| !f.is_empty())),
         "each logged record carries its payload"
     );
-}
-
-/// **The console is `info` and the log file is `debug`, by default.**
-///
-/// The two levels are separate knobs and the defaults are one step apart: the
-/// console is for the person watching the run, the file for the person reading
-/// it afterwards. The report events are `debug`, so they are the evidence —
-/// they are in the file and not on the console.
-///
-/// This is the same property the test above pins from the other side (the
-/// file wants them), read here as the *difference* between the two sinks:
-/// a console at `info` must not carry them, or the two sinks would be one
-/// sink with two names.
-#[test]
-fn the_file_is_louder_than_the_console_by_default() {
-    let t = temp_root("out_file_vs_console");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("run.json");
-    let mut args = compare_args(&src, &dst, &["--output", "json"]);
-    args.push("--log-file".into());
-    args.push(logfile.display().to_string());
-
-    let r = run(&args);
-    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
-
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    let report_events = logged
-        .iter()
-        .filter(|e| e["fields"]["message"] == "report")
-        .count();
-    assert_eq!(
-        report_events,
-        r.records.len(),
-        "the file's default level is `debug`, so every record is in it"
-    );
+    // The console half of the same default: the file wanted every record at
+    // `debug`, but the console's default `info` kept none of them. Folded in
+    // from the old `the_file_is_louder_than_the_console_by_default`, which
+    // built this same fixture and ran this same binary just to assert this.
     assert!(
         !strip_ansi(&r.stderr).contains(" DEBUG "),
         "the console's default level is `info`, so none of them is on it:\n{}",
@@ -508,69 +477,55 @@ fn the_file_is_louder_than_the_console_by_default() {
     );
 }
 
-/// `--log-file-level` narrows the log file.
-///
-/// The flag is the file's own level, and it narrows *only* the file: the
-/// console keeps its own. A file at `error` is the record of what failed and
-/// nothing else.
+/// The file's own level is narrowed the same way by the flag and by the
+/// environment; only how the value is supplied differs. The precedence between
+/// them is pinned in `crates/log` — what is asserted here is that each seam
+/// actually filters the process's JSON log file. (Folded from the old
+/// `the_log_file_level_flag_narrows_the_file` and
+/// `the_environment_sets_the_log_files_level`.)
 #[test]
-fn the_log_file_level_flag_narrows_the_file() {
-    let t = temp_root("out_file_level_flag");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("run.json");
-    let mut args = compare_args(&src, &dst, &["--output", "json"]);
-    args.push("--log-file".into());
-    args.push(logfile.display().to_string());
-    args.push("--log-file-level".into());
-    args.push("error".into());
+fn the_file_level_can_be_narrowed_by_the_flag_or_the_environment() {
+    let cases = [
+        // (name, narrow by flag, narrow by environment)
+        ("--log-file-level", true, false),
+        ("GIRSYNC_LOG_FILE_LEVEL", false, true),
+    ];
+    for (i, (name, use_flag, use_env)) in cases.iter().enumerate() {
+        let t = temp_root(&format!("out_file_level_{i}"));
+        let (src, dst) = fixture(&t);
+        let logfile = t.subdir("logs").join("run.json");
+        let mut args = compare_args(&src, &dst, &["--output", "json"]);
+        args.push("--log-file".into());
+        args.push(logfile.display().to_string());
+        if *use_flag {
+            args.push("--log-file-level".into());
+            args.push("error".into());
+        }
 
-    let r = run(&args);
-    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
+        cmd.args(&args).env("GIRSYNC_TEST_CACHE", "memory");
+        if *use_env {
+            cmd.env("GIRSYNC_LOG_FILE_LEVEL", "error");
+        }
+        let out = cmd.output().expect("spawn girsync");
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    assert_eq!(
-        logged
-            .iter()
-            .filter(|e| e["fields"]["message"] == "report")
-            .count(),
-        0,
-        "the file is at `error`, so it kept no debug record: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-}
-
-/// The environment sets the log file's level, when the flag does not.
-///
-/// The one seam of the policy the flag table cannot show: the flag wins, the
-/// environment answers for a flag that was never given, and `debug` — the
-/// default — answers for both.
-#[test]
-fn the_environment_sets_the_log_files_level() {
-    let t = temp_root("out_env_log_file_level");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("run.json");
-    let mut args = compare_args(&src, &dst, &["--output", "json"]);
-    args.push("--log-file".into());
-    args.push(logfile.display().to_string());
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(&args)
-        .env("GIRSYNC_LOG_FILE_LEVEL", "error")
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert_eq!(out.status.code(), Some(4));
-
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    assert_eq!(
-        logged
-            .iter()
-            .filter(|e| e["fields"]["message"] == "report")
-            .count(),
-        0,
-        "the file is at `error`, so it kept no debug record: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
+        let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+        assert_eq!(
+            logged
+                .iter()
+                .filter(|e| e["fields"]["message"] == "report")
+                .count(),
+            0,
+            "{name}: the file is at `error`, so it kept no debug record: {}",
+            serde_json::to_string(&logged).unwrap()
+        );
+    }
 }
 
 /// `RUST_LOG` adds to the console; it cannot silence the program, and it
@@ -658,95 +613,6 @@ fn the_default_log_file_follows_the_build_it_was_built_from() {
             r.stderr
         );
     }
-}
-
-/// `--no-log-file` turns the file off, and it beats the environment.
-///
-/// "Write no log file" is the more specific thing to have said, so it wins
-/// over a path the shell happened to export. The file is not written at
-/// all — which is the whole point, and which is why the assertion is
-/// `exists()` on a known path rather than a search of a directory.
-#[test]
-fn no_log_file_turns_the_file_off_even_when_the_environment_names_one() {
-    let t = temp_root("out_no_log_file");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("from-env.json");
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(compare_args(&src, &dst, &["--no-log-file"]))
-        .env("GIRSYNC_LOG_FILE", &logfile)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(4), "{stderr}");
-    assert!(
-        !logfile.exists(),
-        "no log file was written: {}",
-        logfile.display()
-    );
-    assert!(
-        !stderr.contains(&format!("log file: {}", logfile.display())),
-        "and the path was not announced:\n{stderr}"
-    );
-}
-
-/// `--no-log-file` and `--log-file` say opposite things, so they are a usage
-/// error rather than one of them silently winning.
-#[test]
-fn no_log_file_and_log_file_together_are_a_usage_error() {
-    let t = temp_root("out_no_log_file_conflict");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("both.json");
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(compare_args(
-            &src,
-            &dst,
-            &["--no-log-file", "--log-file", logfile.to_str().unwrap()],
-        ))
-        .output()
-        .expect("spawn girsync");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    // clap's own exit code for an argument error, which is what `girsync`
-    // uses: it parses with `Cli::parse()`, so a bad flag is clap's `2` and
-    // not the `1` the repair binary remaps it to.
-    assert_eq!(out.status.code(), Some(2), "{stderr}");
-    assert!(
-        stderr.contains("cannot be used with"),
-        "the conflict is reported:\n{stderr}"
-    );
-    assert!(!logfile.exists(), "and no file was written");
-}
-
-/// The environment variable names the log file when the flag does not.
-///
-/// Same precedence as everywhere else in the workspace: the flag wins, the
-/// environment answers for a flag that was never given, and the timestamped
-/// default answers for both.
-#[test]
-fn the_environment_names_the_log_file_when_the_flag_does_not() {
-    let t = temp_root("out_env_log_file");
-    let (src, dst) = fixture(&t);
-    let logfile = t.subdir("logs").join("from-env.json");
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(compare_args(&src, &dst, &[]))
-        .env("GIRSYNC_LOG_FILE", &logfile)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert_eq!(out.status.code(), Some(4));
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(
-        stderr.contains(&format!("log file: {}", logfile.display())),
-        "the path is echoed on stderr, because the caller named it:\n{stderr}"
-    );
-    let text = std::fs::read_to_string(&logfile).expect("the environment named the file");
-    assert!(
-        text.contains("\"log start\""),
-        "and it holds the run's own records:\n{text}"
-    );
 }
 
 /// **The walk's counters are in the log, and they are the walk's own.**

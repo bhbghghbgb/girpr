@@ -229,12 +229,14 @@ pub fn default_log_path() -> std::path::PathBuf {
 mod tests {
     use super::*;
 
+    /// The project's name becomes the prefix of the log environment variables:
+    /// `GIRSYNC_LOG_FILE` and `GIRSYNC_LOG_FILE_LEVEL`. `girpr_log::env_options`
+    /// derives them by upper-casing `PROJECT`; this pins the one spelling that
+    /// is this binary's responsibility. The shared crate covers the file-name
+    /// shape and the precedence of those variables.
     #[test]
-    fn the_default_file_is_named_for_the_project() {
-        let path = default_log_path();
-        let name = path.file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("girsync_"), "{name}");
-        assert!(name.ends_with(".log"), "{name}");
+    fn the_project_prefix_names_the_log_environment_variables() {
+        assert_eq!(PROJECT.to_ascii_uppercase(), "GIRSYNC");
     }
 
     #[test]
