@@ -214,59 +214,128 @@ mod tests {
         }
     }
 
-    /// One chunk, one source, one direction — the smallest case the rule can
-    /// be asked about.
-    fn one(offset: i64, size: i64, source: Option<u64>, usable: u64) -> Order {
-        let c = chunk("c", offset, size);
-        salvage_order(&[c], &[source], usable)
-    }
-
+    /// The small, single-rule boundary cases of the salvage decision, as a
+    /// table: each row is one `salvage_order` call plus the direction, liveness
+    /// and live count it must produce. The four multi-chunk worked cases below
+    /// stay as named tests because each asserts a distinct higher-level rule.
     #[test]
-    fn a_source_after_the_destination_counts_for_ascending() {
-        // r > o: ascending keeps it, descending does not.
-        let order = one(0, 4, Some(8), 64);
-        assert!(order.ascending);
-        assert_eq!(order.live, vec![true]);
-    }
-
-    #[test]
-    fn a_source_before_the_destination_counts_for_descending() {
-        // r < o: descending keeps it, ascending does not.
-        let order = one(8, 4, Some(0), 64);
-        assert!(!order.ascending);
-        assert_eq!(order.live, vec![true]);
-    }
-
-    #[test]
-    fn a_source_at_the_destination_counts_for_both() {
-        // r == o: the chunk is already correct where it belongs, and it is
-        // safe in either direction.
-        let chunks = [chunk("c", 4, 4)];
-        let sources = [Some(4u64)];
-        assert_eq!(survives(chunks.iter(), &sources, 64, true), vec![true]);
-        assert_eq!(survives(chunks.iter(), &sources, 64, false), vec![true]);
-    }
-
-    #[test]
-    fn a_source_past_the_end_of_the_file_counts_for_neither() {
-        // The file is 64 bytes; a source at 60 would fit a 4-byte chunk
-        // exactly, but at 61 it reaches past the end.
-        let order = one(0, 4, Some(61), 64);
-        assert_eq!(order.live, vec![false]);
-    }
-
-    #[test]
-    fn a_chunk_with_no_source_is_never_live() {
-        let order = one(0, 4, None, 64);
-        assert_eq!(order.live, vec![false]);
-    }
-
-    #[test]
-    fn an_empty_candidate_list_yields_an_arbitrary_but_valid_direction() {
-        let chunks = vec![chunk("a", 0, 4), chunk("b", 4, 4)];
-        let order = salvage_order(&chunks, &[None, None], 64);
-        assert_eq!(order.live, vec![false, false]);
-        assert_eq!(order.live_count(), 0);
+    fn salvage_order_source_boundary_cases() {
+        struct Case {
+            label: &'static str,
+            chunks: Vec<SophonChunk>,
+            sources: Vec<Option<u64>>,
+            usable: u64,
+            ascending: bool,
+            live: Vec<bool>,
+            live_count: usize,
+            // r == o survives both directions, not just the one picked.
+            both_directions: bool,
+        }
+        let cases = vec![
+            // r > o: ascending keeps it, descending does not.
+            Case {
+                label: "source after destination -> ascending",
+                chunks: vec![chunk("c", 0, 4)],
+                sources: vec![Some(8)],
+                usable: 64,
+                ascending: true,
+                live: vec![true],
+                live_count: 1,
+                both_directions: false,
+            },
+            // r < o: descending keeps it, ascending does not.
+            Case {
+                label: "source before destination -> descending",
+                chunks: vec![chunk("c", 8, 4)],
+                sources: vec![Some(0)],
+                usable: 64,
+                ascending: false,
+                live: vec![true],
+                live_count: 1,
+                both_directions: false,
+            },
+            // r == o: correct where it belongs, safe in either direction.
+            Case {
+                label: "source at destination -> both",
+                chunks: vec![chunk("c", 4, 4)],
+                sources: vec![Some(4)],
+                usable: 64,
+                ascending: true,
+                live: vec![true],
+                live_count: 1,
+                both_directions: true,
+            },
+            // A source at 61 reaches past the end of a 64-byte file.
+            Case {
+                label: "source past end of file -> neither",
+                chunks: vec![chunk("c", 0, 4)],
+                sources: vec![Some(61)],
+                usable: 64,
+                ascending: true,
+                live: vec![false],
+                live_count: 0,
+                both_directions: false,
+            },
+            Case {
+                label: "no source -> never live",
+                chunks: vec![chunk("c", 0, 4)],
+                sources: vec![None],
+                usable: 64,
+                ascending: true,
+                live: vec![false],
+                live_count: 0,
+                both_directions: false,
+            },
+            Case {
+                label: "no candidates -> arbitrary but valid direction",
+                chunks: vec![chunk("a", 0, 4), chunk("b", 4, 4)],
+                sources: vec![None, None],
+                usable: 64,
+                ascending: true,
+                live: vec![false, false],
+                live_count: 0,
+                both_directions: false,
+            },
+            // A source at 16 reaches past the end of a 16-byte file.
+            Case {
+                label: "source at file length -> neither",
+                chunks: vec![chunk("a", 0, 4)],
+                sources: vec![Some(16)],
+                usable: 16,
+                ascending: true,
+                live: vec![false],
+                live_count: 0,
+                both_directions: false,
+            },
+        ];
+        for Case {
+            label,
+            chunks,
+            sources,
+            usable,
+            ascending,
+            live,
+            live_count,
+            both_directions,
+        } in cases
+        {
+            let order = salvage_order(&chunks, &sources, usable);
+            assert_eq!(order.ascending, ascending, "{label}: direction");
+            assert_eq!(order.live, live, "{label}: live sources");
+            assert_eq!(order.live_count(), live_count, "{label}: live count");
+            if both_directions {
+                assert_eq!(
+                    survives(chunks.iter(), &sources, usable, true),
+                    live,
+                    "{label}: ascending survives"
+                );
+                assert_eq!(
+                    survives(chunks.iter(), &sources, usable, false),
+                    live,
+                    "{label}: descending survives"
+                );
+            }
+        }
     }
 
     #[test]
@@ -289,15 +358,6 @@ mod tests {
         let order = salvage_order(&chunks, &sources, 64);
         assert!(order.ascending);
         assert_eq!(order.live, vec![true, false]);
-    }
-
-    #[test]
-    fn a_source_that_is_past_the_file_counts_for_neither_direction() {
-        // The file is 16 bytes; the source at 12 would fit for a 4-byte
-        // chunk, but at 16 it does not.
-        let chunks = vec![chunk("a", 0, 4)];
-        let order = salvage_order(&chunks, &[Some(16)], 16);
-        assert_eq!(order.live, vec![false]);
     }
 
     /// The plan's own worked example, in the plan's own shape: the content
