@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T10, then advance per the loop.
-* Active checkpoint: CP3 (`open`); T09 `pending_review`, T10 `in_progress`.
+* Next action: pick the next `todo` task (T11) and spawn its implementing session.
+* Active checkpoint: CP3 (`open`); T09, T10 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -35,7 +35,7 @@ commit ranges only.
 | T07 | Hand-build minimal bundles for delete-a-doc | completed | CP2 | CP2 review: completed |
 | T08 | Cache gircap byte tables + shrink chunk | completed | CP2 | CP2 review: completed (partial scope accepted; old.blk shrink deferred to F15) |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | pending_review | CP3 | 37d11fb5; see review range |
-| T10 | Drop sled2redb flush + redundant reopens | in_progress | CP3 | |
+| T10 | Drop sled2redb flush + redundant reopens | pending_review | CP3 | 2 commits fea93769..f342d32e; product flush removal + test reopens |
 | T11 | Replace girsync publish fixed sleeps | todo | CP3 | |
 | T12 | Replace girpr panic-ordering sleep | todo | CP3 | |
 | T13 | Add gircap zero-backoff retry hook | todo | CP3 | |
@@ -72,6 +72,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T07 | `a1de5165..81988899` | completed |
 | T08 | `66ac441b..6bcd4b87` | completed (partial accepted) |
 | T09 | `0c7e0b20..37d11fb5` | — |
+| T10 | `aa9c1add..f342d32e` | — |
 
 ## Follow-ups
 
@@ -97,6 +98,8 @@ are done and a review session has decided the batches.
 | F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | proposed | CP2 review: KEEP — the deferred old.blk shrink. |
 | F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | proposed | CP2 review: KEEP — relevant to CPU-bound gircap. |
 | F18 | In-process spelling check relies on the hand-built `the_converter_command()` mirror; if the binary's `Args` derive drifts from the mirror without affecting `--help`, the pin won't catch it. An authoritative in-process parse would expose/move `Args` from `main.rs` into the library (product change). | T09 implementer | proposed | Out of T09 scope; reviewer decides. |
+| F19 | Removing the one remaining ~200 ms reopen in `convert_sled_dir_to_redb_file` would require exposing written records or accepting a caller-provided handle in the converter's product API. | T10 implementer | proposed | Recommend leaving it as the contract test; reviewer decides. |
+| F20 | Capture actual before/after nextest timing for the sled2redb suite to confirm the reopen savings (report's P1 estimate bundled this with T09). | T10 implementer | proposed | Optional measurement; reviewer decides. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -114,3 +117,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T08 partial (commit 6bcd4b87): DONE — per-process `OnceLock<Mutex<HashMap<(u64,usize),Blob>>>` memo in `blob()` so each blob is encoded/MD5'd once per process (per-process only; doc points to T06 for cross-process). SKIPPED — shrinking the 32 KB `old.blk` chunk: `the_request_log_rows_are_what_the_spec_says_they_are` (capture_layout.rs:1157) pins its id/digest + `bytes_in=32778`, and matrix relies on `removed` being dearest; a trial shrink broke that test, so it was reverted and a why-not comment added. T06 fingerprint (whole common/mod.rs) invalidated correctly on the edit. Full gircap 868 pass/3 skip, clippy -D warnings clean. Reviewer to judge whether the partial scope is acceptable.
 * CP2 review done (no fix/revert commits; tree clean at `9d968559`): verdicts T06/T07 `completed`, T08 `completed` (partial scope accepted; old.blk shrink deferred to F15). Review re-ran gircap 53/53 both cached and after deleting all shared bundles to force fresh parallel builds (race-free confirmed); clippy -D warnings clean. Confirmed the task's "six" delete-a-doc tests was a miscount (five exist; none lost). Follow-ups kept: F02, F09, F10, F13, F14, F15, F16. Removed: F11, F12, F17 (reasons in table). No new follow-ups.
 * T09 implemented: `the_flags_are_accepted_on_either_side_of_the_paths` now checks all 6 spellings in-process via a `parse_in_process()` helper parsing against the existing `the_converter_command()` clap mirror, and keeps 2 full conversions (down from 8) — one asserting the full record, one preserving the byte-for-byte `--output json` == `--output=json` equality. convert suite 16/16, clippy clean. No product code changed. Report §6.4 item 3 (read-only old.flush() in src/convert.rs:228) is a separate P1 product item, left for a different task.
+* T10 implemented (both parts): PRODUCT code — removed no-op `old.flush()` in `src/convert.rs` after validating `old` is opened read-only and only read-only `old.iter()` uses it; `drop(old)` releases the sled lock `replace_destination` needs. No output-format/durability change. TEST code — reduced file-backed `open_db` reopens 3 -> 1; kept `convert_sled_dir_to_redb_file` as the single round-trip contract test, dropped reopens from the two force tests (assert byte-identity/change + converter counts instead), updated `entry_names` expectations (lock sidecar came from the test's own open_db). Full sled2redb 16/16 + 1 unit, nextest 17/17. Product change in fea93769 — reviewer to scrutinize.
