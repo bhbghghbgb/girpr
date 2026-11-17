@@ -6,24 +6,35 @@ use tracing::{debug, info, trace};
 
 use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of, slash_rel};
 
-/// How many entries the walk pushes between two heartbeats.
+/// The production heartbeat period: how many entries the walk pushes between
+/// two `scan progress: walk` events.
 ///
 /// The heartbeat is the walk's own progress report: it says how many entries
 /// the walk has pushed so far, every so often, so a long walk is visibly
 /// alive. It is the `scan progress: walk` event. The period is a number
-/// rather than a rule, and it is named here so that the walk and the case
-/// that pins it agree in one place: a tree of exactly this many entries
-/// produces exactly one heartbeat, and a tree of fewer produces none.
+/// rather than a rule: a tree of exactly this many entries produces exactly
+/// one heartbeat, and a tree of fewer produces none.
 ///
-/// **Public because the suite needs the same number, and for nothing else.**
-/// The integration test that pins the heartbeat builds its tree from this
-/// constant, so the walk and the case cannot drift apart — it was a bare
-/// literal in both places before, and the two could only agree by hand. No
-/// other caller wants it: the period says nothing about the tool's
-/// behaviour, only about how often the walk narrates itself, so the public
-/// surface exists solely so that one test can read the number the walk
-/// divides by.
+/// This is the **production** period. [`heartbeat_entries`] layers a test-only
+/// env hook over it so a small fixture can trip the heartbeat; with the hook
+/// unset, the walk uses this constant and behaves exactly as before.
 pub const HEARTBEAT_ENTRIES: usize = 2000;
+
+/// The heartbeat period for this process.
+///
+/// The test-only `GIRSYNC_TEST_HEARTBEAT_ENTRIES` hook lowers the period inside
+/// a spawned child so a fixture of a handful of files can trip the heartbeat
+/// and be counted, instead of the ~2,000 the production period needs. An unset,
+/// non-numeric, or zero value leaves [`HEARTBEAT_ENTRIES`] in place, so the hook
+/// is default-off and production is unchanged. Deliberately not `cfg(test)`:
+/// the slow suites spawn the real binary and set the variable on the child.
+fn heartbeat_entries() -> usize {
+    std::env::var("GIRSYNC_TEST_HEARTBEAT_ENTRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(HEARTBEAT_ENTRIES)
+}
 
 /// One entry as found on disk, before any cache consultation.
 ///
@@ -73,6 +84,9 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
     debug!(root = %root.display(), max_depth, "scan start");
     let t0 = std::time::Instant::now();
     let mut out = Vec::new();
+    // Resolved once per walk, so a walk cannot change its heartbeat period
+    // halfway through (see `heartbeat_entries`).
+    let heartbeat_period = heartbeat_entries();
     // Counted as the entries are pushed, so the walk does not walk its own
     // output a second time to find out how many files it saw. A dir is the
     // other half of the count, and the two add up to the entries.
@@ -134,7 +148,8 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     false
                 };
                 // Progress: trace every entry (file log), debug heartbeat every
-                // HEARTBEAT_ENTRIES.
+                // period's worth of entries (the production default is
+                // HEARTBEAT_ENTRIES; see `heartbeat_entries`).
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {
@@ -158,7 +173,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
-                if out.len() % HEARTBEAT_ENTRIES == 0 {
+                if out.len() % heartbeat_period == 0 {
                     // The heartbeat names the walk, because the phases report
                     // their progress under their own names — and two progress
                     // events that share one name are told apart by the fields

@@ -38,17 +38,23 @@ experimental = ["setup-scripts"]
 # * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
 #   rename (see `src/util/ini.rs::test_no_fsync`). The temp-file write and
 #   rename are unchanged.
+# * `GIRSYNC_TEST_HEARTBEAT_ENTRIES=<n>` — lowers the walk's heartbeat period
+#   from its production 2000 (see `tools/sync/src/scan.rs::heartbeat_entries`),
+#   so a small fixture can trip the heartbeat. Unlike the hooks above this is
+#   not inherited globally: the one test that pins the heartbeat sets it on its
+#   spawned child, so every other run keeps the production period.
 #
 # Production defaults to durable: an unset variable (or a non-truthy value)
 # leaves every flush in place. These are deliberately not `cfg(test)`: the
 # slowest suites spawn the real binaries, and child processes inherit the
 # variables.
 #
-# The hooks are listed in exactly one place, `.config/nextest-test-env`, and the
-# setup commands below only copy that file to `$NEXTEST_ENV`. Adding a hook
-# means editing the env file, not the commands. `.gitattributes` pins the file
-# to LF: a CRLF checkout would leave a trailing `\r` in every value, and
-# `GIRSYNC_TEST_DURABILITY` would not equal `"none"`.
+# The globally-inherited hooks are listed in exactly one place,
+# `.config/nextest-test-env`, and the setup commands below only copy that file
+# to `$NEXTEST_ENV`. Adding a globally-inherited hook means editing the env
+# file, not the commands. `.gitattributes` pins the file to LF: a CRLF checkout
+# would leave a trailing `\r` in every value, and `GIRSYNC_TEST_DURABILITY`
+# would not equal `"none"`.
 #
 # One script per platform. The Windows script uses `cmd.exe` instead of
 # PowerShell, whose startup alone cost ~1.7 s on every `cargo nextest run`.
