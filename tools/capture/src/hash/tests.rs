@@ -572,17 +572,6 @@ fn hex_covers_every_byte_value_in_both_cases() {
     assert_eq!(hex_bytes_upper(&[0x00, 0x0f, 0xf0, 0xff]), "000FF0FF");
 }
 
-/// *Measured* live 2026-10-14: the 7.1.0 game archive is 9 007 187 bytes and
-/// its compressed MD5 is this. A digest that did not reproduce it would mean
-/// the capture was hashing the wrong bytes.
-#[test]
-fn the_measured_archive_digest_is_reproducible() {
-    // Only the first bytes are pinned here; the full 9 MB blob lives in the
-    // artifact, not in this file.
-    assert_eq!(md5_hex(b"").len(), 32);
-    assert_eq!(ZSTD_MAGIC, [0x28, 0xB5, 0x2F, 0xFD]);
-}
-
 #[test]
 fn the_gzip_rule_is_strictly_greater_than_the_threshold() {
     for (len, threshold, want) in [
