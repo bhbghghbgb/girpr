@@ -469,6 +469,33 @@ async fn a_legacy_in_install_lock_is_left_alone() {
     mock.stop();
 }
 
+/// The post-metadata-phase invariants shared by the branch-failure and
+/// refused-mode cases below: when expected, the branch call was issued, no
+/// `getBuild` followed the aborted metadata phase, and `config.ini` was not
+/// bumped. Which checks run is per-case — complementary cases pin different
+/// subsets (the mode refusals never issue a branch call; the retry cases pin
+/// the branch *count* instead of the "issued" flag; the success case expects a
+/// `getBuild`), so each caller passes `Some(msg)` only for the checks that were
+/// true of it and `None` to omit the rest. `msg` is the original assertion's
+/// diagnostic text, so folding these checks never weakens a failure message.
+fn assert_metadata_phase_stopped(
+    mock: &MockServer,
+    dir: &std::path::Path,
+    branch_issued_msg: Option<&str>,
+    no_build_msg: Option<&str>,
+    no_config_bump_msg: Option<&str>,
+) {
+    if let Some(msg) = branch_issued_msg {
+        assert!(mock.first_target_with("getGameBranches").is_some(), "{msg}");
+    }
+    if let Some(msg) = no_build_msg {
+        assert!(mock.first_target_with("getBuild").is_none(), "{msg}");
+    }
+    if let Some(msg) = no_config_bump_msg {
+        assert!(!dir.join("config.ini").exists(), "{msg}");
+    }
+}
+
 #[tokio::test]
 async fn non_chunk_download_mode_is_a_usage_error() {
     // Only DOWNLOAD_MODE_CHUNK is patchable; FILE and LDIFF need the 7z/hdiff
@@ -501,12 +528,10 @@ async fn non_chunk_download_mode_is_a_usage_error() {
             err.source.to_string().contains("not chunk mode"),
             "mode {mode:?}: {err}"
         );
-        // No manifests were fetched and nothing was written.
-        assert!(
-            mock.first_target_with("getBuild").is_none(),
-            "mode {mode:?}"
-        );
-        assert!(!dir.join("config.ini").exists(), "mode {mode:?}");
+        // No manifests were fetched and nothing was written. This refusal
+        // never issues a branch call, so only the last two checks apply.
+        let msg = format!("mode {mode:?}");
+        assert_metadata_phase_stopped(&mock, &dir, None, Some(&msg), Some(&msg));
         mock.stop();
     }
 }
@@ -578,15 +603,20 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
                 case.name
             );
         }
-        assert!(
-            mock.first_target_with("getGameBranches").is_some(),
-            "{}: the branch call was issued and then discarded",
-            case.name
-        );
-        assert!(
-            mock.first_target_with("getBuild").is_none(),
-            "{}: no build call may follow a refused mode",
-            case.name
+        // This case pins the branch as issued-and-discarded plus no build;
+        // config bump is not part of this whole-fixture refusal case.
+        assert_metadata_phase_stopped(
+            &mock,
+            &dir,
+            Some(&format!(
+                "{}: the branch call was issued and then discarded",
+                case.name
+            )),
+            Some(&format!(
+                "{}: no build call may follow a refused mode",
+                case.name
+            )),
+            None,
         );
 
         mock.stop();
@@ -628,9 +658,12 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
         !text.contains("getGameConfigs"),
         "the config call succeeded, so it must not be blamed: {text}"
     );
-    assert!(
-        mock.first_target_with("getBuild").is_none(),
-        "no build call may follow a failed branch call"
+    assert_metadata_phase_stopped(
+        &mock,
+        &dir,
+        None,
+        Some("no build call may follow a failed branch call"),
+        Some("the version must not be bumped for a failed metadata phase"),
     );
     let branch_requests = mock
         .request_targets()
@@ -640,10 +673,6 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
     assert_eq!(
         branch_requests, 1,
         "a non-JSON failure is fatal, so the call is not retried"
-    );
-    assert!(
-        !dir.join("config.ini").exists(),
-        "the version must not be bumped for a failed metadata phase"
     );
 
     mock.stop();
@@ -720,13 +749,12 @@ async fn a_retryable_branch_failure_exhausts_the_retry_budget() {
         branch_requests, 5,
         "the client's whole retry budget is used"
     );
-    assert!(
-        mock.first_target_with("getBuild").is_none(),
-        "no build call may follow a failed branch call"
-    );
-    assert!(
-        !dir.join("config.ini").exists(),
-        "the version must not be bumped for a failed metadata phase"
+    assert_metadata_phase_stopped(
+        &mock,
+        &dir,
+        None,
+        Some("no build call may follow a failed branch call"),
+        Some("the version must not be bumped for a failed metadata phase"),
     );
 
     mock.stop();
