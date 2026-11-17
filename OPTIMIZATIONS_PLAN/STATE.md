@@ -10,11 +10,10 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T03** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T03** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 review done.
-* Active checkpoint: CP2 (`open`). Status: no task started yet.
+* Active checkpoint: CP2 (`open`). Status: T03 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -34,7 +33,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 |---|---|---|---|---|---|
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | completed | P0 | CP1 | impl `a0a45fc8`; CP1 review confirmed completed. 19 self-tests → 4 tables (49→34), all cases preserved (several assertions strengthened); no product/process/golden code touched. |
 | T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
-| T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
+| T03 | Consolidate remaining low-risk root-unit cases | in_progress | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
 | T06 | sled2redb removes + usage-error parametrization | todo | P0 | CP3 | |
