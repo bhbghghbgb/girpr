@@ -65,11 +65,15 @@ Run it once per disk and compare the `per_op` figures, not the totals: the
 number of operations is fixed so the totals are comparable, but a single noisy
 run is still only worth about 10%.
 
-The bench is a standalone workspace, so ordinary builds do not compile it. CI
-runs `cargo check --locked --manifest-path
-tests/scripts/io-profile/iot-bench/Cargo.toml` with the workspace MSRV (the
-root package's `rust-version`), to keep its pinned `redb` line buildable
-there.
+The bench is a standalone workspace, so ordinary builds do not compile it. It
+is checked on the same stable toolchain as the rest of the workspace:
+
+```powershell
+cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
+```
+
+Its `redb` requirement tracks the workspace's `4.x` line; there is no old-toolchain
+pin to keep buildable.
 
 ## Reading the output
 

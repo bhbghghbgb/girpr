@@ -298,16 +298,11 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- Rust at the highest `rust-version` any workspace member declares, or newer
-  for the whole workspace (each member keeps its own minimum; the root is at
-  today's high-water mark, 1.89, alongside `girsync`; the crates are
-  `edition = "2024"`, and the single-writer lock uses
-  `File::try_lock`/`File::unlock`, both stable since 1.89); network to
-  HoYoPlay + Sophon CDNs (production runs only). The
-  dev-only `girsync` cache pins `redb` to exactly 4.1.0, the last 4.x release
-  that supports `girsync`'s minimum (4.2 and later need 1.90), so checking the
-  whole workspace needs a toolchain at least as new as every member's minimum,
-  not only the product's.
+- A **stable Rust toolchain**, selected by `rust-toolchain.toml` at the
+  repository root. There is no MSRV floor: edition 2024 is the only language
+  requirement. Any version number you may see in notes or tooling is a hint
+  that can be bumped at any time, never a cap on newer language features or
+  library versions. Network to HoYoPlay + Sophon CDNs (production runs only).
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
@@ -317,49 +312,13 @@ the completed `*_tmp` prefix and continuing it.
 members but not default members, so a root command does not compile them; check
 them explicitly when working on them. `--workspace` is the everything command.
 
-Every member declares its own `rust-version`. To check that each one still
-builds with exactly that toolchain, rather than only with the newest compiler
-on the host:
+The whole workspace is checked on stable, with all targets and all features:
 
 ```powershell
-pwsh -File tests/scripts/check-msrv.ps1
+cargo check --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features
+cargo nextest run --workspace --all-features
 ```
-
-The script reads the members and their minimums from `cargo metadata`, installs
-any missing toolchain through rustup, and runs
-`cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
-so tests and benches are held to the same floor. A member's optional features
-are checked as well — the same command with `--features <feature>` — so the
-code that only builds when a feature is on is held to the same floor too. The
-feature names are compared the way cargo compares them — cargo's feature names
-are case-sensitive, so a feature named `Default` is an ordinary feature and not
-the set the default build turns on. A feature that does not build on its own
-is checked with each of the other features instead — the feature together with
-one other, which is a configuration that has to build on its own — so a member
-whose features only build together is covered rather than failed. The features
-are checked in combination as well — each pair of them, and the whole set of
-them at once — so a combination that needs a newer Rust is caught even when
-each of its features builds on its own. Not every subset of the features is
-checked: the subsets of two or more of n features are 2^n - n - 1 of them, so a
-member with a dozen optional features would ask cargo for four thousand builds.
-The code a middle subset compiles is compiled by the whole set as well — unless
-another feature replaces that code, which is the one shape the whole set cannot
-see — and an incompatibility is caught by the pair that holds it or by the whole
-set. A combination that cannot be enabled together fails the member — cargo
-allows it, so it is a configuration a user can ask for — and the failure names
-the combination that does not build. A feature that needs two partners at once
-— one that only builds when two others are on — has no single partner, so it
-fails on its own; that failure names the combination that does build it, which
-is the whole set of the member's features. It needs rustup and network access
-on the first run; after that the declared toolchains and the shared target
-directory make a run a few minutes of incremental builds. The `msrv` workflow
-runs the same script.
-
-The script's own feature rules live in `tests/scripts/msrv-features.ps1` and
-are checked by `tests/scripts/msrv-features.selftest.ps1`, which drives them
-with a synthetic member: no member of the workspace has two optional features
-today, so a real run never reaches the branch that checks a combination of
-them. The `msrv` workflow runs the self-test before the script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working

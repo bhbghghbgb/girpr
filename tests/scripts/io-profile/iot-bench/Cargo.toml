@@ -5,10 +5,10 @@ edition = "2021"
 description = "Microbenchmarks of the file-system operations the test suite performs"
 
 [dependencies]
-# Pinned to the version the workspace resolves (`tools/sync`), so the
-# microbenchmark measures the same redb the cache uses. That line stays on
-# 4.1 because 4.2 and later require Rust 1.90, above the workspace MSRV.
-redb = "=4.1.0"
+# Track the same redb line the workspace cache uses (`tools/sync`). No exact
+# pin: the old one only held an MSRV floor that no longer applies, so newer
+# 4.x releases are allowed as the dependency-upgrade work moves the lockfile.
+redb = "4"
 
 [profile.release]
 opt-level = 2

@@ -2,12 +2,11 @@
 name = "girpr"
 version = "0.1.0"
 edition = "2024"
-# The single-writer lock uses `File::try_lock`/`File::unlock`, stable since
-# 1.89; edition 2024 and the dependency tree need less than that. `girsync`
-# independently ties at the same 1.89 floor through its pinned redb. Every
-# workspace member declares its own minimum, so a version error names the
-# member that actually needs the newer compiler.
-rust-version = "1.89"
+# The workspace standardizes on the stable Rust toolchain (see
+# `rust-toolchain.toml` at the repository root). There is deliberately no
+# `rust-version` floor: edition 2024 and the stable compiler are the only
+# requirement, so newer language features and library versions are never
+# blocked by an old minimum.
 description = "Genshin Impact low-disk repair patcher (Starward chunk-repair core + Collapse extra purge)"
 
 [[bin]]

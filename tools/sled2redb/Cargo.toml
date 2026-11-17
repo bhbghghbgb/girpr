@@ -2,8 +2,7 @@
 name = "sled2redb"
 version = "0.1.0"
 edition = "2024"
-# redb 4.1.0 (pulled in by girsync) needs 1.89; nothing else here needs more.
-rust-version = "1.89"
+# Built with the stable Rust toolchain selected at the workspace root.
 description = "Dev-only one-shot converter from a legacy sled cache directory to a redb cache file, extracted from girsync"
 
 # A tools-only subset of the shared policy, the same one the other two dev

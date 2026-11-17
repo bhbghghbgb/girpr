@@ -224,11 +224,10 @@ pub(super) fn junction_result_with(
         // The guard leans on std's name-surrogate reparse-tag test: on
         // Windows `FileType::is_symlink` is true when the entry carries
         // `FILE_ATTRIBUTE_REPARSE_POINT` and its reparse tag has the
-        // name-surrogate bit, which a junction's tag does. `std` has read
-        // the tag that way since well before the crate's 1.89 floor, so
-        // every supported toolchain reports a junction as a link; a
-        // toolchain that did not would refuse a good fixture here, which is
-        // why the floor is part of this fixture's contract.
+        // name-surrogate bit, which a junction's tag does. `std` reads the
+        // tag that way on the stable toolchain, so a stable toolchain reports a
+        // junction as a link; one that did not would refuse a good fixture
+        // here.
         Ok(md) if md.file_type().is_symlink() => Ok(()),
         // Something is there, but it is not the reparse point `mklink`
         // claimed: a plain directory would stand in for the fixture and
