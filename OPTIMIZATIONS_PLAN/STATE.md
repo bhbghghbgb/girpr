@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: implement Batch 2 (F02, F29) — one implementing session, then one review session; then Batch 1 (F10, F24, F25); then the final cleanup commit (section 5).
-* Active batch: Batch 2 (to be set `in_progress`). Phase: follow-up implementation/review.
+* Next action: review Batch 2 (F02, F29, range `ee043924..40eec3bd`), apply verdicts, then implement/review Batch 1 (F10, F24, F25); then the final cleanup commit (section 5).
+* Active batch: Batch 2 (review in progress). Phase: follow-up review.
 * Active checkpoint: none (all 20 tasks terminal, all CPs `done`).
 * Blocked on user: no.
 
@@ -146,7 +146,7 @@ using the same separate state commits as the task/checkpoint loop. Statuses:
 
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
-| Batch 2 | F02, F29 | pending_review | `ee043924..40eec3bd` | — | `tools/sync/src/scan.rs` (`heartbeat_entries()` ~L31–37, tests ~L218–321; confirm hook not set globally in `.config/nextest-test-env`); `tests/cli_contract.rs` (`usage_rejection()` ~L450–457, jobs-boundary spawns ~L839/846/871/915); `src/cli.rs` (unit-tested error text ~L480–519). | Two self-contained, lowest-risk wins; implement first. F29 keeps one spawn for exact stderr. |
+| Batch 2 | F02, F29 | pending_review | `ee043924..40eec3bd` | review in progress | `tools/sync/src/scan.rs` (`heartbeat_entries()` ~L31–37, tests ~L218–321; confirm hook not set globally in `.config/nextest-test-env`); `tests/cli_contract.rs` (`usage_rejection()` ~L450–457, jobs-boundary spawns ~L839/846/871/915); `src/cli.rs` (unit-tested error text ~L480–519). | Two self-contained, lowest-risk wins; implement first. F29 keeps one spawn for exact stderr. |
 | Batch 1 | F10, F24, F25 | open | — | — | `tools/capture/tests/common/mod.rs` (`bundle_source_key`, shared-bundle key ~L95–149); `tools/capture/src/run/mod.rs` (`zero_backoff()` hook + test module); `tools/capture/tests/capture_layout.rs` (retry test ~L1168–1219); `tools/capture/src/http/transport.rs` (`ZeroSleep`). | Single-crate correctness/coverage. F10: extend the private test-only fingerprint to cover capture source (no product/dep change). F24: tiny product marker optional; no-product-change wall-clock `<500 ms` guard acceptable. |
 
 ## Context / decisions
