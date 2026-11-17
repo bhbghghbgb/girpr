@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T10) and spawn its implementing session.
-* Active checkpoint: CP3 (`open`); T09 `pending_review`.
+* Next action: wait for implementing session on T10, then advance per the loop.
+* Active checkpoint: CP3 (`open`); T09 `pending_review`, T10 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -35,7 +35,7 @@ commit ranges only.
 | T07 | Hand-build minimal bundles for delete-a-doc | completed | CP2 | CP2 review: completed |
 | T08 | Cache gircap byte tables + shrink chunk | completed | CP2 | CP2 review: completed (partial scope accepted; old.blk shrink deferred to F15) |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | pending_review | CP3 | 37d11fb5; see review range |
-| T10 | Drop sled2redb flush + redundant reopens | todo | CP3 | |
+| T10 | Drop sled2redb flush + redundant reopens | in_progress | CP3 | |
 | T11 | Replace girsync publish fixed sleeps | todo | CP3 | |
 | T12 | Replace girpr panic-ordering sleep | todo | CP3 | |
 | T13 | Add gircap zero-backoff retry hook | todo | CP3 | |
