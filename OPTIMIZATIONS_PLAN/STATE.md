@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: start CP3 — pick the first `todo` task (T09) and spawn its implementing session.
-* Active checkpoint: none (CP2 `done`; CP3 `open`).
+* Next action: wait for implementing session on T09, then advance per the loop.
+* Active checkpoint: CP3 (`open`); T09 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -34,7 +34,7 @@ commit ranges only.
 | T06 | Consolidate gircap captures + shared bundle | completed | CP2 | CP2 review: completed |
 | T07 | Hand-build minimal bundles for delete-a-doc | completed | CP2 | CP2 review: completed |
 | T08 | Cache gircap byte tables + shrink chunk | completed | CP2 | CP2 review: completed (partial scope accepted; old.blk shrink deferred to F15) |
-| T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
+| T09 | Cut sled2redb spelling test 8 → 2–3 | in_progress | CP3 | |
 | T10 | Drop sled2redb flush + redundant reopens | todo | CP3 | |
 | T11 | Replace girsync publish fixed sleeps | todo | CP3 | |
 | T12 | Replace girpr panic-ordering sleep | todo | CP3 | |
