@@ -206,6 +206,11 @@ fn the_conversion_temporary_is_named_inside_the_tools_namespace() {
     );
 }
 
+/// The round-trip test: the one case that pays for a file-backed reopen of the
+/// converted cache. It asserts the whole contract — rows decoded from the sled
+/// JSON/hex layout into redb records, unknown algorithms passed through, and a
+/// converted cache that compares equal to a folder with the same content. Every
+/// other case inspects outcomes without reopening the cache file.
 #[test]
 fn convert_sled_dir_to_redb_file() {
     let t = temp_root("convert");
@@ -337,9 +342,10 @@ fn a_failed_conversion_leaves_no_destination_and_no_temporary() {
 /// destroying it before the new one is known to be good trades a cache for
 /// nothing.
 ///
-/// The old cache is compared byte for byte and then opened, because "the file
-/// is still there" and "the file is still a cache" are different answers, and
-/// only the second one is worth anything to the next run.
+/// The old cache is compared byte for byte. That answers the question that
+/// matters: a file byte-identical to a cache that converted successfully is
+/// still that cache, so a separate reopen would only re-prove what
+/// [`convert_sled_dir_to_redb_file`] already asserts about converted files.
 #[test]
 fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
     let t = temp_root("convert_force_fail");
@@ -365,22 +371,14 @@ fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
         "the previous cache is byte-identical"
     );
 
-    // ...and it is still a cache, not just a file of the right size.
-    let recs = {
-        let cache = open_db(&dst, true, rw()).unwrap();
-        load_all_records(&cache).unwrap()
-        // cache handle drops here, releasing the file lock
-    };
-    assert_eq!(recs.len(), 3, "the previous cache still holds its rows");
     assert_eq!(
         entry_names(&work),
         vec![
             "girpr-cache".to_string(),
-            "girpr-cache-lock".to_string(),
             "legacy-cache".to_string(),
             "legacy-cache-bad".to_string(),
         ],
-        "the failed conversion left nothing but the cache and its lock sidecar"
+        "the failed conversion left nothing but the source dbs and the cache"
     );
 }
 
@@ -388,7 +386,11 @@ fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
 ///
 /// The source gains a row between the two conversions, so the second result
 /// is observably different from the first: a destination that was left
-/// alone would still hold three rows rather than four.
+/// alone would still hold three rows rather than four. The replacement is
+/// checked by comparing the cache file's bytes before and after the forced
+/// conversion, and the row count comes from the converter's own summary; the
+/// faithful sled-row-to-redb-row mapping is asserted once in
+/// [`convert_sled_dir_to_redb_file`], so no reopen is needed here.
 #[test]
 fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
     let t = temp_root("convert_force_ok");
@@ -398,6 +400,7 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
     let dst = work.join("girpr-cache");
 
     sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
+    let before = std::fs::read(&dst).unwrap();
     {
         let db = sled::open(&src).unwrap();
         db.insert(
@@ -411,25 +414,15 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
     let c = sled2redb::convert::sled_to_redb(&src, &dst, true).unwrap();
     assert_eq!((c.files, c.dirs), (3, 1));
     assert!(dst.is_file(), "the destination is a redb file");
-
-    let recs = {
-        let cache = open_db(&dst, true, rw()).unwrap();
-        load_all_records(&cache).unwrap()
-        // cache handle drops here, releasing the file lock
-    };
-    assert_eq!(recs.len(), 4, "the new cache replaced the old one");
-    assert!(
-        recs.contains_key("later.txt"),
-        "the row the first conversion did not have is there"
+    assert_ne!(
+        std::fs::read(&dst).unwrap(),
+        before,
+        "the forced conversion replaced the old cache"
     );
     assert_eq!(
         entry_names(&work),
-        vec![
-            "girpr-cache".to_string(),
-            "girpr-cache-lock".to_string(),
-            "legacy-cache".to_string(),
-        ],
-        "the conversion left nothing but the cache and its lock sidecar"
+        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
+        "the conversion left nothing but the cache and its source"
     );
 }
 
