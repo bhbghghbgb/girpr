@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T14, then advance per the loop.
-* Active checkpoint: CP4 (`open`); T14 `in_progress`.
+* Next action: pick the next `todo` task (T15) and spawn its implementing session.
+* Active checkpoint: CP4 (`open`); T14 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -39,7 +39,7 @@ commit ranges only.
 | T11 | Replace girsync publish fixed sleeps | completed | CP3 | CP3 review: completed |
 | T12 | Replace girpr panic-ordering sleep | completed | CP3 | CP3 review: completed |
 | T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
-| T14 | Reduce girpr trace-level logging | in_progress | CP4 | |
+| T14 | Reduce girpr trace-level logging | pending_review | CP4 | 32d12ebe; see review range |
 | T15 | Remove girpr `--help`/argument spawns | todo | CP4 | |
 | T16 | Consolidate girpr multi-run parity tests | todo | CP4 | |
 | T17 | Merge girsync dry-run/hard-link groups | todo | CP4 | |
@@ -76,6 +76,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T11 | `fa0a7687..f7eb3995` | completed |
 | T12 | `326acea9..c33dfe0e` | completed |
 | T13 | `fbf8d14c..1fe87a27` | completed |
+| T14 | `49457928..32d12ebe` | — |
 
 ## Follow-ups
 
@@ -108,6 +109,9 @@ are done and a review session has decided the batches.
 | F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | removed | CP3 review: literal is established across hyp.rs/stream.rs/retry.rs; exposing private const marginal. |
 | F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | proposed | CP3 review: KEEP — guards a real acceptance criterion (broken hook would still pass, just 500 ms slower). |
 | F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | proposed | CP3 review: KEEP — cheap unit test for production-safety criterion. |
+| F26 | Add a `run_no_log()` variant to repair_machinery that omits `--log-file`/`--log-file-level` entirely for tests that never read the log, eliminating log-creation IO (debug builds write no log file without `--log-file`). | T14 implementer | proposed | Reviewer decides. |
+| F27 | Assert chunk outcomes from the binary's `--output json` NDJSON records (`download_bytes`, etc.) instead of parsing log text in `downloaded_chunks`/`in_place_chunk_stats`, reducing coupling to the log format. | T14 implementer | proposed | Reviewer decides. |
+| F28 | Use a `warn` default log level in repair_machinery, with the ~8 log-asserting tests explicitly requesting `debug`; marginal gain given kilobyte fixtures. | T14 implementer | proposed | Reviewer decides. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -130,3 +134,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T12 implemented (commit c33dfe0e): both sleeps validated present first. In `src/repair/file/mod.rs`, replaced the 300 ms tokio sleep in `a_panic_is_observed_before_a_slower_earlier_task` with a `#[cfg(test)]` oneshot gate — the join loop signals on observing a panicked task, task 0 waits; 5 s timeout + dropped sender prevent hangs. In `src/repair/phases/manifest.rs`, removed the 5 ms `ShortSleep` struct/impl and unused `SleepFuture` import, switched test to `NoSleep`, added an "after 5 attempts" error-chain assertion. Only test-only timing paths in product files changed. 2 affected tests 10/10, full girpr --lib 453 pass/0 fail/2 ignored, clippy -D warnings clean. Product change touches test-only paths — reviewer to scrutinize.
 * T13 implemented (2 commits): validated code matched report. Added `ZeroSleep` sleeper in `http/transport.rs` (exported from `http/mod.rs`) returning an immediately-ready future; default-off test-only env hook `GIRCAP_TEST_ZERO_BACKOFF=1` read in `run::capture` selects `Fetcher::with_sleeper(..., ZeroSleep)` instead of `Fetcher::new(..., RealSleep)` (deliberately not cfg(test) so it works on the spawned binary). Retry test sets the hook only on its own child via new `run_with_env`/`capture_with_env` helpers; 503/retry + request-log assertions intact. Production RetryPolicy (500 ms) and Fetcher::new untouched. capture_layout 37/37, fmt clean. Product code changed (test-only default-off hook) — reviewer to scrutinize.
 * CP3 review done (no fix/revert commits; tree clean at `7308c6f1`): verdicts T09–T13 all `completed`. Product changes in T10 (flush removal), T11/T12 (test-only cfg hooks), T13 (default-off env hook) all validated: production behavior/backoff/durability unchanged, deterministic gates, no flakiness (repeated runs). Suites re-run: convert 17/17, sled2redb 17/17, cache 89/89, girpr --lib 453/453, capture_layout 37/37. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25. Removed: F18, F19, F20, F21, F22, F23 (reasons in table). No new follow-ups.
+* T14 implemented (commit 32d12ebe): only `tests/repair_machinery.rs` changed. Added `LogLevel` enum (Debug/Trace); split `Rig::run()` into a default-debug wrapper + `run_at_level(level, args)`. Determined from source that only `the_trace_logs_download_records_agree_with_the_servers_request_log` reads chunk-level log records — that one opts into trace; other log assertions are debug/info. Made log read-back lazy via `Run.log_path` + `OnceLock<String>` and `.log()`, so runs that never inspect the log skip the read; all log-content assertions kept verbatim, no `snapshot()`/hash assertion touched. repair_machinery 28/28, clippy/fmt clean. DEVIATION: report named ~3 trace tests but only one actually reads chunk-level logs; report's "MD5 of the log" premise also stale (logs in separate TempDir, not in snapshot walk) — reviewer to confirm.
