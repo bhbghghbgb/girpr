@@ -10,11 +10,10 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T09** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`. This begins the P1 verification-required work.
+* Next action: wait for the **T09** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop.
 * Active batch: none. Phase: implementation (P1 tasks). CP1, CP2, CP3 reviews done.
-* Active checkpoint: CP4 (`open`). Status: no task started yet.
+* Active checkpoint: CP4 (`open`). Status: T09 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -40,7 +39,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T06 | sled2redb removes + usage-error parametrization | completed | P0 | CP3 | impl `e72f5859`; CP3 review completed. Subsumed help + temp-name tests removed, 4 usage-error cases parametrized (integration 16→11). Strict pins and convert.rs:515 (F03) intact. |
 | T07 | `crates/log` + `tempdir` low-risk merges | completed | P0 | CP3 | commits `bd151a08..ef7fbfc1`; CP3 review completed. 3 tests removed; tempdir pairs folded keeping every assertion; log policy still asserted via LogPlan::resolve. |
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
-| T09 | Consolidate `run_lock.rs` case clusters | todo | P1 | CP4 | |
+| T09 | Consolidate `run_lock.rs` case clusters | in_progress | P1 | CP4 | |
 | T10 | Consolidate `purge.rs` classifier early tests | todo | P1 | CP4 | |
 | T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
