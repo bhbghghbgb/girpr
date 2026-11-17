@@ -663,36 +663,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn purge_keeps_manifest_and_config_only() {
-        let (expected, keep) = purge_fixture();
-        let open = PathScope::default();
-        for rel in ["game.dat", "config.ini"] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
-                PurgeVerdict::Keep,
-                "{rel} must be kept"
-            );
-        }
-        // v1: exe, server bookkeeping, user data all purge (maximize free
-        // space; explicit --keep not implemented).
-        for rel in [
-            "YuanShen.exe",
-            "blacklist.txt",
-            "res_category.txt",
-            "audio_scan.txt",
-            "ScreenShot/shot.png",
-            "log/output.txt",
-            "login.dat",
-        ] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
-                PurgeVerdict::Purge,
-                "{rel} must be purged"
-            );
-        }
-    }
-
     /// V-1: a blacklisted path is dropped from the **repair** plan but is
     /// still part of the expected install. The cleanup must keep it even when
     /// the manifest no longer lists it (the "never deleted" claim in docs/01).
@@ -726,53 +696,6 @@ mod tests {
             "blacklisted file survives"
         );
         assert!(!dir.join("stale.dat").exists(), "the stale file is deleted");
-    }
-
-    #[test]
-    fn purge_keeps_audio_version_files_case_insensitively() {
-        let (expected, keep) = purge_fixture();
-        let open = PathScope::default();
-        // Collapse GenshinInstall.cs:232-241 parity (audio_lang_14 + per-lang pkg_version).
-        for rel in [
-            "audio_lang_14",
-            "Audio_English_pkg_version",
-            "audio_chinese_pkg_version",
-            "AUDIO_JAPANESE_PKG_VERSION",
-        ] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
-                PurgeVerdict::Keep,
-                "{rel} must be kept"
-            );
-        }
-    }
-
-    #[test]
-    fn purge_purges_temps_like_any_other_orphan() {
-        let (expected, keep) = purge_fixture();
-        let open = PathScope::default();
-        // Single files-cleanup: temps are not skipped, they purge into the
-        // same counter. --purge-before and --purge-after delete the same set.
-        // The temp spelling comes from the shared name helper, so this test
-        // cannot keep passing against a suffix no writer produces.
-        let config_temp = crate::util::path::temp_sibling(std::path::Path::new("config.ini"));
-        let config_temp = config_temp.to_str().unwrap();
-        for rel in [
-            "a.dat_tmp",
-            config_temp,
-            "x.hdiff",
-            "chunk/abc123",
-            "ldiff/p1",
-            "staging/y",
-            "old.diff",
-            "patch.deletefiles.txt",
-        ] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
-                PurgeVerdict::Purge,
-                "{rel} must be purged"
-            );
-        }
     }
 
     /// The load-bearing case of the scope rule above: a path the scope hides must be
@@ -926,6 +849,12 @@ mod tests {
     /// files (including a directory descendant), the two owned metadata files,
     /// a blacklisted path, the audio bookkeeping, a hidden path, and the temps
     /// that still purge.
+    ///
+    /// Rows are grouped by the rule they pin. Several were consolidated here
+    /// from earlier single-purpose classifier tests, keeping their original
+    /// path spellings so each regression stays covered. Every row is classified
+    /// by `classify_purge_path_visible` — the same entry point the open-scope
+    /// `classify_purge_path` helper delegates to (with `visible = true`).
     #[test]
     fn cached_keys_classify_every_keep_rule() {
         let plan = plan_of_all(&["game.dat", "dir/manifest.dat"]);
@@ -933,6 +862,9 @@ mod tests {
         let keys = keys_for(&plan, &blacklist);
         let open = PathScope::default();
         let scoped = scope(&["game.dat"], &[]);
+        // Temp spelling from the shared name helper (ex-early temps test).
+        let config_temp = crate::util::path::temp_sibling(std::path::Path::new("config.ini"));
+        let config_temp = config_temp.to_str().unwrap();
 
         for (rel, scope, want) in [
             ("game.dat", &open, PurgeVerdict::Keep),
@@ -946,6 +878,26 @@ mod tests {
             ("a.dat_tmp", &open, PurgeVerdict::Purge),
             ("x.hdiff", &open, PurgeVerdict::Purge),
             ("hidden/orphan.dat", &scoped, PurgeVerdict::Keep),
+            // Everything-else purges (ex-early manifest/config test).
+            ("YuanShen.exe", &open, PurgeVerdict::Purge),
+            ("blacklist.txt", &open, PurgeVerdict::Purge),
+            ("res_category.txt", &open, PurgeVerdict::Purge),
+            ("audio_scan.txt", &open, PurgeVerdict::Purge),
+            ("ScreenShot/shot.png", &open, PurgeVerdict::Purge),
+            ("log/output.txt", &open, PurgeVerdict::Purge),
+            ("login.dat", &open, PurgeVerdict::Purge),
+            // Audio pkg-version case-insensitivity (ex-early audio test).
+            ("audio_chinese_pkg_version", &open, PurgeVerdict::Keep),
+            ("AUDIO_JAPANESE_PKG_VERSION", &open, PurgeVerdict::Keep),
+            // Temp spellings still purge (ex-early temps test).
+            (config_temp, &open, PurgeVerdict::Purge),
+            ("chunk/abc123", &open, PurgeVerdict::Purge),
+            ("ldiff/p1", &open, PurgeVerdict::Purge),
+            ("staging/y", &open, PurgeVerdict::Purge),
+            ("old.diff", &open, PurgeVerdict::Purge),
+            ("patch.deletefiles.txt", &open, PurgeVerdict::Purge),
+            // Legacy lock kept; a slash-path orphan still purges (ex-early lock test).
+            ("stray/orphan.dat", &open, PurgeVerdict::Purge),
         ] {
             assert_eq!(
                 classify_purge_path_visible(
@@ -1196,44 +1148,6 @@ mod tests {
         assert!(keep.contains("config.ini"));
         assert!(keep.contains(crate::repair::lock::LOCK_FILE));
         assert_eq!(keep.len(), 2);
-    }
-
-    /// The classification the keep set exists for: the lock is kept, and
-    /// everything else at the root still purges.
-    #[test]
-    fn the_lock_is_kept_by_the_cleanup() {
-        let (expected, server_keep) = purge_fixture();
-        let scope = PathScope::default();
-        assert_eq!(
-            classify_purge_path(
-                "girpr.lock",
-                &expected,
-                &server_keep,
-                &no_blacklist(),
-                &scope
-            ),
-            PurgeVerdict::Keep
-        );
-        assert_eq!(
-            classify_purge_path(
-                "config.ini",
-                &expected,
-                &server_keep,
-                &no_blacklist(),
-                &scope
-            ),
-            PurgeVerdict::Keep
-        );
-        assert_eq!(
-            classify_purge_path(
-                "stray/orphan.dat",
-                &expected,
-                &server_keep,
-                &no_blacklist(),
-                &scope
-            ),
-            PurgeVerdict::Purge
-        );
     }
 
     /// The sweep's expected failure — something appeared after the plan was
