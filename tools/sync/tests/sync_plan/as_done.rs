@@ -147,15 +147,13 @@ fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
     let t = temp_root("asdone_many");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    // Increasing sizes (1 KB up to ~920 KB, ~11 MB total), so the copies take
-    // measurably different times and completion order is free to diverge from plan
-    // order.
+    // Distinct, increasing sizes (1 KB up to ~3 KB, ~50 KB total) keep the copies
+    // from being identical, so completion order is free to diverge from plan order
+    // under --rw-threads 4. Sizes are deliberately small: the assertion below checks
+    // the *set* of copy events, never sizes or content, so a large fixture would only
+    // burn storage IO.
     for i in 0..24usize {
-        wfile(
-            &src,
-            &format!("pad{i:02}.bin"),
-            &vec![b'x'; i * 40_000 + 1024],
-        );
+        wfile(&src, &format!("pad{i:02}.bin"), &vec![b'x'; i * 100 + 1024]);
     }
     let recs = run(&src, &dst, &["--rw-threads", "4"]);
     let copies: Vec<&str> = recs
