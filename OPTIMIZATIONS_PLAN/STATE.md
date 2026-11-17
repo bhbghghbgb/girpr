@@ -10,9 +10,9 @@ commit ranges only.
 
 ## Current position
 
-* Next action: all tasks terminal + all checkpoints done — spawn a review session to batch surviving follow-ups (section 5), then implement/review each batch, then final cleanup commit.
-* Active checkpoint: none (all CPs `done`). Phase: follow-ups.
-* Phase: implementation.
+* Next action: implement Batch 2 (F02, F29) — one implementing session, then one review session; then Batch 1 (F10, F24, F25); then the final cleanup commit (section 5).
+* Active batch: Batch 2 (to be set `in_progress`). Phase: follow-up implementation/review.
+* Active checkpoint: none (all 20 tasks terminal, all CPs `done`).
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -20,7 +20,8 @@ commit ranges only.
 * Tasks: `todo` → `in_progress` → `pending_review` → `completed` /
   `completed (fixed)` / `reverted`; or `todo`/`in_progress` → `skipped`.
 * Checkpoints: `open` → `in_progress` → `done`.
-* Follow-ups: `proposed` → `scheduled` → `completed` / `removed`.
+* Follow-ups: `proposed` → `scheduled` → `in_progress` → `pending_review` → `completed` / `removed`.
+  Follow-up batches reuse the per-task / checkpoint loop and its separate state commits (ORCHESTRATION.md §5).
 
 ## Tasks
 
@@ -92,35 +93,35 @@ are done and a review session has decided the batches.
 | ID | Description | Source | Status | Note |
 |---|---|---|---|---|
 | F01 | Add a test-only hook for phase A's 100-file progress threshold in `effective/phase_a.rs` (optionally emit on final entry like phase C), then lower the T01 fixture to ~8 files. Product-code change; out of T01 scope. | T01 implementer | removed | CP1 review: only ~0.23 s remains after the 101-file fix; not worth a product-code change. |
-| F02 | Unit test in `scan.rs` locking `heartbeat_entries() == 2000` with no hook set, to guard the production default. | T01 implementer | proposed | CP1 review: KEEP — backs T01's acceptance criterion. |
+| F02 | Unit test in `scan.rs` locking `heartbeat_entries() == 2000` with no hook set, to guard the production default. | T01 implementer | scheduled | Batching review: KEEP → Batch 2. |
 | F03 | Named constant (e.g. `FILE_CACHE_ENV`) for the `("GIRSYNC_TEST_CACHE", "file")` opt-out repeated across three tests in `tests/sync.rs`. | T02 implementer | removed | CP1 review: purely cosmetic constant. |
 | F04 | Debug assertion in `run_binary`/`run_binary_raw` rejecting a redundant `GIRSYNC_TEST_CACHE` in `envs`, to keep "one clear default" enforced against regressions. | T02 implementer | removed | CP1 review: as stated would reject valid `"file"` opt-outs, conflicting with intended API. |
 | F05 | On next report regeneration, account for already-landed R1 memory-cache work so §6.1 B5/C7 are not re-flagged as outstanding. | T03 implementer | removed | CP1 review: moot — report deleted at completion. |
 | F06 | One-line note in `common/mod.rs` near `opts()` pointing readers to the `*_mem` variants, to avoid re-introducing file backends in semantic suites. | T03 implementer | removed | CP1 review: pointer already exists in `opts_mem()`'s doc comment. |
 | F07 | In `through_the_binary.rs`, reuse one directory across passes of `update_hashes_the_same_set_at_every_limit` instead of 6 fresh 40-file trees — needs per-pass cache isolation to avoid leaking cache rows. | T04 implementer | removed | CP1 review: per-pass isolation risky; T04 captured the dominant win. |
 | F08 | Reduce per-pad byte size below 512 B in the rw_threads fixture (pads only need stat-equality + identical content). | T04 implementer | removed | CP1 review: negligible savings; count was the dominant cost. |
-| F09 | Debug assertion/comment tying `PAD_COUNT` to the max `pool_size()` in `settings()` to guard the "more files than workers" invariant against future worker increases. | T04 implementer | proposed | CP1 review: KEEP — cheap invariant guard for T04's core claim. |
-| F10 | Add the gircap binary's fingerprint to the shared-bundle key so a product-code change to capture output also invalidates the cached bundle (today only the test-side world source does). | T06 implementer | proposed | CP2 review: KEEP — real stale-cache hardening. |
+| F09 | Debug assertion/comment tying `PAD_COUNT` to the max `pool_size()` in `settings()` to guard the "more files than workers" invariant against future worker increases. | T04 implementer | removed | Batching review: invariant documented twice + vacuity-checked in limiter.rs; no runtime value, defensive churn. |
+| F10 | Add the gircap binary's fingerprint to the shared-bundle key so a product-code change to capture output also invalidates the cached bundle (today only the test-side world source does). | T06 implementer | scheduled | Batching review: KEEP → Batch 1 (bounded, no product/dep change). |
 | F11 | Unit test asserting the shared-bundle key is stable across repeated calls and changes when `common/mod.rs` changes, guarding the invalidation contract. | T06 implementer | removed | CP2 review: key is a deterministic pure function of a file read; real gap is F10. |
 | F12 | When T07 lands, confirm the two schema key-deletion tests don't regress to fresh captures (they already use the shared bundle as copy source). | T06 implementer | removed | CP2 review: resolved — schema key-deletion tests now use `minimal_bundle`, no `copy_tree`. |
-| F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | proposed | CP2 review: KEEP — further mixed-test consolidation. |
-| F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | proposed | CP2 review: KEEP — dedupe the two minimal-bundle writers. |
-| F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | proposed | CP2 review: KEEP — the deferred old.blk shrink. |
-| F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | proposed | CP2 review: KEEP — relevant to CPU-bound gircap. |
+| F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | removed | Batching review: saves no capture unless shared fixture redesigned to carry summaries — invasive contract change, no runtime win. |
+| F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | removed | Batching review: maintainability-only structural refactor, zero runtime benefit, could reintroduce drift. |
+| F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | removed | Batching review: already attempted in T08 and reverted (broke pinned assertions); remaining win microseconds; band-3 — do not defer a third time. |
+| F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | removed | Batching review: ~tens of µs, partly memoized by T08; content-derived key is circular (re-hashes what archive computes) + staleness risk. |
 | F18 | In-process spelling check relies on the hand-built `the_converter_command()` mirror; if the binary's `Args` derive drifts from the mirror without affecting `--help`, the pin won't catch it. An authoritative in-process parse would expose/move `Args` from `main.rs` into the library (product change). | T09 implementer | removed | CP3 review: drift gap narrow (help pin + in-process asserts + 2 end-to-end conversions); moving Args into library disproportionate. |
 | F19 | Removing the one remaining ~200 ms reopen in `convert_sled_dir_to_redb_file` would require exposing written records or accepting a caller-provided handle in the converter's product API. | T10 implementer | removed | CP3 review: conflicts with accepted T10 design (one reopen is the round-trip contract); not worth product-API change. |
 | F20 | Capture actual before/after nextest timing for the sled2redb suite to confirm the reopen savings (report's P1 estimate bundled this with T09). | T10 implementer | removed | CP3 review: moot — report deleted at completion; speedup already demonstrated. |
 | F21 | Extend the T11 one-shot gate to carry a "claim created" notification so `wait_for_published` becomes fully event-driven instead of polling 100x10 ms (not dead time, but returns eagerly). | T11 implementer | removed | CP3 review: polling is bounded, non-dead-time; marginal. |
 | F22 | T12's `FILE_PANIC_GATE` is a `thread_local` relying on `#[tokio::test]`'s current-thread runtime; a multi_thread flavor would hide the gate. Consider a runtime-flavor-independent hook if such a change is anticipated. | T12 implementer | removed | CP3 review: speculative runtime-flavor change; gate fails loudly (5 s timeout) if flipped, so no silent gap. |
 | F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | removed | CP3 review: literal is established across hyp.rs/stream.rs/retry.rs; exposing private const marginal. |
-| F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | proposed | CP3 review: KEEP — guards a real acceptance criterion (broken hook would still pass, just 500 ms slower). |
-| F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | proposed | CP3 review: KEEP — cheap unit test for production-safety criterion. |
-| F26 | Add a `run_no_log()` variant to repair_machinery that omits `--log-file`/`--log-file-level` entirely for tests that never read the log, eliminating log-creation IO (debug builds write no log file without `--log-file`). | T14 implementer | proposed | CP4 review: KEEP — real bounded IO win; snapshots unaffected. |
+| F24 | Make T13's zero-backoff self-verifying: have the child emit a marker when `GIRCAP_TEST_ZERO_BACKOFF` is active and assert it, so a refactor can't silently reintroduce the 500 ms wait. | T13 implementer | scheduled | Batching review: KEEP → Batch 1 (real acceptance-criterion guard). |
+| F25 | Small unit test for `GIRCAP_TEST_ZERO_BACKOFF` parsing/default-off and for `ZeroSleep::sleep` returning immediately, to lock in the contract. | T13 implementer | scheduled | Batching review: KEEP → Batch 1 (cheap contract lock). |
+| F26 | Add a `run_no_log()` variant to repair_machinery that omits `--log-file`/`--log-file-level` entirely for tests that never read the log, eliminating log-creation IO (debug builds write no log file without `--log-file`). | T14 implementer | removed | Batching review: switching ~17 call sites for modest IO saving on kilobyte fixtures — broad mechanical churn for marginal gain (same rationale as F28). |
 | F27 | Assert chunk outcomes from the binary's `--output json` NDJSON records (`download_bytes`, etc.) instead of parsing log text in `downloaded_chunks`/`in_place_chunk_stats`, reducing coupling to the log format. | T14 implementer | removed | CP4 review: maintainability refactor, no runtime win; log assertions must stay unchanged. |
 | F28 | Use a `warn` default log level in repair_machinery, with the ~8 log-asserting tests explicitly requesting `debug`; marginal gain given kilobyte fixtures. | T14 implementer | removed | CP4 review: marginal; debug default already applied. |
-| F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; convert via `usage_rejection`, keep one for exact stderr. | T15 implementer | proposed | CP4 review: KEEP — genuine bounded win. |
+| F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; convert via `usage_rejection`, keep one for exact stderr. | T15 implementer | scheduled | Batching review: KEEP → Batch 2 (bounded spawn cut; helper + unit-tested text already in place). |
 | F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | removed | CP4 review: moot — confirmed debug builds write no default log file (logging.rs:183-200). |
-| F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | CP4 review: KEEP — product-hook decision for a future review. |
+| F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | removed | Batching review: full collapse needs a product/output-contract change to the heavily pinned `--plan-out` format for ≤2 spawns in one test; the safe gain is already realized in the two sibling comprehensive tests. |
 | F39 | If the artifact_bridge suite is ever added to a gate, a cross-process on-disk verification cache would be the only way to verify literally once across nextest processes (previously rejected as runaway in F37) — revisit only if the gate changes. | T19 implementer | removed | CP5 review: reincarnation of F37; guardrail forbids gating ignored tests, so precondition won't arise in scope (runaway). |
 | F40 | Give peak_heap a very loose structural check (`buffered > streamed`) to self-verify the ratio — optional; conflicts with the file's deliberate "measurement, not assertion" design. | T19 implementer | removed | CP5 review: conflicts with documented "measurement, not assertion" design. |
 | F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | removed | CP4 review: cosmetic cross-binary assertion dedup. |
@@ -131,6 +132,20 @@ are done and a review session has decided the batches.
 | F37 | If future tests verify the T06 shared bundle in more than one place, add a `verified_shared_bundle(variant)` helper that verifies once under the file lock and caches the summary on disk keyed by the bundle fingerprint (race-free). | T18 implementer | removed | CP4 review: single consumer today — invites runaway. |
 | F38 | Add a `materialize` refusal assertion to `a_bundle_without_the_rejection_document_does_not_verify` for symmetry with error_shapes/error_responses — this is added coverage, not redundancy removal. | T18 implementer | removed | CP4 review: added coverage, not redundancy removal; out of scope. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
+
+## Follow-up batches
+
+Batching review kept 5 follow-ups (F02, F10, F24, F25, F29) and removed the rest
+(incl. F31 — full collapse needs a product/output-contract change for ≤2 spawns
+in one test; safe gain already realized in the two sibling tests). Implement one
+batch at a time, each with one implementing session then one review session,
+using the same separate state commits as the task/checkpoint loop. Statuses:
+`open` → `in_progress` → `pending_review` → `done`.
+
+| Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
+|---|---|---|---|---|---|---|
+| Batch 2 | F02, F29 | open | — | — | `tools/sync/src/scan.rs` (`heartbeat_entries()` ~L31–37, tests ~L218–321; confirm hook not set globally in `.config/nextest-test-env`); `tests/cli_contract.rs` (`usage_rejection()` ~L450–457, jobs-boundary spawns ~L839/846/871/915); `src/cli.rs` (unit-tested error text ~L480–519). | Two self-contained, lowest-risk wins; implement first. F29 keeps one spawn for exact stderr. |
+| Batch 1 | F10, F24, F25 | open | — | — | `tools/capture/tests/common/mod.rs` (`bundle_source_key`, shared-bundle key ~L95–149); `tools/capture/src/run/mod.rs` (`zero_backoff()` hook + test module); `tools/capture/tests/capture_layout.rs` (retry test ~L1168–1219); `tools/capture/src/http/transport.rs` (`ZeroSleep`). | Single-crate correctness/coverage. F10: extend the private test-only fingerprint to cover capture source (no product/dep change). F24: tiny product marker optional; no-product-change wall-clock `<500 ms` guard acceptable. |
 
 ## Context / decisions
 
