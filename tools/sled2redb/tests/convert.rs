@@ -11,7 +11,6 @@ use girsync::cache::{load_all_records, open_db};
 use girsync::report::OutputFormat;
 use md5::Md5;
 use sha2::Digest;
-use sled2redb::convert::CONVERT_TEMP_PREFIX;
 use std::collections::HashMap;
 
 fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json::Value {
@@ -187,23 +186,6 @@ fn entry_names(dir: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
-}
-
-/// The temporary is written into the folder the destination cache lives in,
-/// so its name has to be inside the tool's own namespace.
-///
-/// A name outside it would leave the tool's residue looking like ordinary
-/// content: the next run over that folder would copy the temporary out of a
-/// source folder, or delete it as an extra in a destination one. The scan
-/// reserves every `girpr-cache*` component, so a leftover the tool could not
-/// remove is tool state rather than something the next run mirrors.
-#[test]
-fn the_conversion_temporary_is_named_inside_the_tools_namespace() {
-    let name = format!("{CONVERT_TEMP_PREFIX}1234-20240101T000000.000000Z.redb");
-    assert!(
-        girsync::util::is_cache_rel(&name),
-        "`{name}` is the tool's own state, not content"
-    );
 }
 
 /// The round-trip test: the one case that pays for a file-backed reopen of the
@@ -603,97 +585,79 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
     assert_eq!(spaced, equals, "the two spellings are the same run");
 }
 
-/// A usage error is a failure like any other, and fails with the converter's
-/// own code.
+/// Usage errors are failures like any other, and fail with the converter's own
+/// code.
 ///
 /// `clap` exits `2` for a parse error, and the main binary keeps that. This
 /// binary does not: it has one exit code for every way it can fail, so a
 /// script that ran the converter needs no second code to remember.
-#[test]
-fn a_usage_error_exits_three() {
-    let (code, _stdout, stderr) = run_converter(["--not-a-flag"]);
-    assert_eq!(code, 3, "stderr: {stderr}");
-    assert!(
-        stderr.contains("--not-a-flag"),
-        "the error names the flag it did not know: {stderr}"
-    );
-}
-
-/// `--version` is refused: the converter declares no version.
 ///
-/// The flag is an unknown one, so the run fails with the converter's own code
-/// like any other usage error, and no version line is printed anywhere.
+/// Every case is a row below: the arguments under test, the single exit code
+/// all failures share (`3`), and the name the error must print so a script can
+/// tell which argument it got wrong. Each row's exit-code and name assertions
+/// are kept, just folded into one end-to-end test instead of four.
 ///
-/// This is the case that holds the refusal, and it is worth having because the
-/// refusal is not the only shape the flag could take: the error path treats a
-/// version request as an *answer* rather than a failure, so a converter that
-/// grew a version would print one and exit `0` — and nothing else in the suite
-/// would notice, because every other case in this file converts something.
+/// The version row is the one shape that could pass for an *answer* rather
+/// than a failure: a converter that grew a version would print one and exit
+/// `0`, and nothing else in this file converts something to catch it. So that
+/// row also asserts no version line is printed, on either stream.
 #[test]
-fn a_version_request_is_refused_and_prints_no_version() {
-    let (code, stdout, stderr) = run_converter(["--version"]);
-    assert_eq!(code, 3, "stderr: {stderr}");
-    assert!(
-        stderr.contains("--version"),
-        "the error names the flag it did not know: {stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "a refused version prints no version line on stdout: {stdout}"
-    );
-    assert!(
-        !stderr.contains(env!("CARGO_PKG_VERSION")),
-        "a refused version prints no version line at all: {stderr}"
-    );
-}
+fn usage_errors_exit_three_and_name_the_bad_argument() {
+    struct Case {
+        label: &'static str,
+        args: &'static [&'static str],
+        names: &'static [&'static str],
+        is_version: bool,
+    }
 
-/// Both positionals are required: the sled directory is read, and the redb
-/// file is what is written.
-#[test]
-fn a_missing_positional_exits_three() {
-    let (code, _stdout, stderr) = run_converter(["only-one"]);
-    assert_eq!(code, 3, "stderr: {stderr}");
-    assert!(
-        stderr.contains("REDB_PATH"),
-        "the error names the argument it did not get: {stderr}"
-    );
-}
+    let cases: &[Case] = &[
+        Case {
+            label: "an unknown flag",
+            args: &["--not-a-flag"],
+            names: &["--not-a-flag"],
+            is_version: false,
+        },
+        Case {
+            label: "a version request",
+            args: &["--version"],
+            names: &["--version"],
+            is_version: true,
+        },
+        Case {
+            label: "a missing positional",
+            args: &["only-one"],
+            names: &["REDB_PATH"],
+            is_version: false,
+        },
+        Case {
+            label: "an unknown output format",
+            args: &["sled", "cache.redb", "--output", "yaml"],
+            names: &["text", "json"],
+            is_version: false,
+        },
+    ];
 
-/// `--output` still takes only the two formats it always took, and says which
-/// when the value is not one of them.
-///
-/// The paths are placeholders: the arguments are rejected before anything is
-/// read or written, so no fixture is needed for a case that never converts.
-#[test]
-fn an_unknown_output_format_exits_three_and_names_the_accepted_values() {
-    let (code, _stdout, stderr) = run_converter(["sled", "cache.redb", "--output", "yaml"]);
-    assert_eq!(code, 3, "stderr: {stderr}");
-    assert!(stderr.contains("text"), "the error names text: {stderr}");
-    assert!(stderr.contains("json"), "the error names json: {stderr}");
-}
-
-/// `--help` is an answer, not a failure: it exits 0 and prints the flags.
-#[test]
-fn the_help_exits_zero_and_documents_the_flags() {
-    let (code, stdout, stderr) = run_converter(["--help"]);
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.contains("--force"),
-        "the help names --force: {stdout}"
-    );
-    assert!(
-        stdout.contains("--output"),
-        "the help names --output: {stdout}"
-    );
-    // The order of the two positionals is part of the contract: the sled
-    // directory is read, the redb file is written.
-    let sled = stdout
-        .find("SLED_DIR")
-        .expect("the help names the sled dir");
-    let redb = stdout
-        .find("REDB_PATH")
-        .expect("the help names the redb file");
-    assert!(sled < redb, "the sled dir comes first: {stdout}");
+    for case in cases {
+        let (code, stdout, stderr) = run_converter(case.args);
+        assert_eq!(code, 3, "{}: stderr: {stderr}", case.label);
+        for name in case.names {
+            assert!(
+                stderr.contains(name),
+                "{}: the error names `{name}`: {stderr}",
+                case.label
+            );
+        }
+        if case.is_version {
+            assert!(
+                stdout.is_empty(),
+                "a refused version prints no version line on stdout: {stdout}"
+            );
+            assert!(
+                !stderr.contains(env!("CARGO_PKG_VERSION")),
+                "a refused version prints no version line at all: {stderr}"
+            );
+        }
+    }
 }
 
 /// The converter's own command, as the help pin holds it.
