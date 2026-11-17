@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T03** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T04** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 review done.
-* Active checkpoint: CP2 (`open`). Status: T03 `in_progress`.
+* Active checkpoint: CP2 (`open`). Status: T03 `pending_review`, T04 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -33,7 +34,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 |---|---|---|---|---|---|
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | completed | P0 | CP1 | impl `a0a45fc8`; CP1 review confirmed completed. 19 self-tests → 4 tables (49→34), all cases preserved (several assertions strengthened); no product/process/golden code touched. |
 | T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
-| T03 | Consolidate remaining low-risk root-unit cases | in_progress | P0 | CP2 | |
+| T03 | Consolidate remaining low-risk root-unit cases | pending_review | P0 | CP2 | commits `5e8d593f..185cfa4c` (3 test-only bullets done). REVIEW FLAG: implementer kept the `live_count` column in the reuse table (derivable from `live`, only non-redundant for all-dead rows) to preserve the original explicit assertion — reviewer may judge it unnecessary. |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
 | T06 | sled2redb removes + usage-error parametrization | todo | P0 | CP3 | |
@@ -64,7 +65,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 |---|---|---|
 | T01 | a0a45fc8 (single commit) | completed |
 | T02 | d6dfb324 + fix e4439122 | completed (fixed) |
-| T03 | — | — |
+| T03 | 5e8d593f..185cfa4c (3 commits) | — |
 | T04 | — | — |
 | T05 | — | — |
 | T06 | — | — |
@@ -91,6 +92,7 @@ effect) so the final follow-up phase is meaningful.
 | F04 | ~~Consider merging the measured-fixture logic-name duplicates in `tools/capture/tests/measured_fixture.rs` (§E.5, L192–199) — only if an explicit size target exists; report recommends KEEP.~~ | report | removed | CP1 reviewer pruned: conditional on a non-existent size target, MEDIUM risk, report recommends KEEP; idea stays in report §E.5. |
 | F05 | If later tasks add more `catch_unwind` assertions in other integration-test binaries, move the `panic_message` helper into `tests/common/mod.rs` to avoid duplicating the panic-downcast logic per test binary. | T01 implementer | proposed | Only if duplication actually arises; test-only. |
 | F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | CP1 reviewer kept; skip `run_lock.rs` clusters (T09 folds those). Do not force. |
+| F07 | Fold `the_runtime_keeps_a_worker_beyond_every_file_window` (main.rs) into T03's `worker_threads_arithmetic` table using exact-value rows `(1,4)→5`, `(1,8)→9`, `(1,1000)→1001`; saves one test. | T03 implementer | proposed | Implementer left it separate because it asserts a different invariant (`> jobs`); evaluate whether the `max(available, jobs+1)` contract makes it safe. Test-only. |
 
 ## Follow-up batches
 
