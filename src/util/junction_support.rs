@@ -571,6 +571,47 @@ mod tests {
                     "the failure names the fixture: {message}"
                 );
                 assert!(message.contains("is missing"), "{message}");
+                assert!(
+                    message.contains(&link.display().to_string()),
+                    "the failure names the link itself: {message}"
+                );
+            }
+        }
+
+        // The other broken-fixture arm — a link `mklink` claimed but that
+        // could not be inspected — reaches the same decision. Its own cause
+        // must survive into the failure message verbatim, and must not be
+        // relabelled as a missing link. (These checks used to live in the
+        // per-caller copies in `ini.rs`/`path.rs`; the canonical decision
+        // case now owns them.)
+        let uninspectable = junction_result_with(&JunctionOutcome::Success, &link, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the link could not be read",
+            ))
+        })
+        .expect_err("a link that cannot be inspected must fail");
+        match drive_junction_decision(uninspectable, false, FixtureRefusal::Injected) {
+            JunctionDecision::Skipped => {
+                panic!("an uninspectable junction is not a host refusal")
+            }
+            JunctionDecision::Failed(message) => {
+                assert!(
+                    message.contains("could not create the test directory junction"),
+                    "the failure names the fixture: {message}"
+                );
+                assert!(
+                    message.contains("could not be inspected"),
+                    "the failure names the inspection's cause: {message}"
+                );
+                assert!(
+                    message.contains("the link could not be read"),
+                    "the inspection cause survives: {message}"
+                );
+                assert!(
+                    !message.contains("is missing"),
+                    "an unreadable junction is not a missing one: {message}"
+                );
             }
         }
     }
