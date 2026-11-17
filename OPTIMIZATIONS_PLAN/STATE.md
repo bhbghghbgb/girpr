@@ -45,7 +45,7 @@ commit ranges only.
 | T16 | Consolidate girpr multi-run parity tests | completed | CP4 | CP4 review: completed |
 | T17 | Merge girsync dry-run/hard-link groups | completed | CP4 | CP4 review: completed |
 | T18 | Merge redundant gircap read/verify groups | completed | CP4 | CP4 review: completed (§6.2-3 deferral accepted as N/A) |
-| T19 | Tidy ignored tests | pending_review | CP5 | 2 commits a82d4d81..36719f62; see review range |
+| T19 | Tidy ignored tests | completed | CP5 | 2 commits a82d4d81..36719f62; CP5 review: completed |
 | T20 | Guardrail audit (hooks, no temp→`Z:`) | completed | CP5 | clean audit, no changes; see context |
 
 ## Review checkpoints
