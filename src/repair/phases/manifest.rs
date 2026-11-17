@@ -285,7 +285,7 @@ pub async fn local_reuse_map(
 mod tests {
     use super::*;
     use crate::hyp::{ChunkManifestMeta, ManifestFile, ManifestUrl};
-    use crate::sleep::{NoSleep, SleepFuture};
+    use crate::sleep::NoSleep;
     use crate::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use crate::util::md5::md5_digest;
     use prost::Message;
@@ -606,17 +606,6 @@ mod tests {
         drop(in_flight);
     }
 
-    /// A short backoff, so a retryable failure takes longer to finish than a
-    /// decided one without spending the real 1+2+3+4 s.
-    #[derive(Debug)]
-    struct ShortSleep;
-
-    impl Sleep for ShortSleep {
-        fn sleep(&self, _d: Duration) -> SleepFuture {
-            Box::pin(tokio::time::sleep(Duration::from_millis(5)))
-        }
-    }
-
     /// A result for a later selection is retained without unblocking the
     /// caller, so the output is read in selection order even when the network
     /// finishes out of order.
@@ -772,9 +761,11 @@ mod tests {
         assert!(!message.contains("manifest extra"), "{message}");
     }
 
-    /// The first manifest fails slowly (a retryable 500) while a later one
-    /// fails at once with a 404. The returned error must name the first
-    /// manifest in selection order, not the first to finish.
+    /// The first manifest fails through a retryable 500 (retried to the cap)
+    /// while a later one fails at once with a 404. The returned error must name
+    /// the first manifest in selection order, not the first to finish. Backoff
+    /// is skipped with `NoSleep`; the attempt count is asserted from the error
+    /// chain instead of from time spent sleeping.
     #[tokio::test]
     async fn fetch_latest_reports_the_first_failure_in_selection_order() {
         let (ok_body, ok_checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
@@ -795,7 +786,7 @@ mod tests {
         let client = Client::new();
         let failure = fetch_latest(
             &client,
-            &ShortSleep,
+            &NoSleep,
             &build,
             &HashSet::new(),
             &HashSet::new(),
@@ -806,6 +797,10 @@ mod tests {
         let message = failure.to_string();
         assert!(message.contains("manifest game"), "{message}");
         assert!(!message.contains("manifest res"), "{message}");
+        assert!(
+            message.contains("after 5 attempts"),
+            "the retryable 500 is retried to the attempt cap, not failed early: {message}"
+        );
     }
 
     /// The real HTTP fan-out starts at most `manifest_concurrency(jobs)`

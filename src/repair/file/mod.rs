@@ -362,6 +362,25 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
     .await
 }
 
+// A test-only one-shot signal from the join loop to a file task: it fires the
+// instant the join loop observes a panicked task. Production builds have no
+// such hook; no timing or ordering of a real repair depends on it.
+#[cfg(test)]
+std::thread_local! {
+    static FILE_PANIC_GATE: std::cell::RefCell<Option<tokio::sync::oneshot::Sender<()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm the panic-observation gate for one test. The receiver completes once
+/// [`join_file_tasks`] has joined a panicked task (and tripped fail-fast), so
+/// a task can wait on that event instead of on a fixed sleep.
+#[cfg(test)]
+fn arm_file_panic_gate() -> tokio::sync::oneshot::Receiver<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    FILE_PANIC_GATE.with(|gate| *gate.borrow_mut() = Some(tx));
+    rx
+}
+
 /// Start and join the file tasks, keeping at most `jobs` of them alive.
 ///
 /// `spawn` is called with a file index only when the in-flight window has
@@ -409,6 +428,19 @@ where
             tracing::error!(error = %e, "repair task failed");
             if summary.fail_fast() {
                 summary.abort();
+            }
+            // Test-only: signal a panic the instant the join loop observes it.
+            // This runs after `abort()` so a task waiting on the signal sees the
+            // flag already set. No production path installs a receiver.
+            #[cfg(test)]
+            {
+                if e.is_panic() {
+                    FILE_PANIC_GATE.with(|gate| {
+                        if let Some(tx) = gate.borrow_mut().take() {
+                            let _ = tx.send(());
+                        }
+                    });
+                }
             }
         }
     }
@@ -1003,9 +1035,11 @@ mod tests {
     /// deliberately slower) task first, so under `--fail-fast` the queued
     /// files would keep starting after the run already knew it had failed.
     ///
-    /// The slower task samples the abort flag when it finishes: it must
-    /// already be set by then. With spawn-order awaiting it is not, because
-    /// the panicked task comes after it.
+    /// The earlier task waits on a one-shot signal that the join loop fires
+    /// the moment it observes task 1's panic, then samples the abort flag: it
+    /// must already be set. With spawn-order awaiting the signal never comes
+    /// while task 0 is still running, so the bounded wait fails instead of the
+    /// test hanging on a fixed sleep.
     #[tokio::test]
     async fn a_panic_is_observed_before_a_slower_earlier_task() {
         let summary = Arc::new({
@@ -1016,12 +1050,23 @@ mod tests {
         let saw_abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let slow_summary = Arc::clone(&summary);
         let slow_saw = Arc::clone(&saw_abort);
+        // Task 0 waits on this instead of sleeping a fixed 300 ms: it proceeds
+        // only once the join loop has observed task 1's panic.
+        let mut panic_rx = Some(arm_file_panic_gate());
         join_file_tasks(2, 2, &summary, move |idx| {
             let slow_summary = Arc::clone(&slow_summary);
             let slow_saw = Arc::clone(&slow_saw);
+            let panic_rx = if idx == 0 { panic_rx.take() } else { None };
             async move {
-                if idx == 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                if let Some(rx) = panic_rx {
+                    // A dropped sender (a panicking test) also ends the wait,
+                    // so a failure cannot turn into a hang. The timeout turns
+                    // a spawn-order regression into a failure rather than a
+                    // hang.
+                    tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+                        .await
+                        .expect("the join loop observes the panic before the earlier task finishes")
+                        .expect("the panic-observation sender is not dropped early");
                     slow_saw.store(slow_summary.aborted(), Ordering::SeqCst);
                 } else {
                     panic!("injected file-task panic");
