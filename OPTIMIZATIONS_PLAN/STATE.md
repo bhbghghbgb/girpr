@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T13) and spawn its implementing session.
-* Active checkpoint: CP3 (`open`); T09, T10, T11, T12 `pending_review`.
+* Next action: wait for implementing session on T13; after it finishes, CP3 is complete — run the CP3 review phase.
+* Active checkpoint: CP3 (`open`); T09, T10, T11, T12 `pending_review`, T13 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -38,7 +38,7 @@ commit ranges only.
 | T10 | Drop sled2redb flush + redundant reopens | pending_review | CP3 | 2 commits fea93769..f342d32e; product flush removal + test reopens |
 | T11 | Replace girsync publish fixed sleeps | pending_review | CP3 | 2 commits fa3546dd..f7eb3995; see review range |
 | T12 | Replace girpr panic-ordering sleep | pending_review | CP3 | c33dfe0e; see review range |
-| T13 | Add gircap zero-backoff retry hook | todo | CP3 | |
+| T13 | Add gircap zero-backoff retry hook | in_progress | CP3 | |
 | T14 | Reduce girpr trace-level logging | todo | CP4 | |
 | T15 | Remove girpr `--help`/argument spawns | todo | CP4 | |
 | T16 | Consolidate girpr multi-run parity tests | todo | CP4 | |
