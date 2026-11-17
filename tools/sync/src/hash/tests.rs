@@ -891,60 +891,85 @@ fn debug_renders_the_spellings_the_logs_already_carry() {
     assert_eq!(format!("{:?}", HashAlg::Md5), "\"md5\"");
 }
 
-/// A repeated algorithm is **one** request, however the flags were typed.
+/// Dedup and first-seen order are one contract: a repeated algorithm is a
+/// single request, kept in the order it first appeared.
 ///
-/// The non-adjacent case comes first because `Vec::dedup` only collapses
-/// *consecutive* repeats: `md5 sha256 md5` must still count as three algorithms
-/// and reach `HashPlan::digest_count` as a promise of three digests.
+/// First-seen order is **the property `pick_one` depends on** — `--hash-any-of`'s
+/// tie-break is the user's flag order, so a dedup that sorted or kept the *last*
+/// occurrence would settle a pair by a different algorithm. The non-adjacent
+/// cases are the real fix: `Vec::dedup` only collapses *consecutive* repeats, so
+/// `md5 sha256 md5` must still collapse here. One row per regression from the
+/// four old single-case tests.
 #[test]
-fn a_repeated_algorithm_is_one_request() {
-    assert_eq!(
-        parse(&["md5", "sha256", "md5"]),
-        vec![HashAlg::Md5, HashAlg::Sha256]
-    );
-    assert_eq!(
-        parse(&["md5", "md5", "sha256", "md5", "sha256"]),
-        vec![HashAlg::Md5, HashAlg::Sha256]
-    );
-}
+fn dedup_keeps_first_seen_order() {
+    // (parser, [(input, expected)], regression note)
+    let rows: &[(
+        fn(&[&str]) -> Vec<HashAlg>,
+        &[(&[&str], Vec<HashAlg>)],
+        &str,
+    )] = &[
+        // Non-adjacent repeats: `md5 sha256 md5` still collapses to one
+        // request of each algorithm, however many times they are typed.
+        (
+            parse,
+            &[
+                (
+                    &["md5", "sha256", "md5"],
+                    vec![HashAlg::Md5, HashAlg::Sha256],
+                ),
+                (
+                    &["md5", "md5", "sha256", "md5", "sha256"],
+                    vec![HashAlg::Md5, HashAlg::Sha256],
+                ),
+            ],
+            "a repeated algorithm is one request",
+        ),
+        // First-seen order is kept: a leading `sha256` stays first, with or
+        // without a later duplicate. `pick_one`'s tie-break relies on this.
+        (
+            parse,
+            &[
+                (
+                    &["sha256", "md5", "sha256"],
+                    vec![HashAlg::Sha256, HashAlg::Md5],
+                ),
+                (&["sha256", "md5"], vec![HashAlg::Sha256, HashAlg::Md5]),
+            ],
+            "first-seen order is the order kept",
+        ),
+        // Adjacent repeats `Vec::dedup` already handled; pinned so the fix
+        // above cannot be read as "dedup was always broken".
+        (
+            parse,
+            &[
+                (&["md5", "md5"], vec![HashAlg::Md5]),
+                (
+                    &["sha256", "md5", "md5"],
+                    vec![HashAlg::Sha256, HashAlg::Md5],
+                ),
+            ],
+            "adjacent repeats collapse",
+        ),
+        // `parse_any_of` delegates, so it inherits the dedup — the mode where
+        // a duplicate mattered most since the flag asks for *one* algorithm.
+        (
+            parse_any,
+            &[
+                (&["md5", "md5"], vec![HashAlg::Md5]),
+                (
+                    &["md5", "sha256", "md5"],
+                    vec![HashAlg::Md5, HashAlg::Sha256],
+                ),
+            ],
+            "any-of dedupes through the delegate",
+        ),
+    ];
 
-/// First-seen order is the order kept. **This is the property `pick_one`
-/// depends on** — `--hash-any-of`'s tie-break is the user's flag order, so a
-/// dedup that sorted, or that kept the *last* occurrence, would change which
-/// algorithm a pair is settled by.
-#[test]
-fn first_seen_order_is_the_order_kept() {
-    assert_eq!(
-        parse(&["sha256", "md5", "sha256"]),
-        vec![HashAlg::Sha256, HashAlg::Md5]
-    );
-    assert_eq!(
-        parse(&["sha256", "md5"]),
-        vec![HashAlg::Sha256, HashAlg::Md5]
-    );
-}
-
-/// The adjacent case `Vec::dedup` already handled, pinned so the fix above
-/// cannot be read as "dedup was always broken".
-#[test]
-fn adjacent_repeats_collapse() {
-    assert_eq!(parse(&["md5", "md5"]), vec![HashAlg::Md5]);
-    assert_eq!(
-        parse(&["sha256", "md5", "md5"]),
-        vec![HashAlg::Sha256, HashAlg::Md5]
-    );
-}
-
-/// `parse_any_of` delegates, so it inherits the dedup. Worth pinning because
-/// it is the mode where a duplicate mattered most: the flag asks for *one*
-/// algorithm, and a repeated one had nothing to change.
-#[test]
-fn any_of_dedupes_through_the_delegate() {
-    assert_eq!(parse_any(&["md5", "md5"]), vec![HashAlg::Md5]);
-    assert_eq!(
-        parse_any(&["md5", "sha256", "md5"]),
-        vec![HashAlg::Md5, HashAlg::Sha256]
-    );
+    for &(parser, cases, note) in rows {
+        for &(input, ref expected) in cases {
+            assert_eq!(parser(input), *expected, "{note}: {input:?}");
+        }
+    }
 }
 
 /// The refusal names the offender and the alternatives, in the wording the
