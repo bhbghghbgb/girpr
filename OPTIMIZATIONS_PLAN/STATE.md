@@ -10,11 +10,10 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T11** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T11** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop.
 * Active batch: none. Phase: implementation (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`open`). Status: no task started yet.
+* Active checkpoint: CP5 (`open`). Status: T11 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -42,7 +41,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | completed | P1 | CP4 | impl `327fd01e`; CP4 review completed. 15 → 5 tests, every assertion preserved, end-to-end cleanup case retained with real Lock::acquire/remove; product lock code untouched (repair_offline.rs anchors intact). run_lock 5/5 pass. |
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
-| T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
+| T11 | Trim `migration_lock.rs` clear duplicates | in_progress | P1 | CP5 | |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
 
