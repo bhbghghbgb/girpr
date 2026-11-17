@@ -1185,6 +1185,17 @@ fn a_retried_request_is_recorded_as_retried() {
         &[("GIRCAP_TEST_ZERO_BACKOFF", "1")],
     );
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    // Self-verification of the T13 hook. A refactor that drops the
+    // `zero_backoff()` branch would restore the 500 ms production backoff while
+    // this test still saw `attempts == 2` (only slower). The child names the
+    // hook on stderr at the exact point it selects ZeroSleep, so require that
+    // marker: a missing one means the zero-delay path is no longer in play.
+    assert!(
+        r.stderr.contains("GIRCAP_TEST_ZERO_BACKOFF"),
+        "the child did not report the zero-backoff hook; the 500 ms backoff may \
+         have been reintroduced. stderr:\n{}",
+        r.stderr
+    );
     let bundle = bundle_in(&scratch.out());
 
     let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))

@@ -38,7 +38,15 @@ pub use crate::failure::{
 /// default-off, so production always uses [`crate::http::RealSleep`] and the
 /// 500 ms [`crate::http::RetryPolicy::new`] base delay is untouched.
 fn zero_backoff() -> bool {
-    std::env::var("GIRCAP_TEST_ZERO_BACKOFF").as_deref() == Ok("1")
+    zero_backoff_from(std::env::var("GIRCAP_TEST_ZERO_BACKOFF").ok().as_deref())
+}
+
+/// The pure part of [`zero_backoff`], so the parse/default-off contract can be
+/// unit-tested without touching the process-global environment. Only the exact
+/// string `"1"` turns the hook on: unset, empty, non-numeric and every other
+/// value are default-off, so production always keeps the 500 ms backoff.
+fn zero_backoff_from(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 /// `gircap capture` — fetch from the live APIs and write a bundle.
@@ -63,7 +71,19 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         timeout: plan.timeout,
         max_response_bytes: plan.max_response_bytes,
     };
-    let fetcher = if zero_backoff() {
+    let use_zero_sleep = zero_backoff();
+    if use_zero_sleep {
+        // A self-verifying marker for the test-only zero-backoff hook: the
+        // spawned child names the hook on stderr at the exact point it selects
+        // ZeroSleep, so a refactor that drops this branch (and silently
+        // restores the 500 ms production backoff) makes the retry test's
+        // marker assertion fail instead of passing more slowly.
+        tracing::info!(
+            hook = "GIRCAP_TEST_ZERO_BACKOFF",
+            "test-only zero-delay retry sleeper selected"
+        );
+    }
+    let fetcher = if use_zero_sleep {
         Fetcher::with_sleeper(transport, log.clone(), std::sync::Arc::new(ZeroSleep))
     } else {
         Fetcher::new(transport, log.clone())
@@ -941,6 +961,30 @@ mod tests {
     use super::*;
     use crate::http::ApiError;
     use crate::report::Val;
+
+    /// The test-only zero-backoff hook is default-off: only the exact string
+    /// `"1"` selects the silent sleeper. Unset and every other spelling leave
+    /// production's 500 ms backoff in place. Tested through the pure helper so
+    /// the process-global environment is never touched (nextest runs tests in
+    /// parallel threads inside one process).
+    #[test]
+    fn the_zero_backoff_hook_is_default_off_and_only_one_turns_it_on() {
+        assert!(!zero_backoff_from(None), "unset is default-off");
+        assert!(
+            zero_backoff_from(Some("1")),
+            "the exact value 1 turns it on"
+        );
+        for off in [
+            Some("0"),
+            Some("true"),
+            Some(""),
+            Some(" 1"),
+            Some("01"),
+            None,
+        ] {
+            assert!(!zero_backoff_from(off), "{off:?} must be default-off");
+        }
+    }
 
     /// An assertion on captured API state is exit 3, and says why: neither the
     /// network nor the request is at fault.

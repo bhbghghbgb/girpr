@@ -157,6 +157,21 @@ fn at_least_one_attempt_is_always_made() {
     assert_eq!(RetryPolicy::new(5).attempts, 5);
 }
 
+/// `ZeroSleep` is the sleeper the test-only hook selects, and its whole contract
+/// is that it returns immediately no matter what delay it is handed. Asserting
+/// that with a timeout pins the contract in-process: if it ever starts waiting,
+/// the timeout fires and the retry test's speed guarantee is exposed.
+#[tokio::test]
+async fn zero_sleep_returns_immediately_even_for_a_long_delay() {
+    let sleeper = ZeroSleep;
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        sleeper.sleep(Duration::from_secs(60)),
+    )
+    .await
+    .expect("ZeroSleep must never wait, even for a 60 second delay");
+}
+
 /// The whole retry policy in one test: a `404` is not worth retrying, a
 /// `503` is, and a timeout is.
 #[test]
