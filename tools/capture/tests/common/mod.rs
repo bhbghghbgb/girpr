@@ -152,9 +152,13 @@ pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
     let dir = root.join(&key);
     let lock = root.join(format!("{key}.lock"));
 
+    // A lock file is only a handle to lock; its bytes are never read or
+    // written. `truncate(false)` is explicit so reopening never disturbs a
+    // process that already holds the lock.
     let guard = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(&lock)
         .unwrap_or_else(|e| panic!("open {}: {e}", lock.display()));
     guard

@@ -557,7 +557,7 @@ fn the_gzip_threshold_is_recorded_in_the_manifest(b: &Path) {
 fn checksums_cover_every_file_and_re_hash_to_what_they_record(b: &Path) {
     let raw = std::fs::read(b.join("verify/checksums.json")).unwrap();
     let c: gircap::emit::index::Checksums = serde_json::from_slice(&raw).unwrap();
-    let (ok, detail) = c.a16(&b);
+    let (ok, detail) = c.a16(b);
     assert!(ok, "A16: {detail}");
 
     // And independently: the list is exactly the set of files on disk, minus
@@ -568,11 +568,11 @@ fn checksums_cover_every_file_and_re_hash_to_what_they_record(b: &Path) {
         c.entries.iter().map(|e| e.path.clone()).collect()
     };
     let mut on_disk = Vec::new();
-    collect(&b, &mut on_disk);
+    collect(b, &mut on_disk);
     let mut actual: Vec<String> = on_disk
         .iter()
         .map(|p| {
-            p.strip_prefix(&b)
+            p.strip_prefix(b)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/")
