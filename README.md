@@ -443,6 +443,12 @@ cargo nextest run --test repair_machinery
 cargo clippy -p girpr --all-targets -- -D warnings
 cargo clippy -p girsync -p gircap -p sled2redb --all-targets -- -D warnings
 
+# girpr-log's default-file policy is a `cfg!(debug_assertions)` branch. The
+# dev-profile runs above exercise "no default file"; this release run exercises
+# the other half — `the_default_file_is_written_in_a_release_build_and_not_in_a_debug_one`
+# asserting the timestamped default is written. Both halves need a run to be covered.
+cargo nextest run --release -p girpr-log
+
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
 # builds gircap first so the `gircap verify` precondition executes
 # the same commands, explained in "Real bytes, real flags — and expensive" below
