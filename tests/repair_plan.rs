@@ -116,25 +116,48 @@ async fn print_plan_reports_the_plan_and_writes_nothing() {
 #[tokio::test]
 async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
     // `--print-plan` is documented as read-only by construction: it never
-    // writes the scan file or creates `game_dir`.
-    //
-    // The report must still name the requested language: resolving the audio
-    // set is not the write.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
+    // writes the scan file or creates `game_dir`, and it must still name the
+    // requested language (resolving the audio set is not the write). It also
+    // exempts the scope gate: an explicit `--audio` whose scan file is outside
+    // an active scope is a usage error for a real run, but a plan run defers
+    // the write and exits `0` with a `PLAN` whether the scan file is in scope
+    // or not. The only input that varies across these cases is the `--include`
+    // scope; the body below applies the union of what each case used to assert
+    // on its own.
+    struct AudioPlanCase {
+        name: &'static str,
+        includes: &'static [&'static str],
+    }
+    let cases = [
+        AudioPlanCase {
+            name: "no_scope",
+            includes: &[],
         },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
+        AudioPlanCase {
+            name: "scan_out",
+            includes: &["game/foo.dat"],
+        },
+        AudioPlanCase {
+            name: "scan_in",
+            includes: &["Audio/scan.txt", "game/foo.dat"],
+        },
+    ];
 
-    let (code, stdout, stderr) = run_binary(
-        &[
+    for case in &cases {
+        let fx = build_fixture();
+        let mock = MockServer::start(
+            fx,
+            MockOpts {
+                scan_dir: "Audio/scan.txt".to_string(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir(&format!("print_plan_audio_{}", case.name));
+        let game = dir.join("install");
+        let game_arg = game.to_string_lossy().into_owned();
+
+        let mut args: Vec<&str> = vec![
             "--game-path",
             &game_arg,
             "--biz",
@@ -144,135 +167,48 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
             "--print-plan",
             "--audio",
             "en-us",
+        ];
+        for &rel in case.includes {
+            args.push("--include");
+            args.push(rel);
+        }
+        args.extend_from_slice(&[
             "--hyp-base",
             &mock.hyp_base,
             "--sophon-base",
             &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(!game.exists(), "--print-plan must not create the game dir");
-    assert!(
-        !game.join("Audio").exists(),
-        "--print-plan must not create the scan dir"
-    );
-    assert!(
-        stdout.contains("audio_langs=en-us"),
-        "the report must name the requested language:\n{stdout}"
-    );
+        ]);
 
-    mock.stop();
-}
+        let (code, stdout, stderr) = run_binary(&args, &[]).await;
+        assert_eq!(code, 0, "{}: stderr: {stderr}", case.name);
+        assert!(
+            stdout.contains("audio_langs=en-us"),
+            "{}: the report must name the requested language:\n{stdout}",
+            case.name
+        );
+        assert!(
+            stdout.lines().any(|l| l.starts_with("PLAN ")),
+            "{}: the plan must still be reported:\n{stdout}",
+            case.name
+        );
+        assert!(
+            !game.exists(),
+            "{}: --print-plan must not create the game dir",
+            case.name
+        );
+        assert!(
+            !game.join("Audio").exists(),
+            "{}: --print-plan must not create the scan dir",
+            case.name
+        );
+        assert!(
+            !game.join("Audio").join("scan.txt").exists(),
+            "{}: the scan file must not be written, even when the scope admits it",
+            case.name
+        );
 
-#[tokio::test]
-async fn print_plan_audio_outside_the_scope_is_not_refused_and_writes_nothing() {
-    // An explicit `--audio` under an active scope whose scan file is *not*
-    // included is a
-    // usage error (exit `1`) — unless the run is `--print-plan`, which never
-    // writes the scan file at all. `--print-plan` therefore has to exempt the
-    // scope gate while still deferring the write: exit `0`, a `PLAN`, and no
-    // scan file on disk prove both halves.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio_scope_out");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-            "--include",
-            "game/foo.dat",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan must still be reported:\n{stdout}"
-    );
-    assert!(
-        !game.join("Audio").join("scan.txt").exists(),
-        "the scan file is out of scope and print-plan must not write it"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_audio_inside_the_scope_still_defers_the_write() {
-    // The companion case: include the scan file's own rel, so the scope gate
-    // would admit the write. `--print-plan` alone still defers it — exit `0`,
-    // the `PLAN` is printed, and the file the scope admitted is not created.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio_scope_in");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-            "--include",
-            "Audio/scan.txt",
-            "--include",
-            "game/foo.dat",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan must still be reported:\n{stdout}"
-    );
-    assert!(
-        !game.join("Audio").join("scan.txt").exists(),
-        "print-plan must defer the scan write even when the scope admits it"
-    );
-
-    mock.stop();
+        mock.stop();
+    }
 }
 
 #[tokio::test]
