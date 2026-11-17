@@ -136,20 +136,16 @@ fn a_quote_or_backslash_in_a_value_survives_the_json_encoding() {
     );
 }
 
-/// The common path is untouched: a plain ASCII key is still written straight
-/// into the buffer between one pair of quotes.
+/// A plain ASCII key is written straight into the buffer between one pair of
+/// quotes; a key that needs escaping is quoted exactly once, so the bytes
+/// match what `serde_json` would emit and the surrounding object still parses
+/// with the key intact. A double-quoted key (`""a\"b""`) would corrupt the line.
 #[test]
-fn push_json_key_keeps_the_plain_ascii_fast_path() {
+fn push_json_key_writes_plain_and_escaped_keys_correctly() {
     let mut out = String::new();
     push_json_key(&mut out, "exit_code");
     assert_eq!(out, "\"exit_code\"");
-}
 
-/// A key that needs escaping is quoted exactly once, so the bytes match what
-/// `serde_json` would emit and the surrounding object parses with the key
-/// intact. A double-quoted key (`""a\"b""`) would corrupt the line.
-#[test]
-fn push_json_key_quotes_an_escaped_key_exactly_once() {
     let key = "a\"b\\c\u{1}\t"; // quote, backslash, control, tab
     let mut quoted = String::new();
     push_json_key(&mut quoted, key);
@@ -316,19 +312,15 @@ fn percent_encoding_round_trips_and_leaves_ordinary_values_alone() {
 
 /// A malformed escape is data, not a decode failure: `%` followed by
 /// non-hex is passed through rather than dropped, so a value can never
-/// silently lose characters on the way back.
+/// silently lose characters on the way back. The scan is over bytes, so the
+/// two bytes after a `%` are read as text even when they are the middle of a
+/// multi-byte character — there is no char boundary there, and a slice of the
+/// string would panic.
 #[test]
-fn a_malformed_percent_sequence_passes_through() {
+fn malformed_percent_sequences_pass_through() {
     assert_eq!(percent_decode("%zz"), "%zz");
     assert_eq!(percent_decode("%4"), "%4");
     assert_eq!(percent_decode("100%"), "100%");
-}
-
-/// The scan is over bytes, so the two bytes after a `%` are read as text even
-/// when they are the middle of a multi-byte character. There is no char
-/// boundary there, and a slice of the string would panic.
-#[test]
-fn a_percent_before_a_multibyte_character_passes_through() {
     assert_eq!(percent_decode("%中"), "%中");
     assert_eq!(percent_decode("%zz中"), "%zz中");
 }
@@ -586,7 +578,7 @@ fn each_summary_group_reports_under_its_own_name_and_not_its_struct_name() {
 }
 
 #[test]
-fn set_all_appends_in_order_rather_than_sorting() {
+fn set_all_appends_in_order_keeping_duplicates() {
     // `set_all` takes an ordered iterable on purpose. Had it taken a map, a
     // `BTreeMap` would have silently rewritten the reader-visible order -
     // which is the one thing `set_all` exists to preserve.
@@ -599,17 +591,14 @@ fn set_all_appends_in_order_rather_than_sorting() {
         vec!["event", "tool", "version", "z", "a", "m"]
     );
     assert!(r.to_text_line().ends_with("z=1 a=2 m=3"));
-}
 
-#[test]
-fn set_all_appends_rather_than_replacing_like_set_does_not() {
     // Duplicate names are kept, exactly as `set` keeps them. If `set_all`
     // were implemented as a map insert, a summary would silently lose a
     // field instead of showing two facts under one name.
-    let r = Record::summary("x").set_all([("n", Val::Int(1)), ("n", Val::Int(2))]);
+    let dup = Record::summary("x").set_all([("n", Val::Int(1)), ("n", Val::Int(2))]);
     assert_eq!(
-        r.keys().collect::<Vec<_>>(),
+        dup.keys().collect::<Vec<_>>(),
         vec!["event", "tool", "version", "n", "n"]
     );
-    assert!(r.to_text_line().ends_with("n=1 n=2"));
+    assert!(dup.to_text_line().ends_with("n=1 n=2"));
 }

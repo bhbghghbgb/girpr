@@ -220,9 +220,9 @@ mod tests {
 
     /// The digests are normalised once, where the manifest enters the crate,
     /// so that every later comparison agrees with `girpr`'s case-insensitive
-    /// one by construction.
+    /// one by construction. An already-lower-case manifest is left untouched.
     #[test]
-    fn normalising_lowercases_the_declared_digests() {
+    fn normalising_lowercases_digests_and_leaves_lower_case_untouched() {
         let mut m = sample();
         m.chuncks[0].md5 = "D992A789".into();
         m.chuncks[0].chunks[0].uncompressed_md5 = "DE1CFE6927DACBC58D2D55A0B45EA0F3".into();
@@ -234,13 +234,9 @@ mod tests {
             "de1cfe6927dacbc58d2d55a0b45ea0f3"
         );
         assert_eq!(m.chuncks[0].chunks[0].compressed_md5, "06ba73bb");
-    }
 
-    /// **No allocation in the normal case.** The live manifests spell their
-    /// digests in lower case already, and `to_ascii_lowercase` would allocate
-    /// for every one of the ~454 000 chunks regardless.
-    #[test]
-    fn normalising_an_already_lower_case_manifest_changes_nothing() {
+        // The live manifests spell their digests in lower case already; a
+        // normalise of one must leave it byte-for-byte equal.
         let want = sample();
         let mut got = want.clone();
         got.normalise();
