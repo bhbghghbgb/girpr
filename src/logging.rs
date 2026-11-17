@@ -16,8 +16,8 @@
 //!   it afterwards.
 //! - The file is written when it is asked for: by `--log-file`, by
 //!   `GIRPR_LOG_FILE`, or — in a **release** build — by the default, which is
-//!   [`default_log_path`]'s timestamped path in a `logs/` directory beside the
-//!   executable. A **debug** build writes no file unless it is asked to, and
+//!   [`girpr_log::default_log_path`]'s timestamped path in a `logs/` directory beside
+//!   the executable. A **debug** build writes no file unless it is asked to, and
 //!   `--no-log-file` turns it off in any build.
 //! - Data-plane output (`REPORT` / `PROGRESS` / `SUMMARY`) stays on stdout via
 //!   [`mod@crate::report::emit`]; the file layer is plain text, not JSON, because
@@ -43,8 +43,6 @@
 
 use std::io::{BufWriter, Write};
 use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -104,18 +102,6 @@ impl<'a> MakeWriter<'a> for SharedWriter {
         // writer is an append-only file, whose state is still usable.
         SharedWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
-}
-
-/// Where the log file lives when neither `--log-file` nor `GIRPR_LOG_FILE`
-/// named one: `<exe-dir>/logs/girpr_<timestamp>.log`, falling back to the
-/// current directory when the exe path is unavailable.
-///
-/// The timestamp keeps concurrent runs from interleaving but also makes the
-/// name unguessable to the caller, which is why the flag and the environment
-/// variable exist.
-#[cfg(test)]
-pub fn default_log_path() -> PathBuf {
-    girpr_log::default_log_path(PROJECT)
 }
 
 /// Install the global tracing subscriber and return the resolved plan.
