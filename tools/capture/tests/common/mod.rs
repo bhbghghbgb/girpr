@@ -34,13 +34,13 @@
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fs2::FileExt;
 use girpr_tempdir::TempDir;
@@ -466,38 +466,62 @@ pub struct Blob {
     pub served: Option<Vec<u8>>,
 }
 
+/// Per-process memo of generated blobs, keyed by `(seed, len)`.
+///
+/// [`blob`] is a pure function of its inputs: the same seed and length always
+/// yield the same body, the same zstd frame and the same digests. Encoding and
+/// hashing are the dearest part of building [`World::all_shapes`] — it makes
+/// ~25 blobs on every call, and a suite calls it once per capture — so each
+/// distinct blob is generated at most once per process and cloned out after.
+///
+/// The cached blobs are immutable by contract: the builder methods
+/// ([`Blob::declaring_uncompressed_size`], [`File::declaring_size`]) consume and
+/// return new values, and [`World::mis_serve`] edits a caller's world rather than
+/// the memo. This is a **per-process** cache only — `cargo nextest` runs each
+/// test in its own process, so it does not share across them; the on-disk shared
+/// bundle fixture ([`shared_bundle`]) is what handles cross-process reuse.
+static BLOBS: OnceLock<Mutex<HashMap<(u64, usize), Blob>>> = OnceLock::new();
+
 /// A chunk whose bytes are a function of `seed`, and nothing else.
 ///
 /// Deterministic so a test's expectations are stable, and distinct per `seed` so
-/// two files cannot collide by accident.
+/// two files cannot collide by accident. Zstd-encoding and hashing happen once
+/// per distinct `(seed, len)` per process; see [`BLOBS`].
 pub fn blob(seed: u64, len: usize) -> Blob {
-    let mut body = Vec::with_capacity(len);
-    let mut x = seed
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(0x1234_5678_9ABC_DEF0)
-        | 1;
-    for _ in 0..len {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        body.push((x >> 24) as u8);
-    }
-    let raw = zstd::encode_all(body.as_slice(), 3).expect("zstd encode");
-    let uncompressed_md5 = md5_hex(&body);
-    // The 16-hex prefix is deliberately *not* a function of anything a reader
-    // could check, because upstream's is not either (docs/00-spec.md §3.7).
-    let prefix = md5_hex(format!("prefix/{seed}").as_bytes())[..16].to_string();
-    Blob {
-        id: format!("{prefix}_{uncompressed_md5}"),
-        compressed_md5: md5_hex(&raw),
-        compressed_size: raw.len() as i64,
-        uncompressed_md5,
-        uncompressed_size: body.len() as i64,
-        declared_uncompressed_size: None,
-        served: None,
-        raw,
-        body,
-    }
+    let cache = BLOBS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().expect("the blob cache is not poisoned");
+    cache
+        .entry((seed, len))
+        .or_insert_with(|| {
+            let mut body = Vec::with_capacity(len);
+            let mut x = seed
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(0x1234_5678_9ABC_DEF0)
+                | 1;
+            for _ in 0..len {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                body.push((x >> 24) as u8);
+            }
+            let raw = zstd::encode_all(body.as_slice(), 3).expect("zstd encode");
+            let uncompressed_md5 = md5_hex(&body);
+            // The 16-hex prefix is deliberately *not* a function of anything a reader
+            // could check, because upstream's is not either (docs/00-spec.md §3.7).
+            let prefix = md5_hex(format!("prefix/{seed}").as_bytes())[..16].to_string();
+            Blob {
+                id: format!("{prefix}_{uncompressed_md5}"),
+                compressed_md5: md5_hex(&raw),
+                compressed_size: raw.len() as i64,
+                uncompressed_md5,
+                uncompressed_size: body.len() as i64,
+                declared_uncompressed_size: None,
+                served: None,
+                raw,
+                body,
+            }
+        })
+        .clone()
 }
 
 impl Blob {
@@ -698,7 +722,11 @@ impl World {
                         // The **dearest** capture on purpose: it is the one a
                         // budget can refuse without taking the coverage with
                         // it, because a `removed` capture contributes nothing
-                        // to A21-A23.
+                        // to A21-A23. Its 32 KB body and digest are pinned byte
+                        // for byte by `the_request_log_rows_are_what_the_spec_says_they_are`
+                        // (capture_layout.rs) and by the 7.0.0 game-manifest
+                        // checksum that derives from them, so the chunk cannot
+                        // be shrunk without rewriting those assertions.
                         File::new(
                             "GenshinImpact_Data/StreamingAssets/blocks/old.blk",
                             &[91],
