@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for the CP5 review-and-fix session; apply verdicts, then handle follow-ups per section 5.
-* Active checkpoint: CP5 (`in_progress` — review session running).
+* Next action: all tasks terminal + all checkpoints done — spawn a review session to batch surviving follow-ups (section 5), then implement/review each batch, then final cleanup commit.
+* Active checkpoint: none (all CPs `done`). Phase: follow-ups.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -55,7 +55,7 @@ commit ranges only.
 | CP2 | T06–T08 | done | gircap capture consolidation & fixtures |
 | CP3 | T09–T13 | done | sled2redb conversions & fixed sleeps |
 | CP4 | T14–T18 | done | girpr spawns, logging & redundant merges |
-| CP5 | T19–T20 | in_progress | ignored tests & final guardrail audit |
+| CP5 | T19–T20 | done | ignored tests & final guardrail audit |
 
 ## Commit ranges for review
 
@@ -81,8 +81,8 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T16 | `aeefde5c..b51e0395` | completed |
 | T17 | `319270b7..15e79270` | completed |
 | T18 | `6c165bc5..9b8b5128` | completed (partial accepted) |
-| T19 | `6fc38676..36719f62` | — |
-| T20 | (no implementation commits — clean audit) | — |
+| T19 | `6fc38676..36719f62` | completed |
+| T20 | (no implementation commits — clean audit) | completed |
 
 ## Follow-ups
 
@@ -121,8 +121,8 @@ are done and a review session has decided the batches.
 | F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; convert via `usage_rejection`, keep one for exact stderr. | T15 implementer | proposed | CP4 review: KEEP — genuine bounded win. |
 | F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | removed | CP4 review: moot — confirmed debug builds write no default log file (logging.rs:183-200). |
 | F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | CP4 review: KEEP — product-hook decision for a future review. |
-| F39 | If the artifact_bridge suite is ever added to a gate, a cross-process on-disk verification cache would be the only way to verify literally once across nextest processes (previously rejected as runaway in F37) — revisit only if the gate changes. | T19 implementer | proposed | Reviewer decides. |
-| F40 | Give peak_heap a very loose structural check (`buffered > streamed`) to self-verify the ratio — optional; conflicts with the file's deliberate "measurement, not assertion" design. | T19 implementer | proposed | Reviewer decides. |
+| F39 | If the artifact_bridge suite is ever added to a gate, a cross-process on-disk verification cache would be the only way to verify literally once across nextest processes (previously rejected as runaway in F37) — revisit only if the gate changes. | T19 implementer | removed | CP5 review: reincarnation of F37; guardrail forbids gating ignored tests, so precondition won't arise in scope (runaway). |
+| F40 | Give peak_heap a very loose structural check (`buffered > streamed`) to self-verify the ratio — optional; conflicts with the file's deliberate "measurement, not assertion" design. | T19 implementer | removed | CP5 review: conflicts with documented "measurement, not assertion" design. |
 | F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | removed | CP4 review: cosmetic cross-binary assertion dedup. |
 | F33 | Merge the three repaired `repair_scan.rs` tests into one table-driven test over modes (inplace/temp/ordered) centralizing "scanned estimate == real download" via `--plan-out`; higher coverage risk. | T16 implementer | removed | CP4 review: high coverage risk; T16 deliberately conservative. |
 | F34 | The cross-root hard-link test could share the T17 fixture too, but needs a third link and `--exclude`, raising complexity/risk for little gain — kept separate deliberately. | T17 implementer | removed | CP4 review: implementer deemed not worth complexity/risk. |
@@ -160,3 +160,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * CP4 review done (one fix commit `937438db` for T15; tree clean at `937438db`): verdicts T14/T16/T17 `completed`, T15 `completed (fixed)`, T18 `completed` (§6.2-3 deferral accepted as N/A). T15 fix added a self-verifying byte-identity guard in `help_exits_zero` (`assert_eq!(stdout, real_help())`) reusing the existing --help spawn, no added process. Review confirmed T14's stale-report deviation (old :1210/:1278 read no log; logs in separate TempDir outside snapshot), every `.log()` assertion maps to an info!/debug! emission; T16/T17/T18 merges dropped no assertion/parity relation; T18 §6.2-3 confirmed single consumer. Suites re-run: repair_machinery 28/28, cli_contract 49/49, repair_scan/machinery/writer 64/64, sync 46 pass/1 skip, gircap 81/81. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25, F26, F29, F31. Removed: F27, F28, F30, F32, F33, F34, F35, F36, F37, F38 (reasons in table). No new follow-ups.
 * T19 implemented (2 commits): validated all three anchors. Tidy 1 (artifact_bridge share) SKIPPED as stale — suite already uses process-wide `Suite` (OnceCell) verifying once + one Bridge (`c4224d3e`/`a2cfdfb6` ancestors); under nextest each case is a separate process, cross-process cache rejected as runaway (F37). Tidy 2 DONE — peak_heap `CHUNK_BYTES` 2_162_302 -> 262_144, doc prose made scale-independent; ~1.95 s -> ~0.05 s. Tidy 3 DELETED (stale) — `rows_for_a_directory_created_and_removed_in_one_run_are_dropped` reproduced "a row survived for Sub", doc labelled it a known limitation (documented in tools/sync/README.md:462-469), making it pass would need a product change not clearly correct. Verification: ignored-only 12 run/12 pass (was 13/1 fail), girsync sync 46 pass, fmt/clippy clean. No product code.
 * T20 completed (clean audit, no code changes; tree clean at `9fc486a9`): all three hooks present/unchanged in `.config/nextest-test-env` (working tree + HEAD); setup scripts `test-hooks-unix`/`test-hooks-windows` in `.config/nextest.toml` intact and wired to all(); `.gitattributes` LF pin intact with LF-only bytes (`DURABILITY` parses as "none"); full-tree `Z:` search found only the temporary report + `tests/scripts/io-profile/` measurement scripts (legitimate instruments), no committed temp-dir redirect; `git log -S` for Z:/TMPDIR over .config + crates returned no commits; temp helper `crates/tempdir/src/lib.rs::root` still `std::env::temp_dir().join(ROOT)`. No regression to revert; Z: not needed. Gate `cargo nextest run --workspace` PASS: 2236 run/2236 pass/12 skip (110.6 s). No follow-ups.
+* CP5 review done (no fix/revert commits; tree clean at `cc393381`): verdicts T19 `completed`, T20 `completed` (clean audit independently re-verified — hooks, setup scripts, LF pin, temp helper, no Z: redirect; full gate re-run 2236/2236/12). T19 ignored-test deletion confirmed a documented known limitation, not coverage loss. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25, F26, F29, F31. Removed: F39, F40 (reasons in table). No new follow-ups. ALL 20 TASKS TERMINAL; ALL 5 CHECKPOINTS DONE.
