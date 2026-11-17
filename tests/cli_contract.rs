@@ -626,6 +626,13 @@ fn help_exits_zero() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "--help should exit 0");
     assert!(stdout.contains("Usage"), "{stdout}");
+    // The in-process renderer must stay byte-identical to what the binary
+    // prints. Reusing this spawn keeps the guard free of any extra process.
+    assert_eq!(
+        stdout,
+        real_help(),
+        "the in-process --help render must match the binary byte for byte"
+    );
 }
 
 #[test]
