@@ -10,10 +10,12 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T12** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T13** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`. T13 is the last task overall, so on success (or resolved
+  skip) run the CP5 review checkpoint.
 * Active batch: none. Phase: implementation (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `in_progress`.
+* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `pending_review` (partial), T13 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -42,7 +44,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T09 | Consolidate `run_lock.rs` case clusters | completed | P1 | CP4 | impl `327fd01e`; CP4 review completed. 15 → 5 tests, every assertion preserved, end-to-end cleanup case retained with real Lock::acquire/remove; product lock code untouched (repair_offline.rs anchors intact). run_lock 5/5 pass. |
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
 | T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length strengthened by 7bf6731b; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row assertion; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. migration_lock 11/11 pass. |
-| T12 | Capture: remove redundant process test; fold assertion-free test | in_progress | P1 | CP5 | |
+| T12 | Capture: remove redundant process test; fold assertion-free test | pending_review | P1 | CP5 | PARTIAL: impl `2202ea9f` (test-only, closeout.rs) removed assertion-free `a_clean_close_out_returns_ok` (fully redundant; neighbours assert more). REVIEW FLAG: bullet 1 `a_bad_log_level_is_refused_by_the_parser` (cli_contract.rs:214) SKIPPED/test kept - exit code and stderr-name assertions are covered, but its `r.stdout.is_empty()` assertion exists NOWHERE else in the capture tree (the named stdout-contract tests assert different things). Reviewer must confirm skip or fix by pinning stdout-empty into a neighbour first. |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
 
 ## Review checkpoints
@@ -73,7 +75,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T09 | 327fd01e (single commit) | completed |
 | T10 | 564b341b (single commit) | completed |
 | T11 | — (skipped, no commits) | skipped, to be confirmed by CP5 review |
-| T12 | — | — |
+| T12 | 2202ea9f (single commit; bullet 1 skipped) | — |
 | T13 | — | — |
 
 ## Follow-ups
@@ -103,6 +105,7 @@ effect) so the final follow-up phase is meaningful.
 | F16 | ~~`a_blacklisted_path_is_kept_by_the_cleanup` (still present) mixes a pure classifier assertion with real plan_purge/apply_purge I/O; move only the pure row into the parametrized table.~~ | T10 implementer | removed | CP4 reviewer pruned: no test-count benefit; pure+I/O layering is intentional. |
 | F17 | ~~Doc-comment notes on `cached_keys_classify_every_keep_rule`: visibility computation only in scope tests; group 'everything else purges' rows under a provenance comment.~~ | T10 implementer | removed | CP4 reviewer pruned: already done by commit `564b341b` (provenance comment at lines 853–857 plus per-group comments). |
 | F18 | Document which `tools/sync/tests/migration_lock.rs` tests are deliberately file-backend-specific (backups, snapshots, record side, dry-run byte-identity) despite the file's backend-agnostic header, so a future audit does not re-flag them as out of place. | T11 implementer | proposed | Cosmetic doc clarification following T11's verified skip. |
+| F19 | To realize T12 bullet 1 safely: first fold the unique process-level `r.stdout.is_empty()` guarantee into a neighbouring argument-error test (e.g. extend `every_argument_error_is_one` across its case table), then delete `a_bad_log_level_is_refused_by_the_parser`. The cli/mod.rs:1002 and cli_contract.rs:214 tests pin different layers and can only be consolidated after stdout-empty is pinned elsewhere. | T12 implementer | proposed | Preserves coverage while saving one test; evaluate with T12 review. |
 
 ## Follow-up batches
 
