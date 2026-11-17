@@ -10,11 +10,12 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T04** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop. T04 is the last task in
-  CP2, so on success run the CP2 review checkpoint before starting T05.
-* Active batch: none. Phase: implementation (P0 tasks). CP1 review done.
-* Active checkpoint: CP2 (`open`). Status: T03 `pending_review`, T04 `in_progress`.
+* Next action: run the **CP2 review checkpoint** (both tasks now `pending_review`):
+  set CP2 `in_progress`, commit, then spawn one review-and-fix session with the
+  T03/T04 pointers, commit ranges and the review flags recorded in the task notes.
+  Do not start T05 until CP2 is `done`.
+* Active batch: CP2 (T03, T04). Phase: review (P0 tasks). CP1 review done.
+* Active checkpoint: CP2 (`in_progress` pending state commit). Status: T03 `pending_review`, T04 `pending_review`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -35,7 +36,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | completed | P0 | CP1 | impl `a0a45fc8`; CP1 review confirmed completed. 19 self-tests → 4 tables (49→34), all cases preserved (several assertions strengthened); no product/process/golden code touched. |
 | T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
 | T03 | Consolidate remaining low-risk root-unit cases | pending_review | P0 | CP2 | commits `5e8d593f..185cfa4c` (3 test-only bullets done). REVIEW FLAG: implementer kept the `live_count` column in the reuse table (derivable from `live`, only non-redundant for all-dead rows) to preserve the original explicit assertion — reviewer may judge it unnecessary. |
-| T04 | Table-drive sync hash dedup/order asserts | in_progress | P0 | CP2 | |
+| T04 | Table-drive sync hash dedup/order asserts | pending_review | P0 | CP2 | impl `6f6a47af` (test-only). Four cases → `dedup_keeps_first_seen_order` table (41→38 tests), 8 original assertions preserved, parse-vs-parse_any via fn pointer. REVIEW FLAGS: (a) table is nested (each row holds its two original input/expected pairs) - reviewer may prefer flattening to 8 rows; (b) row type could become a named struct if more variants appear later (implementer judges unnecessary now). |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
 | T06 | sled2redb removes + usage-error parametrization | todo | P0 | CP3 | |
 | T07 | `crates/log` + `tempdir` low-risk merges | todo | P0 | CP3 | |
@@ -51,7 +52,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
 | CP1 | T01–T02 | done | root CLI self-tests + root-unit fixture dedup; T01 completed, T02 completed (fixed e4439122) |
-| CP2 | T03–T04 | open | remaining root-unit merges + sync hash table |
+| CP2 | T03–T04 | in_progress | remaining root-unit merges + sync hash table; T03 5e8d593f..185cfa4c, T04 6f6a47af |
 | CP3 | T05–T08 | open | capture, sled2redb, small crates, root-integration merges |
 | CP4 | T09–T10 | open | `run_lock.rs` + `purge.rs` (verification-required) |
 | CP5 | T11–T13 | open | `migration_lock.rs`, capture medium, cross-binary log policy |
@@ -66,7 +67,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T01 | a0a45fc8 (single commit) | completed |
 | T02 | d6dfb324 + fix e4439122 | completed (fixed) |
 | T03 | 5e8d593f..185cfa4c (3 commits) | — |
-| T04 | — | — |
+| T04 | 6f6a47af (single commit) | — |
 | T05 | — | — |
 | T06 | — | — |
 | T07 | — | — |
