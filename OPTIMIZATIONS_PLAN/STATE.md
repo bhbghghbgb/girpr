@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T06, then advance per the loop.
-* Active checkpoint: CP2 (`open`); T06 `in_progress`.
+* Next action: pick the next `todo` task (T07) and spawn its implementing session.
+* Active checkpoint: CP2 (`open`); T06 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -31,7 +31,7 @@ commit ranges only.
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; CP1 review: skip confirmed |
 | T04 | Shrink rw_threads 96-file fixture | completed | CP1 | implemented in c7b9c1c0; CP1 review: completed |
 | T05 | Shrink `as_done` 11 MB fixture | completed | CP1 | implemented in a2ddea53; CP1 review: completed |
-| T06 | Consolidate gircap captures + shared bundle | in_progress | CP2 | |
+| T06 | Consolidate gircap captures + shared bundle | pending_review | CP2 | 5 commits be7314ff..9096e118; see review range |
 | T07 | Hand-build minimal bundles for delete-a-doc | todo | CP2 | |
 | T08 | Cache gircap byte tables + shrink chunk | todo | CP2 | |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
@@ -68,6 +68,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T02 | `c1e2fb04..eb6afaf2` | completed |
 | T04 | `f84883a7..c7b9c1c0` | completed |
 | T05 | `e1ef69fb..a2ddea53` | completed |
+| T06 | `575c7ed0..9096e118` | — |
 
 ## Follow-ups
 
@@ -85,6 +86,10 @@ are done and a review session has decided the batches.
 | F07 | In `through_the_binary.rs`, reuse one directory across passes of `update_hashes_the_same_set_at_every_limit` instead of 6 fresh 40-file trees — needs per-pass cache isolation to avoid leaking cache rows. | T04 implementer | removed | CP1 review: per-pass isolation risky; T04 captured the dominant win. |
 | F08 | Reduce per-pad byte size below 512 B in the rw_threads fixture (pads only need stat-equality + identical content). | T04 implementer | removed | CP1 review: negligible savings; count was the dominant cost. |
 | F09 | Debug assertion/comment tying `PAD_COUNT` to the max `pool_size()` in `settings()` to guard the "more files than workers" invariant against future worker increases. | T04 implementer | proposed | CP1 review: KEEP — cheap invariant guard for T04's core claim. |
+| F10 | Add the gircap binary's fingerprint to the shared-bundle key so a product-code change to capture output also invalidates the cached bundle (today only the test-side world source does). | T06 implementer | proposed | Reviewer decides. |
+| F11 | Unit test asserting the shared-bundle key is stable across repeated calls and changes when `common/mod.rs` changes, guarding the invalidation contract. | T06 implementer | proposed | Reviewer decides. |
+| F12 | When T07 lands, confirm the two schema key-deletion tests don't regress to fresh captures (they already use the shared bundle as copy source). | T06 implementer | proposed | Verification item for T07; reviewer decides. |
+| F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | proposed | Reviewer decides. |
 
 ## Context / decisions
 
@@ -96,3 +101,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T02 note: implementer also flagged the adjacent P0 `opts()` -> `opts_mem()` audit in `tests/common/mod.rs`/semantic suites; that is already task T03 on the roster, so no new follow-up was created. T02 added file-cache opt-outs only where on-disk bytes are asserted; `GIRSYNC_TEST_NO_FSYNC=0` durability hooks untouched.
 * T03 skipped (implementer): audit target no longer exists — R1 commits already in the tree (`989b618c`, `1eafe53b`, `0ba1d130`, `8914668b`, `28678736`) implemented the `opts()` -> `*_mem` migration. Memory helpers (`opts_mem`, `pair_mem`, `sync_mem`, `compare_mem`, `update_mem`, `asking_mem`, `recs_of` memory-first lookup) are used throughout semantic suites; all `pair()` calls use `warmed: false`. Remaining `opts()` (File) sites are intentional cache-byte/on-disk assertions or harnesses overriding to Memory in their own `common`. Report's `helpers.rs` is a misdiagnosis (unit tests with no `cmd_*` calls). Full `cargo test -p girsync` passes (19 binaries, 0 failures). No code changed; reviewer to confirm skip.
 * CP1 review done (no fix/revert commits; tree clean at `db3928cc`): verdicts T01/T02/T04/T05 `completed`, T03 `skipped` confirmed. Review re-ran T01 test (1/1), `sync` (48/48), `rw_threads` (15/15), `sync_plan` (19/19) — all green. Follow-ups kept: F02, F09. Removed: F01, F03, F04, F05, F06, F07, F08 (reasons in Follow-ups table). No new follow-ups.
+* T06 implemented: shared read-only bundle fixture in `tests/common/mod.rs` under an `fs2` cross-process file lock, published by atomic rename under `girpr-test/`, keyed by a fingerprint of `common/mod.rs` (so T08's World change auto-invalidates); `fs2` added as dev-dep. schema.rs: 19 doc tests -> 1 grouped default test + gzip/ceiling variants; layout/matrix: 8+2 doc reads moved to shared bundle. Deletion tests kept for T07. Verified capture_layout+schema+matrix 53 pass (was 68 in 24.3s -> ~9.5-13.9s), full gircap 868 pass/3 skip, clippy clean. No product code changed.
