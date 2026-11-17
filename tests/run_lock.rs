@@ -61,14 +61,18 @@ mod run_lock_tests {
     use super::*;
 
     #[test]
-    fn mode_mirror_matches_every_run_mode() {
+    fn mode_and_args_mirrors_match_every_run_mode() {
         for flags in mode_sets() {
             let ctx = ctx_for(&flags);
+            let expected = takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan);
             assert_eq!(
                 mode_takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
-                takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
+                expected,
                 "flags {flags:?}"
             );
+            let mut argv = vec!["--game-path", "."];
+            argv.extend_from_slice(&flags);
+            assert_eq!(args_take_lock(&argv), expected, "flags {flags:?}");
         }
 
         // `--purge-only` is the mutating inverse of check-only: it is not one
@@ -81,20 +85,6 @@ mod run_lock_tests {
             purge_only.check_only,
             purge_only.print_plan
         ));
-    }
-
-    #[test]
-    fn args_mirror_accepts_purge_only_and_rejects_read_only_flags() {
-        for flags in mode_sets() {
-            let ctx = ctx_for(&flags);
-            let mut argv = vec!["--game-path", "."];
-            argv.extend_from_slice(&flags);
-            assert_eq!(
-                args_take_lock(&argv),
-                takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
-                "flags {flags:?}"
-            );
-        }
 
         for flag in ["--dry-run", "--check-only", "--print-plan"] {
             assert!(
@@ -106,39 +96,87 @@ mod run_lock_tests {
     }
 
     #[test]
-    fn game_path_is_read_in_both_spellings() {
-        assert_eq!(
-            game_path_arg(&["--game-path", "/games/a"]),
-            Some("/games/a")
-        );
-        assert_eq!(game_path_arg(&["--game-path=/games/a"]), Some("/games/a"));
-        assert_eq!(
-            game_path_arg(&["--dry-run", "--game-path", "/games/a"]),
-            Some("/games/a")
-        );
-        // A value may itself contain `=`.
-        assert_eq!(
-            game_path_arg(&["--game-path=/games/a=b"]),
-            Some("/games/a=b")
-        );
-        assert_eq!(game_path_arg(&["--game-path"]), None);
-        assert_eq!(game_path_arg(&["--other", "/games/a"]), None);
-        // The CLI rejects an empty value, so cleanup has no path to target.
-        assert_eq!(game_path_arg(&["--game-path="]), None);
-        assert_eq!(game_path_arg(&["--game-path", ""]), None);
-    }
-
-    #[test]
-    fn game_path_arg_refuses_a_repeated_flag() {
-        // A repeated `--game-path` is a usage error: the run never starts and
-        // takes no lock, so cleanup must not choose one of the two paths.
-        for args in [
-            vec!["--game-path", "/games/a", "--game-path=/games/b"],
-            vec!["--game-path=/games/a", "--game-path", "/games/b"],
-            vec!["--game-path", "/games/a", "--game-path", "/games/a"],
+    fn game_path_arg_covers_every_spelling_clap_accepts_or_refuses() {
+        // Both spellings, a value containing `=`, and a missing or empty value
+        // all keep the mirror in step with the one game path. The other cases
+        // are spellings clap refuses before a run can take a lock, so cleanup
+        // must not pick a directory that never ran.
+        for (args, expected) in [
+            (vec!["--game-path", "/games/a"], Some("/games/a")),
+            (vec!["--game-path=/games/a"], Some("/games/a")),
+            (
+                vec!["--dry-run", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
+            // A value may itself contain `=`.
+            (vec!["--game-path=/games/a=b"], Some("/games/a=b")),
+            (vec!["--game-path"], None),
+            (vec!["--other", "/games/a"], None),
+            // clap refuses an empty value, so cleanup has no path to target.
+            (vec!["--game-path="], None),
+            (vec!["--game-path", ""], None),
+            // A repeated flag is a usage error: no run starts, and cleanup
+            // must not choose one of the two paths.
+            (
+                vec!["--game-path", "/games/a", "--game-path=/games/b"],
+                None,
+            ),
+            (
+                vec!["--game-path=/games/a", "--game-path", "/games/b"],
+                None,
+            ),
+            (
+                vec!["--game-path", "/games/a", "--game-path", "/games/a"],
+                None,
+            ),
+            // A missing value or another flag as the value means no run.
+            (vec!["--game-path", "--dry-run"], None),
+            (vec!["--game-path", "--biz", "hk4e_global"], None),
+            (vec!["--game-path", "/games/a", "--game-path"], None),
+            (
+                vec!["--game-path", "/games/a", "--game-path", "--dry-run"],
+                None,
+            ),
+            (vec!["--game-path=/games/a", "--game-path"], None),
+            // A lone `-` is a value, not a flag.
+            (vec!["--game-path", "-"], Some("-")),
+            // The token after another value-taking flag is that flag's value,
+            // so a `--game-path` there names no game path.
+            (vec!["--include", "--game-path", "/games/a"], None),
+            (vec!["--include", "--game-path=/games/a"], None),
+            (vec!["--max-files", "--game-path", "/games/a"], None),
+            (vec!["--jobs", "--game-path", "/games/a"], None),
+            (vec!["--log-file", "--game-path", "/games/a"], None),
+            (
+                vec!["--include", "--dry-run", "--game-path", "/games/a"],
+                None,
+            ),
+            // The same flags with a value of their own leave the path visible.
+            (
+                vec!["--include", "*.blk", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
+            (
+                vec!["--include=*.blk", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
+            (
+                vec!["--jobs", "4", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
+            (
+                vec!["--io-threads", "4", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
+            (
+                vec!["--include", "-", "--game-path", "/games/a"],
+                Some("/games/a"),
+            ),
         ] {
-            assert_eq!(game_path_arg(&args), None, "{args:?}");
+            assert_eq!(game_path_arg(&args), expected, "{args:?}");
         }
+
+        // The CLI really does reject a repeated `--game-path`.
         assert!(
             Args::try_parse_from([
                 "girpr",
@@ -151,57 +189,7 @@ mod run_lock_tests {
             ])
             .is_err()
         );
-    }
 
-    #[test]
-    fn game_path_arg_refuses_a_trailing_or_flag_value() {
-        // clap rejects a `--game-path` with no value or with another flag as
-        // its value, so the run never starts and takes no lock. The same holds
-        // when such an occurrence follows a valid one.
-        for args in [
-            vec!["--game-path"],
-            vec!["--game-path", "--dry-run"],
-            vec!["--game-path", "--biz", "hk4e_global"],
-            vec!["--game-path", "/games/a", "--game-path"],
-            vec!["--game-path", "/games/a", "--game-path", "--dry-run"],
-            vec!["--game-path=/games/a", "--game-path"],
-        ] {
-            assert_eq!(game_path_arg(&args), None, "{args:?}");
-        }
-        // A lone `-` is a value, not a flag.
-        assert_eq!(game_path_arg(&["--game-path", "-"]), Some("-"));
-    }
-
-    #[test]
-    fn game_path_arg_skips_another_flags_value() {
-        // The token after a value-taking flag is that flag's value, so a
-        // `--game-path` there is not a game path. clap refuses such a spelling
-        // (a value may not look like a flag), so the run never takes a lock.
-        for args in [
-            vec!["--include", "--game-path", "/games/a"],
-            vec!["--include", "--game-path=/games/a"],
-            vec!["--max-files", "--game-path", "/games/a"],
-            vec!["--jobs", "--game-path", "/games/a"],
-            vec!["--log-file", "--game-path", "/games/a"],
-            vec!["--include", "--dry-run", "--game-path", "/games/a"],
-        ] {
-            assert_eq!(game_path_arg(&args), None, "{args:?}");
-        }
-
-        // The same flags with a value of their own leave the path visible.
-        for args in [
-            vec!["--include", "*.blk", "--game-path", "/games/a"],
-            vec!["--include=*.blk", "--game-path", "/games/a"],
-            vec!["--jobs", "4", "--game-path", "/games/a"],
-            vec!["--io-threads", "4", "--game-path", "/games/a"],
-            vec!["--include", "-", "--game-path", "/games/a"],
-        ] {
-            assert_eq!(game_path_arg(&args), Some("/games/a"), "{args:?}");
-        }
-    }
-
-    #[test]
-    fn every_value_flag_hides_a_following_game_path() {
         // Read the value-taking flags from the CLI itself, so a new flag cannot
         // be added without the cleanup learning that it owns the next token.
         let command = Args::command();
@@ -233,10 +221,7 @@ mod run_lock_tests {
             }
         }
         assert!(checked >= 20, "the CLI exposes its value-taking flags");
-    }
 
-    #[test]
-    fn game_path_mirror_matches_clap_option_arity() {
         // Each list is either accepted by the CLI, and then the mirror must
         // name the same path, or refused, and then the mirror must name none
         // because no run took a lock.
@@ -317,7 +302,7 @@ mod run_lock_tests {
     }
 
     #[test]
-    fn the_cli_refuses_a_missing_or_flag_game_path_value() {
+    fn the_cli_refuses_missing_flag_and_empty_game_path_values() {
         for argv in [
             vec!["girpr", "--game-path"],
             vec!["girpr", "--game-path", "--dry-run", "--biz", "hk4e_global"],
@@ -330,6 +315,10 @@ mod run_lock_tests {
                 "--biz",
                 "hk4e_global",
             ],
+            // An empty value is refused before any run can take a lock; this
+            // is why `lock_key_path` does not mirror production's `""` key.
+            vec!["girpr", "--game-path", "", "--biz", "hk4e_global"],
+            vec!["girpr", "--game-path=", "--biz", "hk4e_global"],
         ] {
             assert!(Args::try_parse_from(argv.clone()).is_err(), "{argv:?}");
         }
@@ -344,77 +333,70 @@ mod run_lock_tests {
     }
 
     #[test]
-    fn the_cli_refuses_an_empty_game_path() {
-        // This is why `lock_key_path` does not mirror production's key for
-        // `""`: clap rejects the empty value before any run can take a lock.
-        assert!(
-            Args::try_parse_from(["girpr", "--game-path", "", "--biz", "hk4e_global"]).is_err()
-        );
-        assert!(Args::try_parse_from(["girpr", "--game-path=", "--biz", "hk4e_global"]).is_err());
+    fn vanished_paths_key_by_canonical_parent_with_lexical_suffix() {
+        {
+            let dir = TempDir::new("girpr_it", "run_lock_vanished");
+            let install = dir.join("install");
+            let expected = dir.canonicalize().unwrap().join("install");
+            assert_eq!(lock_key_path(&install), expected);
+        }
+        {
+            let dir = TempDir::new("girpr_it", "run_lock_dotdot");
+            std::fs::create_dir(dir.join("sub")).unwrap();
+
+            let through_sub = dir.join("sub").join("..").join("install");
+            let through_current = dir.join(".").join("install");
+            let expected = dir.canonicalize().unwrap().join("install");
+            assert_eq!(lock_key_path(&through_sub), expected);
+            assert_eq!(lock_key_path(&through_current), expected);
+        }
     }
 
     #[test]
-    fn a_vanished_install_keys_by_its_canonical_parent() {
-        let dir = TempDir::new("girpr_it", "run_lock_vanished");
-        let install = dir.join("install");
-        let expected = dir.canonicalize().unwrap().join("install");
-        assert_eq!(lock_key_path(&install), expected);
-    }
+    fn cleanup_removes_leftover_locks_and_ignores_absent_runs() {
+        {
+            // An absent run has no lock to remove; cleanup must not create the
+            // file it did not find.
+            let dir = TempDir::new("girpr_it", "run_lock_absent");
+            let game = dir.join("never-installed");
+            let path = lock_path(&lock_key_path(&game));
+            assert!(!path.exists(), "the setup has no lock file");
 
-    #[test]
-    fn a_vanished_suffix_is_replayed_lexically() {
-        let dir = TempDir::new("girpr_it", "run_lock_dotdot");
-        std::fs::create_dir(dir.join("sub")).unwrap();
-
-        let through_sub = dir.join("sub").join("..").join("install");
-        let through_current = dir.join(".").join("install");
-        let expected = dir.canonicalize().unwrap().join("install");
-        assert_eq!(lock_key_path(&through_sub), expected);
-        assert_eq!(lock_key_path(&through_current), expected);
-    }
-
-    #[test]
-    fn cleanup_does_not_create_a_lock_for_an_absent_run() {
-        let dir = TempDir::new("girpr_it", "run_lock_absent");
-        let game = dir.join("never-installed");
-        let path = lock_path(&lock_key_path(&game));
-        assert!(!path.exists(), "the setup has no lock file");
-
-        remove_run_lock(&game);
-        assert!(
-            !path.exists(),
-            "cleanup must not create the file it did not find"
-        );
-    }
-
-    #[test]
-    fn cleanup_removes_a_lock_the_run_left() {
-        let dir = TempDir::new("girpr_it", "run_lock_present");
-        let game = dir.to_path_buf();
-        let lock = Lock::acquire(&game).expect("the lock is taken");
-        let path = lock.path().to_path_buf();
-        drop(lock);
-        assert!(path.exists(), "the run left the lock file");
-
-        remove_run_lock(&game);
-        assert!(!path.exists(), "cleanup removes the run's lock file");
-    }
-
-    #[test]
-    fn args_cleanup_removes_the_lock_in_both_spellings() {
-        let dir = TempDir::new("girpr_it", "run_lock_args");
-        let game = dir.to_string_lossy().into_owned();
-        for args in [
-            vec!["--game-path".to_string(), game.clone()],
-            vec![format!("--game-path={game}")],
-        ] {
-            let lock = Lock::acquire(dir.as_ref()).expect("the lock is taken");
+            remove_run_lock(&game);
+            assert!(
+                !path.exists(),
+                "cleanup must not create the file it did not find"
+            );
+        }
+        {
+            // End-to-end: the run left a lock file and cleanup removes it.
+            let dir = TempDir::new("girpr_it", "run_lock_present");
+            let game = dir.to_path_buf();
+            let lock = Lock::acquire(&game).expect("the lock is taken");
             let path = lock.path().to_path_buf();
             drop(lock);
             assert!(path.exists(), "the run left the lock file");
 
-            remove_run_lock_for_args(&args);
-            assert!(!path.exists(), "cleanup removes the lock for {args:?}");
+            remove_run_lock(&game);
+            assert!(!path.exists(), "cleanup removes the run's lock file");
+        }
+        {
+            // The args-based helper removes the lock in both `--game-path`
+            // spellings.
+            let dir = TempDir::new("girpr_it", "run_lock_args");
+            let game = dir.to_string_lossy().into_owned();
+            for args in [
+                vec!["--game-path".to_string(), game.clone()],
+                vec![format!("--game-path={game}")],
+            ] {
+                let lock = Lock::acquire(dir.as_ref()).expect("the lock is taken");
+                let path = lock.path().to_path_buf();
+                drop(lock);
+                assert!(path.exists(), "the run left the lock file");
+
+                remove_run_lock_for_args(&args);
+                assert!(!path.exists(), "cleanup removes the lock for {args:?}");
+            }
         }
     }
 }
