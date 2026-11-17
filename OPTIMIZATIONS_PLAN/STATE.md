@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for the CP2 review-and-fix session; apply verdicts, then start CP3 at T09.
-* Active checkpoint: CP2 (`in_progress` — review session running).
+* Next action: start CP3 — pick the first `todo` task (T09) and spawn its implementing session.
+* Active checkpoint: none (CP2 `done`; CP3 `open`).
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -31,9 +31,9 @@ commit ranges only.
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; CP1 review: skip confirmed |
 | T04 | Shrink rw_threads 96-file fixture | completed | CP1 | implemented in c7b9c1c0; CP1 review: completed |
 | T05 | Shrink `as_done` 11 MB fixture | completed | CP1 | implemented in a2ddea53; CP1 review: completed |
-| T06 | Consolidate gircap captures + shared bundle | pending_review | CP2 | 5 commits be7314ff..9096e118; see review range |
-| T07 | Hand-build minimal bundles for delete-a-doc | pending_review | CP2 | 3 commits 7e4ca155..81988899; see review range |
-| T08 | Cache gircap byte tables + shrink chunk | pending_review | CP2 | 6bcd4b87; caching done, chunk shrink skipped (pinned bytes) — reviewer to judge |
+| T06 | Consolidate gircap captures + shared bundle | completed | CP2 | CP2 review: completed |
+| T07 | Hand-build minimal bundles for delete-a-doc | completed | CP2 | CP2 review: completed |
+| T08 | Cache gircap byte tables + shrink chunk | completed | CP2 | CP2 review: completed (partial scope accepted; old.blk shrink deferred to F15) |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
 | T10 | Drop sled2redb flush + redundant reopens | todo | CP3 | |
 | T11 | Replace girsync publish fixed sleeps | todo | CP3 | |
@@ -52,7 +52,7 @@ commit ranges only.
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
 | CP1 | T01–T05 | done | girsync fixtures & cache backend |
-| CP2 | T06–T08 | in_progress | gircap capture consolidation & fixtures |
+| CP2 | T06–T08 | done | gircap capture consolidation & fixtures |
 | CP3 | T09–T13 | open | sled2redb conversions & fixed sleeps |
 | CP4 | T14–T18 | open | girpr spawns, logging & redundant merges |
 | CP5 | T19–T20 | open | ignored tests & final guardrail audit |
@@ -68,9 +68,9 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T02 | `c1e2fb04..eb6afaf2` | completed |
 | T04 | `f84883a7..c7b9c1c0` | completed |
 | T05 | `e1ef69fb..a2ddea53` | completed |
-| T06 | `575c7ed0..9096e118` | — |
-| T07 | `a1de5165..81988899` | — |
-| T08 | `66ac441b..6bcd4b87` | — |
+| T06 | `575c7ed0..9096e118` | completed |
+| T07 | `a1de5165..81988899` | completed |
+| T08 | `66ac441b..6bcd4b87` | completed (partial accepted) |
 
 ## Follow-ups
 
@@ -88,14 +88,14 @@ are done and a review session has decided the batches.
 | F07 | In `through_the_binary.rs`, reuse one directory across passes of `update_hashes_the_same_set_at_every_limit` instead of 6 fresh 40-file trees — needs per-pass cache isolation to avoid leaking cache rows. | T04 implementer | removed | CP1 review: per-pass isolation risky; T04 captured the dominant win. |
 | F08 | Reduce per-pad byte size below 512 B in the rw_threads fixture (pads only need stat-equality + identical content). | T04 implementer | removed | CP1 review: negligible savings; count was the dominant cost. |
 | F09 | Debug assertion/comment tying `PAD_COUNT` to the max `pool_size()` in `settings()` to guard the "more files than workers" invariant against future worker increases. | T04 implementer | proposed | CP1 review: KEEP — cheap invariant guard for T04's core claim. |
-| F10 | Add the gircap binary's fingerprint to the shared-bundle key so a product-code change to capture output also invalidates the cached bundle (today only the test-side world source does). | T06 implementer | proposed | Reviewer decides. |
-| F11 | Unit test asserting the shared-bundle key is stable across repeated calls and changes when `common/mod.rs` changes, guarding the invalidation contract. | T06 implementer | proposed | Reviewer decides. |
-| F12 | When T07 lands, confirm the two schema key-deletion tests don't regress to fresh captures (they already use the shared bundle as copy source). | T06 implementer | proposed | Verification item for T07; reviewer decides. |
-| F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | proposed | Reviewer decides. |
-| F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | proposed | Reviewer decides. |
-| F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | proposed | Needs a band-3 note; reviewer decides. |
-| F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | proposed | Out of T08 scope; reviewer decides. |
-| F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | proposed | Reviewer decides. |
+| F10 | Add the gircap binary's fingerprint to the shared-bundle key so a product-code change to capture output also invalidates the cached bundle (today only the test-side world source does). | T06 implementer | proposed | CP2 review: KEEP — real stale-cache hardening. |
+| F11 | Unit test asserting the shared-bundle key is stable across repeated calls and changes when `common/mod.rs` changes, guarding the invalidation contract. | T06 implementer | removed | CP2 review: key is a deterministic pure function of a file read; real gap is F10. |
+| F12 | When T07 lands, confirm the two schema key-deletion tests don't regress to fresh captures (they already use the shared bundle as copy source). | T06 implementer | removed | CP2 review: resolved — schema key-deletion tests now use `minimal_bundle`, no `copy_tree`. |
+| F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | proposed | CP2 review: KEEP — further mixed-test consolidation. |
+| F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | proposed | CP2 review: KEEP — dedupe the two minimal-bundle writers. |
+| F15 | If the `old.blk` shrink is still wanted: refresh the two pinned rows in `capture_layout.rs` (:1133 manifest checksum, :1157 chunk id + `bytes_in`) and keep `old.blk` above `eager.blk`'s ~14 KB so the over-budget test still refuses `removed`. | T08 implementer | proposed | CP2 review: KEEP — the deferred old.blk shrink. |
+| F16 | Cache `World::archive()` (common/mod.rs:1435) which also zstd-encodes + MD5s per `Mock::start`; naive `(tag, field)` keying goes stale for mutated worlds — a content-derived key could make it safe. | T08 implementer | proposed | CP2 review: KEEP — relevant to CPU-bound gircap. |
+| F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
 
@@ -110,3 +110,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T06 implemented: shared read-only bundle fixture in `tests/common/mod.rs` under an `fs2` cross-process file lock, published by atomic rename under `girpr-test/`, keyed by a fingerprint of `common/mod.rs` (so T08's World change auto-invalidates); `fs2` added as dev-dep. schema.rs: 19 doc tests -> 1 grouped default test + gzip/ceiling variants; layout/matrix: 8+2 doc reads moved to shared bundle. Deletion tests kept for T07. Verified capture_layout+schema+matrix 53 pass (was 68 in 24.3s -> ~9.5-13.9s), full gircap 868 pass/3 skip, clippy clean. No product code changed.
 * T07 implemented: added `minimal_bundle(name)` in `tests/common/mod.rs` (smallest directory `gircap::verify::Bundle::open` accepts, built from crate value types). Converted 5 capture_layout delete-a-doc tests (error_shapes x2, error_responses x2, rejections x1) and 2 schema missing-field tests off full capture/copy_tree; assertions unchanged; removed unused `copy_tree` helper. capture_layout 37/37, schema 6/6, clippy clean. Coordinated with T06 (reused common/mod.rs). NOTE: task/report said "six" delete-a-doc tests but only five exist (no path_map.json failure test) — reviewer to confirm none lost. T07 implementer says F12 is resolved (schema key-deletion tests no longer copy the shared tree). A minimal bundle has an empty matrix, so verifying one unmodified would fail reverify — future "verify passes" tests should use offline_bundle.rs::Bundle::build.
 * T08 partial (commit 6bcd4b87): DONE — per-process `OnceLock<Mutex<HashMap<(u64,usize),Blob>>>` memo in `blob()` so each blob is encoded/MD5'd once per process (per-process only; doc points to T06 for cross-process). SKIPPED — shrinking the 32 KB `old.blk` chunk: `the_request_log_rows_are_what_the_spec_says_they_are` (capture_layout.rs:1157) pins its id/digest + `bytes_in=32778`, and matrix relies on `removed` being dearest; a trial shrink broke that test, so it was reverted and a why-not comment added. T06 fingerprint (whole common/mod.rs) invalidated correctly on the edit. Full gircap 868 pass/3 skip, clippy -D warnings clean. Reviewer to judge whether the partial scope is acceptable.
+* CP2 review done (no fix/revert commits; tree clean at `9d968559`): verdicts T06/T07 `completed`, T08 `completed` (partial scope accepted; old.blk shrink deferred to F15). Review re-ran gircap 53/53 both cached and after deleting all shared bundles to force fresh parallel builds (race-free confirmed); clippy -D warnings clean. Confirmed the task's "six" delete-a-doc tests was a miscount (five exist; none lost). Follow-ups kept: F02, F09, F10, F13, F14, F15, F16. Removed: F11, F12, F17 (reasons in table). No new follow-ups.
