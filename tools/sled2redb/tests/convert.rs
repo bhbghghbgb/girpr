@@ -50,6 +50,20 @@ where
     )
 }
 
+/// Parse an argument spelling against the converter's own clap command, in
+/// process. The command is the same definition the help pin holds
+/// ([`the_converter_command`]), so this checks clap's *acceptance* of a spelling
+/// without paying for a full conversion subprocess. Conversion correctness is
+/// the job of the rest of this suite and of the one end-to-end run kept below.
+fn parse_in_process(args: Vec<std::ffi::OsString>) -> clap::ArgMatches {
+    // `try_get_matches_from` takes the first item as argv[0], so prepend the
+    // program name and let the caller pass only the arguments under test.
+    let argv = std::iter::once(std::ffi::OsString::from("sled2redb")).chain(args);
+    the_converter_command()
+        .try_get_matches_from(argv)
+        .unwrap_or_else(|e| panic!("the spelling must be accepted by clap: {e}"))
+}
+
 /// A legacy sled DB, holding exactly what the case below needs.
 ///
 /// **Both file rows carry every algorithm the case requests**, and that is
@@ -499,8 +513,11 @@ fn the_converter_reports_json_records_on_stdout() {
 /// refused one of them would fail on the spelling rather than on the
 /// conversion — and the spelling is what a script writes.
 ///
-/// Every form prints the same record, and the two spellings of `--output`
-/// print it byte for byte: they are one run and not two.
+/// Acceptance is a parsing property, so every form is checked in-process
+/// against the converter's own clap command. Only two full conversions remain:
+/// one proves a spelling end to end and prints the record every spelling
+/// prints, and the second proves the two `--output` spellings are byte for byte
+/// the same run. Conversion correctness is covered by the rest of the suite.
 #[test]
 fn the_flags_are_accepted_on_either_side_of_the_paths() {
     let t = temp_root("convert_args");
@@ -527,10 +544,9 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
 
     // The forms, as the flags before the paths and the flags after them: the
     // flags after the paths, the flags before them, the `=` spelling on either
-    // side of the paths, and `--force` on either side of them.
-    //
-    // Each form gets a destination of its own, so no form has to force over
-    // the cache another one left, and every record is about its own run.
+    // side of the paths, and `--force` on either side of them. Each is checked
+    // in-process, so a spelling that clap refused fails here on the spelling
+    // rather than on a conversion — which is exactly what is under test.
     let forms: &[(&[&str], &[&str])] = &[
         (&[], &["--output", "json"]),
         (&["--output", "json"], &[]),
@@ -541,32 +557,54 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
     ];
 
     for (i, (before, after)) in forms.iter().enumerate() {
-        let dst = work.join(format!("girpr-cache-{i}"));
-        let (code, stdout, stderr) = run_converter(args_of(before, after, &dst));
+        let dst = work.join(format!("girpr-cache-parse-{i}"));
+        let matches = parse_in_process(args_of(before, after, &dst));
         assert_eq!(
-            code, 0,
-            "the form {before:?} before the paths and {after:?} after them: stderr: {stderr}"
+            matches.get_one::<OutputFormat>("output"),
+            Some(&OutputFormat::Json),
+            "the form {before:?} before the paths and {after:?} after them must select json"
         );
         assert_eq!(
-            parse_ndjson(stdout.as_bytes()),
-            vec![serde_json::json!({
-                "event": "converted",
-                "src": src.display().to_string(),
-                "dst": dst.display().to_string(),
-                "files": 2,
-                "dirs": 1,
-                "hashes": 5,
-            })],
-            "the form {before:?} before the paths and {after:?} after them: \
-             the record is the one every spelling prints"
+            matches
+                .get_one::<String>("sled_dir")
+                .map(std::ffi::OsStr::new),
+            Some(src.as_os_str()),
+            "the sled path is the first positional in the form {before:?} / {after:?}"
+        );
+        assert_eq!(
+            matches
+                .get_one::<String>("redb_path")
+                .map(std::ffi::OsStr::new),
+            Some(dst.as_os_str()),
+            "the redb path is the second positional in the form {before:?} / {after:?}"
+        );
+        assert_eq!(
+            matches.get_flag("force"),
+            before.contains(&"--force") || after.contains(&"--force"),
+            "the form {before:?} / {after:?} sets --force only where the form spells it"
         );
     }
 
-    // The two spellings of `--output` are the same run: the same destination,
-    // the same record, byte for byte.
+    // One end-to-end conversion still proves a spelling is accepted by the real
+    // binary and prints the record every spelling prints.
     let dst = work.join("girpr-cache-spellings");
     let (code, spaced, stderr) = run_converter(args_of(&["--output", "json"], &[], &dst));
     assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        parse_ndjson(spaced.as_bytes()),
+        vec![serde_json::json!({
+            "event": "converted",
+            "src": src.display().to_string(),
+            "dst": dst.display().to_string(),
+            "files": 2,
+            "dirs": 1,
+            "hashes": 5,
+        })],
+        "the record is the one every spelling prints"
+    );
+
+    // The two spellings of `--output` are the same run: the same destination,
+    // the same record, byte for byte.
     let (code, equals, stderr) = run_converter(args_of(&["--force", "--output=json"], &[], &dst));
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(spaced, equals, "the two spellings are the same run");
