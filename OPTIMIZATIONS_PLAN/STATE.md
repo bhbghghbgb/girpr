@@ -10,11 +10,12 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T08** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop. T08 is the last task in
-  CP3, so on success run the CP3 review checkpoint before starting T09.
-* Active batch: none. Phase: implementation (P0 tasks). CP1 and CP2 reviews done.
-* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `pending_review`, T07 `pending_review`, T08 `in_progress`.
+* Next action: run the **CP3 review checkpoint** (all four tasks now `pending_review`):
+  set CP3 `in_progress`, commit, then spawn one review-and-fix session with the
+  T05-T08 pointers, commit ranges and the review flags recorded in the task notes.
+  Do not start T09 until CP3 is `done`.
+* Active batch: CP3 (T05, T06, T07, T08). Phase: review (P0 tasks). CP1 and CP2 reviews done.
+* Active checkpoint: CP3 (`in_progress` pending state commit). Status: T05/T06/T07/T08 all `pending_review`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -39,7 +40,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T05 | Remove capture no-op test; merge same-function pairs | pending_review | P0 | CP3 | commits `0e8496e9..30e15ae4` (test-only). No-op removed + 4 pairs merged (670→665 tests, −5); manifest/proto.rs equality assertion kept, only misleading doc dropped. REVIEW FLAG: the 5th pair `config/tests.rs:411/483` was SKIPPED per guardrail - 411 is end-to-end rejection across bad tags, 483 checks the 'device' diagnostic content via tag_shape_problem; implementer says a reviewer could fold 483 into 411 by adding a `.contains("device")` assertion. Reviewer must confirm skip or fix. |
 | T06 | sled2redb removes + usage-error parametrization | pending_review | P0 | CP3 | impl `e72f5859` (test-only, tools/sled2redb/tests/convert.rs). Removed subsumed help + temp-name tests, parametrized 4 usage-error cases (integration 16→11, −5). Strict help pin, src/convert.rs:410, and convert.rs:515 conversions (F03) left intact. No flags. |
 | T07 | `crates/log` + `tempdir` low-risk merges | pending_review | P0 | CP3 | commits `bd151a08..ef7fbfc1` (test-only). 3 tests removed as planned; tempdir pairs had distinct properties so were folded (weak into strong) keeping every assertion; log default-file policy still covered via LogPlan::resolve (446). No pairs skipped. No flags. |
-| T08 | `repair_plan` scope table + optional root-integration merges | in_progress | P0 | CP3 | |
+| T08 | `repair_plan` scope table + optional root-integration merges | pending_review | P0 | CP3 | commits `11e108ce..79c52b93` (test-only). Merged repair_plan scope table (2 saved) + repair_offline branch-failure and repair_post non-UTF-8 switch pairs (2 saved). SKIPPED pairs (reviewer must confirm): repair_offline.rs:662/699 (complementary success vs exhaustion outcomes) and repair_scope.rs:184/414 (differ by purge_only flag, glob, cleanup assertion, extra scenario). Do-not-merge list and T13 log tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | todo | P1 | CP4 | |
 | T10 | Consolidate `purge.rs` classifier early tests | todo | P1 | CP4 | |
 | T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
@@ -52,7 +53,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 |---|---|---|---|
 | CP1 | T01–T02 | done | root CLI self-tests + root-unit fixture dedup; T01 completed, T02 completed (fixed e4439122) |
 | CP2 | T03–T04 | done | remaining root-unit merges + sync hash table; T03 completed (fixed cd80083b), T04 completed |
-| CP3 | T05–T08 | open | capture, sled2redb, small crates, root-integration merges |
+| CP3 | T05–T08 | in_progress | capture, sled2redb, small crates, root-integration merges; T05 0e8496e9..30e15ae4, T06 e72f5859, T07 bd151a08..ef7fbfc1, T08 11e108ce..79c52b93 |
 | CP4 | T09–T10 | open | `run_lock.rs` + `purge.rs` (verification-required) |
 | CP5 | T11–T13 | open | `migration_lock.rs`, capture medium, cross-binary log policy |
 
@@ -70,7 +71,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T05 | 0e8496e9..30e15ae4 (2 commits) | — |
 | T06 | e72f5859 (single commit) | — |
 | T07 | bd151a08..ef7fbfc1 (2 commits) | — |
-| T08 | — | — |
+| T08 | 11e108ce..79c52b93 (2 commits) | — |
 | T09 | — | — |
 | T10 | — | — |
 | T11 | — | — |
@@ -96,6 +97,9 @@ effect) so the final follow-up phase is meaningful.
 | F08 | If more sled2redb usage-error shapes with distinct assertions are added later, replace the parametrized test's `is_version` boolean with a per-row assertion closure so special-case checks stay data-driven rather than becoming a widening `if` chain. | T06 implementer | proposed | Conditional on future additions; test-only. Reviewer may prune as speculative. |
 | F09 | Consider an additional `--release` test run for `girpr-log` in CI: dev-profile `cargo test`/nextest only exercises the debug (no-file) branch of the surviving default-file policy test, so the release (timestamped default) branch is never run. | T07 implementer | proposed | Test-config/CI, not a test-count reduction. Reviewer decides relevance. |
 | F10 | Add a brief note to the surviving log policy test that `default_file_is_written()` is an intentional branch selector, not the assertion under test, to deter re-adding the removed tautological test. | T07 implementer | proposed | Trivial doc-comment tidy; reviewer may prune. |
+| F11 | Factor the repeated 'branch call was issued / no getBuild followed / no config bump' checks in `repair_offline.rs` into a shared assertion helper. | T08 implementer | proposed | Trims duplication across branch-failure tests without merging the complementary success/exhaustion cases. |
+| F12 | Re-examine whether the `audio_langs=en-us` process-level assertion in the merged plan test is redundant with the `REPORT` unit tests in `src/report/`; if so, narrow the binary-level check to the no-scope case. | T08 implementer | proposed | Requires checking unit-test overlap; reviewer decides relevance. |
+| F13 | In `repair_offline.rs:514/560`, derive the `expect_no_branch_endpoint_in_text` flag from `case.failure == BranchFailure::terminal(-1001)` instead of storing it per row. | T08 implementer | proposed | Micro-refactor within T08's new table; reviewer may prune. |
 
 ## Follow-up batches
 
