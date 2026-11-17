@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: start CP4 — pick the first `todo` task (T14) and spawn its implementing session.
-* Active checkpoint: none (CP3 `done`; CP4 `open`).
+* Next action: wait for implementing session on T14, then advance per the loop.
+* Active checkpoint: CP4 (`open`); T14 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -39,7 +39,7 @@ commit ranges only.
 | T11 | Replace girsync publish fixed sleeps | completed | CP3 | CP3 review: completed |
 | T12 | Replace girpr panic-ordering sleep | completed | CP3 | CP3 review: completed |
 | T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
-| T14 | Reduce girpr trace-level logging | todo | CP4 | |
+| T14 | Reduce girpr trace-level logging | in_progress | CP4 | |
 | T15 | Remove girpr `--help`/argument spawns | todo | CP4 | |
 | T16 | Consolidate girpr multi-run parity tests | todo | CP4 | |
 | T17 | Merge girsync dry-run/hard-link groups | todo | CP4 | |
