@@ -479,25 +479,25 @@ fn write_non_utf8_source(src: &std::path::Path) -> bool {
     }
 }
 
-/// The skip branch must run even on a host that can create the name: a write
-/// that reports "unsupported" stands in for the filesystem's refusal.
+/// The switch decides what a refused non-UTF-8 name means: without it the case
+/// skips; with it (whatever the value) the refusal is a failure. An injected
+/// `Unsupported` write stands in for the filesystem's refusal, so both branches
+/// are reachable even on a host that can create the name. The two calls below
+/// cover the two switch values; the `should_panic` expectation belongs to the
+/// second (required) call, and the first call's assertion still has to hold —
+/// a failure there would panic with a different message and fail this test.
 #[cfg(any(unix, windows))]
 #[test]
-fn a_non_utf8_write_failure_skips_without_the_switch() {
+#[should_panic(expected = "GIRPR_TEST_REQUIRE_NON_UTF8 is set")]
+fn a_non_utf8_write_failure_skip_obeys_the_switch() {
     let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
+
+    // Without the switch a refused name skips the case.
     assert!(
         !skip_non_utf8_source(&err, false, FixtureRefusal::Injected),
         "without the switch a refused name skips the case"
     );
-}
-
-/// The same refusal is a failure when the switch is present, whatever its
-/// value.
-#[cfg(any(unix, windows))]
-#[test]
-#[should_panic(expected = "GIRPR_TEST_REQUIRE_NON_UTF8 is set")]
-fn a_non_utf8_write_failure_fails_with_the_switch() {
-    let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
+    // With the switch present the same refusal is a failure naming the switch.
     skip_non_utf8_source(&err, true, FixtureRefusal::Injected);
 }
 

@@ -516,91 +516,81 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     // The first wave issues both calls. A branch endpoint that fails must not
     // turn the authoritative mode refusal into a metadata error: the mode
     // check runs after the config answer but before the branch result is used,
-    // and a still-pending branch call is dropped, so exit 1 wins over exit 2.
+    // and a failed branch call is dropped, so exit 1 wins over exit 2. This
+    // holds for both a non-JSON body (fatal parse on the first attempt) and a
+    // terminal retcode (final on the first attempt); only the failure body
+    // varies across the cases below.
     //
     // Holding the config answer until the branch answer is chosen pins the
     // branch as issued and failed, rather than leaving that to which request
     // the selector happens to poll first.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
-            branch_failure: BranchFailure::NonJson,
-            config_after_branches: true,
-            ..Default::default()
+    struct Case {
+        name: &'static str,
+        failure: BranchFailure,
+        // A terminal answer is a complete error with its own text; a non-JSON
+        // answer never parses into one. The terminal case checks that its
+        // branch error does not leak into / replace the mode refusal.
+        expect_no_branch_endpoint_in_text: bool,
+    }
+    let cases = [
+        Case {
+            name: "dlmode_branch",
+            failure: BranchFailure::NonJson,
+            expect_no_branch_endpoint_in_text: false,
         },
-    )
-    .await;
-    let dir = temp_dir("dlmode_branch");
-    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect_err("non-chunk mode must fail");
-    assert_eq!(
-        err.exit_code,
-        RunExit::Usage,
-        "the mode refusal wins: {err:#}"
-    );
-    assert!(
-        err.source.to_string().contains("not chunk mode"),
-        "the refusal is the mode one: {err:#}"
-    );
-    assert!(
-        mock.first_target_with("getGameBranches").is_some(),
-        "the branch call was issued and then discarded"
-    );
-    assert!(
-        mock.first_target_with("getBuild").is_none(),
-        "no build call may follow a refused mode"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
-    // A branch answer with a terminal retcode is final on the first attempt,
-    // and the config's mode is still the authoritative answer: the run is a
-    // usage refusal, not a metadata failure. Holding the config until the
-    // branch has answered pins the branch as issued and already failed.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
-            branch_failure: BranchFailure::terminal(-1001),
-            config_after_branches: true,
-            ..Default::default()
+        Case {
+            name: "dlmode_branch_terminal",
+            failure: BranchFailure::terminal(-1001),
+            expect_no_branch_endpoint_in_text: true,
         },
-    )
-    .await;
-    let dir = temp_dir("dlmode_branch_terminal");
-    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect_err("non-chunk mode must fail");
-    assert_eq!(
-        err.exit_code,
-        RunExit::Usage,
-        "the mode refusal wins over a terminal branch failure: {err:#}"
-    );
-    assert!(
-        err.source.to_string().contains("not chunk mode"),
-        "the refusal is the mode one, not the branch one: {err:#}"
-    );
-    assert!(
-        !err.source.to_string().contains("getGameBranches"),
-        "the terminal branch error must not replace the mode refusal: {err:#}"
-    );
-    assert!(
-        mock.first_target_with("getGameBranches").is_some(),
-        "the branch call was issued and then discarded"
-    );
-    assert!(
-        mock.first_target_with("getBuild").is_none(),
-        "no build call may follow a refused mode"
-    );
+    ];
+    for case in &cases {
+        let fx = build_fixture();
+        let mock = MockServer::start(
+            fx,
+            MockOpts {
+                download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+                branch_failure: case.failure,
+                config_after_branches: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir(case.name);
+        let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+            .await
+            .expect_err("non-chunk mode must fail");
+        assert_eq!(
+            err.exit_code,
+            RunExit::Usage,
+            "{}: the mode refusal wins: {err:#}",
+            case.name
+        );
+        assert!(
+            err.source.to_string().contains("not chunk mode"),
+            "{}: the refusal is the mode one, not the branch one: {err:#}",
+            case.name
+        );
+        if case.expect_no_branch_endpoint_in_text {
+            assert!(
+                !err.source.to_string().contains("getGameBranches"),
+                "{}: the terminal branch error must not replace the mode refusal: {err:#}",
+                case.name
+            );
+        }
+        assert!(
+            mock.first_target_with("getGameBranches").is_some(),
+            "{}: the branch call was issued and then discarded",
+            case.name
+        );
+        assert!(
+            mock.first_target_with("getBuild").is_none(),
+            "{}: no build call may follow a refused mode",
+            case.name
+        );
 
-    mock.stop();
+        mock.stop();
+    }
 }
 
 #[tokio::test]
