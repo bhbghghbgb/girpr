@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T18; after it finishes, CP4 is complete — run the CP4 review phase.
-* Active checkpoint: CP4 (`open`); T14, T15, T16, T17 `pending_review`, T18 `in_progress`.
+* Next action: CP4 batch complete — run the CP4 review-and-fix phase (section 4) before starting CP5.
+* Active checkpoint: CP4 (`open`, all tasks terminal) — set to `in_progress` in the review step.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -43,7 +43,7 @@ commit ranges only.
 | T15 | Remove girpr `--help`/argument spawns | pending_review | CP4 | ac507a7c; see review range |
 | T16 | Consolidate girpr multi-run parity tests | pending_review | CP4 | b51e0395; see review range |
 | T17 | Merge girsync dry-run/hard-link groups | pending_review | CP4 | 15e79270; see review range |
-| T18 | Merge redundant gircap read/verify groups | in_progress | CP4 | |
+| T18 | Merge redundant gircap read/verify groups | pending_review | CP4 | 9b8b5128; §6.2-5 done, §6.2-3 N/A — reviewer to judge |
 | T19 | Tidy ignored tests | todo | CP5 | |
 | T20 | Guardrail audit (hooks, no temp→`Z:`) | todo | CP5 | |
 
@@ -80,6 +80,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T15 | `f7392a76..ac507a7c` | — |
 | T16 | `aeefde5c..b51e0395` | — |
 | T17 | `319270b7..15e79270` | — |
+| T18 | `6c165bc5..9b8b5128` | — |
 
 ## Follow-ups
 
@@ -123,6 +124,8 @@ are done and a review session has decided the batches.
 | F34 | The cross-root hard-link test could share the T17 fixture too, but needs a third link and `--exclude`, raising complexity/risk for little gain — kept separate deliberately. | T17 implementer | proposed | Reviewer decides. |
 | F35 | Some remaining hard-link refusal spawns could be in-process `cmd_sync` assertions, but that changes what is asserted (exit code/stderr -> error value). | T17 implementer | proposed | Reviewer decides. |
 | F36 | On case-insensitive hosts the case-only hard-link dimension now emits an `eprintln!` skip line instead of a nextest "skipped" test; revisit if a visible skip marker is preferred. | T17 implementer | proposed | Reviewer decides. |
+| F37 | If future tests verify the T06 shared bundle in more than one place, add a `verified_shared_bundle(variant)` helper that verifies once under the file lock and caches the summary on disk keyed by the bundle fingerprint (race-free). | T18 implementer | proposed | No dedup gain today (single consumer); reviewer decides. |
+| F38 | Add a `materialize` refusal assertion to `a_bundle_without_the_rejection_document_does_not_verify` for symmetry with error_shapes/error_responses — this is added coverage, not redundancy removal. | T18 implementer | proposed | Out of T18 scope; reviewer decides. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -149,3 +152,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T15 implemented (commit ac507a7c): only `tests/cli_contract.rs`. Added `real_help()` that renders --help in-process by replaying clap's `DisplayHelp` error with the real binary name as argv[0] (verified byte-identical to binary --help; naive `Args::command().render_help()` was NOT — rejected), cached in a OnceLock; added `usage_rejection()` classifying bad args via `Args::try_parse_from` or `Args::into_ctx`. Converted 5 --help cases + the 17-case `argument_errors_exit_one_not_two` loop to in-process; kept real binary cases for exit-code contract (`help_exits_zero`, one bad-flag case, all post-parse/log-file/data-plane cases). Argument/help spawns ~31 -> ~10 (~68% cut); all 49 cli_contract tests pass, no clippy warnings. No product logging/lock code touched; no GIRPR_TEST_NO_LOG hook needed.
 * T16 implemented (commit b51e0395): stale report line numbers; implementer mapped actual parity relations across repair_scan/repair_machinery/repair_writer. Genuine mode-vs-mode/tier-vs-tier relations already each asserted in exactly one place (repair_machinery.rs); repair_writer.rs flagged tests are single-spawn/single-mode with unique assertions — left untouched per "keep both when relations differ". Only real redundancy was in repair_scan.rs: two scanned-estimate-vs-real-download tests each spawned twice (--print-plan + repair) — consolidated to one `--scan --plan-out` run each, comparing per-file est_download_bytes sum to SUMMARY download_bytes; chunk_hits assertions kept. 2 spawns cut (16->14 run_binary calls). repair_scan/machinery/writer 64/64, clippy/fmt clean. No product code.
 * T17 implemented (commit 15e79270): anchors current. D8 — merged `run_sync_dry_run_writes_nothing` + `…creates_no_cache` into one single-run test asserting all original checks (rw-limit-2, both files unchanged, no cache/backup on both sides, compare_mem==4 and compare==4); left ignore-cache test alone. D9 — added `seed_dst_hard_link_pair` fixture, merged the two dst-pair hard-link tests into one asserting all three dimensions in a single dry/real spawn pair (ordinary inode untouched, case-only inode untouched + renamed-before-refusal, no COPY, hazard named, default-plan delete-then-succeed parity on a separate fixture); kept cross-root test separate (different shape). Hard-link spawns 8->6; dry-run 2 tests->1. sync 46 pass/1 skip, fmt clean. No product code.
+* T18 implemented (commit 9b8b5128): §6.2-5 done — merged two `every_command_that_reads_a_bundle_agrees_*` cases into their `a_bundle_without_*_does_not_verify` partners (folding materialize loop, all assertions preserved incl. upfront is_file + verify/materialize refuse + name the doc), dropped trivial `the_binary_exists_where_this_test_expects_it`. §6.2-3 judged NOT APPLICABLE: after T06 only one test verifies the shared bundle; the six `offline_bundle.rs` reverify sites use distinct freshly-built/mutated `Bundle::build` fixtures, not the shared bundle — no per-shared-bundle verification redundancy left, so no cross-process verify cache forced (per guardrail). Report's "three agree cases / rejection twin at 498" was a miscount (two exist; line 498 partner has no agree twin — left intact, noted). gircap 865 pass/3 skip (3 fewer = 3 removed tests), fmt/clippy -D warnings clean. No product code; verify::reverify untouched. Reviewer to judge partial scope.
