@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T12, then advance per the loop.
-* Active checkpoint: CP3 (`open`); T09, T10, T11 `pending_review`, T12 `in_progress`.
+* Next action: pick the next `todo` task (T13) and spawn its implementing session.
+* Active checkpoint: CP3 (`open`); T09, T10, T11, T12 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -37,7 +37,7 @@ commit ranges only.
 | T09 | Cut sled2redb spelling test 8 → 2–3 | pending_review | CP3 | 37d11fb5; see review range |
 | T10 | Drop sled2redb flush + redundant reopens | pending_review | CP3 | 2 commits fea93769..f342d32e; product flush removal + test reopens |
 | T11 | Replace girsync publish fixed sleeps | pending_review | CP3 | 2 commits fa3546dd..f7eb3995; see review range |
-| T12 | Replace girpr panic-ordering sleep | in_progress | CP3 | |
+| T12 | Replace girpr panic-ordering sleep | pending_review | CP3 | c33dfe0e; see review range |
 | T13 | Add gircap zero-backoff retry hook | todo | CP3 | |
 | T14 | Reduce girpr trace-level logging | todo | CP4 | |
 | T15 | Remove girpr `--help`/argument spawns | todo | CP4 | |
@@ -74,6 +74,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T09 | `0c7e0b20..37d11fb5` | — |
 | T10 | `aa9c1add..f342d32e` | — |
 | T11 | `fa0a7687..f7eb3995` | — |
+| T12 | `326acea9..c33dfe0e` | — |
 
 ## Follow-ups
 
@@ -102,6 +103,8 @@ are done and a review session has decided the batches.
 | F19 | Removing the one remaining ~200 ms reopen in `convert_sled_dir_to_redb_file` would require exposing written records or accepting a caller-provided handle in the converter's product API. | T10 implementer | proposed | Recommend leaving it as the contract test; reviewer decides. |
 | F20 | Capture actual before/after nextest timing for the sled2redb suite to confirm the reopen savings (report's P1 estimate bundled this with T09). | T10 implementer | proposed | Optional measurement; reviewer decides. |
 | F21 | Extend the T11 one-shot gate to carry a "claim created" notification so `wait_for_published` becomes fully event-driven instead of polling 100x10 ms (not dead time, but returns eagerly). | T11 implementer | proposed | Minor; reviewer decides. |
+| F22 | T12's `FILE_PANIC_GATE` is a `thread_local` relying on `#[tokio::test]`'s current-thread runtime; a multi_thread flavor would hide the gate. Consider a runtime-flavor-independent hook if such a change is anticipated. | T12 implementer | proposed | Reviewer decides. |
+| F23 | T12's `after 5 attempts` assertion hard-codes the attempt cap as a string, decoupled from `sophon::stream::ATTEMPTS`; exposing the constant or reusing the `serve_status` hit-counting helper would remove the magic number. | T12 implementer | proposed | Reviewer decides. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -121,3 +124,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T09 implemented: `the_flags_are_accepted_on_either_side_of_the_paths` now checks all 6 spellings in-process via a `parse_in_process()` helper parsing against the existing `the_converter_command()` clap mirror, and keeps 2 full conversions (down from 8) — one asserting the full record, one preserving the byte-for-byte `--output json` == `--output=json` equality. convert suite 16/16, clippy clean. No product code changed. Report §6.4 item 3 (read-only old.flush() in src/convert.rs:228) is a separate P1 product item, left for a different task.
 * T10 implemented (both parts): PRODUCT code — removed no-op `old.flush()` in `src/convert.rs` after validating `old` is opened read-only and only read-only `old.iter()` uses it; `drop(old)` releases the sled lock `replace_destination` needs. No output-format/durability change. TEST code — reduced file-backed `open_db` reopens 3 -> 1; kept `convert_sled_dir_to_redb_file` as the single round-trip contract test, dropped reopens from the two force tests (assert byte-identity/change + converter counts instead), updated `entry_names` expectations (lock sidecar came from the test's own open_db). Full sled2redb 16/16 + 1 unit, nextest 17/17. Product change in fea93769 — reviewer to scrutinize.
 * T11 implemented: in `cache/open.rs`, replaced `PUBLISH_PAUSED` thread-local + 500 ms sleep in `pause_publish()` with a test-only `#[cfg(test)]` one-shot mpsc gate; the four publish tests release the sender only after observing the claim (dropped sender on panic prevents hangs). In `cache/write.rs`, replaced the 150 ms interval sleep with a `#[cfg(test)]` `backdate_last_commit` hook. Production behavior untouched. The 5 affected tests passed 10/10 consecutive runs (~0.2-0.3 s each, down from ~2 s); full 24-test cache filter passed. Report's 300 ms girpr panic sleep (T12) and 500 ms gircap retry sleep (T13) are separate tasks, untouched.
+* T12 implemented (commit c33dfe0e): both sleeps validated present first. In `src/repair/file/mod.rs`, replaced the 300 ms tokio sleep in `a_panic_is_observed_before_a_slower_earlier_task` with a `#[cfg(test)]` oneshot gate — the join loop signals on observing a panicked task, task 0 waits; 5 s timeout + dropped sender prevent hangs. In `src/repair/phases/manifest.rs`, removed the 5 ms `ShortSleep` struct/impl and unused `SleepFuture` import, switched test to `NoSleep`, added an "after 5 attempts" error-chain assertion. Only test-only timing paths in product files changed. 2 affected tests 10/10, full girpr --lib 453 pass/0 fail/2 ignored, clippy -D warnings clean. Product change touches test-only paths — reviewer to scrutinize.
