@@ -1049,21 +1049,64 @@ std::thread_local! {
     static LINKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-// The test-only switch that pauses a publish once the name is there.
+// The test-only gate that pauses a publish once the name is there.
 //
 // A publish is over in microseconds, so a test that wants to look at the
-// folder in the middle of one needs the publish to wait. The pause is a
-// plain sleep: it is only ever on for the length of one test.
+// folder in the middle of one needs the publish to wait. The publishing
+// thread installs a one-shot receiver here; `pause_publish` blocks on it
+// until the main test has observed the claim and released its sender. There
+// is no wall-clock sleep, so the race window is exact and costs no dead time.
 #[cfg(test)]
 std::thread_local! {
-    static PUBLISH_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PUBLISH_GATE: std::cell::RefCell<Option<std::sync::mpsc::Receiver<()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
-/// Hold a publish still for a moment, so a test can look at the folder.
+/// The send half of a one-shot publish gate, held by the test.
+///
+/// The main test releases it once it has observed the claim. If the test
+/// panics or returns before releasing, dropping this sender closes the
+/// channel and unblocks the paused publisher anyway, so a failure cannot
+/// turn into a hang.
+#[cfg(test)]
+struct PublishGate {
+    tx: Option<std::sync::mpsc::Sender<()>>,
+}
+
+#[cfg(test)]
+impl PublishGate {
+    /// Let the paused publisher continue.
+    fn release(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// Create a one-shot gate. The receiver arms the publishing thread; the
+/// returned sender is kept by the test to release it once the claim is seen.
+#[cfg(test)]
+fn publish_gate() -> (std::sync::mpsc::Receiver<()>, PublishGate) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (rx, PublishGate { tx: Some(tx) })
+}
+
+/// Install the receive half of a publish gate in this (publishing) thread.
+#[cfg(test)]
+fn arm_publish_gate(rx: std::sync::mpsc::Receiver<()>) {
+    PUBLISH_GATE.with(|f| *f.borrow_mut() = Some(rx));
+}
+
+/// Hold a publish still until the test releases its gate, so a test can look
+/// at the folder deterministically in the middle of one.
 #[cfg(test)]
 fn pause_publish() {
-    if PUBLISH_PAUSED.with(|f| f.get()) {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+    let rx = PUBLISH_GATE.with(|f| f.borrow_mut().take());
+    if let Some(rx) = rx {
+        // A message releases us; a dropped sender (a test that panicked
+        // before releasing) makes `recv` return Err and releases us too.
+        // Either way there is no fixed sleep and no way to hang here.
+        let _ = rx.recv();
     }
 }
 
@@ -2212,8 +2255,9 @@ mod tests {
         let db = dir.join("girpr-cache");
         std::fs::write(&db, b"the cache bytes").unwrap();
 
+        let (rx, mut gate) = publish_gate();
         let handle = std::thread::spawn(move || {
-            PUBLISH_PAUSED.with(|f| f.set(true));
+            arm_publish_gate(rx);
             backup_db(&db)
         });
 
@@ -2224,6 +2268,9 @@ mod tests {
             "the published name holds the copy from the moment it exists"
         );
 
+        // The publish is still paused at this point; let it finish now that
+        // the whole copy under the published name has been observed.
+        gate.release();
         let published = handle
             .join()
             .unwrap()
@@ -2373,19 +2420,23 @@ mod tests {
         std::fs::create_dir(&db).unwrap();
         std::fs::write(db.join("a"), b"the cache bytes").unwrap();
 
+        let (rx, mut gate) = publish_gate();
         let handle = std::thread::spawn(move || {
             // A filesystem that cannot lock a file: there is no record to
             // say the name is being claimed.
             LOCKING_UNAVAILABLE.with(|f| f.set(true));
-            PUBLISH_PAUSED.with(|f| f.set(true));
+            arm_publish_gate(rx);
             backup_db(&db)
         });
 
-        // The claim: an empty directory under a published name.
+        // The claim: an empty directory under a published name. The publish
+        // is paused here, so the claim is removed while it is still the
+        // publisher's before it is released to check the claim.
         let claim = wait_for_published(&dir);
         assert!(claim.is_dir(), "the claim is an empty directory");
         std::fs::remove_dir(&claim).unwrap();
 
+        gate.release();
         let err = handle
             .join()
             .unwrap()
@@ -2459,18 +2510,22 @@ mod tests {
         let db = dir.join("girpr-cache");
         std::fs::write(&db, b"the cache bytes").unwrap();
 
+        let (rx, mut gate) = publish_gate();
         let handle = std::thread::spawn(move || {
             LINKING_UNAVAILABLE.with(|f| f.set(true));
             LOCKING_UNAVAILABLE.with(|f| f.set(true));
-            PUBLISH_PAUSED.with(|f| f.set(true));
+            arm_publish_gate(rx);
             backup_db(&db)
         });
 
-        // The claim: an empty file under a published name.
+        // The claim: an empty file under a published name. The publish is
+        // paused here, so the claim is removed while it is still the
+        // publisher's before it is released to check the claim.
         let claim = wait_for_published(&dir);
         assert!(claim.is_file(), "the claim is an empty file");
         std::fs::remove_file(&claim).unwrap();
 
+        gate.release();
         let err = handle
             .join()
             .unwrap()
@@ -2505,14 +2560,17 @@ mod tests {
         let db = dir.join("girpr-cache");
         std::fs::write(&db, b"the cache bytes").unwrap();
 
+        let (rx, mut gate) = publish_gate();
         let handle = std::thread::spawn(move || {
             LINKING_UNAVAILABLE.with(|f| f.set(true));
             LOCKING_UNAVAILABLE.with(|f| f.set(true));
-            PUBLISH_PAUSED.with(|f| f.set(true));
+            arm_publish_gate(rx);
             backup_db(&db)
         });
 
-        // The claim: an empty file under a published name.
+        // The claim: an empty file under a published name. The publish is
+        // paused here, so the claim is removed and the name taken over while
+        // it is still the publisher's before it is released to check.
         let claim = wait_for_published(&dir);
         assert!(claim.is_file(), "the claim is an empty file");
         std::fs::remove_file(&claim).unwrap();
@@ -2520,6 +2578,7 @@ mod tests {
         // Another run takes the name and publishes its copy there.
         std::fs::write(&claim, b"another run's copy").unwrap();
 
+        gate.release();
         let err = handle
             .join()
             .unwrap()
