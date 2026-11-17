@@ -135,9 +135,11 @@ fn the_two_help_strings_that_were_stale_match_the_code() {
 /// "network or API failure" here, and a flag typo must not be indistinguishable
 /// from a CDN outage.
 ///
-/// Only the *code* is asserted here. Whether a failure prints a summary is a
-/// separate contract — `a_usage_error_prints_a_summary_on_stdout_too` — and
-/// holding this test to it too would make one assertion depend on another.
+/// These are *parser* refusals: they own no part of stdout, which is reserved
+/// for the run's records. (`a_usage_error_prints_a_summary_on_stdout_too` pins
+/// the opposite case — a failure discovered by the run, which does print a
+/// summary.) Both the code and the stdout channel are asserted per case, so the
+/// process-level "parse failure prints nothing on stdout" contract lives here.
 #[test]
 fn every_argument_error_is_one() {
     let cases: &[&[&str]] = &[
@@ -155,7 +157,12 @@ fn every_argument_error_is_one() {
         &["verify", "--artifact", "a", "--output"], // missing value
     ];
     for args in cases {
-        assert_code(args, 1);
+        let r = assert_code(args, 1);
+        assert!(
+            r.stdout.is_empty(),
+            "a parser refusal owns no stdout: {args:?}\n{:?}",
+            r.stdout
+        );
     }
 }
 
@@ -205,24 +212,6 @@ fn a_usage_error_prints_a_summary_on_stdout_too() {
     assert!(r.stdout.contains("exit_code=1"), "{:?}", r.stdout);
     assert!(r.stdout.contains("exit_code_slug=usage"), "{:?}", r.stdout);
     assert_eq!(r.stdout.lines().filter(|l| !l.is_empty()).count(), 1);
-}
-
-/// A bad `--log-level` is an *argument* failure, and it is refused by the
-/// parser — like every other bad argument, and unlike the run-time failures
-/// above, which print a summary because they happen after the parse.
-#[test]
-fn a_bad_log_level_is_refused_by_the_parser() {
-    let r = assert_code(&["capture", "--log-level", "loud"], 1);
-    assert!(
-        r.stderr.contains("loud"),
-        "the message names the value that was wrong:\n{:?}",
-        r.stderr
-    );
-    assert!(
-        r.stdout.is_empty(),
-        "a parse failure owns no part of stdout:\n{:?}",
-        r.stdout
-    );
 }
 
 #[test]
