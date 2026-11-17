@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: start CP2 — pick the first `todo` task (T06) and spawn its implementing session.
-* Active checkpoint: none (CP1 `done`; CP2 `open` — set `in_progress` when T06 starts).
+* Next action: wait for implementing session on T06, then advance per the loop.
+* Active checkpoint: CP2 (`open`); T06 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -31,7 +31,7 @@ commit ranges only.
 | T03 | Audit `opts()` → memory helpers | skipped | CP1 | stale: R1 commits already landed the audit; CP1 review: skip confirmed |
 | T04 | Shrink rw_threads 96-file fixture | completed | CP1 | implemented in c7b9c1c0; CP1 review: completed |
 | T05 | Shrink `as_done` 11 MB fixture | completed | CP1 | implemented in a2ddea53; CP1 review: completed |
-| T06 | Consolidate gircap captures + shared bundle | todo | CP2 | |
+| T06 | Consolidate gircap captures + shared bundle | in_progress | CP2 | |
 | T07 | Hand-build minimal bundles for delete-a-doc | todo | CP2 | |
 | T08 | Cache gircap byte tables + shrink chunk | todo | CP2 | |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
