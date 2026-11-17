@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: pick the next `todo` task (T20) and spawn its implementing session.
-* Active checkpoint: CP5 (`open`); T19 `pending_review`.
+* Next action: wait for implementing session on T20; after it finishes, CP5 is complete — run the CP5 review phase.
+* Active checkpoint: CP5 (`open`); T19 `pending_review`, T20 `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -45,7 +45,7 @@ commit ranges only.
 | T17 | Merge girsync dry-run/hard-link groups | completed | CP4 | CP4 review: completed |
 | T18 | Merge redundant gircap read/verify groups | completed | CP4 | CP4 review: completed (§6.2-3 deferral accepted as N/A) |
 | T19 | Tidy ignored tests | pending_review | CP5 | 2 commits a82d4d81..36719f62; see review range |
-| T20 | Guardrail audit (hooks, no temp→`Z:`) | todo | CP5 | |
+| T20 | Guardrail audit (hooks, no temp→`Z:`) | in_progress | CP5 | |
 
 ## Review checkpoints
 
