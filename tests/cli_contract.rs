@@ -943,6 +943,35 @@ fn plan_out_help_documents_every_serialized_field() {
     );
 }
 
+/// The base arguments that reach a decided exit code without a server.
+const LOG_BASE_ARGS: &[&str] = &["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"];
+
+/// Run girpr with extra arguments and environment overrides.
+///
+/// The environment is set on the child, never the test process, so these cases
+/// cannot race each other or the rest of the suite.
+fn run_log(extra: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_girpr"));
+    cmd.args(LOG_BASE_ARGS).args(extra);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let out = cmd.output().expect("run girpr");
+    (
+        out.status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The directory the executable is in — where the default log file lands.
+fn exe_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_BIN_EXE_girpr"))
+        .parent()
+        .expect("the executable has a directory")
+        .to_path_buf()
+}
+
 #[test]
 fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // `logging::init_tracing` is infallible by contract: an unwritable log is a
@@ -961,11 +990,7 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     std::fs::write(&blocker, b"x").expect("blocker file");
     let bad_log = blocker.join("run.log");
 
-    let base: &[&str] = &["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"];
-    let mut flagged: Vec<&str> = base.to_vec();
-    flagged.extend_from_slice(&["--log-file", bad_log.to_str().unwrap()]);
-
-    let (code, _, stderr) = run(&flagged);
+    let (code, _, stderr) = run_log(&["--log-file", bad_log.to_str().unwrap()], &[]);
     assert_eq!(code, 1, "{stderr}");
     assert!(
         stderr.contains("WARN disabling file logging"),
@@ -978,46 +1003,8 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // The default location is announced by a `tracing::info!`, which stderr
     // only carries at `info` or lower — that is fine, because nobody asked for
     // it. What must hold is that the failure moved nothing at all.
-    let (base_code, _, _) = run(base);
+    let (base_code, _, _) = run_log(&[], &[]);
     assert_eq!(code, base_code, "the log file must not move the exit code");
-}
-
-#[test]
-fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
-    // The other half of the contract: a caller that asked for a specific path
-    // is told where it went on stderr, not just inside the file, so a wrapper
-    // that captured only stdout can still find it.
-    //
-    // `--log-level warn` is what makes this sharp. The `tracing::info!` that
-    // reports the default path is filtered out at `warn`, so anything still
-    // saying `log file:` on stderr at that level is the acknowledgement the
-    // caller asked for.
-    let scratch = TempDir::new("girpr_cli_logfile", "explicit");
-    let log = scratch.join("nested").join("run.log");
-
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "0", // stops before any game directory or network is touched
-        "--log-level",
-        "warn",
-        "--log-file",
-        log.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(
-        stderr.contains(&format!("log file: {}", log.display())),
-        "the requested path must be echoed on stderr even at --log-level warn:\n{stderr}"
-    );
-    // Missing parents are created, so `--log-file a/b/c.log` works in one go.
-    let body = std::fs::read_to_string(&log).expect("the log file is created");
-    assert!(
-        body.contains("log file:"),
-        "the file carries the same announcement:\n{body}"
-    );
 }
 
 /// A **debug** build writes no log file; a **release** build writes one.
@@ -1037,7 +1024,7 @@ fn the_default_log_file_follows_the_build_it_was_built_from() {
     let logs = exe_dir().join("logs");
     let existed = logs.exists();
 
-    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"]);
+    let (code, _, stderr) = run_log(&[], &[]);
     assert_eq!(code, 1, "{stderr}");
 
     if cfg!(debug_assertions) {
@@ -1060,253 +1047,241 @@ fn the_default_log_file_follows_the_build_it_was_built_from() {
     }
 }
 
-/// `--no-log-file` turns the file off, and it beats the environment.
+/// An explicitly named log file — by flag or by environment — is announced on
+/// stderr and written, with missing parents created. The flag wins when both
+/// name one, and the announcement survives a `--log-level warn` console.
 ///
-/// "Write no log file" is the more specific thing to have said, so it wins
-/// over a path the shell happened to export. The file is not written at
-/// all — which is the whole point, and which is why the assertion is
-/// `exists()` on a known path rather than a search of a directory.
+/// The four cases were four separate tests; the shared policy's precedence and
+/// level shape live in `crates/log`, so what is pinned here is only the
+/// process-level acknowledgement and the file's existence.
 #[test]
-fn no_log_file_turns_the_file_off_even_when_the_environment_names_one() {
+fn an_explicit_log_file_is_echoed_and_created() {
+    let scratch = TempDir::new("girpr_cli_logfile", "explicit");
+    let cases = [
+        // (name, flag names it, environment names it, `--log-level warn`)
+        ("the flag names the file", true, false, false),
+        ("the environment names the file", false, true, false),
+        ("the flag beats the environment", true, true, false),
+        (
+            "the path is echoed even at --log-level warn",
+            true,
+            false,
+            true,
+        ),
+    ];
+    for (i, (name, use_flag, use_env, warn_console)) in cases.iter().enumerate() {
+        // Nested paths so every case also pins that missing parents are created
+        // in one go; the original "explicit" case was the one that used to test
+        // this.
+        let flag_path = scratch.join(format!("f{i}")).join("nested").join("run.log");
+        let env_path = scratch.join(format!("e{i}")).join("nested").join("run.log");
+        let expected = if *use_flag { &flag_path } else { &env_path };
+
+        let mut extra: Vec<&str> = Vec::new();
+        if *warn_console {
+            extra.extend_from_slice(&["--log-level", "warn"]);
+        }
+        if *use_flag {
+            extra.extend_from_slice(&["--log-file", flag_path.to_str().unwrap()]);
+        }
+        let mut env: Vec<(&str, &str)> = Vec::new();
+        if *use_env {
+            env.push(("GIRPR_LOG_FILE", env_path.to_str().unwrap()));
+        }
+
+        let (code, _, stderr) = run_log(&extra, &env);
+        assert_eq!(code, 1, "{name}: {stderr}");
+        assert!(
+            stderr.contains(&format!("log file: {}", expected.display())),
+            "{name}: the path must be echoed on stderr:\n{stderr}"
+        );
+        let body = std::fs::read_to_string(expected).expect("the log file is created");
+        assert!(
+            body.contains("log file:"),
+            "{name}: the file carries the announcement:\n{body}"
+        );
+        assert!(
+            body.contains("usage error: --jobs must be >= 1"),
+            "{name}: the file holds the run's own records:\n{body}"
+        );
+        if *use_flag && *use_env {
+            assert!(
+                !env_path.exists(),
+                "the flag's file wins over the environment's"
+            );
+        }
+    }
+}
+
+/// `--no-log-file` is both an off-switch that beats the environment and, with
+/// `--log-file`, a conflict that clap refuses. The shared crate pins the
+/// precedence; these are the process-level refusals.
+#[test]
+fn no_log_file_is_honoured_and_conflicts_with_log_file() {
     let scratch = TempDir::new("girpr_cli_logfile", "no_log_file");
-    let log = scratch.join("from-env.log");
+    let cases = [
+        // (name, `--no-log-file`, `--log-file` too)
+        ("--no-log-file beats the environment", true, false),
+        ("--no-log-file with --log-file is a usage error", true, true),
+    ];
+    for (i, (name, no_flag, log_flag)) in cases.iter().enumerate() {
+        let log = scratch.join(format!("case-{i}.log"));
+        let mut extra: Vec<&str> = Vec::new();
+        if *no_flag {
+            extra.push("--no-log-file");
+        }
+        if *log_flag {
+            extra.extend_from_slice(&["--log-file", log.to_str().unwrap()]);
+        }
+        let mut env: Vec<(&str, &str)> = Vec::new();
+        if !*log_flag {
+            env.push(("GIRPR_LOG_FILE", log.to_str().unwrap()));
+        }
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "0",
-            "--no-log-file",
-        ])
-        .env("GIRPR_LOG_FILE", &log)
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(!log.exists(), "no log file was written: {}", log.display());
-    assert!(
-        !stderr.contains(&format!("log file: {}", log.display())),
-        "and the path was not announced:\n{stderr}"
-    );
+        let (code, _, stderr) = run_log(&extra, &env);
+        assert_eq!(code, 1, "{name}: {stderr}");
+        assert!(
+            !log.exists(),
+            "{name}: no log file was written: {}",
+            log.display()
+        );
+        if *log_flag {
+            assert!(
+                stderr.contains("cannot be used with"),
+                "{name}: the conflict is reported:\n{stderr}"
+            );
+        } else {
+            assert!(
+                !stderr.contains(&format!("log file: {}", log.display())),
+                "{name}: the path was not announced:\n{stderr}"
+            );
+        }
+    }
 }
 
-/// `--no-log-file` and `--log-file` say opposite things, so they are a usage
-/// error rather than one of them silently winning.
+/// One case per way the file and console levels are chosen: the shared crate
+/// owns the precedence and the defaults; these assert the process actually
+/// applies them to the two sinks it owns.
 #[test]
-fn no_log_file_and_log_file_together_are_a_usage_error() {
-    let scratch = TempDir::new("girpr_cli_logfile", "conflict");
-    let log = scratch.join("both.log");
-
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "0",
-        "--no-log-file",
-        "--log-file",
-        log.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(
-        stderr.contains("cannot be used with"),
-        "the conflict is reported:\n{stderr}"
-    );
-    assert!(!log.exists(), "and no file was written");
-}
-
-/// The environment variable names the log file when the flag does not.
-///
-/// Same precedence as everywhere else in the workspace: the flag wins, the
-/// environment answers for a flag that was never given, and the timestamped
-/// default answers for both.
-#[test]
-fn the_environment_names_the_log_file_when_the_flag_does_not() {
-    let scratch = TempDir::new("girpr_cli_logfile", "env");
-    let log = scratch.join("from-env.log");
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args(["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"])
-        .env("GIRPR_LOG_FILE", &log)
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains(&format!("log file: {}", log.display())),
-        "the path is echoed on stderr, because the caller named it:\n{stderr}"
-    );
-    let body = std::fs::read_to_string(&log).expect("the environment named the file");
-    assert!(
-        body.contains("usage error: --jobs must be >= 1"),
-        "and it holds the run's own records:\n{body}"
-    );
-}
-
-/// The flag wins over the environment.
-///
-/// The flag was typed by the person running the tool; the environment is
-/// whatever the shell happened to export. The one that was typed wins.
-#[test]
-fn the_flag_wins_over_the_environment() {
-    let scratch = TempDir::new("girpr_cli_logfile", "precedence");
-    let from_flag = scratch.join("from-flag.log");
-    let from_env = scratch.join("from-env.log");
-
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "0",
-            "--log-file",
-            from_flag.to_str().unwrap(),
-        ])
-        .env("GIRPR_LOG_FILE", &from_env)
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(from_flag.exists(), "the flag's file was written");
-    assert!(!from_env.exists(), "the environment's file was not");
-    assert!(
-        stderr.contains(&format!("log file: {}", from_flag.display())),
-        "{stderr}"
-    );
-}
-
-/// The console is `info` and the log file is `debug`, by default.
-///
-/// `--log-level error` takes the console below the file, and the file still
-/// holds the run's own record of itself: the two levels answer separate
-/// questions, and the file's is the one asked afterwards.
-#[test]
-fn the_file_keeps_what_a_quiet_console_drops() {
+fn log_levels_and_rust_log_are_applied_to_the_two_sinks() {
+    struct Case {
+        name: &'static str,
+        console_level: Option<&'static str>,
+        file_level_flag: Option<&'static str>,
+        file_level_env: Option<&'static str>,
+        rust_log: Option<&'static str>,
+        use_log_file: bool,
+        console_forbid: &'static [&'static str],
+        console_require: &'static [&'static str],
+        file_forbid: &'static [&'static str],
+        file_require: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            name: "a quiet console keeps the file's info record",
+            console_level: Some("error"),
+            file_level_flag: None,
+            file_level_env: None,
+            rust_log: None,
+            use_log_file: true,
+            console_forbid: &["INFO girpr::logging"],
+            console_require: &[],
+            file_forbid: &[],
+            file_require: &["INFO girpr::logging: log file:"],
+        },
+        Case {
+            name: "the environment sets the file level",
+            console_level: None,
+            file_level_flag: None,
+            file_level_env: Some("error"),
+            rust_log: None,
+            use_log_file: true,
+            console_forbid: &[],
+            console_require: &[],
+            file_forbid: &["INFO girpr::logging"],
+            file_require: &["ERROR girpr: usage error"],
+        },
+        Case {
+            name: "the file-level flag beats the environment",
+            console_level: None,
+            file_level_flag: Some("debug"),
+            file_level_env: Some("error"),
+            rust_log: None,
+            use_log_file: true,
+            console_forbid: &[],
+            console_require: &[],
+            file_forbid: &[],
+            file_require: &["INFO girpr::logging: log file:"],
+        },
+        Case {
+            name: "RUST_LOG adds to the console but cannot silence it",
+            console_level: None,
+            file_level_flag: None,
+            file_level_env: None,
+            rust_log: Some("reqwest=debug"),
+            use_log_file: false,
+            console_forbid: &[],
+            console_require: &["INFO girpr::logging"],
+            file_forbid: &[],
+            file_require: &[],
+        },
+    ];
     let scratch = TempDir::new("girpr_cli_logfile", "levels");
-    let log = scratch.join("levels.log");
+    for (i, case) in cases.iter().enumerate() {
+        let log = scratch.join(format!("level-{i}.log"));
+        let mut extra: Vec<&str> = Vec::new();
+        if let Some(level) = case.console_level {
+            extra.extend_from_slice(&["--log-level", level]);
+        }
+        if case.use_log_file {
+            extra.extend_from_slice(&["--log-file", log.to_str().unwrap()]);
+        }
+        if let Some(level) = case.file_level_flag {
+            extra.extend_from_slice(&["--log-file-level", level]);
+        }
+        let mut env: Vec<(&str, &str)> = Vec::new();
+        if let Some(level) = case.file_level_env {
+            env.push(("GIRPR_LOG_FILE_LEVEL", level));
+        }
+        if let Some(spec) = case.rust_log {
+            env.push(("RUST_LOG", spec));
+        }
 
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "0",
-        "--log-level",
-        "error",
-        "--log-file",
-        log.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(
-        !strip_ansi(&stderr).contains("INFO girpr::logging"),
-        "the console is at `error`, so it kept no info record:\n{stderr}"
-    );
-    let body = std::fs::read_to_string(&log).expect("the log file was written");
-    assert!(
-        body.contains("INFO girpr::logging: log file:"),
-        "the file is at `debug` by default, so it kept it:\n{body}"
-    );
-}
-
-/// The directory the executable is in — where the default log file lands.
-fn exe_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_BIN_EXE_girpr"))
-        .parent()
-        .expect("the executable has a directory")
-        .to_path_buf()
-}
-
-/// The environment sets the log file's level, when the flag does not.
-///
-/// The one seam of the policy that the flag table cannot show: the flag wins,
-/// the environment answers for a flag that was never given, and `debug` — the
-/// default — answers for both.
-#[test]
-fn the_environment_sets_the_log_files_level() {
-    let scratch = TempDir::new("girpr_cli_logfile", "file_level");
-    let log = scratch.join("levels.log");
-
-    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "0",
-            "--log-file",
-            log.to_str().unwrap(),
-        ])
-        .env("GIRPR_LOG_FILE_LEVEL", "error")
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-
-    let body = std::fs::read_to_string(&log).expect("the log file was written");
-    assert!(
-        !body.contains("INFO girpr::logging"),
-        "the file is at `error`, so it kept no info record:\n{body}"
-    );
-    assert!(
-        body.contains("ERROR girpr: usage error"),
-        "but it kept the error:\n{body}"
-    );
-}
-
-/// The flag beats the environment for the log file's level too.
-#[test]
-fn the_log_file_level_flag_beats_the_environment() {
-    let scratch = TempDir::new("girpr_cli_logfile", "file_level_flag");
-    let log = scratch.join("levels.log");
-
-    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "0",
-            "--log-file",
-            log.to_str().unwrap(),
-            "--log-file-level",
-            "debug",
-        ])
-        .env("GIRPR_LOG_FILE_LEVEL", "error")
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-
-    let body = std::fs::read_to_string(&log).expect("the log file was written");
-    assert!(
-        body.contains("INFO girpr::logging: log file:"),
-        "the flag's `debug` beat the environment's `error`:\n{body}"
-    );
-}
-
-/// `RUST_LOG` adds to the console; it cannot silence the program. The
-/// program's own level is `--log-level`, and `RUST_LOG` only adds to it.
-#[test]
-fn an_unrelated_rust_log_does_not_silence_the_program() {
-    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args(["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"])
-        .env("RUST_LOG", "reqwest=debug")
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(
-        strip_ansi(&stderr).contains("INFO girpr::logging"),
-        "the program still speaks at its own level:\n{stderr}"
-    );
+        let (code, _, stderr) = run_log(&extra, &env);
+        assert_eq!(code, 1, "{}: {stderr}", case.name);
+        let console = strip_ansi(&stderr);
+        for needle in case.console_forbid {
+            assert!(
+                !console.contains(needle),
+                "{}: console kept {needle}:\n{stderr}",
+                case.name
+            );
+        }
+        for needle in case.console_require {
+            assert!(
+                console.contains(needle),
+                "{}: console dropped {needle}:\n{stderr}",
+                case.name
+            );
+        }
+        if case.use_log_file {
+            let body = std::fs::read_to_string(&log).expect("the log file was written");
+            for needle in case.file_forbid {
+                assert!(
+                    !body.contains(needle),
+                    "{}: file kept {needle}:\n{body}",
+                    case.name
+                );
+            }
+            for needle in case.file_require {
+                assert!(
+                    body.contains(needle),
+                    "{}: file dropped {needle}:\n{body}",
+                    case.name
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -2061,122 +2036,4 @@ async fn the_text_plane_plan_out_alone_writes_the_document_without_a_plan_record
         "the run still did the work it planned"
     );
     mock.stop();
-}
-
-/// A synthetic sequence, so the golden's own failure modes are testable
-/// without a run.
-fn synthetic(records: &[(&str, &[&str])]) -> DataPlaneRun {
-    DataPlaneRun {
-        code: 0,
-        records: records
-            .iter()
-            .map(|(event, keys)| {
-                (
-                    (*event).to_string(),
-                    keys.iter().map(|key| (*key).to_string()).collect(),
-                )
-            })
-            .collect(),
-        stdout: "synthetic records".to_string(),
-        stderr: String::new(),
-    }
-}
-
-/// The golden is only worth keeping if it rejects the breaking changes:
-/// `SUMMARY` moving before `PLAN`, a second `SUMMARY`, a `PROGRESS` before
-/// `PLAN` or after the run is over, and a renamed field key.
-#[test]
-fn the_golden_rejects_a_reorder_a_duplicate_a_misplaced_progress_and_a_rename() {
-    let golden: &[(&str, &[&str])] = &[
-        ("report", REPORT_KEYS),
-        ("plan", PLAN_KEYS),
-        ("summary", SUMMARY_KEYS),
-    ];
-    const RENAMED_EXIT: &[&str] = &[
-        "total",
-        "skipped",
-        "repaired",
-        "failed",
-        "download_bytes",
-        "deleted_extra_bytes",
-        "exit_code",
-    ];
-    let cases = [
-        (
-            "SUMMARY before PLAN",
-            synthetic(&[
-                ("report", REPORT_KEYS),
-                ("summary", SUMMARY_KEYS),
-                ("plan", PLAN_KEYS),
-            ]),
-        ),
-        (
-            "a second SUMMARY",
-            synthetic(&[
-                ("report", REPORT_KEYS),
-                ("plan", PLAN_KEYS),
-                ("summary", SUMMARY_KEYS),
-                ("summary", SUMMARY_KEYS),
-            ]),
-        ),
-        (
-            "PROGRESS before PLAN",
-            synthetic(&[
-                ("report", REPORT_KEYS),
-                ("progress", PROGRESS_KEYS),
-                ("plan", PLAN_KEYS),
-                ("summary", SUMMARY_KEYS),
-            ]),
-        ),
-        (
-            "PROGRESS after SUMMARY",
-            synthetic(&[
-                ("report", REPORT_KEYS),
-                ("plan", PLAN_KEYS),
-                ("summary", SUMMARY_KEYS),
-                ("progress", PROGRESS_KEYS),
-            ]),
-        ),
-        (
-            "a renamed SUMMARY key",
-            synthetic(&[
-                ("report", REPORT_KEYS),
-                ("plan", PLAN_KEYS),
-                ("summary", RENAMED_EXIT),
-            ]),
-        ),
-    ];
-    for (what, run) in cases {
-        assert!(
-            check_golden(&run, golden).is_err(),
-            "the golden must reject {what}"
-        );
-    }
-    assert!(
-        check_golden(&synthetic(golden), golden).is_ok(),
-        "the matching sequence must be accepted"
-    );
-    // `PROGRESS` is legitimate in the window before the terminal `SUMMARY`,
-    // with or without a `PLAN` ahead of it.
-    let with_plan = synthetic(&[
-        ("report", REPORT_KEYS),
-        ("plan", PLAN_KEYS),
-        ("progress", PROGRESS_KEYS),
-        ("progress", PROGRESS_KEYS),
-        ("summary", SUMMARY_KEYS),
-    ]);
-    assert!(
-        check_golden(&with_plan, golden).is_ok(),
-        "PROGRESS between PLAN and SUMMARY is the documented window"
-    );
-    let without_plan: &[(&str, &[&str])] = &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)];
-    let no_plan = synthetic(&[
-        ("report", REPORT_KEYS),
-        ("progress", PROGRESS_KEYS),
-        ("summary", SUMMARY_KEYS),
-    ]);
-    assert!(
-        check_golden(&no_plan, without_plan).is_ok(),
-        "a run without PLAN has its PROGRESS window between REPORT and SUMMARY"
-    );
 }
