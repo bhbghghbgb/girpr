@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T05** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T06** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 and CP2 reviews done.
-* Active checkpoint: CP3 (`open`). Status: T05 `in_progress`.
+* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -35,7 +36,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
 | T03 | Consolidate remaining low-risk root-unit cases | completed (fixed) | P0 | CP2 | commits `5e8d593f..185cfa4c`, review fix `cd80083b`. All 3 bullets done (−9 tests); the four distinct salvage_order cases kept separate. Review fix derived `live_count` in the reuse table loop instead of storing a redundant column, retaining the all-dead explicit check. No product logic changed. |
 | T04 | Table-drive sync hash dedup/order asserts | completed | P0 | CP2 | impl `6f6a47af` (test-only); CP2 review confirmed completed. Four cases → `dedup_keeps_first_seen_order` table (41→38), 8 assertions preserved, parse-vs-parse_any via fn pointer. Review flags judged not worth changing (nested grouping keeps one comment per regression; named struct unnecessary for 4 fixed rows). |
-| T05 | Remove capture no-op test; merge same-function pairs | in_progress | P0 | CP3 | |
+| T05 | Remove capture no-op test; merge same-function pairs | pending_review | P0 | CP3 | commits `0e8496e9..30e15ae4` (test-only). No-op removed + 4 pairs merged (670→665 tests, −5); manifest/proto.rs equality assertion kept, only misleading doc dropped. REVIEW FLAG: the 5th pair `config/tests.rs:411/483` was SKIPPED per guardrail - 411 is end-to-end rejection across bad tags, 483 checks the 'device' diagnostic content via tag_shape_problem; implementer says a reviewer could fold 483 into 411 by adding a `.contains("device")` assertion. Reviewer must confirm skip or fix. |
 | T06 | sled2redb removes + usage-error parametrization | todo | P0 | CP3 | |
 | T07 | `crates/log` + `tempdir` low-risk merges | todo | P0 | CP3 | |
 | T08 | `repair_plan` scope table + optional root-integration merges | todo | P0 | CP3 | |
@@ -66,7 +67,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T02 | d6dfb324 + fix e4439122 | completed (fixed) |
 | T03 | 5e8d593f..185cfa4c + fix cd80083b | completed (fixed) |
 | T04 | 6f6a47af (single commit) | completed |
-| T05 | — | — |
+| T05 | 0e8496e9..30e15ae4 (2 commits) | — |
 | T06 | — | — |
 | T07 | — | — |
 | T08 | — | — |
