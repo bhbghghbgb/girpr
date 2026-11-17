@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T02, then advance per the loop.
-* Active checkpoint: CP1 (`open`); T01 `pending_review`, T02 `in_progress`.
+* Next action: pick the next `todo` task (T03) and spawn its implementing session.
+* Active checkpoint: CP1 (`open`); T01, T02 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -27,7 +27,7 @@ commit ranges only.
 | ID | Title | Status | Checkpoint | Notes |
 |---|---|---|---|---|
 | T01 | Lower heartbeat fixture via test hook | pending_review | CP1 | implemented in 833f6d6a; see review range below |
-| T02 | Default `run_binary_raw` to memory cache | in_progress | CP1 | |
+| T02 | Default `run_binary_raw` to memory cache | pending_review | CP1 | implemented in eb6afaf2; see review range below |
 | T03 | Audit `opts()` → memory helpers | todo | CP1 | |
 | T04 | Shrink rw_threads 96-file fixture | todo | CP1 | |
 | T05 | Shrink `as_done` 11 MB fixture | todo | CP1 | |
@@ -65,6 +65,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | Task | Commit range | Review verdict |
 |---|---|---|
 | T01 | `ae60730d..833f6d6a` | — |
+| T02 | `c1e2fb04..eb6afaf2` | — |
 
 ## Follow-ups
 
@@ -75,6 +76,8 @@ are done and a review session has decided the batches.
 |---|---|---|---|---|
 | F01 | Add a test-only hook for phase A's 100-file progress threshold in `effective/phase_a.rs` (optionally emit on final entry like phase C), then lower the T01 fixture to ~8 files. Product-code change; out of T01 scope. | T01 implementer | proposed | Would reach the report's literal ~99% IO cut; current 101-file fixture already ~20x smaller. |
 | F02 | Unit test in `scan.rs` locking `heartbeat_entries() == 2000` with no hook set, to guard the production default. | T01 implementer | proposed | Env-reading test carries mild fragility; implementer left it out. |
+| F03 | Named constant (e.g. `FILE_CACHE_ENV`) for the `("GIRSYNC_TEST_CACHE", "file")` opt-out repeated across three tests in `tests/sync.rs`. | T02 implementer | proposed | Minor readability; reviewer decides. |
+| F04 | Debug assertion in `run_binary`/`run_binary_raw` rejecting a redundant `GIRSYNC_TEST_CACHE` in `envs`, to keep "one clear default" enforced against regressions. | T02 implementer | proposed | Enforces the helper invariant; reviewer decides. |
 
 ## Context / decisions
 
@@ -83,3 +86,4 @@ deliberate deviations from task files, why a task was skipped/reverted,
 checkpoint boundary changes, and anything else needed to resume.
 
 * T01 deviation (implementer): report suggested an 8-file fixture, but phase A emits its progress event only every 100 kept files (`effective/phase_a.rs:483`, inside the file branch), while phase C emits on its final entry. With one excluded file, the smallest period preserving the phase-A progress assertion is 101; 8 or 100 yielded an empty `phase_a_progress`. Implementer chose 101 (~1,900 fewer file creates; ~7 s -> ~0.25 s) rather than add a second product hook in `phase_a.rs`. Approved follow-ups F01/F02 recorded above; reviewer to confirm.
+* T02 note: implementer also flagged the adjacent P0 `opts()` -> `opts_mem()` audit in `tests/common/mod.rs`/semantic suites; that is already task T03 on the roster, so no new follow-up was created. T02 added file-cache opt-outs only where on-disk bytes are asserted; `GIRSYNC_TEST_NO_FSYNC=0` durability hooks untouched.
