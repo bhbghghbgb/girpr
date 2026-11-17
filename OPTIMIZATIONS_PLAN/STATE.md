@@ -10,11 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T02** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop. T02 is the last task in
-  CP1, so on success run the CP1 review checkpoint before starting T03.
-* Active batch: none. Phase: implementation (P0 tasks).
-* Active checkpoint: CP1 (`open`). Status: T01 `pending_review`, T02 `in_progress`.
+* Next action: run the **CP1 review checkpoint** (both tasks now `pending_review`):
+  set CP1 `in_progress`, commit, then spawn one review-and-fix session with the
+  T01/T02 pointers and commit ranges. Do not start T03 until CP1 is `done`.
+* Active batch: CP1 (T01, T02). Phase: review (P0 tasks).
+* Active checkpoint: CP1 (`in_progress` pending state commit). Status: T01 `pending_review`, T02 `pending_review`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -33,7 +33,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | ID | Title | Status | Priority | Checkpoint | Notes |
 |---|---|---|---|---|---|
 | T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | pending_review | P0 | CP1 | impl commit `a0a45fc8`; 15 test functions removed (49→34), no coverage lost per implementer |
-| T02 | Remove duplicated fixture-helper meta-tests | in_progress | P0 | CP1 | |
+| T02 | Remove duplicated fixture-helper meta-tests | pending_review | P0 | CP1 | impl commit `d6dfb324`; ~7 duplicate tests removed. REVIEW FLAG: implementer notes two deleted assertions were covered only implicitly, not verbatim — (a) junction link path inside `Failed` message (`a_claimed_junction...`), (b) inspection cause (`could not be inspected` / `the link could not be read`) inside `Failed` message (`an_uninspectable_junction_fails_instead_of_skipping`). Reviewer must decide if coverage is truly preserved or fold these into `junction_support.rs::a_broken_fixture_fails_the_case_through_the_shared_decision`. |
 | T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
@@ -50,7 +50,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
-| CP1 | T01–T02 | open | root CLI self-tests + root-unit fixture dedup |
+| CP1 | T01–T02 | in_progress | root CLI self-tests + root-unit fixture dedup; T01 a0a45fc8, T02 d6dfb324 |
 | CP2 | T03–T04 | open | remaining root-unit merges + sync hash table |
 | CP3 | T05–T08 | open | capture, sled2redb, small crates, root-integration merges |
 | CP4 | T09–T10 | open | `run_lock.rs` + `purge.rs` (verification-required) |
@@ -64,7 +64,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | Task | Commit range | Review verdict |
 |---|---|---|
 | T01 | a0a45fc8 (single commit) | — |
-| T02 | — | — |
+| T02 | d6dfb324 (single commit) | — |
 | T03 | — | — |
 | T04 | — | — |
 | T05 | — | — |
