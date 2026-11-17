@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T01** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T02** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
 * Active batch: none. Phase: implementation (P0 tasks).
-* Active checkpoint: CP1 (`open`). Status: T01 `in_progress`.
+* Active checkpoint: CP1 (`open`). Status: T01 `pending_review`, T02 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -31,7 +32,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 
 | ID | Title | Status | Priority | Checkpoint | Notes |
 |---|---|---|---|---|---|
-| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | in_progress | P0 | CP1 | |
+| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | pending_review | P0 | CP1 | impl commit `a0a45fc8`; 15 test functions removed (49→34), no coverage lost per implementer |
 | T02 | Remove duplicated fixture-helper meta-tests | todo | P0 | CP1 | |
 | T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
@@ -62,7 +63,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 
 | Task | Commit range | Review verdict |
 |---|---|---|
-| T01 | — | — |
+| T01 | a0a45fc8 (single commit) | — |
 | T02 | — | — |
 | T03 | — | — |
 | T04 | — | — |
@@ -89,6 +90,8 @@ effect) so the final follow-up phase is meaningful.
 | F02 | Remove the stale doc note in `tools/sync/DESIGN-NOTES.md:907` referencing an ignored test that no longer exists (report cross-cutting, L239–240). Documentation cleanup only. | report | proposed | No test-count effect. |
 | F03 | Drop the two redundant full binary conversions in `tools/sled2redb/tests/convert.rs:515` (report cross-cutting, L248–250). Saves runtime, not test count. | report | proposed | LOW risk. |
 | F04 | Consider merging the measured-fixture logic-name duplicates in `tools/capture/tests/measured_fixture.rs` (§E.5, L192–199) — only if an explicit size target exists; report recommends KEEP. | report | proposed | MEDIUM risk; ground-truth constants are the value. |
+| F05 | If later tasks add more `catch_unwind` assertions in other integration-test binaries, move the `panic_message` helper into `tests/common/mod.rs` to avoid duplicating the panic-downcast logic per test binary. | T01 implementer | proposed | Only if duplication actually arises; test-only. |
+| F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | Follows T01's pattern; do not force. |
 
 ## Follow-up batches
 
