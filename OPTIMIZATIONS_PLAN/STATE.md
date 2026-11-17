@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: start CP1 — pick the first `todo` task (T01).
-* Active checkpoint: none yet (CP1 is `open`).
+* Next action: wait for implementing session on T01, then advance per the loop.
+* Active checkpoint: CP1 (`open`); T01 is `in_progress`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -26,7 +26,7 @@ commit ranges only.
 
 | ID | Title | Status | Checkpoint | Notes |
 |---|---|---|---|---|
-| T01 | Lower heartbeat fixture via test hook | todo | CP1 | |
+| T01 | Lower heartbeat fixture via test hook | in_progress | CP1 | |
 | T02 | Default `run_binary_raw` to memory cache | todo | CP1 | |
 | T03 | Audit `opts()` → memory helpers | todo | CP1 | |
 | T04 | Shrink rw_threads 96-file fixture | todo | CP1 | |
