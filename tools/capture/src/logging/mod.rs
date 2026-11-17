@@ -247,24 +247,14 @@ mod tests {
         );
     }
 
-    /// The default file is named for the project, and it sits in a `logs/`
-    /// directory beside the executable.
-    ///
-    /// The *shape* of the default is the same in every build; what differs
-    /// between builds is whether there is a default at all, and that is the
-    /// shared crate's business (`girpr_log::default_file_is_written`).
+    /// The project's name becomes the prefix of the log environment variables:
+    /// `GIRCAP_LOG_FILE` and `GIRCAP_LOG_FILE_LEVEL`. `girpr_log::env_options`
+    /// derives them by upper-casing `PROJECT`; this pins the one spelling that
+    /// is this binary's responsibility. The shared crate covers the file-name
+    /// shape and the precedence of those variables.
     #[test]
-    fn the_default_file_is_named_for_the_project() {
-        let path = girpr_log::default_log_path(PROJECT);
-        let name = path.file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("gircap_"), "{name}");
-        assert!(name.ends_with(".log"), "{name}");
-        assert_eq!(
-            path.parent()
-                .and_then(Path::file_name)
-                .and_then(|s| s.to_str()),
-            Some("logs")
-        );
+    fn the_project_prefix_names_the_log_environment_variables() {
+        assert_eq!(PROJECT.to_ascii_uppercase(), "GIRCAP");
     }
 
     #[test]
