@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for the CP1 review-and-fix session; apply verdicts, then resume at T05.
-* Active checkpoint: CP1 (`in_progress`); T01, T02, T04 `pending_review`, T03 `skipped`.
+* Next action: pick the next `todo` task (T05) and spawn its implementing session.
+* Active checkpoint: CP1 (`open`); T01, T02, T04 `pending_review`, T03 `skipped`, T05 `todo`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -51,7 +51,7 @@ commit ranges only.
 
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
-| CP1 | T01–T05 | in_progress | girsync fixtures & cache backend |
+| CP1 | T01–T05 | open | girsync fixtures & cache backend |
 | CP2 | T06–T08 | open | gircap capture consolidation & fixtures |
 | CP3 | T09–T13 | open | sled2redb conversions & fixed sleeps |
 | CP4 | T14–T18 | open | girpr spawns, logging & redundant merges |
