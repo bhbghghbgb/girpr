@@ -623,12 +623,16 @@ than spinning: the run reports the failure rather than a backup that is not on
 disk.
 
 The bound is applied **after** the cache is opened, and the open holds the
-cache file's exclusive lock until the run is done with the cache. redb takes
-that lock exclusively and does not wait for it, so at most one run is in its
-run phase for a folder's cache at a time — **where the filesystem can lock a
-file at all**. redb skips the lock entirely on a filesystem that cannot lock
-one, and there the exclusion is gone: the bound runs under no lock at all, and
-nothing says that another run is in its run phase for the folder. The bound
+cache's sidecar lock (`girpr-cache-lock`, a file of its own beside the cache)
+until the run is done with the cache. The crate takes that lock non-blockingly,
+so at most one run is in its run phase for a folder's cache at a time —
+**where the filesystem can lock a file at all**. The sidecar is used because
+redb 4.3+ locks the database with byte ranges and, on Windows, takes a blocking
+lock on a reserved byte when a byte-range lock is refused: a whole-file lock on
+the cache itself would block rather than fail fast. A filesystem that cannot
+lock a file has neither sidecar nor redb lock, and there the exclusion is gone:
+the bound runs under no lock at all, and nothing says that another run is in
+its run phase for the folder. The bound
 also enumerates the folder once, at its start, so a copy published after that
 is not a candidate at all: a run that publishes while another run is bounding
 the folder is spared by the enumeration, not by a rule about ages.
@@ -746,9 +750,10 @@ name another run is publishing under, and it moves on to the next name rather
 than racing for it. Taking the record before the claim is also what keeps two
 runs from publishing onto one name.
 
-The tool takes **one lock of its own**, and it is the record's. The bound
-itself still runs under the cache's own lock, which redb holds: a folder whose
-filesystem cannot lock a file still gets the bound, and its copies are
+The tool takes **two kinds of lock of its own**: the per-copy record's and the
+cache's sidecar. The bound itself still runs under the cache's sidecar, which
+the open holds: a folder whose filesystem cannot lock a file still gets the
+bound, and its copies are
 published and reclaimed as they were before a record existed — the record's
 lock is per copy, and a filesystem that cannot take one leaves the copy
 unmarked rather than failing the run. A publish that fails fails the run

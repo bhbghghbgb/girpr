@@ -7,6 +7,7 @@ use redb::{
     ReadableTableMetadata, TableHandle, backends::InMemoryBackend,
 };
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 #[cfg(test)]
@@ -137,19 +138,36 @@ pub(in crate::cache) fn visit_entry_keys(
 
 /// An open redb cache file, read/write or read-only.
 ///
-/// Note: redb takes a file lock per *writable* database, so two read/write
-/// `CacheDb` handles on the **same** file cannot be alive at once (the second
-/// open fails with "Database already open"). All callers open, use, and drop
-/// sequentially — never hold two writable handles on one path. Read-only
-/// handles do not conflict with each other.
+/// The cache's own lock is a sidecar this crate takes,
+/// not redb's byte-range lock on the database file. Two read/write `CacheDb`
+/// handles on the same cache therefore cannot be alive at once: the second
+/// open is refused at once while the first holds the sidecar. Read-only
+/// handles take it shared and do not conflict with each other, but are refused
+/// by a writer. All callers open, use, and drop sequentially — never hold two
+/// writable handles on one path.
 ///
-/// **A filesystem that cannot lock a file has none of that.** redb skips the
-/// lock entirely there, so the exclusion is not there either and another
-/// handle can be open on the same file. It is the filesystem the crate
+/// redb still locks each writable database itself, so the two mechanisms agree
+/// on who may write: the sidecar gives the fail-fast answer, and redb's own
+/// lock keeps handles from different builds that do not know the sidecar from
+/// writing one file at once.
+///
+/// **A filesystem that cannot lock a file has none of that.** Both the sidecar
+/// and redb skip their locks there, so the exclusion is not there either and
+/// another handle can be open on the same file. It is the filesystem the crate
 /// already knows: a copy published there carries no record of its own, the
 /// record being a lock as well.
 pub struct CacheDb {
     pub(super) db: Handle,
+    /// The cache's sidecar lock, held for as long as this handle is alive.
+    ///
+    /// This is the run's "in progress" marker for the folder: another run
+    /// opening the same cache is refused while it is held, and a bound that
+    /// finds it held leaves the folder alone. Dropping the handle drops the
+    /// guard and releases the lock. `None` on a filesystem that cannot lock a
+    /// file, or for an in-memory cache that never touches one.
+    ///
+    /// Held for its `Drop` alone — nothing reads it.
+    _lock: Option<File>,
     /// The entries-table reads counted into the counter this handle holds.
     ///
     /// A test seam, and the reason the handle carries it rather than the
@@ -197,8 +215,14 @@ impl CacheDb {
     /// alive on one cache at once, and it hands them one counter between
     /// them rather than one each — see `with_shared_reads`.
     fn with_handle(db: Handle) -> Self {
+        Self::with_handle_and_lock(db, None)
+    }
+
+    /// Wrap a handle together with the sidecar lock guard it must keep alive.
+    fn with_handle_and_lock(db: Handle, lock: Option<File>) -> Self {
         Self {
             db,
+            _lock: lock,
             #[cfg(test)]
             reads: Arc::new(AtomicU64::new(0)),
         }
@@ -218,19 +242,28 @@ impl CacheDb {
     /// the filesystem can lock a file at all (see `with_handle`).
     #[cfg(test)]
     fn with_shared_reads(db: Handle, reads: Arc<AtomicU64>) -> Self {
-        Self { db, reads }
+        Self {
+            db,
+            _lock: None,
+            reads,
+        }
     }
 
-    /// Wrap an already-open handle as this crate's participant side. The only
-    /// place a [`Handle::Writable`] is built, so "who may create one" has one
-    /// answer rather than one per caller.
-    pub(in crate::cache) fn open_writable(db: Database) -> Self {
-        Self::with_handle(Handle::Writable(Arc::new(db)))
+    /// Wrap an already-open handle and the sidecar lock this run holds on it.
+    ///
+    /// The only place a [`Handle::Writable`] is built, so "who may create one"
+    /// has one answer rather than one per caller. `lock` is `None` for a
+    /// filesystem that cannot lock a file and for in-memory caches.
+    pub(in crate::cache) fn open_writable_locked(db: Database, lock: Option<File>) -> Self {
+        Self::with_handle_and_lock(Handle::Writable(Arc::new(db)), lock)
     }
 
-    /// Wrap an already-open handle as this crate's observer side.
-    pub(in crate::cache) fn open_read_only(db: redb::ReadOnlyDatabase) -> Self {
-        Self::with_handle(Handle::ReadOnly(db))
+    /// Wrap an observer handle and the shared sidecar lock this run holds.
+    pub(in crate::cache) fn open_read_only_locked(
+        db: redb::ReadOnlyDatabase,
+        lock: Option<File>,
+    ) -> Self {
+        Self::with_handle_and_lock(Handle::ReadOnly(db), lock)
     }
 
     /// Bring the cache's `meta` row in line with the run's case mode.
@@ -906,7 +939,7 @@ mod tests {
         let db = redb_builder()
             .create_with_backend(InMemoryBackend::new())
             .unwrap();
-        let bare = CacheDb::open_writable(db);
+        let bare = CacheDb::open_writable_locked(db, None);
         let mut got = Vec::new();
         bare.visit_keys(|k| {
             got.push(k.to_string());
@@ -946,7 +979,7 @@ mod tests {
         let db = redb_builder()
             .create_with_backend(InMemoryBackend::new())
             .unwrap();
-        let bare = CacheDb::open_writable(db);
+        let bare = CacheDb::open_writable_locked(db, None);
         assert_eq!(bare.entry_count().unwrap(), 0);
 
         let c = CacheDb::open_temp(true).unwrap();
@@ -1069,7 +1102,7 @@ mod tests {
         let db = redb_builder()
             .create_with_backend(InMemoryBackend::new())
             .unwrap();
-        let bare = CacheDb::open_writable(db);
+        let bare = CacheDb::open_writable_locked(db, None);
 
         let many = bare.get_many(["a.txt", "b.txt"]).unwrap();
         assert_eq!(many.len(), 2);

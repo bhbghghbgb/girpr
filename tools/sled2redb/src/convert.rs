@@ -252,9 +252,14 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
         }
         w.commit()?;
     }
-    // The handle holds redb's file lock, and it is dropped here so that the
-    // move below is not racing the handle that wrote the file.
+    // The handle holds redb's file lock and the cache's lock sidecar, and is
+    // dropped here so that the move below is not racing the handle that wrote
+    // the file. The sidecar is named after the temp path, so it is removed
+    // here too: the finished database is about to move onto its final name,
+    // and an orphaned sidecar would be residue in the user's folder.
     drop(cache);
+    girsync::cache::remove_lock_sidecar(temp)
+        .with_context(|| format!("remove lock sidecar of {}", temp.display()))?;
     Ok(out)
 }
 
@@ -363,6 +368,18 @@ fn temp_candidate_name(stamp: &str, n: u32) -> String {
 /// fails is part of the failure the user needs to see, not a result to drop.
 /// The same rule the case-fix rename pass follows for its own placeholder.
 fn cleanup_temp(primary: anyhow::Error, temp: &Path) -> anyhow::Error {
+    // The sidecar is the temporary's own residue, so it goes with the
+    // temporary. A failure to remove it never hides the primary failure.
+    let primary = match girsync::cache::remove_lock_sidecar(temp) {
+        Ok(()) => primary,
+        Err(cleanup) => {
+            let summary = format!("{primary}");
+            primary.context(format!(
+                "{summary}; removing the lock sidecar of {} also failed: {cleanup}",
+                temp.display()
+            ))
+        }
+    };
     match std::fs::remove_file(temp) {
         Ok(()) => primary,
         Err(cleanup) => {

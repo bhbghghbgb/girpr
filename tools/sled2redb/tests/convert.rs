@@ -362,10 +362,11 @@ fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
         entry_names(&work),
         vec![
             "girpr-cache".to_string(),
+            "girpr-cache-lock".to_string(),
             "legacy-cache".to_string(),
             "legacy-cache-bad".to_string(),
         ],
-        "the failed conversion left nothing behind"
+        "the failed conversion left nothing but the cache and its lock sidecar"
     );
 }
 
@@ -409,8 +410,12 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
     );
     assert_eq!(
         entry_names(&work),
-        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
-        "the conversion left nothing behind"
+        vec![
+            "girpr-cache".to_string(),
+            "girpr-cache-lock".to_string(),
+            "legacy-cache".to_string(),
+        ],
+        "the conversion left nothing but the cache and its lock sidecar"
     );
 }
 

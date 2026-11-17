@@ -36,14 +36,17 @@
 //!   `backend`, `cachedb` and `handle` leaves |
 //! | `write` | [`CacheWrite`]: batched mutations and when they commit |
 //! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
+//! | `lock` | the sidecar lock that marks a run in progress for a folder |
 
 mod codec;
 mod db;
+mod lock;
 mod open;
 mod schema;
 mod write;
 
 use redb::TableDefinition;
+use std::path::Path;
 
 /// Keys are `/`-separated relative paths; values are the [`codec`]'d
 /// [`FileRec`]. Both tables are touched on create so a fresh file has both.
@@ -80,7 +83,7 @@ const META_KEY: &str = "meta";
 /// typo) means `Immediate`.
 ///
 /// redb refuses `Durability::None` in its multiprocess modes. This crate opens
-/// every database in the default single-writer mode, so the gate is valid here;
+/// every database in the default `ExclusiveWriter` mode, so the gate is valid here;
 /// if that ever changes, the `set_durability` call sites start returning
 /// `NonDurableCommitUnsupported` under the test switch rather than silently
 /// weakening the commit.
@@ -120,3 +123,18 @@ pub use open::{
 };
 pub use schema::{CACHE_PREFIX, CACHE_VERSION, FileRec, Meta};
 pub use write::{COMMIT_BATCH, COMMIT_BYTES, COMMIT_INTERVAL, CacheWrite, CommitLimits};
+
+/// Remove the lock sidecar of the cache at `db_path`, if it is there.
+///
+/// A caller that moves or deletes a cache file must take its sidecar with it:
+/// the sidecar is named after the path, so a new cache at that path creates a
+/// fresh one, and a sidecar left from the old one would be an orphan in the
+/// user's tree. This is only for a cache path that is private to the caller —
+/// the converter's temporary — never for a live cache another run may lock.
+pub fn remove_lock_sidecar(db_path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(lock::path_for(db_path)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}

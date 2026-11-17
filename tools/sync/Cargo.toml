@@ -52,10 +52,11 @@ rayon = "1.12.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2.5"
-# Pinned to 4.2.0: from 4.3 on, opening a cache another run holds blocks on
-# the file lock instead of returning `DatabaseAlreadyOpen`, which breaks the
-# cache's fail-fast behaviour. 4.2.0 is the newest release that keeps it.
-redb = "=4.2.0"
+# Fail-fast exclusion is our own sidecar lock (`cache::lock`), not redb's file
+# lock: from 4.3 on, opening a cache another process holds blocks in redb's
+# byte-range lock instead of returning `DatabaseAlreadyOpen`. The sidecar is
+# taken before the open, so the cache keeps its fail-fast behaviour on 4.6.
+redb = "=4.6.0"
 
 # Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
 # `MetadataExt::number_of_links` is still unstable (`windows_by_handle`) on the
