@@ -10,12 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T13** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`. T13 is the last task overall, so on success (or resolved
-  skip) run the CP5 review checkpoint.
+* Next action: wait for the **T13** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop. T13 is the last task
+  overall, so on success (or resolved skip) run the CP5 review checkpoint.
 * Active batch: none. Phase: implementation (P1 tasks). CP1–CP4 reviews done.
-* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `pending_review` (partial), T13 `todo`.
+* Active checkpoint: CP5 (`open`). Status: T11 `skipped` (no safe cuts), T12 `pending_review` (partial), T13 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -45,7 +44,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T10 | Consolidate `purge.rs` classifier early tests | completed | P1 | CP4 | impl `564b341b`; CP4 review completed. 4 early tests removed (purge 27→23). Parity independently confirmed: wrapper ≡ visible(true) under PathScope::default(); 16 NEW rows added to cached_keys table, 8 duplicate case-instances (corrected count per reviewer); both kept tests byte-for-byte unchanged. No product change. |
 | T11 | Trim `migration_lock.rs` clear duplicates | skipped | P1 | CP5 | No commits. Validated all 5 candidates against current code; none is a proven duplicate - each has unique assertions (443 byte-identical cache mtime+length strengthened by 7bf6731b; 376 second-update backup; 241 cache-row content + convergence under hash-none; 279 sha256 digest-in-cache row assertion; 480 empty-dirs/nesting). Report '≈' is thematic overlap, not property identity. Whole-target deletion correctly avoided. migration_lock 11/11 pass. |
 | T12 | Capture: remove redundant process test; fold assertion-free test | pending_review | P1 | CP5 | PARTIAL: impl `2202ea9f` (test-only, closeout.rs) removed assertion-free `a_clean_close_out_returns_ok` (fully redundant; neighbours assert more). REVIEW FLAG: bullet 1 `a_bad_log_level_is_refused_by_the_parser` (cli_contract.rs:214) SKIPPED/test kept - exit code and stderr-name assertions are covered, but its `r.stdout.is_empty()` assertion exists NOWHERE else in the capture tree (the named stdout-contract tests assert different things). Reviewer must confirm skip or fix by pinning stdout-empty into a neighbour first. |
-| T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
+| T13 | Cross-binary log-file policy reduction | in_progress | P1 | CP5 | |
 
 ## Review checkpoints
 
