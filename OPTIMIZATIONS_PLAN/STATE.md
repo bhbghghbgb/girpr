@@ -10,11 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: run the **CP1 review checkpoint** (both tasks now `pending_review`):
-  set CP1 `in_progress`, commit, then spawn one review-and-fix session with the
-  T01/T02 pointers and commit ranges. Do not start T03 until CP1 is `done`.
-* Active batch: CP1 (T01, T02). Phase: review (P0 tasks).
-* Active checkpoint: CP1 (`in_progress` pending state commit). Status: T01 `pending_review`, T02 `pending_review`.
+* Next action: spawn implementing session for **T03** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`.
+* Active batch: none. Phase: implementation (P0 tasks). CP1 review done.
+* Active checkpoint: CP2 (`open`). Status: no task started yet.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -32,8 +32,8 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 
 | ID | Title | Status | Priority | Checkpoint | Notes |
 |---|---|---|---|---|---|
-| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | pending_review | P0 | CP1 | impl commit `a0a45fc8`; 15 test functions removed (49→34), no coverage lost per implementer |
-| T02 | Remove duplicated fixture-helper meta-tests | pending_review | P0 | CP1 | impl commit `d6dfb324`; ~7 duplicate tests removed. REVIEW FLAG: implementer notes two deleted assertions were covered only implicitly, not verbatim — (a) junction link path inside `Failed` message (`a_claimed_junction...`), (b) inspection cause (`could not be inspected` / `the link could not be read`) inside `Failed` message (`an_uninspectable_junction_fails_instead_of_skipping`). Reviewer must decide if coverage is truly preserved or fold these into `junction_support.rs::a_broken_fixture_fails_the_case_through_the_shared_decision`. |
+| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | completed | P0 | CP1 | impl `a0a45fc8`; CP1 review confirmed completed. 19 self-tests → 4 tables (49→34), all cases preserved (several assertions strengthened); no product/process/golden code touched. |
+| T02 | Remove duplicated fixture-helper meta-tests | completed (fixed) | P0 | CP1 | impl `d6dfb324`, review fix `e4439122`. 7 duplicate meta-tests removed; reviewer confirmed the flagged assertions were only transitively covered and folded them verbatim into `a_broken_fixture_fails_the_case_through_the_shared_decision` (no test function added, count reduction preserved). |
 | T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
 | T05 | Remove capture no-op test; merge same-function pairs | todo | P0 | CP3 | |
@@ -50,7 +50,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
-| CP1 | T01–T02 | in_progress | root CLI self-tests + root-unit fixture dedup; T01 a0a45fc8, T02 d6dfb324 |
+| CP1 | T01–T02 | done | root CLI self-tests + root-unit fixture dedup; T01 completed, T02 completed (fixed e4439122) |
 | CP2 | T03–T04 | open | remaining root-unit merges + sync hash table |
 | CP3 | T05–T08 | open | capture, sled2redb, small crates, root-integration merges |
 | CP4 | T09–T10 | open | `run_lock.rs` + `purge.rs` (verification-required) |
@@ -63,8 +63,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 
 | Task | Commit range | Review verdict |
 |---|---|---|
-| T01 | a0a45fc8 (single commit) | — |
-| T02 | d6dfb324 (single commit) | — |
+| T01 | a0a45fc8 (single commit) | completed |
+| T02 | d6dfb324 + fix e4439122 | completed (fixed) |
 | T03 | — | — |
 | T04 | — | — |
 | T05 | — | — |
@@ -89,9 +89,9 @@ effect) so the final follow-up phase is meaningful.
 | F01 | Extract the byte-identical `tests/common/mod.rs` shared by `tools/sync` and `tools/sled2redb` into the `girpr-tempdir` crate (report cross-cutting, L226–233). Saves maintenance, not test count. | report | proposed | Test-only refactor; LOW–MEDIUM risk. |
 | F02 | Remove the stale doc note in `tools/sync/DESIGN-NOTES.md:907` referencing an ignored test that no longer exists (report cross-cutting, L239–240). Documentation cleanup only. | report | proposed | No test-count effect. |
 | F03 | Drop the two redundant full binary conversions in `tools/sled2redb/tests/convert.rs:515` (report cross-cutting, L248–250). Saves runtime, not test count. | report | proposed | LOW risk. |
-| F04 | Consider merging the measured-fixture logic-name duplicates in `tools/capture/tests/measured_fixture.rs` (§E.5, L192–199) — only if an explicit size target exists; report recommends KEEP. | report | proposed | MEDIUM risk; ground-truth constants are the value. |
+| F04 | ~~Consider merging the measured-fixture logic-name duplicates in `tools/capture/tests/measured_fixture.rs` (§E.5, L192–199) — only if an explicit size target exists; report recommends KEEP.~~ | report | removed | CP1 reviewer pruned: conditional on a non-existent size target, MEDIUM risk, report recommends KEEP; idea stays in report §E.5. |
 | F05 | If later tasks add more `catch_unwind` assertions in other integration-test binaries, move the `panic_message` helper into `tests/common/mod.rs` to avoid duplicating the panic-downcast logic per test binary. | T01 implementer | proposed | Only if duplication actually arises; test-only. |
-| F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | Follows T01's pattern; do not force. |
+| F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | CP1 reviewer kept; skip `run_lock.rs` clusters (T09 folds those). Do not force. |
 
 ## Follow-up batches
 
