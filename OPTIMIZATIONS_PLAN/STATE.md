@@ -10,11 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T10** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T10** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop. T10 is the last task in
+  CP4, so on success run the CP4 review checkpoint before starting T11.
 * Active batch: none. Phase: implementation (P1 tasks). CP1, CP2, CP3 reviews done.
-* Active checkpoint: CP4 (`open`). Status: T09 `pending_review`, T10 `todo`.
+* Active checkpoint: CP4 (`open`). Status: T09 `pending_review`, T10 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -41,7 +41,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T07 | `crates/log` + `tempdir` low-risk merges | completed | P0 | CP3 | commits `bd151a08..ef7fbfc1`; CP3 review completed. 3 tests removed; tempdir pairs folded keeping every assertion; log policy still asserted via LogPlan::resolve. |
 | T08 | `repair_plan` scope table + optional root-integration merges | completed | P0 | CP3 | commits `11e108ce..79c52b93`; CP3 review completed. Scope table (3→1) + branch-failure and non-UTF-8 switch pairs merged (4 saved). Flagged skips CONFIRMED as complementary: repair_offline (success vs exhaustion) and repair_scope (purge_only/glob/cleanup/scenario differences). Do-not-merge list and T13 tests untouched. |
 | T09 | Consolidate `run_lock.rs` case clusters | pending_review | P1 | CP4 | impl `327fd01e` (test-only, tests/run_lock.rs). Validated first: file guards the test-support helper, not product lock behavior (product anchors repair_offline.rs:348/408/441 intact). 15 → 5 tests; one end-to-end cleanup case retained with real Lock::acquire/remove. All dimensions asserted; run_lock 5/5 pass. No flags. |
-| T10 | Consolidate `purge.rs` classifier early tests | todo | P1 | CP4 | |
+| T10 | Consolidate `purge.rs` classifier early tests | in_progress | P1 | CP4 | |
 | T11 | Trim `migration_lock.rs` clear duplicates | todo | P1 | CP5 | |
 | T12 | Capture: remove redundant process test; fold assertion-free test | todo | P1 | CP5 | |
 | T13 | Cross-binary log-file policy reduction | todo | P1 | CP5 | |
