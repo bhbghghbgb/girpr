@@ -1769,6 +1769,125 @@ fn key_list(keys: &[String]) -> Vec<&str> {
     keys.iter().map(String::as_str).collect()
 }
 
+/// A synthetic sequence, so the golden's own failure modes are testable
+/// without a run. `check_golden` is test-only and the real goldens exercise
+/// only its happy path; these cases pin its rejection branches directly.
+fn synthetic(records: &[(&str, &[&str])]) -> DataPlaneRun {
+    DataPlaneRun {
+        code: 0,
+        records: records
+            .iter()
+            .map(|(event, keys)| {
+                (
+                    (*event).to_string(),
+                    keys.iter().map(|key| (*key).to_string()).collect(),
+                )
+            })
+            .collect(),
+        stdout: "synthetic records".to_string(),
+        stderr: String::new(),
+    }
+}
+
+/// The golden is only worth keeping if it rejects the breaking changes:
+/// `SUMMARY` moving before `PLAN`, a second `SUMMARY`, a `PROGRESS` before
+/// `PLAN` or after the run is over, and a renamed field key.
+#[test]
+fn the_golden_rejects_a_reorder_a_duplicate_a_misplaced_progress_and_a_rename() {
+    let golden: &[(&str, &[&str])] = &[
+        ("report", REPORT_KEYS),
+        ("plan", PLAN_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ];
+    const RENAMED_EXIT: &[&str] = &[
+        "total",
+        "skipped",
+        "repaired",
+        "failed",
+        "download_bytes",
+        "deleted_extra_bytes",
+        "exit_code",
+    ];
+    let cases = [
+        (
+            "SUMMARY before PLAN",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("plan", PLAN_KEYS),
+            ]),
+        ),
+        (
+            "a second SUMMARY",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("summary", SUMMARY_KEYS),
+            ]),
+        ),
+        (
+            "PROGRESS before PLAN",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("progress", PROGRESS_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+            ]),
+        ),
+        (
+            "PROGRESS after SUMMARY",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("progress", PROGRESS_KEYS),
+            ]),
+        ),
+        (
+            "a renamed SUMMARY key",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", RENAMED_EXIT),
+            ]),
+        ),
+    ];
+    for (what, run) in cases {
+        assert!(
+            check_golden(&run, golden).is_err(),
+            "the golden must reject {what}"
+        );
+    }
+    assert!(
+        check_golden(&synthetic(golden), golden).is_ok(),
+        "the matching sequence must be accepted"
+    );
+    // `PROGRESS` is legitimate in the window before the terminal `SUMMARY`,
+    // with or without a `PLAN` ahead of it.
+    let with_plan = synthetic(&[
+        ("report", REPORT_KEYS),
+        ("plan", PLAN_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ]);
+    assert!(
+        check_golden(&with_plan, golden).is_ok(),
+        "PROGRESS between PLAN and SUMMARY is the documented window"
+    );
+    let without_plan: &[(&str, &[&str])] = &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)];
+    let no_plan = synthetic(&[
+        ("report", REPORT_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ]);
+    assert!(
+        check_golden(&no_plan, without_plan).is_ok(),
+        "a run without PLAN has its PROGRESS window between REPORT and SUMMARY"
+    );
+}
+
 /// The top-level keys of a flat JSON object, in the line's own order.
 ///
 /// `serde_json::Map` is a `BTreeMap` unless the workspace opts into
