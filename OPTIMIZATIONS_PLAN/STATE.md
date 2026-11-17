@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T07, then advance per the loop.
-* Active checkpoint: CP2 (`open`); T06 `pending_review`, T07 `in_progress`.
+* Next action: pick the next `todo` task (T08) and spawn its implementing session.
+* Active checkpoint: CP2 (`open`); T06, T07 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -32,7 +32,7 @@ commit ranges only.
 | T04 | Shrink rw_threads 96-file fixture | completed | CP1 | implemented in c7b9c1c0; CP1 review: completed |
 | T05 | Shrink `as_done` 11 MB fixture | completed | CP1 | implemented in a2ddea53; CP1 review: completed |
 | T06 | Consolidate gircap captures + shared bundle | pending_review | CP2 | 5 commits be7314ff..9096e118; see review range |
-| T07 | Hand-build minimal bundles for delete-a-doc | in_progress | CP2 | |
+| T07 | Hand-build minimal bundles for delete-a-doc | pending_review | CP2 | 3 commits 7e4ca155..81988899; see review range |
 | T08 | Cache gircap byte tables + shrink chunk | todo | CP2 | |
 | T09 | Cut sled2redb spelling test 8 → 2–3 | todo | CP3 | |
 | T10 | Drop sled2redb flush + redundant reopens | todo | CP3 | |
@@ -69,6 +69,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T04 | `f84883a7..c7b9c1c0` | completed |
 | T05 | `e1ef69fb..a2ddea53` | completed |
 | T06 | `575c7ed0..9096e118` | — |
+| T07 | `a1de5165..81988899` | — |
 
 ## Follow-ups
 
@@ -90,6 +91,7 @@ are done and a review session has decided the batches.
 | F11 | Unit test asserting the shared-bundle key is stable across repeated calls and changes when `common/mod.rs` changes, guarding the invalidation contract. | T06 implementer | proposed | Reviewer decides. |
 | F12 | When T07 lands, confirm the two schema key-deletion tests don't regress to fresh captures (they already use the shared bundle as copy source). | T06 implementer | proposed | Verification item for T07; reviewer decides. |
 | F13 | Split `the_bundle_has_the_shape_the_schema_documents` (layout) and `admission_is_cheapest_first...` / `audio_candidates_are_attributed...` (matrix) so document reads can move onto the shared fixture; summary assertions stay. | T06 implementer | proposed | Reviewer decides. |
+| F14 | Consolidate the new `minimal_bundle` test helper with the private `write_minimal_bundle` in `src/verify/tests.rs:380` into one shared test-support target to avoid drift (integration tests cannot reach `#[cfg(test)]` lib code). | T07 implementer | proposed | Reviewer decides. |
 
 ## Context / decisions
 
@@ -102,3 +104,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T03 skipped (implementer): audit target no longer exists — R1 commits already in the tree (`989b618c`, `1eafe53b`, `0ba1d130`, `8914668b`, `28678736`) implemented the `opts()` -> `*_mem` migration. Memory helpers (`opts_mem`, `pair_mem`, `sync_mem`, `compare_mem`, `update_mem`, `asking_mem`, `recs_of` memory-first lookup) are used throughout semantic suites; all `pair()` calls use `warmed: false`. Remaining `opts()` (File) sites are intentional cache-byte/on-disk assertions or harnesses overriding to Memory in their own `common`. Report's `helpers.rs` is a misdiagnosis (unit tests with no `cmd_*` calls). Full `cargo test -p girsync` passes (19 binaries, 0 failures). No code changed; reviewer to confirm skip.
 * CP1 review done (no fix/revert commits; tree clean at `db3928cc`): verdicts T01/T02/T04/T05 `completed`, T03 `skipped` confirmed. Review re-ran T01 test (1/1), `sync` (48/48), `rw_threads` (15/15), `sync_plan` (19/19) — all green. Follow-ups kept: F02, F09. Removed: F01, F03, F04, F05, F06, F07, F08 (reasons in Follow-ups table). No new follow-ups.
 * T06 implemented: shared read-only bundle fixture in `tests/common/mod.rs` under an `fs2` cross-process file lock, published by atomic rename under `girpr-test/`, keyed by a fingerprint of `common/mod.rs` (so T08's World change auto-invalidates); `fs2` added as dev-dep. schema.rs: 19 doc tests -> 1 grouped default test + gzip/ceiling variants; layout/matrix: 8+2 doc reads moved to shared bundle. Deletion tests kept for T07. Verified capture_layout+schema+matrix 53 pass (was 68 in 24.3s -> ~9.5-13.9s), full gircap 868 pass/3 skip, clippy clean. No product code changed.
+* T07 implemented: added `minimal_bundle(name)` in `tests/common/mod.rs` (smallest directory `gircap::verify::Bundle::open` accepts, built from crate value types). Converted 5 capture_layout delete-a-doc tests (error_shapes x2, error_responses x2, rejections x1) and 2 schema missing-field tests off full capture/copy_tree; assertions unchanged; removed unused `copy_tree` helper. capture_layout 37/37, schema 6/6, clippy clean. Coordinated with T06 (reused common/mod.rs). NOTE: task/report said "six" delete-a-doc tests but only five exist (no path_map.json failure test) — reviewer to confirm none lost. T07 implementer says F12 is resolved (schema key-deletion tests no longer copy the shared tree). A minimal bundle has an empty matrix, so verifying one unmodified would fail reverify — future "verify passes" tests should use offline_bundle.rs::Bundle::build.
