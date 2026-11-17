@@ -1112,6 +1112,11 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
 }
 /// The captured `api/` bodies are byte-exact, which is the whole reason they are
 /// stored rather than re-rendered.
+///
+/// The zstd 0.14 upgrade changed the compressor's output by a byte or two per
+/// frame, so the pinned `bytes_in` sizes and the two manifest-id hashes below
+/// were refreshed for that version. The set of rows, their order and every
+/// other field are unchanged.
 #[test]
 fn the_request_log_rows_are_what_the_spec_says_they_are() {
     let mock = Mock::start(World::all_shapes());
@@ -1130,10 +1135,10 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         "5 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.1.0 200 1348 1 api/getBuild.7.1.0.json -",
         "6 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.0.0 200 1348 1 api/getBuild.7.0.0.json -",
         "7 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=6.7.0 200 50 1 - -",
-        "8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_70ef994bc1c8a1a3f8bae061f3173a59 200 1302 1 manifests/7.0.0/game.manifest.zst -",
-        "9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_3004baafaed168985353c643b2daa6f4 200 1249 1 manifests/7.1.0/game.manifest.zst -",
-        "10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
-        "11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
+        "8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_08967406679bdab248a9384e4f81158a 200 1317 1 manifests/7.0.0/game.manifest.zst -",
+        "9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_587c0563531ae5d2fc485ac89e3bfb36 200 1255 1 manifests/7.1.0/game.manifest.zst -",
+        "10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_fb1081bacc72b97fe030dcbe3c413f12 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
+        "11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_fb1081bacc72b97fe030dcbe3c413f12 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
         "12 probe GET /cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000 404 276 1 - -",
         "13 probe GET /cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000 404 273 1 - -",
         "14 probe GET /cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 404 273 1 - -",
@@ -1141,22 +1146,22 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         "16 probe GET /sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword 200 55 1 - -",
         "17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
         "18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
-        "19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
-        "20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
-        "21 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1033 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
-        "22 chunk GET /cdn/sMOCKnew00/chunk/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b 200 265 1 chunks/blobs/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b.zst -",
-        "23 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
-        "24 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
-        "25 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
-        "26 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
-        "27 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
-        "28 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
-        "29 chunk GET /cdn/sMOCKnew00/chunk/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4 200 265 1 chunks/blobs/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4.zst -",
-        "30 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
-        "31 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
-        "32 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
-        "33 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
-        "34 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
+        "19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1034 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
+        "20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 522 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
+        "21 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1034 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
+        "22 chunk GET /cdn/sMOCKnew00/chunk/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b 200 266 1 chunks/blobs/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b.zst -",
+        "23 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1034 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+        "24 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 522 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+        "25 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1034 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
+        "26 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 522 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+        "27 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1034 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
+        "28 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1034 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
+        "29 chunk GET /cdn/sMOCKnew00/chunk/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4 200 266 1 chunks/blobs/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4.zst -",
+        "30 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 522 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+        "31 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 266 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+        "32 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32778 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
+        "33 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1034 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+        "34 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1034 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
     ];
 
     let mut got: Vec<(u64, String)> = log

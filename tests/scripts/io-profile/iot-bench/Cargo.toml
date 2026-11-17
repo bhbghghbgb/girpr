@@ -5,10 +5,9 @@ edition = "2021"
 description = "Microbenchmarks of the file-system operations the test suite performs"
 
 [dependencies]
-# Track the same redb line the workspace cache uses (`tools/sync`). No exact
-# pin: the old one only held an MSRV floor that no longer applies, so newer
-# 4.x releases are allowed as the dependency-upgrade work moves the lockfile.
-redb = "4"
+# Track the same redb pin the workspace cache uses (`tools/sync`): 4.2.0 is
+# the newest release before the 4.3+ cache-lock behaviour change.
+redb = "=4.2.0"
 
 [profile.release]
 opt-level = 2

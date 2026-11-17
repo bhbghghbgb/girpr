@@ -23,6 +23,12 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
+/// Render a digest as lowercase hex. Digest 0.11's `Output` no longer implements
+/// `LowerHex`, so format the bytes directly.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Run the converter binary and hand back its exit code, stdout and stderr.
 ///
 /// The binary is spawned rather than the library called because the arguments
@@ -83,11 +89,8 @@ fn build_sled_db_at(dir: &std::path::Path, name: &str) {
             "file",
             5,
             [
-                ("md5".to_string(), format!("{:x}", Md5::digest(b"hello"))),
-                (
-                    "sha256".to_string(),
-                    format!("{:x}", sha2::Sha256::digest(b"hello")),
-                ),
+                ("md5".to_string(), hex(&Md5::digest(b"hello"))),
+                ("sha256".to_string(), hex(&sha2::Sha256::digest(b"hello"))),
             ]
             .into_iter()
             .collect(),
@@ -102,7 +105,7 @@ fn build_sled_db_at(dir: &std::path::Path, name: &str) {
             "file",
             0,
             [
-                ("md5".to_string(), format!("{:x}", Md5::digest(b""))),
+                ("md5".to_string(), hex(&Md5::digest(b""))),
                 (
                     "sha256".to_string(),
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),

@@ -34,7 +34,7 @@ name = "gircap"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 # The log-file and log-level policy, shared with the repair binary and with
 # `girsync`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters (see docs/00-spec.md
@@ -56,28 +56,28 @@ girpr-log = { path = "../../crates/log" }
 # dependency tree still enables tokio's empty `default` feature, which adds
 # nothing. `spawn`/`spawn_blocking`/`JoinSet` come with `rt`, which
 # `rt-multi-thread` already includes.
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
 # or handed on as raw bytes, and nothing reads a streaming body. The `stream`
 # feature is what a future "hash the blob as it lands" would ask for.
-reqwest = "0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-prost = "0.13"
-zstd = "0.13"
-md-5 = "0.10"
-sha2 = "0.10"
-flate2 = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+reqwest = "0.13.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+prost = "0.14.6"
+zstd = "0.14.4"
+md-5 = "0.11.0"
+sha2 = "0.11.1"
+flate2 = "1.1.11"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 # Only the `non_blocking` writer guard, which is what flushes the tail of a
 # --log-file run. No rolling: a capture writes one log, it is not a daemon.
-tracing-appender = "0.2"
-chrono = { version = "0.4", features = ["clock"] }
+tracing-appender = "0.2.5"
+chrono = { version = "0.4.45", features = ["clock"] }
 
 [dev-dependencies]
 # `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
-serde_json = "1"
+serde_json = "1.0.154"
 # The scratch-directory helper, shared with the repair binary and with
 # `girsync`: one name, one construction and one cleanup for every test in the
 # workspace. A dev-dependency, because nothing that ships creates a scratch
