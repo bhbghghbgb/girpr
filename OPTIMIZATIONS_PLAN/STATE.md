@@ -10,13 +10,13 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn one implementing session for **Batch A** (F01) with the
-  scope/pointers recorded in the Follow-up batches table, then a review session
-  for it. Batch A is the last batch. After it is `done` and no actionable
-  follow-ups remain, make the final cleanup commit (delete OPTIMIZATIONS_PLAN/
-  and docs/08-test-suite-reduction-audit.md, verify no implementation file
-  refers to either).
-* Active batch: **Batch A** (`in_progress` pending state commit). Phase: follow-ups (§5). CP1–CP5 all `done`.
+* Next action: spawn one **review session for Batch A** (F01) with the batch's
+  scope/pointers and commit range recorded below. Batch A is the last batch.
+  After it is `done`, evaluate the remaining follow-ups; if none are actionable,
+  make the final cleanup commit (delete OPTIMIZATIONS_PLAN/ and
+  docs/08-test-suite-reduction-audit.md, verify no implementation file refers
+  to either).
+* Active batch: **Batch A** (`pending_review`). Phase: follow-ups (§5). CP1–CP5 all `done`.
 * Active checkpoint: none (`done`). Status: all 13 tasks terminal; Batches B and C `done`.
 * Blocked on user: no.
 
@@ -114,6 +114,8 @@ effect) so the final follow-up phase is meaningful.
 | F23 | ~~If other repair integration binaries repeat the 'no getBuild / no config bump' invariant, promote `assert_metadata_phase_stopped` into `tests/common/mod.rs`.~~ | Batch B implementer | removed | Batch B reviewer pruned: precondition false - the full invariant exists only in repair_offline.rs; other binaries have isolated config.ini checks only. |
 | F24 | ~~Add a process case with `--audio en-us,ja-jp` to close the F12 end-to-end gap.~~ | Batch B implementer | removed | Batch B reviewer pruned: multi-language formatting already asserted at unit level; adds a test back against the reduction goal. |
 | F25 | ~~Fix the now-failing documented clippy gate: dead-code `default_log_path()` at src/logging.rs:117.~~ | Batch C implementer | removed | Batch C reviewer resolved by fix commit `58f14fc3` (removed wrapper + retargeted intra-doc link); gate now clean. Do not re-add. |
+| F26 | Split `girpr-tempdir::test_support` into pure-std helpers (file/link/temp-root) vs girsync-coupled cache/option helpers, so crates that only need `TempDir` don't pull `girsync` into their test builds. | Batch A implementer | proposed | Extraction added girsync/serde_json deps to girpr-tempdir; conditional on whether that transitive dep matters. Reviewer may prune as larger churn. |
+| F27 | Confine the two `#[macro_export]` macros behind a dedicated feature/module path for a stricter test-support boundary. | Batch A implementer | proposed | Requires touching call sites; implementer left as-is to preserve behavior. Reviewer likely prunes. |
 
 ## Follow-up batches
 
@@ -127,7 +129,7 @@ the same separate state commits as the task/checkpoint loop. Statuses: `open` �
 |---|---|---|---|---|---|---|
 | B | F11, F12 | done | 6b82c98a..614f3aa4 (2 test-only commits) | F11 completed; F12 completed; no fixes | Root repair integration cleanup: `tests/repair_offline.rs` shared assertion helper for repeated branch-issued / no-getBuild / no-config-bump checks (allow per-case omissions); `tests/repair_plan.rs` narrow `audio_langs=en-us` assertion to the no-scope case. Pointers: report §C kept L143-148, `OPTIMIZATIONS_PLAN/tasks/T08-root-integration-optional-merges.md`, `tests/repair_offline.rs:470-733`, `tests/repair_plan.rs:150-205`, `src/report/tests.rs:405-460`. No case merges, no coverage loss, no product code. | Run first (small/concrete). |
 | C | F09, F20 | done | 1cbb6d3a..ce669675 + fix 58f14fc3 | F09 completed; F20 completed; F25 completed (fixed) | Coverage hardening: add `cargo nextest run --release -p girpr-log` to the documented gate in `README.md:437-456` (no CI config exists - do not create one; skip if no appropriate place); restore a compact synthetic `check_golden` rejection self-test in `tests/cli_contract.rs` (reorder, duplicate terminal, misplaced progress, renamed event => Err). Pointers: report §F.4 L218-220, T07/T13 task files, `crates/log/src/plan.rs:273-297,420-443`, `README.md:430-456`, `.config/nextest.toml`, `tests/cli_contract.rs:1702-1770`. Note F20 adds a test back (low priority). | Run second. REVIEW FLAG: implementer found the README gate's `cargo clippy -p girpr --all-targets -- -D warnings` line FAILS on a pre-existing dead-code warning for `default_log_path()` at src/logging.rs:117 (leftover F22, pruned by CP5 reviewer). F09/F20 themselves pass; reviewer must decide whether to fix this in review or re-approve as a follow-up (product-code cleanup, not test coverage). |
-| A | F01 | in_progress | — | — | Shared tempdir helper extraction: move the verbatim `tests/common/mod.rs` from `tools/sync` and `tools/sled2redb` into the existing `girpr-tempdir` crate; rewire both test targets; leave root/capture `common/mod.rs` separate. Pointers: report cross-cutting L226-233, `tools/sync/tests/common/mod.rs`, `tools/sled2redb/tests/common/mod.rs`, `crates/tempdir/src/lib.rs`. F01 targets `common/mod.rs`, not T06's rewritten `convert.rs`. Test-only; preserve all helper behavior. | Run last (largest refactor, single item). |
+| A | F01 | pending_review | f9b6914e (single commit) | — | Shared tempdir helper extraction: move the verbatim `tests/common/mod.rs` from `tools/sync` and `tools/sled2redb` into the existing `girpr-tempdir` crate; rewire both test targets; leave root/capture `common/mod.rs` separate. Pointers: report cross-cutting L226-233, `tools/sync/tests/common/mod.rs`, `tools/sled2redb/tests/common/mod.rs`, `crates/tempdir/src/lib.rs`. F01 targets `common/mod.rs`, not T06's rewritten `convert.rs`. Test-only; preserve all helper behavior. | Run last (largest refactor, single item). |
 
 ## Known constraints from the report (persistent)
 
