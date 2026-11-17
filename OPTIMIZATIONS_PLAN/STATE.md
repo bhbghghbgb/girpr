@@ -10,10 +10,11 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: wait for the **T07** implementing session to finish, then apply
-  its result (commit range / skip) per the per-task loop.
+* Next action: spawn implementing session for **T08** (first `todo`), handing its
+  task-file path, its Pointers block and the "Implementing session" section of
+  `ORCHESTRATION.md`. T08 is the last task in CP3, so on success run the CP3 review.
 * Active batch: none. Phase: implementation (P0 tasks). CP1 and CP2 reviews done.
-* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `pending_review`, T07 `in_progress`.
+* Active checkpoint: CP3 (`open`). Status: T05 `pending_review`, T06 `pending_review`, T07 `pending_review`, T08 `todo`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -37,7 +38,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 | T04 | Table-drive sync hash dedup/order asserts | completed | P0 | CP2 | impl `6f6a47af` (test-only); CP2 review confirmed completed. Four cases → `dedup_keeps_first_seen_order` table (41→38), 8 assertions preserved, parse-vs-parse_any via fn pointer. Review flags judged not worth changing (nested grouping keeps one comment per regression; named struct unnecessary for 4 fixed rows). |
 | T05 | Remove capture no-op test; merge same-function pairs | pending_review | P0 | CP3 | commits `0e8496e9..30e15ae4` (test-only). No-op removed + 4 pairs merged (670→665 tests, −5); manifest/proto.rs equality assertion kept, only misleading doc dropped. REVIEW FLAG: the 5th pair `config/tests.rs:411/483` was SKIPPED per guardrail - 411 is end-to-end rejection across bad tags, 483 checks the 'device' diagnostic content via tag_shape_problem; implementer says a reviewer could fold 483 into 411 by adding a `.contains("device")` assertion. Reviewer must confirm skip or fix. |
 | T06 | sled2redb removes + usage-error parametrization | pending_review | P0 | CP3 | impl `e72f5859` (test-only, tools/sled2redb/tests/convert.rs). Removed subsumed help + temp-name tests, parametrized 4 usage-error cases (integration 16→11, −5). Strict help pin, src/convert.rs:410, and convert.rs:515 conversions (F03) left intact. No flags. |
-| T07 | `crates/log` + `tempdir` low-risk merges | in_progress | P0 | CP3 | |
+| T07 | `crates/log` + `tempdir` low-risk merges | pending_review | P0 | CP3 | commits `bd151a08..ef7fbfc1` (test-only). 3 tests removed as planned; tempdir pairs had distinct properties so were folded (weak into strong) keeping every assertion; log default-file policy still covered via LogPlan::resolve (446). No pairs skipped. No flags. |
 | T08 | `repair_plan` scope table + optional root-integration merges | todo | P0 | CP3 | |
 | T09 | Consolidate `run_lock.rs` case clusters | todo | P1 | CP4 | |
 | T10 | Consolidate `purge.rs` classifier early tests | todo | P1 | CP4 | |
@@ -68,7 +69,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T04 | 6f6a47af (single commit) | completed |
 | T05 | 0e8496e9..30e15ae4 (2 commits) | — |
 | T06 | e72f5859 (single commit) | — |
-| T07 | — | — |
+| T07 | bd151a08..ef7fbfc1 (2 commits) | — |
 | T08 | — | — |
 | T09 | — | — |
 | T10 | — | — |
@@ -93,6 +94,8 @@ effect) so the final follow-up phase is meaningful.
 | F06 | Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way; merge only where multiple cases exercise the same helper. | T01 implementer | proposed | CP1 reviewer kept; skip `run_lock.rs` clusters (T09 folds those). Do not force. |
 | F07 | ~~Fold `the_runtime_keeps_a_worker_beyond_every_file_window` (main.rs) into T03's `worker_threads_arithmetic` table using exact-value rows; saves one test.~~ | T03 implementer | removed | CP2 reviewer pruned: saves only 1 test while replacing a general `> jobs` headroom invariant (already covered by exact-value + saturation rows) with exact examples; runaway risk. |
 | F08 | If more sled2redb usage-error shapes with distinct assertions are added later, replace the parametrized test's `is_version` boolean with a per-row assertion closure so special-case checks stay data-driven rather than becoming a widening `if` chain. | T06 implementer | proposed | Conditional on future additions; test-only. Reviewer may prune as speculative. |
+| F09 | Consider an additional `--release` test run for `girpr-log` in CI: dev-profile `cargo test`/nextest only exercises the debug (no-file) branch of the surviving default-file policy test, so the release (timestamped default) branch is never run. | T07 implementer | proposed | Test-config/CI, not a test-count reduction. Reviewer decides relevance. |
+| F10 | Add a brief note to the surviving log policy test that `default_file_is_written()` is an intentional branch selector, not the assertion under test, to deter re-adding the removed tautological test. | T07 implementer | proposed | Trivial doc-comment tidy; reviewer may prune. |
 
 ## Follow-up batches
 
