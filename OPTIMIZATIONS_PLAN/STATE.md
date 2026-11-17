@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T19, then advance per the loop.
-* Active checkpoint: CP5 (`open`); T19 `in_progress`.
+* Next action: pick the next `todo` task (T20) and spawn its implementing session.
+* Active checkpoint: CP5 (`open`); T19 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -44,7 +44,7 @@ commit ranges only.
 | T16 | Consolidate girpr multi-run parity tests | completed | CP4 | CP4 review: completed |
 | T17 | Merge girsync dry-run/hard-link groups | completed | CP4 | CP4 review: completed |
 | T18 | Merge redundant gircap read/verify groups | completed | CP4 | CP4 review: completed (§6.2-3 deferral accepted as N/A) |
-| T19 | Tidy ignored tests | in_progress | CP5 | |
+| T19 | Tidy ignored tests | pending_review | CP5 | 2 commits a82d4d81..36719f62; see review range |
 | T20 | Guardrail audit (hooks, no temp→`Z:`) | todo | CP5 | |
 
 ## Review checkpoints
@@ -81,6 +81,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T16 | `aeefde5c..b51e0395` | completed |
 | T17 | `319270b7..15e79270` | completed |
 | T18 | `6c165bc5..9b8b5128` | completed (partial accepted) |
+| T19 | `6fc38676..36719f62` | — |
 
 ## Follow-ups
 
@@ -119,6 +120,8 @@ are done and a review session has decided the batches.
 | F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; convert via `usage_rejection`, keep one for exact stderr. | T15 implementer | proposed | CP4 review: KEEP — genuine bounded win. |
 | F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | removed | CP4 review: moot — confirmed debug builds write no default log file (logging.rs:183-200). |
 | F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | CP4 review: KEEP — product-hook decision for a future review. |
+| F39 | If the artifact_bridge suite is ever added to a gate, a cross-process on-disk verification cache would be the only way to verify literally once across nextest processes (previously rejected as runaway in F37) — revisit only if the gate changes. | T19 implementer | proposed | Reviewer decides. |
+| F40 | Give peak_heap a very loose structural check (`buffered > streamed`) to self-verify the ratio — optional; conflicts with the file's deliberate "measurement, not assertion" design. | T19 implementer | proposed | Reviewer decides. |
 | F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | removed | CP4 review: cosmetic cross-binary assertion dedup. |
 | F33 | Merge the three repaired `repair_scan.rs` tests into one table-driven test over modes (inplace/temp/ordered) centralizing "scanned estimate == real download" via `--plan-out`; higher coverage risk. | T16 implementer | removed | CP4 review: high coverage risk; T16 deliberately conservative. |
 | F34 | The cross-root hard-link test could share the T17 fixture too, but needs a third link and `--exclude`, raising complexity/risk for little gain — kept separate deliberately. | T17 implementer | removed | CP4 review: implementer deemed not worth complexity/risk. |
@@ -154,3 +157,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * T17 implemented (commit 15e79270): anchors current. D8 — merged `run_sync_dry_run_writes_nothing` + `…creates_no_cache` into one single-run test asserting all original checks (rw-limit-2, both files unchanged, no cache/backup on both sides, compare_mem==4 and compare==4); left ignore-cache test alone. D9 — added `seed_dst_hard_link_pair` fixture, merged the two dst-pair hard-link tests into one asserting all three dimensions in a single dry/real spawn pair (ordinary inode untouched, case-only inode untouched + renamed-before-refusal, no COPY, hazard named, default-plan delete-then-succeed parity on a separate fixture); kept cross-root test separate (different shape). Hard-link spawns 8->6; dry-run 2 tests->1. sync 46 pass/1 skip, fmt clean. No product code.
 * T18 implemented (commit 9b8b5128): §6.2-5 done — merged two `every_command_that_reads_a_bundle_agrees_*` cases into their `a_bundle_without_*_does_not_verify` partners (folding materialize loop, all assertions preserved incl. upfront is_file + verify/materialize refuse + name the doc), dropped trivial `the_binary_exists_where_this_test_expects_it`. §6.2-3 judged NOT APPLICABLE: after T06 only one test verifies the shared bundle; the six `offline_bundle.rs` reverify sites use distinct freshly-built/mutated `Bundle::build` fixtures, not the shared bundle — no per-shared-bundle verification redundancy left, so no cross-process verify cache forced (per guardrail). Report's "three agree cases / rejection twin at 498" was a miscount (two exist; line 498 partner has no agree twin — left intact, noted). gircap 865 pass/3 skip (3 fewer = 3 removed tests), fmt/clippy -D warnings clean. No product code; verify::reverify untouched. Reviewer to judge partial scope.
 * CP4 review done (one fix commit `937438db` for T15; tree clean at `937438db`): verdicts T14/T16/T17 `completed`, T15 `completed (fixed)`, T18 `completed` (§6.2-3 deferral accepted as N/A). T15 fix added a self-verifying byte-identity guard in `help_exits_zero` (`assert_eq!(stdout, real_help())`) reusing the existing --help spawn, no added process. Review confirmed T14's stale-report deviation (old :1210/:1278 read no log; logs in separate TempDir outside snapshot), every `.log()` assertion maps to an info!/debug! emission; T16/T17/T18 merges dropped no assertion/parity relation; T18 §6.2-3 confirmed single consumer. Suites re-run: repair_machinery 28/28, cli_contract 49/49, repair_scan/machinery/writer 64/64, sync 46 pass/1 skip, gircap 81/81. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25, F26, F29, F31. Removed: F27, F28, F30, F32, F33, F34, F35, F36, F37, F38 (reasons in table). No new follow-ups.
+* T19 implemented (2 commits): validated all three anchors. Tidy 1 (artifact_bridge share) SKIPPED as stale — suite already uses process-wide `Suite` (OnceCell) verifying once + one Bridge (`c4224d3e`/`a2cfdfb6` ancestors); under nextest each case is a separate process, cross-process cache rejected as runaway (F37). Tidy 2 DONE — peak_heap `CHUNK_BYTES` 2_162_302 -> 262_144, doc prose made scale-independent; ~1.95 s -> ~0.05 s. Tidy 3 DELETED (stale) — `rows_for_a_directory_created_and_removed_in_one_run_are_dropped` reproduced "a row survived for Sub", doc labelled it a known limitation (documented in tools/sync/README.md:462-469), making it pass would need a product change not clearly correct. Verification: ignored-only 12 run/12 pass (was 13/1 fail), girsync sync 46 pass, fmt/clippy clean. No product code.
