@@ -262,6 +262,12 @@ mod tests {
     /// The name says which suite and which test asked for the directory, and
     /// it carries the process id — the three parts a reader needs to work out
     /// whose leftover a surviving directory is.
+    ///
+    /// The five-part shape is the **code's** promise, not the caller's: a
+    /// prefix or a tag that carries a dash has it folded to an underscore, so
+    /// the name still has five parts. This matters because one caller builds
+    /// its tag from data — a table row's name — and a row name is a sentence,
+    /// so a dash in it is a matter of time rather than a matter of luck.
     #[test]
     fn the_name_carries_the_prefix_the_tag_and_the_pid() {
         let path = unique_path("girpr_tempdir_test", "a_tag");
@@ -278,6 +284,19 @@ mod tests {
         assert_eq!(parts[2], std::process::id().to_string());
         assert!(parts[3].parse::<u128>().is_ok(), "the name is {name}");
         assert!(parts[4].parse::<u64>().is_ok(), "the name is {name}");
+
+        // The shape holds with dashed inputs too: the dash folds to an
+        // underscore and the prefix and tag still occupy the first two slots.
+        let dashed = unique_path("girpr-tempdir-test", "a-tag");
+        let dashed_name = dashed
+            .file_name()
+            .expect("the path has a last component")
+            .to_string_lossy()
+            .into_owned();
+        let dashed_parts: Vec<&str> = dashed_name.split('-').collect();
+        assert_eq!(dashed_parts.len(), 5, "the name is {dashed_name}");
+        assert_eq!(dashed_parts[0], "girpr_tempdir_test");
+        assert_eq!(dashed_parts[1], "a_tag");
     }
 
     /// Every scratch tree of this workspace lives under **one** directory in
@@ -287,6 +306,13 @@ mod tests {
     /// has to be attributable — "whose leftover is this?" — and in the system
     /// temp directory the name is all the answer there is. Under a root named
     /// for the project the answer is the directory it sits in.
+    ///
+    /// The root is there once a scratch tree has been made. Not "the root was
+    /// created by this call": another test in another process may have made it
+    /// already, and a test that removed the root to find out would delete the
+    /// tree some other test is halfway through writing. The promise worth
+    /// pinning is the one a caller can rely on — after `TempDir::new`, the root
+    /// exists.
     #[test]
     fn every_scratch_tree_lives_under_this_projects_own_root() {
         let dir = TempDir::new("girpr_tempdir_test", "under_the_root");
@@ -307,41 +333,8 @@ mod tests {
             "the root is in the system temp directory: {}",
             root().display()
         );
-    }
-
-    /// The root is there when a scratch tree has been made.
-    ///
-    /// Not "the root was created by this call": another test in another
-    /// process may have made it already, and a test that removed the root to
-    /// find out would delete the tree some other test is halfway through
-    /// writing. The promise worth pinning is the one a caller can rely on —
-    /// after `TempDir::new`, the root exists.
-    #[test]
-    fn the_root_exists_once_a_scratch_tree_has_been_made() {
-        let dir = TempDir::new("girpr_tempdir_test", "makes_the_root");
-        assert!(root().is_dir(), "the root is there");
+        assert!(root().is_dir(), "the root is there once a tree was made");
         assert!(dir.is_dir(), "and so is the tree under it");
-    }
-
-    /// The five-part shape is the **code's** promise, not the caller's: a
-    /// prefix or a tag that carries a dash has it folded to an underscore, so
-    /// the name is still five parts.
-    ///
-    /// This matters because one caller builds its tag from data — a table row's
-    /// name — and a row name is a sentence, so a dash in it is a matter of
-    /// time rather than a matter of luck.
-    #[test]
-    fn a_dash_in_the_prefix_or_the_tag_cannot_break_the_shape() {
-        let path = unique_path("girpr-tempdir-test", "a-tag");
-        let name = path
-            .file_name()
-            .expect("the path has a last component")
-            .to_string_lossy()
-            .into_owned();
-        let parts: Vec<&str> = name.split('-').collect();
-        assert_eq!(parts.len(), 5, "the name is {name}");
-        assert_eq!(parts[0], "girpr_tempdir_test");
-        assert_eq!(parts[1], "a_tag");
     }
 
     /// An `absent` directory is a path and nothing more: the tests whose
