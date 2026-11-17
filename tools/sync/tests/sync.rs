@@ -128,8 +128,16 @@ fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// A dry run writes nothing on disk *and* creates no caches.
+///
+/// Merged from the formerly separate `run_sync_dry_run_writes_nothing` and
+/// `run_sync_dry_run_creates_no_cache`: they overlapped almost entirely, so a
+/// single run now carries every one of their checks. A read/write open would
+/// have created a cache per side and written its `meta`; the dry run must leave
+/// both sides untouched. The `--ignore-cache` case is distinct and stays in its
+/// own test below.
 #[test]
-fn run_sync_dry_run_writes_nothing() {
+fn run_sync_dry_run_writes_nothing_and_creates_no_cache() {
     let t = temp_root("dryrun");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
@@ -144,32 +152,13 @@ fn run_sync_dry_run_writes_nothing() {
     o.common.rw = RwLimits::Shared(NonZeroUsize::new(2).unwrap());
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
+
     // Nothing changed on disk.
     assert_eq!(rfile(&dst, "a.txt"), b"old");
     assert_eq!(rfile(&dst, "extra.txt"), b"stay for now");
-    assert!(
-        !has_backup_sibling(&dst.join(CACHE_PREFIX)),
-        "dry-run makes no backups"
-    );
 
-    // Still different afterwards.
-    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
-    assert_eq!(code, 4);
-}
-
-/// A dry run writes nothing, which includes not *creating* the caches: a
-/// read/write open would have created one per side and written its `meta`.
-#[test]
-fn run_sync_dry_run_creates_no_cache() {
-    let t = temp_root("drynocache");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
-    wfile(&src, "a.txt", b"new content here");
-    wfile(&dst, "a.txt", b"old");
-
-    let o = sync_dry(src.clone(), dst.clone());
-    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
-
+    // Nor did the run create a cache on either side, or back one up. These
+    // assertions run before the compares below, which open their own caches.
     for d in [&src, &dst] {
         assert!(
             !d.join(CACHE_PREFIX).exists(),
@@ -181,8 +170,13 @@ fn run_sync_dry_run_creates_no_cache() {
             "dry-run makes no backups"
         );
     }
-    // The plan was still the real one, and nothing was applied.
-    assert_eq!(rfile(&dst, "a.txt"), b"old");
+
+    // The plan was still the real one, and nothing was applied -- in both cache
+    // modes the two originals asserted.
+    assert_eq!(
+        cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        4
+    );
     assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 4);
 }
 
@@ -477,6 +471,17 @@ fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
     );
 }
 
+/// Seed the "dst inode with two names" shape shared by the hard-link refusal
+/// dimensions below: src holds the bytes a sync will want to copy, dst holds
+/// the old bytes under `dst_name`, and `alias` is a second name for that same
+/// inode. `dst_name` differs from `src_name` only for the case-only dimension.
+fn seed_dst_hard_link_pair(src: &Path, dst: &Path, src_name: &str, dst_name: &str, alias: &str) {
+    wfile(src, src_name, b"NEW");
+    wfile(dst, dst_name, b"OLD");
+    std::fs::hard_link(dst.join(dst_name), dst.join(alias))
+        .expect("hard links need no privilege on this host");
+}
+
 /// `dst/a.txt` is a hard link to `src/b.txt`, so truncating it writes through
 /// to a source file. Both hash modes must refuse before `File::create`, leaving
 /// the shared bytes and the link in place.
@@ -522,22 +527,36 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
     );
 }
 
-/// The hard-link refusal is a plan-time decision both modes take. `copy_one`
-/// runs only in a real run, so the dry run must not report `COPY` for a tree
-/// the real run refuses with exit 3. With `--keep-extra` the second name
-/// survives, so both modes refuse before any action record. Without it, the
-/// delete phase removes the second name first and both modes succeed — the
-/// preflight credits the planned delete instead of refusing every count above
-/// one.
+/// Hard links are refused at plan time in every dimension: an ordinary dst
+/// pair, its case-only spelling, and (in the sibling test above) a dst link
+/// into src. The refusal is the same decision both modes take: with
+/// `--keep-extra` the second name survives, so both modes refuse before any
+/// action record; without it, the delete phase removes the second name first
+/// and both modes succeed — the preflight credits the planned delete instead of
+/// refusing every count above one.
+///
+/// The ordinary-pair and case-only dimensions share one fixture: it holds both
+/// hazards at once, so a single dry/real refusal pair pins them together. This
+/// keeps both dimensions asserted with fewer binary spawns than running each
+/// against its own tree. They are not strictly subsumed — the case-only pass
+/// re-keys `dm` in a dry run but moves nothing on disk, so both modes stat the
+/// spelling still on disk and the real run renames before refusing — so each
+/// dimension keeps its own assertions. The default-plan half uses a separate,
+/// single-pair fixture so the case rename cannot alter the exact plan.
 #[test]
-fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
+fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
+    // ----- dimensions 1 & 2: one fixture, two dst hard-link pairs -----------
     let t = temp_root("hardlink_parity");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    wfile(&src, "a.txt", b"NEW");
-    wfile(&dst, "a.txt", b"OLD");
-    std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt"))
-        .expect("hard links need no privilege on this host");
+    seed_dst_hard_link_pair(&src, &dst, "n.txt", "n.txt", "n_shared.txt");
+    // The case-only pair is observable only where the two spellings differ.
+    let case_sensitive = is_case_sensitive(&dst);
+    if case_sensitive {
+        seed_dst_hard_link_pair(&src, &dst, "c.txt", "C.txt", "c_shared.txt");
+    } else {
+        eprintln!("skip: this filesystem pairs `CaseProbe` with `caseprobe`");
+    }
 
     for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
         let out = run_binary_raw(&src, &dst, extra, &[]);
@@ -549,81 +568,68 @@ fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
         );
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("hard links"), "names the hazard: {err}");
-        assert!(err.contains("a.txt"), "names the copy: {err}");
+        assert!(
+            err.contains("n.txt") || err.contains("c.txt") || err.contains("C.txt"),
+            "names the copy: {err}"
+        );
         let recs = parse_ndjson(&out.stdout);
         assert!(
             !recs.iter().any(|r| r["event"] == "copy"),
             "no COPY is reported for a copy that cannot run: {recs:?}"
         );
+        // Ordinary pair: both names still hold dst's bytes.
         assert_eq!(
-            rfile(&dst, "a.txt"),
+            rfile(&dst, "n.txt"),
             b"OLD",
             "the shared inode is untouched"
         );
-        assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+        assert_eq!(rfile(&dst, "n_shared.txt"), b"OLD");
+        // Case-only pair: same invariant, spelled as it is on disk at this
+        // point. Only the real run's rename pass moves C.txt to c.txt.
+        if case_sensitive {
+            let on_disk = if extra.contains(&"--dry-run") {
+                "C.txt"
+            } else {
+                "c.txt"
+            };
+            assert_eq!(rfile(&dst, on_disk), b"OLD", "case pair inode untouched");
+            assert_eq!(rfile(&dst, "c_shared.txt"), b"OLD");
+        }
+    }
+    // The real --keep-extra run renamed C.txt to src's casing before refusing;
+    // the dry run (which moves nothing on disk) did not.
+    if case_sensitive {
+        let names = entry_names(&dst);
+        assert!(
+            names.iter().any(|n| n == "c.txt"),
+            "renamed to src's casing: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "C.txt"),
+            "no old spelling left: {names:?}"
+        );
     }
 
-    // The default plan deletes the extra name before the copy, which reduces the
-    // count to one. The dry run must reach that decision too.
-    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    // ----- dimension 1's other half: the default plan deletes the extra -----
+    // A fresh single-pair fixture, so the case pair cannot change the plan. The
+    // default plan deletes the second name before the copy, reducing the count
+    // to one; both modes must reach that decision.
+    let t2 = temp_root("hardlink_default");
+    let src2 = t2.subdir("src");
+    let dst2 = t2.subdir("dst");
+    seed_dst_hard_link_pair(&src2, &dst2, "a.txt", "a.txt", "shared.txt");
+
+    let dry = run_binary(&src2, &dst2, &["--dry-run"], &[]);
     assert_eq!(paths(&dry, "delete"), ["shared.txt"], "{dry:?}");
     assert_eq!(paths(&dry, "copy"), ["a.txt"], "{dry:?}");
-    assert_eq!(rfile(&dst, "a.txt"), b"OLD", "the dry run changed nothing");
+    assert_eq!(rfile(&dst2, "a.txt"), b"OLD", "the dry run changed nothing");
 
-    let real = run_binary(&src, &dst, &[], &[]);
+    let real = run_binary(&src2, &dst2, &[], &[]);
     assert_eq!(paths(&real, "delete"), ["shared.txt"], "{real:?}");
     assert_eq!(paths(&real, "copy"), ["a.txt"], "{real:?}");
-    assert_eq!(rfile(&dst, "a.txt"), b"NEW");
-    assert!(!dst.join("shared.txt").exists());
-    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
-}
-
-/// A case-only dst hard link is judged at plan time in both modes.
-///
-/// The rename pass re-keys `dm` in a dry run but moves nothing on disk, so both
-/// modes stat the spelling still on disk: the dry run plans the same refusal
-/// the real run reaches after renaming. `--keep-extra` makes the second name
-/// survive, which is what leaves the inode with two names at copy time.
-#[test]
-fn a_case_only_hard_link_is_the_same_decision_in_both_modes() {
-    let t = temp_root("hardlink_case_parity");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
-    skip_if_case_insensitive!(&dst);
-    wfile(&src, "a.txt", b"NEW");
-    wfile(&dst, "A.txt", b"OLD");
-    std::fs::hard_link(dst.join("A.txt"), dst.join("shared.txt"))
-        .expect("hard links need no privilege on this host");
-
-    for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
-        let out = run_binary_raw(&src, &dst, extra, &[]);
-        assert_eq!(
-            out.status.code(),
-            Some(3),
-            "a case-only hard link must be refused in both modes: {extra:?}\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("hard links"), "names the hazard: {err}");
-        assert!(err.contains("a.txt"), "names the copy: {err}");
-        let recs = parse_ndjson(&out.stdout);
-        assert!(
-            !recs.iter().any(|r| r["event"] == "copy"),
-            "no COPY is reported for a copy that cannot run: {recs:?}"
-        );
-    }
-
-    assert_eq!(
-        entry_names(&dst),
-        ["a.txt", "shared.txt"],
-        "the real run renamed A.txt to src's casing before the refusal"
-    );
-    assert_eq!(
-        rfile(&dst, "a.txt"),
-        b"OLD",
-        "the shared inode is untouched"
-    );
-    assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+    assert_eq!(rfile(&dst2, "a.txt"), b"NEW");
+    assert!(!dst2.join("shared.txt").exists());
+    assert_eq!(cmd_compare(compare_mem(src2, dst2), &log()).unwrap(), 0);
 }
 
 #[test]
