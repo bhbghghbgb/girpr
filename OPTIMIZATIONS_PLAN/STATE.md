@@ -10,8 +10,8 @@ commit ranges only.
 
 ## Current position
 
-* Next action: wait for implementing session on T16, then advance per the loop.
-* Active checkpoint: CP4 (`open`); T14, T15 `pending_review`, T16 `in_progress`.
+* Next action: pick the next `todo` task (T17) and spawn its implementing session.
+* Active checkpoint: CP4 (`open`); T14, T15, T16 `pending_review`.
 * Phase: implementation.
 * Blocked on user: no.
 
@@ -41,7 +41,7 @@ commit ranges only.
 | T13 | Add gircap zero-backoff retry hook | completed | CP3 | CP3 review: completed |
 | T14 | Reduce girpr trace-level logging | pending_review | CP4 | 32d12ebe; see review range |
 | T15 | Remove girpr `--help`/argument spawns | pending_review | CP4 | ac507a7c; see review range |
-| T16 | Consolidate girpr multi-run parity tests | in_progress | CP4 | |
+| T16 | Consolidate girpr multi-run parity tests | pending_review | CP4 | b51e0395; see review range |
 | T17 | Merge girsync dry-run/hard-link groups | todo | CP4 | |
 | T18 | Merge redundant gircap read/verify groups | todo | CP4 | |
 | T19 | Tidy ignored tests | todo | CP5 | |
@@ -78,6 +78,7 @@ the review-and-fix session. Keep the range until the checkpoint is `done`.
 | T13 | `fbf8d14c..1fe87a27` | completed |
 | T14 | `49457928..32d12ebe` | — |
 | T15 | `f7392a76..ac507a7c` | — |
+| T16 | `aeefde5c..b51e0395` | — |
 
 ## Follow-ups
 
@@ -115,6 +116,9 @@ are done and a review session has decided the batches.
 | F28 | Use a `warn` default log level in repair_machinery, with the ~8 log-asserting tests explicitly requesting `debug`; marginal gain given kilobyte fixtures. | T14 implementer | proposed | Reviewer decides. |
 | F29 | The ~8 remaining post-parse jobs-boundary spawns in cli_contract assert `"usage error: --jobs must be <= 1024"` stderr text already unit-tested in `src/cli.rs`; consider whether the spelling-parity test's process cost is worth it. | T15 implementer | proposed | Implementer left intact to honour "assertions unchanged"; reviewer decides. |
 | F30 | `GIRPR_TEST_NO_LOG` hook idea: skip default log file creation for argument-only runs; low-value since debug builds (what nextest runs) write no default log file anyway. | T15 implementer | proposed | Reviewer decides. |
+| F31 | Comprehensive T16 site still uses 3 spawns because the unscanned-estimate upper-bound check needs a separate `--print-plan` process; collapsing would require exposing the unscanned estimate as a parseable field (product/test-hook change). | T16 implementer | proposed | Out of scope; reviewer decides. |
+| F32 | T16's `chunk_hits == [chunk_p, chunk_t]` assertion also exists in `repair_writer.rs::the_ordered_tier_keeps_one_direction...` with the same fixture; consider dropping from one site for strict single-assertion-per-fact. | T16 implementer | proposed | Reviewer decides. |
+| F33 | Merge the three repaired `repair_scan.rs` tests into one table-driven test over modes (inplace/temp/ordered) centralizing "scanned estimate == real download" via `--plan-out`; higher coverage risk. | T16 implementer | proposed | Reviewer decides. |
 | F17 | Narrow T06's shared-bundle fingerprint to just the world-generating section so harness-only edits (e.g. T08's cache) don't force a rebuild — only if staleness can be ruled out (current whole-file key is conservative/correct). | T08 implementer | removed | CP2 review: risks stale bundles for marginal rebuild savings; whole-file key is correct. |
 
 ## Context / decisions
@@ -139,3 +143,4 @@ checkpoint boundary changes, and anything else needed to resume.
 * CP3 review done (no fix/revert commits; tree clean at `7308c6f1`): verdicts T09–T13 all `completed`. Product changes in T10 (flush removal), T11/T12 (test-only cfg hooks), T13 (default-off env hook) all validated: production behavior/backoff/durability unchanged, deterministic gates, no flakiness (repeated runs). Suites re-run: convert 17/17, sled2redb 17/17, cache 89/89, girpr --lib 453/453, capture_layout 37/37. Follow-ups kept: F02, F09, F10, F13, F14, F15, F16, F24, F25. Removed: F18, F19, F20, F21, F22, F23 (reasons in table). No new follow-ups.
 * T14 implemented (commit 32d12ebe): only `tests/repair_machinery.rs` changed. Added `LogLevel` enum (Debug/Trace); split `Rig::run()` into a default-debug wrapper + `run_at_level(level, args)`. Determined from source that only `the_trace_logs_download_records_agree_with_the_servers_request_log` reads chunk-level log records — that one opts into trace; other log assertions are debug/info. Made log read-back lazy via `Run.log_path` + `OnceLock<String>` and `.log()`, so runs that never inspect the log skip the read; all log-content assertions kept verbatim, no `snapshot()`/hash assertion touched. repair_machinery 28/28, clippy/fmt clean. DEVIATION: report named ~3 trace tests but only one actually reads chunk-level logs; report's "MD5 of the log" premise also stale (logs in separate TempDir, not in snapshot walk) — reviewer to confirm.
 * T15 implemented (commit ac507a7c): only `tests/cli_contract.rs`. Added `real_help()` that renders --help in-process by replaying clap's `DisplayHelp` error with the real binary name as argv[0] (verified byte-identical to binary --help; naive `Args::command().render_help()` was NOT — rejected), cached in a OnceLock; added `usage_rejection()` classifying bad args via `Args::try_parse_from` or `Args::into_ctx`. Converted 5 --help cases + the 17-case `argument_errors_exit_one_not_two` loop to in-process; kept real binary cases for exit-code contract (`help_exits_zero`, one bad-flag case, all post-parse/log-file/data-plane cases). Argument/help spawns ~31 -> ~10 (~68% cut); all 49 cli_contract tests pass, no clippy warnings. No product logging/lock code touched; no GIRPR_TEST_NO_LOG hook needed.
+* T16 implemented (commit b51e0395): stale report line numbers; implementer mapped actual parity relations across repair_scan/repair_machinery/repair_writer. Genuine mode-vs-mode/tier-vs-tier relations already each asserted in exactly one place (repair_machinery.rs); repair_writer.rs flagged tests are single-spawn/single-mode with unique assertions — left untouched per "keep both when relations differ". Only real redundancy was in repair_scan.rs: two scanned-estimate-vs-real-download tests each spawned twice (--print-plan + repair) — consolidated to one `--scan --plan-out` run each, comparing per-file est_download_bytes sum to SUMMARY download_bytes; chunk_hits assertions kept. 2 spawns cut (16->14 run_binary calls). repair_scan/machinery/writer 64/64, clippy/fmt clean. No product code.
