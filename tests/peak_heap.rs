@@ -6,12 +6,15 @@
 //!
 //! # Why this file exists
 //!
-//! The whole justification for the streaming path is a number: the chunk
-//! path's peak live heap goes from **6.14 MB to 0.03 MB** per active chunk
-//! (measured below on the 2 162 302 B chunk: 6 435 587 B against 33 684 B),
-//! which at `--jobs 8` is ~64-97 MB of resident chunk buffers down to
-//! ~0.3 MB. Without an instrument that number is a sentence in a document,
-//! and the next change that reintroduces a buffer silently invalidates it.
+//! The whole justification for the streaming path is a ratio: the buffered
+//! path's peak live heap is roughly twice the chunk's decoded size (the
+//! compressed body stays resident while the decoded buffer grows by doubling),
+//! while the streamed path holds only a small fixed-size read window. The
+//! instrument below measures both on the same incompressible payload and prints
+//! the ratio, which is scale-independent; at `--jobs 8` it is the difference
+//! between buffering a whole chunk per worker and holding a small window.
+//! Without an instrument that ratio is a sentence in a document, and the next
+//! change that reintroduces a buffer silently invalidates it.
 //!
 //! So this is the instrument: a counting allocator around the two shapes of
 //! the chunk path, and a printout of what each one costs.
@@ -43,10 +46,12 @@
 //! | **streamed** | `stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
 //! | **buffered** | `resp.bytes()` → `zstd::decode_all` → the decoded buffer — the buffered path |
 //!
-//! The payload is the shape of the reference bundle's largest chunk: ~2.16 MB
-//! of essentially incompressible bytes, so the compressed body and the
-//! decoded body are the same size. A compressible payload would measure the
-//! wrong thing — the compressed body would be small and the buffered path's
+//! The payload is a scaled-down stand-in for the reference bundle's largest
+//! chunk: 256 KiB of essentially incompressible bytes, so the compressed body
+//! and the decoded body are the same size. The ratio this measures is
+//! scale-independent, so the smaller payload makes the instrument cheaper to
+//! run without changing the conclusion. A compressible payload would measure
+//! the wrong thing — the compressed body would be small and the buffered path's
 //! peak would be the decoded buffer alone.
 
 // A counting global allocator is necessarily `unsafe`: it is the instrument
@@ -264,8 +269,9 @@ async fn serve(body: Vec<u8>, piece: usize) -> String {
 // the measurement
 // ---------------------------------------------------------------------------
 
-/// The size of the reference bundle's largest chunk, in bytes.
-const CHUNK_BYTES: usize = 2_162_302;
+/// The payload size, in bytes: a scaled-down stand-in for the reference
+/// bundle's largest chunk (256 KiB). The measured ratio is scale-independent.
+const CHUNK_BYTES: usize = 262_144;
 
 #[tokio::test]
 #[ignore = "a measurement, not an assertion: run it and read the numbers"]
