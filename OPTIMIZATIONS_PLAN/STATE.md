@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T14 implementing session to finish, then apply its
-  result. T14 completes CP5's tasks, so after recording it, run the CP5 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP4 `done`; T13 `pending_review`, T14 `in_progress` (last CP5 task).
+* Next action: run the CP5 review phase (`ORCHESTRATION.md` §4) — both CP5 tasks
+  are terminal (`pending_review`). Set CP5 `in_progress` and spawn one
+  review-and-fix session with the two commit ranges (include the T13 row-pin and
+  T14 partial-implementation notes).
+* Active phase: review. All CP5 tasks are `pending_review`; CP5 is ready for review.
 * Active checkpoint: none yet (CP5 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -48,7 +49,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | completed | P1 | CP4 | CP4 review: completed. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | completed | P1 | CP4 | CP4 review: completed (DiskFigure deviation validated). |
 | T13 | Capture: merge mock / no-network full captures | B4 | pending_review | P1 | CP5 | Implemented in bda7e0c5; row-pin test kept separate (deviation, see context). |
-| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | in_progress | P1 | CP5 | Two tables over the named case sets. |
+| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | pending_review | P1 | CP5 | Partial: purge-only trio merged in b3cf81bf; plan-out pair skipped (contradiction, see context). |
 | T15 | Parameterize the sync heartbeat period | E4 | todo | P1 | CP6 | If counters stay log-only, E2 (T17) is still required. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
@@ -95,7 +96,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T11 | `6117c5ff..787c35f0` | completed |
 | T12 | `ae909714..08ca4e98` | completed |
 | T13 | `2758abff..bda7e0c5` | — (pending CP5 review) |
-| T14–T23 | — (not started) | — |
+| T14 | `86b465f3..b3cf81bf` | — (pending CP5 review) |
+| T15–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -119,6 +121,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F12 | Merge the two `--fail-fast` malformed-manifest cases into a `Lies` table, and merge `the_three_modes_produce_the_same_bytes` with `no_mode_leaves_a_temp_file_behind` into a three-mode loop asserting bytes + leftovers. | T09 implementer | proposed | Real test-count reduction; CP3 reviewer to decide. |
 | F13 | Share one `MockServer` across all three cases of T10's audio-plan test (start before the loop, stop after) to cut 2 listener/task starts. | T10 implementer | proposed | Real but small scale reduction, low risk; outside T10's stated steps. |
 | F17 | Capture the on-disk shared bundle with `--jobs 1` so request `seq` is deterministic, letting T13's row-pin test read from it too (→ one fewer capture) — but it serializes the shared bundle read by ~20 offline tests. | T13 implementer | proposed | Trades fixture-build speed for one fewer test; reviewer decision only if fixture time acceptable. |
+| F18 | A6 (out of T14 scope): `tests/process.rs:281–330` duplicates the library-level removed-path case at `repair_purge.rs:257–307`; its comment claims a process-only distinction that does not exist (asserts `code == 0`). Could be removed or reduced to a one-line flag smoke. | T14 implementer | proposed | Separate finding, explicitly out of T14's guardrails. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
@@ -182,3 +185,4 @@ change log.
 * T11 clippy diagnostics resolved by CP4 review: `repair/phases/plan.rs:573` type_complexity originated in T02's merged table; `tests/repair_machinery.rs:119` dead_code (`Run::word`) was exposed by T09's last-caller conversion. Both benign test-only lints, no `-D warnings` gate, no behavior/coverage/scale impact — reviewer deliberately opened no follow-up.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
+* T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
