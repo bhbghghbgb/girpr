@@ -16,38 +16,16 @@
 //! error path in `main` already treats a version request as an answer rather
 //! than a failure, so the flag would exit `0` the moment it was declared.
 //!
-//! **The argument struct carries no doc comment, on purpose.** `clap` reads
-//! one as the command's `long_about`, so `--help` prints it — verbatim, the
-//! `**` markers and the `#[command(version)]` attribute included, because
-//! `clap` does not render markdown. A note written for a source reader would
-//! then tell a user about an attribute they cannot type. The notes above are
-//! for source readers, so they live here.
+//! The argument struct and the conversion record live in the library, not
+//! here, so a test can parse a spelling and render the record in-process.
+//! Why the struct carries no doc comment is documented there.
 //!
 //! Reports through the same [`girsync::report`] writer as `girsync` itself, so
 //! `--output json` means the same thing in both binaries and there is one
 //! definition of a conversion record rather than a `println!` per tool.
 
 use clap::Parser;
-use girsync::report::{OutputFormat, Record};
-use std::path::PathBuf;
-
-#[derive(clap::Parser, Debug)]
-#[command(
-    name = "sled2redb",
-    about = "Convert a legacy sled cache directory into a redb cache file"
-)]
-struct Args {
-    /// Legacy sled cache directory.
-    sled_dir: PathBuf,
-    /// Destination redb file.
-    redb_path: PathBuf,
-    /// Replace an existing destination.
-    #[arg(long)]
-    force: bool,
-    /// How the conversion record is rendered.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    output: OutputFormat,
-}
+use sled2redb::Args;
 
 fn main() {
     let args = match Args::try_parse() {
@@ -79,13 +57,9 @@ fn main() {
     // for, exactly as it is for `girsync` itself.
     let _guard = girsync::init_tracing(girsync::logging::Level::Info, None, None, false);
     match sled2redb::convert::sled_to_redb(&args.sled_dir, &args.redb_path, args.force) {
-        Ok(c) => Record::keyed("converted")
-            .put("src", args.sled_dir.display().to_string())
-            .put("dst", args.redb_path.display().to_string())
-            .put("files", c.files)
-            .put("dirs", c.dirs)
-            .put("hashes", c.hashes)
-            .emit(args.output),
+        Ok(c) => {
+            sled2redb::conversion_record(&c, &args.sled_dir, &args.redb_path).emit(args.output)
+        }
         Err(e) => {
             // `target: "girsync"` on purpose. `init_tracing` filters the console and
             // the log file to the `girsync` target so third-party crates stay quiet,

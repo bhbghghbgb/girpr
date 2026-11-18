@@ -5,13 +5,16 @@
 
 mod common;
 
-use clap::ValueEnum;
+use clap::{Parser, ValueEnum};
 use common::{parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
 use girsync::report::OutputFormat;
 use md5::Md5;
 use sha2::Digest;
+use sled2redb::Args;
+use sled2redb::convert::Converted;
 use std::collections::HashMap;
+use std::path::Path;
 
 fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json::Value {
     serde_json::json!({
@@ -30,9 +33,11 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Run the converter binary and hand back its exit code, stdout and stderr.
 ///
-/// The binary is spawned rather than the library called because the arguments
-/// and the exit code live in the binary: `sled2redb::convert::sled_to_redb` has
-/// no opinion about how the run was spelled.
+/// The binary is spawned where the *process* boundary is what is under test —
+/// its exit code, its `--help` output, and one flag spelled end to end. The
+/// arguments and the record now live in the library
+/// ([`Args`] / [`sled2redb::conversion_output`]), so everything else in this
+/// suite inspects them in-process without a conversion subprocess.
 fn run_converter<I>(args: I) -> (i32, String, String)
 where
     I: IntoIterator,
@@ -49,17 +54,19 @@ where
     )
 }
 
-/// Parse an argument spelling against the converter's own clap command, in
-/// process. The command is the same definition the help pin holds
-/// ([`the_converter_command`]), so this checks clap's *acceptance* of a spelling
-/// without paying for a full conversion subprocess. Conversion correctness is
-/// the job of the rest of this suite and of the one end-to-end run kept below.
-fn parse_in_process(args: Vec<std::ffi::OsString>) -> clap::ArgMatches {
-    // `try_get_matches_from` takes the first item as argv[0], so prepend the
-    // program name and let the caller pass only the arguments under test.
+/// Parse an argument spelling against the converter's own [`Args`], in process.
+///
+/// This is the parser the binary itself uses, so it checks clap's *acceptance*
+/// of a spelling — and the value a flag selects — without paying for a full
+/// conversion subprocess. The help pin still holds the hand-built command
+/// ([`the_converter_command`]); parsing does not need it. Conversion
+/// correctness is the job of the rest of this suite and of the one end-to-end
+/// run kept below.
+fn parse_in_process(args: Vec<std::ffi::OsString>) -> Args {
+    // `try_parse_from` takes the first item as argv[0], so prepend the program
+    // name and let the caller pass only the arguments under test.
     let argv = std::iter::once(std::ffi::OsString::from("sled2redb")).chain(args);
-    the_converter_command()
-        .try_get_matches_from(argv)
+    Args::try_parse_from(argv)
         .unwrap_or_else(|e| panic!("the spelling must be accepted by clap: {e}"))
 }
 
@@ -417,50 +424,49 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
 
 /// The converter reports through the same writer as `girsync`, so `--output json`
 /// means the same thing in both binaries and a caller parsing one can parse the
-/// other. Asserted through the binary, because that is where the flag's parsing
-/// and its reporting live.
+/// other. The record is a pure function of the counts and the two paths, so its
+/// renderings are asserted in-process against the library seam: no spawn and no
+/// sled fixture are needed to pin JSON, text and the default format.
 #[test]
 fn the_converter_reports_json_records_on_stdout() {
-    let t = temp_root("convert_json");
-    let work = t.subdir("w");
-    build_sled_db(&work);
-    let src = work.join("legacy-cache");
-    let dst = work.join("girpr-cache");
-
-    let run = |extra: &[&str]| -> (i32, String, String) {
-        let mut args: Vec<&std::ffi::OsStr> = vec![src.as_os_str(), dst.as_os_str()];
-        args.extend(extra.iter().map(std::ffi::OsStr::new));
-        run_converter(args)
+    let src = Path::new("legacy-cache");
+    let dst = Path::new("girpr-cache");
+    // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them —
+    // the counts `build_sled_db` yields for this fixture, now supplied directly
+    // because only the render, not the conversion, is under test here.
+    let c = Converted {
+        files: 2,
+        dirs: 1,
+        hashes: 5,
     };
-    // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them. The
-    // count tracks the fixture: `build_sled_db` gives every row both requested
-    // algorithms so the converted record can answer a
-    // `--hash-all-of md5 --hash-all-of sha256` audit, and `blake3` is the extra
-    // one that must survive untouched.
     let want = serde_json::json!({"event": "converted", "src": src.display().to_string(),
                                  "dst": dst.display().to_string(), "files": 2, "dirs": 1,
                                  "hashes": 5});
 
-    let (code, stdout, stderr) = run(&["--output", "json"]);
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(parse_ndjson(stdout.as_bytes()), vec![want.clone()]);
+    let json = sled2redb::conversion_output(&c, src, dst, OutputFormat::Json);
+    assert_eq!(parse_ndjson(json.as_bytes()), vec![want]);
 
-    // The same record, text-rendered, and text is the default.
-    let (code, stdout, stderr) = run(&["--force", "--output", "text"]);
-    assert_eq!(code, 0, "stderr: {stderr}");
+    // The same record, text-rendered.
+    let text = sled2redb::conversion_output(&c, src, dst, OutputFormat::Text);
     assert_eq!(
-        stdout,
+        text,
         format!(
-            "converted src={} dst={} files=2 dirs=1 hashes=5\n",
+            "converted src={} dst={} files=2 dirs=1 hashes=5",
             src.display(),
             dst.display()
         )
     );
-    let (code, stdout, stderr) = run(&["--force"]);
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.starts_with("converted src="),
-        "text is the default: {stdout}"
+
+    // Text is the default: the flag omitted from a real parse selects it, and
+    // the default renders exactly like an explicit `--output text`.
+    let default = Args::try_parse_from(["sled2redb", "sled", "redb"])
+        .expect("the two paths alone parse")
+        .output;
+    assert_eq!(default, OutputFormat::Text, "text is the default");
+    assert_eq!(
+        sled2redb::conversion_output(&c, src, dst, default),
+        text,
+        "the default renders exactly like --output text"
     );
 }
 
@@ -473,10 +479,11 @@ fn the_converter_reports_json_records_on_stdout() {
 /// conversion — and the spelling is what a script writes.
 ///
 /// Acceptance is a parsing property, so every form is checked in-process
-/// against the converter's own clap command. Only two full conversions remain:
-/// one proves a spelling end to end and prints the record every spelling
-/// prints, and the second proves the two `--output` spellings are byte for byte
-/// the same run. Conversion correctness is covered by the rest of the suite.
+/// against the converter's own [`Args`]. Only one full conversion remains: it
+/// proves a spelling end to end and prints the record every spelling prints.
+/// The two `--output` spellings are proved byte-identical in-process, by
+/// parsing each and rendering the same record through the library seam.
+/// Conversion correctness is covered by the rest of the suite.
 #[test]
 fn the_flags_are_accepted_on_either_side_of_the_paths() {
     let t = temp_root("convert_args");
@@ -517,28 +524,24 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
 
     for (i, (before, after)) in forms.iter().enumerate() {
         let dst = work.join(format!("girpr-cache-parse-{i}"));
-        let matches = parse_in_process(args_of(before, after, &dst));
+        let args = parse_in_process(args_of(before, after, &dst));
         assert_eq!(
-            matches.get_one::<OutputFormat>("output"),
-            Some(&OutputFormat::Json),
+            args.output,
+            OutputFormat::Json,
             "the form {before:?} before the paths and {after:?} after them must select json"
         );
         assert_eq!(
-            matches
-                .get_one::<String>("sled_dir")
-                .map(std::ffi::OsStr::new),
-            Some(src.as_os_str()),
+            args.sled_dir.as_os_str(),
+            src.as_os_str(),
             "the sled path is the first positional in the form {before:?} / {after:?}"
         );
         assert_eq!(
-            matches
-                .get_one::<String>("redb_path")
-                .map(std::ffi::OsStr::new),
-            Some(dst.as_os_str()),
+            args.redb_path.as_os_str(),
+            dst.as_os_str(),
             "the redb path is the second positional in the form {before:?} / {after:?}"
         );
         assert_eq!(
-            matches.get_flag("force"),
+            args.force,
             before.contains(&"--force") || after.contains(&"--force"),
             "the form {before:?} / {after:?} sets --force only where the form spells it"
         );
@@ -562,11 +565,29 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
         "the record is the one every spelling prints"
     );
 
-    // The two spellings of `--output` are the same run: the same destination,
-    // the same record, byte for byte.
-    let (code, equals, stderr) = run_converter(args_of(&["--force", "--output=json"], &[], &dst));
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(spaced, equals, "the two spellings are the same run");
+    // The two spellings of `--output` are the same record: parse each spelling
+    // against `Args` — the second one also carries `--force` — and render the
+    // same record with each. Both select json and `--force` never reaches the
+    // record, so the lines are byte-identical without a second conversion.
+    let equals_dst = work.join("girpr-cache-equals");
+    let spaced_args = parse_in_process(args_of(&["--output", "json"], &[], &equals_dst));
+    let equals_args = parse_in_process(args_of(&["--force", "--output=json"], &[], &equals_dst));
+    assert_eq!(spaced_args.output, OutputFormat::Json);
+    assert_eq!(equals_args.output, OutputFormat::Json);
+    assert!(
+        !spaced_args.force && equals_args.force,
+        "--force is set only where the form spells it"
+    );
+    let c = Converted {
+        files: 2,
+        dirs: 1,
+        hashes: 5,
+    };
+    assert_eq!(
+        sled2redb::conversion_output(&c, &src, &equals_dst, spaced_args.output),
+        sled2redb::conversion_output(&c, &src, &equals_dst, equals_args.output),
+        "the two --output spellings render the same bytes"
+    );
 }
 
 /// Usage errors are failures like any other, and fail with the converter's own
@@ -578,13 +599,16 @@ fn the_flags_are_accepted_on_either_side_of_the_paths() {
 ///
 /// Every case is a row below: the arguments under test, the single exit code
 /// all failures share (`3`), and the name the error must print so a script can
-/// tell which argument it got wrong. Each row's exit-code and name assertions
-/// are kept, just folded into one end-to-end test instead of four.
+/// tell which argument it got wrong. Naming the bad argument is a clap parse
+/// property, so three of the four rows are asserted in-process through
+/// [`Args::try_parse_from`] — the same parser the binary uses.
 ///
 /// The version row is the one shape that could pass for an *answer* rather
 /// than a failure: a converter that grew a version would print one and exit
 /// `0`, and nothing else in this file converts something to catch it. So that
-/// row also asserts no version line is printed, on either stream.
+/// row keeps the one process run in this test, pinning both the exit code the
+/// binary chooses for every failure and that no version line is printed on
+/// either stream.
 #[test]
 fn usage_errors_exit_three_and_name_the_bad_argument() {
     struct Case {
@@ -622,16 +646,18 @@ fn usage_errors_exit_three_and_name_the_bad_argument() {
     ];
 
     for case in cases {
-        let (code, stdout, stderr) = run_converter(case.args);
-        assert_eq!(code, 3, "{}: stderr: {stderr}", case.label);
-        for name in case.names {
-            assert!(
-                stderr.contains(name),
-                "{}: the error names `{name}`: {stderr}",
-                case.label
-            );
-        }
         if case.is_version {
+            // The one process run here: it pins the binary's exit-code wiring
+            // and that an undeclared version is a failure, not an answer.
+            let (code, stdout, stderr) = run_converter(case.args);
+            assert_eq!(code, 3, "{}: stderr: {stderr}", case.label);
+            for name in case.names {
+                assert!(
+                    stderr.contains(name),
+                    "{}: the error names `{name}`: {stderr}",
+                    case.label
+                );
+            }
             assert!(
                 stdout.is_empty(),
                 "a refused version prints no version line on stdout: {stdout}"
@@ -640,6 +666,27 @@ fn usage_errors_exit_three_and_name_the_bad_argument() {
                 !stderr.contains(env!("CARGO_PKG_VERSION")),
                 "a refused version prints no version line at all: {stderr}"
             );
+        } else {
+            // The other three spellings are parse properties: `Args` is the
+            // binary's parser, so its error must name the argument the same way
+            // the process error does.
+            let argv = std::iter::once(std::ffi::OsString::from("sled2redb")).chain(
+                case.args
+                    .iter()
+                    .map(|a| std::ffi::OsStr::new(*a).to_os_string()),
+            );
+            let err = match Args::try_parse_from(argv) {
+                Ok(_) => panic!("{}: this spelling must be a usage error", case.label),
+                Err(e) => e,
+            };
+            let rendered = err.to_string();
+            for name in case.names {
+                assert!(
+                    rendered.contains(name),
+                    "{}: the error names `{name}`: {rendered}",
+                    case.label
+                );
+            }
         }
     }
 }
