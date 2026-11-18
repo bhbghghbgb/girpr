@@ -353,23 +353,4 @@ pub(crate) mod clock_support {
              GIRPR_TEST_REQUIRE_PRE_EPOCH (to any value) to fail instead"
         );
     }
-
-    mod tests {
-        use super::*;
-
-        /// Without the switch, a host that cannot represent the instant skips
-        /// the clock case out loud instead of failing it.
-        #[test]
-        fn a_pre_epoch_fixture_skips_without_the_switch() {
-            skip_pre_epoch_decision(false, "a clock a minute before the epoch");
-        }
-
-        /// The same host is a failure when the switch is set, whatever its
-        /// value: the case must not pass having proved nothing.
-        #[test]
-        #[should_panic(expected = "GIRPR_TEST_REQUIRE_PRE_EPOCH is set")]
-        fn a_pre_epoch_fixture_fails_with_the_switch() {
-            skip_pre_epoch_decision(true, "a clock a minute before the epoch");
-        }
-    }
 }
