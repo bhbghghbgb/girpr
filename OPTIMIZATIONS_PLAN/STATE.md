@@ -12,12 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: start the user-directed post-task flaky-test investigation — spawn
-  the **investigate** session first (see its section). It must complete before
-  any follow-up batching.
-* Active phase: post-task flaky-test investigation (investigate → fix → review),
-  before follow-ups. All 23 tasks terminal; all 11 checkpoints `done`.
-* Active checkpoint: none (all `done`). Active batch: none (follow-ups not started).
+* Next action: spawn the follow-up **batching review** session first (`ORCHESTRATION.md` §5) to decide batches for the surviving follow-ups (F01, F03, F05, F11, F12, F13, F18, F24). Record its batches in the Follow-up batches table. F30 stays `scheduled` for the orchestrator's final cleanup commit.
+* Active phase: follow-up batching. All 23 tasks terminal; all 11 checkpoints `done`; the post-task flaky-test investigation (investigate → fix → review) is `done`.
+* Active checkpoint: none (all `done`). Active batch: none (batching review not started).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -145,8 +142,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F30 | Clean stale docs referencing the deleted peak_heap measurement: root `README.md:478–480` (calls the deleted allocator "the one explicit test-only exception") and `docs/03-repair-rust-implementation-plan.md:132,184`. | T21 implementer | scheduled | CP10 reviewer: now factually wrong after T21; README is read-only during the task loop, so handle in the orchestrator's final cleanup commit, not a follow-up implementation session. |
 | F32 | ~~Drop T23's refuse/force-success sled fixture by using an empty plain directory as the sled source (no fsync), changing that case's asserted counts from (2,1) to (0,0).~~ | T23 implementer | removed | CP11 reviewer removed it: drops the only fixture pinning force-replace and changes asserted counts — coverage loss for −1 fixture. |
 | F33 | ~~Add a `case_sensitive = false` case through `write_records` to pin case routing more directly.~~ | T23 implementer | removed | CP11 reviewer removed it: pure coverage-adder, zero scale reduction. |
-| F34 | Add a warning comment in `tools/sync/tests/common/mod.rs` discouraging future process-global tracing calls in `run_args_logged`. | fix session | proposed | Hygiene, zero scale effect; investigation reviewer likely to prune. |
-| F35 | Apply the registration-then-rebuild guard to any future scoped-subscriber fold sharing a WARN callsite with sibling tests in one process. | fix session | proposed | Contingent guidance, no current action; investigation reviewer likely to prune. |
+| F34 | ~~Add a warning comment in `tools/sync/tests/common/mod.rs` discouraging future process-global tracing calls in `run_args_logged`.~~ | fix session | removed | Investigation reviewer removed it: hygiene with zero scale effect, redundant with the fix's own doc comment. |
+| F35 | ~~Apply the registration-then-rebuild guard to any future scoped-subscriber fold sharing a WARN callsite with sibling tests in one process.~~ | fix session | removed | Investigation reviewer removed it: speculative future guidance, no current target or action. |
 | F31 | ~~End-to-end pin through `stream_chunk_to` itself via a body-injection seam on the public `ChunkFetch` struct (avoids a socket).~~ | T21 implementer | removed | CP10 reviewer removed it: production API change, zero scale effect; stream_body invariant already non-vacuous. |
 | F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
 | F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
@@ -164,7 +161,7 @@ unknown. This investigation MUST run after all tasks are terminal and all
 checkpoints are `done`, but BEFORE any follow-up batching or implementation —
 an explicit override of the default §5 completion order.
 
-* Status: in_progress. Active session: (3) review — investigate and fix completed.
+* Status: done. All three sessions completed: investigate → fix (`046a4628`) → review (`completed`). Review independently reproduced 45/45 plain-cargo-test runs (0 failures), 12/12 nextest control, full suites green; confirmed the two spawns gone, all five assertions byte-for-byte unchanged, common/mod.rs and output.rs untouched, and only the documented pre-existing clippy warning. F23 completed; F34/F35 pruned.
 * Scope: determine whether the flakiness originated during this orchestration
   session or before it, and determine whether and how it can be fixed.
 
