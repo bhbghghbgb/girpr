@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T22 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP10 `done`; T22 `in_progress`, T23 `todo` (CP11, final checkpoint).
+* Next action: pick the next `todo` task in seeded order — T23 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP10 `done`; T22 `pending_review`, T23 `todo` (CP11, final checkpoint).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -58,7 +58,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | completed | P2 | CP10 | CP10 review: completed; process pins retained. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | completed | P2 | CP10 | CP10 review: completed; non-vacuousness independently confirmed. |
-| T22 | Expose `Args` + conversion record from sled2redb lib | D1 | in_progress | P2 | CP11 | Keep one spawn for the flag→record→exit-0 path. (D8/F02 was later pruned by CP5 — do not implement.) |
+| T22 | Expose `Args` + conversion record from sled2redb lib | D1 | pending_review | P2 | CP11 | Implemented in d0ad4da0; spawns 10→3, conversions 5→1 (count note in context). |
 | T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | todo | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
 
 ## Review checkpoints
@@ -105,7 +105,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T19 | `416b480b..416aeda3` | completed |
 | T20 | `5d58b228..5deab7fb` | completed |
 | T21 | `351e3e4d..8aa7021c` | completed |
-| T22–T23 | — (not started) | — |
+| T22 | `49ac1645..d0ad4da0` | — (pending CP11 review) |
+| T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -231,6 +232,7 @@ change log.
 * T19 stale-report findings: the report listed six compare reimplementations but omitted a seventh (`resolve_both` in `crates/tempdir/src/test_support.rs`) — converted too. `tests/helpers.rs::phased` was listed but is actually the single-side update pipeline (no classify/open_side/plan_pairs/diff_maps), so the compare seam cannot serve it — left untouched deliberately. `compare_detailed` enters and returns its span before `cmd_compare` renders, so `end`/`report` log events are no longer inside the `girsync.compare` span; no test pins span membership and stdout is identical.
 * T21 interpretation: the plan named `stream_chunk_to`, but that needs a real HTTP transport; the invariant targets `stream_body`, the exact decode/write path it calls. Non-vacuousness was demonstrated: a temporary buffering rewrite made the new test fail ("streaming must write in more than one piece, got 1 write(s)"), then was restored. Trade-off (quantitative heap ratio → structural bound, no runtime win) stated in the commit. Other ignored tests untouched; 8 remain skipped.
 * Final cleanup (user/orchestrator, §7) must also fix F30's stale docs references to the deleted peak_heap measurement (root `README.md:478–480`, `docs/03-repair-rust-implementation-plan.md:132,184`) — CP10 reviewer ruled these factually wrong after T21 and not suitable for a follow-up implementation session.
+* T22 (D1) count deviation: spawns 10 → 3 (report said ~3–4), binary conversions 5 → 1 (report said 2), one `build_sled_db` fixture removed (report said two). The report's estimate is internally inconsistent with its own explicit "keep ONE flag→record→exit-0 spawn" + "replace the byte-equality spawn" instructions; the implementer followed the explicit constraints. All pinned properties still asserted; CP11 reviewer should treat this as a better-than-estimated result, not a missed item.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
 * T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
