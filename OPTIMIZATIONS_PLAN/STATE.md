@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T21 implementing session to finish, then apply its
-  result. T21 completes CP10's tasks, so after recording it, run the CP10 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP9 `done`; T20 `pending_review`, T21 `in_progress` (last CP10 task).
+* Next action: run the CP10 review phase (`ORCHESTRATION.md` §4) — both CP10 tasks
+  are terminal (`pending_review`). Set CP10 `in_progress` and spawn one
+  review-and-fix session with the two commit ranges.
+* Active phase: review. All CP10 tasks are `pending_review`; CP10 is ready for review.
 * Active checkpoint: none yet (CP10 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -58,7 +58,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | pending_review | P2 | CP10 | Implemented in 5deab7fb; spawns 16→4, tests 15→14; process pins retained. |
-| T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | in_progress | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
+| T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | pending_review | P2 | CP10 | Implemented in 8aa7021c; 357-line file deleted, invariant targets `stream_body`, non-vacuous verified. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
 | T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | todo | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
 
@@ -105,7 +105,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T18 | `4c7625a6..f1800244` | completed |
 | T19 | `416b480b..416aeda3` | completed |
 | T20 | `5d58b228..5deab7fb` | — (pending CP10 review) |
-| T21–T23 | — (not started) | — |
+| T21 | `351e3e4d..8aa7021c` | — (pending CP10 review) |
+| T22–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -138,6 +139,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
 | F28 | Pin the exact stdout line for T20's "PLAN printed with a wrong digest" via a second binary spawn (currently asserted via plan-out document content). | T20 implementer | proposed | Would ADD a spawn, contrary to the one-binary-run-per-test guardrail; CP10 reviewer likely to prune. |
 | F29 | Production seam exposing `summary.flags.plan_download_bytes` unconditionally so T20's remaining binary PLAN-line run can fully downshift. | T20 implementer | proposed | Real −1 spawn but needs a production seam (field currently only set with a --max-download-bytes ceiling); CP10 reviewer to decide. |
+| F30 | Clean stale docs referencing the deleted peak_heap measurement: root `README.md:478–480` (calls the deleted allocator "the one explicit test-only exception") and `docs/03-repair-rust-implementation-plan.md:132,184`. | T21 implementer | proposed | Docs hygiene, no scale effect; CP10 reviewer likely to prune. |
+| F31 | End-to-end pin through `stream_chunk_to` itself via a body-injection seam on the public `ChunkFetch` struct (avoids a socket). | T21 implementer | proposed | Production API change, no scale effect; CP10 reviewer likely to prune. |
 | F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
 | F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
 | F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
@@ -227,6 +230,7 @@ change log.
 * T16 CP7 review noted for T17: the two remaining `stat_trust/flag_surface.rs` spawns (`bin`/`bin_mem`) assert a WARN string ("no-trust") emitted through the process subscriber; downshifting them needs T17's scoped subscriber. Reviewer deliberately did not open a standalone follow-up — fold into T17's scope if desired.
 * T17 deviations/fallbacks: `subscriber_for` returns `(impl Subscriber, Option<WorkerGuard>)` rather than the plan's `-> impl Subscriber` — the tuple is required so callers keep the WorkerGuard alive past the `with_default` closure. Rayon caveat verified NOT binding: scan-done / effective-done:phase-A events are main-thread. Deliberate fallbacks: (1) `an_unrelated_rust_log…` kept as a process smoke — it pins `init_tracing`'s own `log start` event which a scoped stack cannot render; (2) the CP7 stat_trust fold was attempted then REVERTED — the scoped WARN assertion was intermittently flaky under threaded `cargo test` (stable under `cargo nextest`); kept its 2 spawns rather than ship a flaky test. CP8 reviewer confirmed both.
 * T19 stale-report findings: the report listed six compare reimplementations but omitted a seventh (`resolve_both` in `crates/tempdir/src/test_support.rs`) — converted too. `tests/helpers.rs::phased` was listed but is actually the single-side update pipeline (no classify/open_side/plan_pairs/diff_maps), so the compare seam cannot serve it — left untouched deliberately. `compare_detailed` enters and returns its span before `cmd_compare` renders, so `end`/`report` log events are no longer inside the `girsync.compare` span; no test pins span membership and stdout is identical.
+* T21 interpretation: the plan named `stream_chunk_to`, but that needs a real HTTP transport; the invariant targets `stream_body`, the exact decode/write path it calls. Non-vacuousness was demonstrated: a temporary buffering rewrite made the new test fail ("streaming must write in more than one piece, got 1 write(s)"), then was restored. Trade-off (quantitative heap ratio → structural bound, no runtime win) stated in the commit. Other ignored tests untouched; 8 remain skipped.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
 * T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
