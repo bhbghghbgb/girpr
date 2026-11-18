@@ -20,13 +20,13 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::Serialize;
 
 use crate::config::RepairMode;
-use crate::repair::file::{Mode, resolve_mode};
+use crate::repair::file::Mode;
 use crate::repair::phases::plan::{FileId, RepairPlan};
 use crate::repair::purge::PurgePlan;
 use crate::report::Record;
@@ -71,9 +71,13 @@ pub struct DiskPlan {
 impl DiskPlan {
     /// The disk figures for a plan, against what is on disk.
     ///
-    /// One `stat` per planned file: the on-disk length is what turns "the
-    /// file is this big" into "the file has to *grow* by this much", which is
-    /// the whole difference between the two modes.
+    /// One `stat` per planned file ([`std::fs::symlink_metadata`]): its length
+    /// is what turns "the file is this big" into "the file has to *grow* by
+    /// this much", and its file-vs-directory-vs-symlink bit is the same one
+    /// [`crate::repair::file::resolve_mode`] uses to pick the temp path. Both
+    /// facts are handed to [`DiskPlan::from_figures`]: this method is the I/O
+    /// wrapper, that one is the arithmetic. `resolve_mode` itself is untouched
+    /// — its decision is measured here and injected as data.
     ///
     /// `root` is the run's cached install root. `None` means the base itself
     /// could not be resolved, and each file falls back to [`util::contained_join`].
@@ -84,9 +88,7 @@ impl DiskPlan {
         requested: RepairMode,
         jobs: usize,
     ) -> Self {
-        let mut out = DiskPlan::default();
-        let mut peak = 0u64;
-        for (_, f) in plan.iter() {
+        let figures = plan.iter().map(|(_, f)| {
             let joined = root.map_or_else(
                 || util::contained_join(game_dir, &f.rel),
                 |root| root.join(&f.rel),
@@ -102,6 +104,46 @@ impl DiskPlan {
                         error = %format!("{e:#}"),
                         "disk plan: path escapes the game dir; file omitted from the estimate"
                     );
+                    return DiskFigure::Unresolved;
+                }
+            };
+            // One stat supplies both facts. `symlink_metadata` is the very
+            // probe `resolve_mode` makes, so a directory or symlink comes back
+            // as not in-place-capable and takes the temp path — the semantics
+            // the estimate must share with the repair. The length is charged
+            // only on the in-place path, where there is no symlink to follow,
+            // so reading it from this stat does not change any figure.
+            let (len, in_place) = match std::fs::symlink_metadata(&path) {
+                Ok(m) => (util::FileLen::Present(m.len()), m.is_file()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (util::FileLen::Absent, true),
+                Err(e) => (util::FileLen::Unreadable(e), true),
+            };
+            DiskFigure::Measured(len, in_place, path)
+        });
+        Self::from_figures(plan, figures, requested, jobs)
+    }
+
+    /// The disk figures for a plan from injected per-file facts, with no I/O.
+    ///
+    /// Each [`DiskFigure::Measured`] carries the two measurements [`Self::new`]
+    /// takes — the on-disk length probe and whether `resolve_mode` would take
+    /// the in-place path (its symlink/dir → temp decision, *not* the
+    /// `requested == Temp` shortcut, which is applied here) — plus the display
+    /// path used only for the unreadable-stat warning. The arithmetic, the
+    /// saturation and the one-entry-per-file invariant are identical to the
+    /// original inline loop; only the measurement source is injected.
+    fn from_figures(
+        plan: &RepairPlan,
+        figures: impl IntoIterator<Item = DiskFigure>,
+        requested: RepairMode,
+        jobs: usize,
+    ) -> Self {
+        let mut out = DiskPlan::default();
+        let mut peak = 0u64;
+        for ((_, f), figure) in plan.iter().zip(figures) {
+            let (len, in_place, path) = match figure {
+                DiskFigure::Measured(len, in_place, path) => (len, in_place, path),
+                DiskFigure::Unresolved => {
                     out.per_file.push(FileDisk {
                         mode: "inplace",
                         extra_bytes: 0,
@@ -109,9 +151,16 @@ impl DiskPlan {
                     continue;
                 }
             };
-            let on_disk = planned_on_disk(util::file_len(&path), &f.rel, &path);
+            let on_disk = planned_on_disk(len, &f.rel, &path);
             let size = f.size.max(0) as u64;
-            let (mode, extra) = match resolve_mode(requested, &path) {
+            // `requested == Temp` forces the temp path; otherwise the injected
+            // verdict decides. A directory/symlink is `in_place == false`.
+            let mode = if requested == RepairMode::Temp || !in_place {
+                Mode::Temp
+            } else {
+                Mode::Inplace
+            };
+            let (mode, extra) = match mode {
                 // The temp path duplicates the whole file: the target and the
                 // temp exist side by side for as long as the repair takes.
                 Mode::Temp => (Mode::Temp, size),
@@ -148,6 +197,18 @@ impl DiskPlan {
     pub fn for_id(&self, id: FileId) -> Option<FileDisk> {
         self.per_file.get(id.index()).copied()
     }
+}
+
+/// The per-file facts [`DiskPlan::from_figures`] folds, measured by
+/// [`DiskPlan::new`] or injected by tests.
+pub(crate) enum DiskFigure {
+    /// A resolved file: its length probe, whether `resolve_mode` would take the
+    /// in-place path (the directory/symlink case is `false` → temp), and the
+    /// display path used only when the stat was unreadable.
+    Measured(util::FileLen, bool, PathBuf),
+    /// Path resolution refused the rel: keep the slot, charge nothing, and
+    /// report `inplace`/`0` exactly as the old inline escape arm did.
+    Unresolved,
 }
 
 /// The on-disk length the disk plan charges for one file.
@@ -459,6 +520,13 @@ mod tests {
         }
     }
 
+    /// An injected per-file figure for the pure `from_figures` seam. The
+    /// display path is irrelevant here: none of these figures is unreadable,
+    /// so the warning that uses it never fires.
+    fn measured(len: util::FileLen, in_place: bool) -> DiskFigure {
+        DiskFigure::Measured(len, in_place, PathBuf::from("<injected>"))
+    }
+
     fn purge_plan() -> PurgePlan {
         PurgePlan {
             files: vec![PurgeCandidate {
@@ -557,13 +625,17 @@ mod tests {
     fn the_disk_plan_says_what_each_file_costs() {
         // A file that is already the right size needs nothing beyond the
         // install; a file that is not there needs all of it; the temp path
-        // always needs all of it.
-        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "plan");
-        std::fs::create_dir_all(dir.join("game")).unwrap();
-        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
-
+        // always needs all of it. The two measurements are injected — no temp
+        // dir, no fixture file, no stat.
         let plan = plan();
-        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 4);
+        let figures = || {
+            [
+                measured(util::FileLen::Present(128), true),
+                measured(util::FileLen::Absent, true),
+                measured(util::FileLen::Absent, true),
+            ]
+        };
+        let disk = DiskPlan::from_figures(&plan, figures(), RepairMode::Auto, 4);
         assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "inplace");
         assert_eq!(
             disk.for_id(FileId::new(0)).unwrap().extra_bytes,
@@ -581,11 +653,41 @@ mod tests {
         // size (the third one is empty, so it adds nothing).
         assert_eq!(disk.est_write_bytes, 128 + 64);
 
-        // The temp path duplicates every file.
-        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 4);
+        // The temp path duplicates every file. `requested` is still applied
+        // on top of the same injected figures.
+        let disk = DiskPlan::from_figures(&plan, figures(), RepairMode::Temp, 4);
         assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "temp");
         assert_eq!(disk.for_id(FileId::new(0)).unwrap().extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
+    }
+
+    /// A directory or symlink is not a regular file, so `resolve_mode` sends
+    /// it to the temp path even under Auto. The injected "in-place-capable"
+    /// boolean carries that decision (false); `from_figures` must not
+    /// second-guess it from the length. This pins the report's stated risk —
+    /// symlink/dir → temp — with no symlink fixture or temp dir at all.
+    #[test]
+    fn a_non_regular_target_is_charged_the_temp_path_even_in_auto_mode() {
+        let disk = DiskPlan::from_figures(
+            &plan(),
+            [
+                measured(util::FileLen::Present(4096), false), // a dir/symlink
+                measured(util::FileLen::Absent, true),
+                measured(util::FileLen::Absent, true),
+            ],
+            RepairMode::Auto,
+            1,
+        );
+        assert_eq!(
+            disk.for_id(FileId::new(0)).unwrap(),
+            FileDisk {
+                mode: "temp",
+                extra_bytes: 128,
+            },
+            "a non-regular target is replaced through the temp path"
+        );
+        assert_eq!(disk.for_id(FileId::new(1)).unwrap().mode, "inplace");
+        assert_eq!(disk.est_extra_bytes, 128);
     }
 
     /// An id outside the per-file table has no figures: there is no default
@@ -630,13 +732,18 @@ mod tests {
     /// growth would understate the free space the run needs before it starts.
     #[test]
     fn discard_needs_the_growth_but_never_a_second_copy() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "discard");
-        std::fs::create_dir_all(dir.join("game")).unwrap();
-        // foo.dat is full size; bar.dat is 16 of 64 bytes.
-        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
-        std::fs::write(dir.join("game").join("bar.dat"), vec![0u8; 16]).unwrap();
-
-        let disk = DiskPlan::new(&dir, None, &plan(), RepairMode::Discard, 4);
+        // foo.dat is full size; bar.dat is 16 of 64 bytes. Both lengths (and
+        // the in-place verdict) are injected.
+        let disk = DiskPlan::from_figures(
+            &plan(),
+            [
+                measured(util::FileLen::Present(128), true),
+                measured(util::FileLen::Present(16), true),
+                measured(util::FileLen::Absent, true),
+            ],
+            RepairMode::Discard,
+            4,
+        );
         assert_eq!(
             disk.for_id(FileId::new(0)).unwrap().extra_bytes,
             0,
@@ -696,11 +803,17 @@ mod tests {
 
     #[test]
     fn the_document_carries_the_mode_and_the_extra_bytes_of_each_file() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "document");
-        std::fs::create_dir_all(dir.join("game")).unwrap();
-        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         let plan = plan();
-        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 1);
+        let disk = DiskPlan::from_figures(
+            &plan,
+            [
+                measured(util::FileLen::Present(128), true),
+                measured(util::FileLen::Absent, true),
+                measured(util::FileLen::Absent, true),
+            ],
+            RepairMode::Auto,
+            1,
+        );
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &disk);
         assert_eq!(doc.repair[0].mode, "inplace");
         assert_eq!(doc.repair[0].extra_bytes, 0);
@@ -748,7 +861,6 @@ mod tests {
         // `size` is server manifest data. Three files at `i64::MAX` do not
         // fit in a `u64`: the debug build must not panic and a release build
         // must not wrap a smaller "estimate" onto the PLAN line.
-        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "overflow");
         let plan = RepairPlan::from_files(
             "9.9",
             ["a.dat", "b.dat", "c.dat"]
@@ -762,7 +874,12 @@ mod tests {
                 })
                 .collect(),
         );
-        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 3);
+        let disk = DiskPlan::from_figures(
+            &plan,
+            [0; 3].map(|_| measured(util::FileLen::Absent, true)),
+            RepairMode::Auto,
+            3,
+        );
         assert_eq!(disk.est_write_bytes, u64::MAX);
         // The peak is the largest single file (`i64::MAX`); three files in
         // flight overflow the multiplication, so that fold must saturate too.
