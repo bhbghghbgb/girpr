@@ -12,11 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T16 implementing session to finish, then apply its
-  result. T16 is the sole CP7 task, so after recording it, run the CP7 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP6 `done`; T16 `in_progress` (sole CP7 task,
-  largest single change).
+* Next action: run the CP7 review phase (`ORCHESTRATION.md` §4) — T16 is terminal
+  (`pending_review`). Set CP7 `in_progress` and spawn one review-and-fix session
+  with its single commit range.
+* Active phase: review. T16 is `pending_review`; CP7 is ready for review.
 * Active checkpoint: none yet (CP7 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -51,7 +50,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T13 | Capture: merge mock / no-network full captures | B4 | completed | P1 | CP5 | CP5 review: completed; row-pin deviation confirmed. |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
-| T16 | Sync injectable record sink + `run_captured` | E1 | in_progress | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
+| T16 | Sync injectable record sink + `run_captured` | E1 | pending_review | P2 | CP7 | Implemented in eda0babb..3bd03d22 (6 commits); spawns ~100→~20, 621 tests pass. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | todo | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
@@ -98,7 +97,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T13 | `2758abff..bda7e0c5` | completed |
 | T14 | `86b465f3..b3cf81bf` | skipped (confirmed) |
 | T15 | `7c787656..a2f21205` | completed |
-| T16–T23 | — (not started) | — |
+| T16 | `0c22b736..3bd03d22` | — (pending CP7 review) |
+| T17–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -187,6 +187,7 @@ change log.
 * T08 deviation: `fixtures_classify_as_folders` was folded into the relying test `the_wider_handle_window_still_refuses_a_self_collision` as `debug_assert`s, not literally into `pair()`/`fixture()` — no local `fixture()` exists and `pair()` lives in `girpr-tempdir` (cannot depend on girsync's `classify`). The same three assertions are preserved.
 * T10 (A3): report predicted "−2 spawns and mock servers", but only −2 binary spawns are realizable test-only — the downshifted cases still issue HTTP via `hyp_base_override`/`sophon_base_override`, so each keeps its `MockServer`; removing them needs a production data-injection seam the task does not call for. Not a missed optimization; CP3 reviewer should not flag it.
 * T11 clippy diagnostics resolved by CP4 review: `repair/phases/plan.rs:573` type_complexity originated in T02's merged table; `tests/repair_machinery.rs:119` dead_code (`Run::word`) was exposed by T09's last-caller conversion. Both benign test-only lints, no `-D warnings` gate, no behavior/coverage/scale impact — reviewer deliberately opened no follow-up.
+* T16: converted record tests now pin the real file cache because the path-keyed in-memory registry could leak across in-process runs (a few cases are slower); T18's injected cache backend could restore in-memory speed. `Report` lost `Copy`; all three by-ref `let report = log.report()` sites were audited. One pre-existing unrelated clippy warning remains in `src/hash/tests.rs`.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
 * T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
