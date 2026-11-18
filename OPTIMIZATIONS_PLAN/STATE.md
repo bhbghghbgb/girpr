@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T19 implementing session to finish, then apply its
-  result. T19 is the sole CP9 task, so after recording it, run the CP9 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP8 `done`; T19 `in_progress` (sole CP9 task).
+* Next action: run the CP9 review phase (`ORCHESTRATION.md` §4) — T19 is terminal
+  (`pending_review`). Set CP9 `in_progress` and spawn one review-and-fix session
+  with its single commit range.
+* Active phase: review. T19 is `pending_review`; CP9 is ready for review.
 * Active checkpoint: none yet (CP9 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -56,7 +56,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | completed | P2 | CP8 | CP8 review: completed; tuple deviation and both fallbacks confirmed. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
-| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | in_progress | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
+| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | pending_review | P2 | CP9 | Implemented in 416aeda3; ~304 net duplicated lines removed; 7th copy found and converted. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
@@ -103,7 +103,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T16 | `0c22b736..3bd03d22` | completed |
 | T17 | `069ca97a..6f488b0b` | completed |
 | T18 | `4c7625a6..f1800244` | completed |
-| T19–T23 | — (not started) | — |
+| T19 | `416b480b..416aeda3` | — (pending CP9 review) |
+| T20–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -115,7 +116,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 |---|---|---|---|---|
 | F01 | **B6:** in-process capture seam — call `run::capture/verify/materialize/list` directly and assert on `Outcome` records; removing the TCP mock needs an injected HTTP transport for `Fetcher` (report §B6 L318–L330). | report | proposed | Largest capture lever, wide/risky; B1–B5 (T05/T06/T07/T13) capture most benefit first. |
 | F02 | ~~**D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591).~~ | report | removed | CP5 reviewer removed it: zero test-count/spawn/fixture effect, pure maintenance; avoid an implement+review cycle for no scale benefit. |
-| F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
+| F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Now unblocked — T19's shared comparison harness exists (416aeda3). ~14 tests. |
 | F04 | ~~Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range.~~ | T01 implementer | removed | CP2 reviewer removed it: non-actionable conditional watch item; adds coverage rather than reducing scale, contingent on an unplanned jitter-test extension. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
 | F06 | ~~Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines).~~ | T04 implementer | removed | CP1 reviewer removed it: no test-count effect and riskier than the fold; avoid a future implement+review cycle for zero scale benefit. |
@@ -134,6 +135,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F22 | ~~Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process.~~ | T17 implementer | removed | CP8 reviewer removed it: the smoke pins the real `init_tracing` install path; a shared helper would make it assert a re-implementation (coverage loss) for −1 spawn. |
 | F23 | If the scheduled post-task flaky-test investigation resolves the WARN-capture flake, downshift the 2 `stat_trust/flag_surface.rs` spawns. | T17 implementer | proposed | Reframed by CP8 reviewer: the flake-investigation half is subsumed by the user-directed post-task investigation; retain only the downstream −2 spawn action, gated on that investigation's outcome. |
 | F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
+| F26 | Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve. | T19 implementer | proposed | Line dedup, no test-count/spawn effect; CP9 reviewer likely to prune. |
+| F27 | Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events. | T19 implementer | proposed | Log-only, zero test-scale effect; CP9 reviewer likely to prune. |
 | F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
@@ -219,7 +222,8 @@ change log.
 * T11 clippy diagnostics resolved by CP4 review: `repair/phases/plan.rs:573` type_complexity originated in T02's merged table; `tests/repair_machinery.rs:119` dead_code (`Run::word`) was exposed by T09's last-caller conversion. Both benign test-only lints, no `-D warnings` gate, no behavior/coverage/scale impact — reviewer deliberately opened no follow-up.
 * T16: converted record tests now pin the real file cache because the path-keyed in-memory registry could leak across in-process runs (a few cases are slower); T18's injected cache backend could restore in-memory speed. `Report` lost `Copy`; all three by-ref `let report = log.report()` sites were audited. One pre-existing unrelated clippy warning remains in `src/hash/tests.rs`.
 * T16 CP7 review noted for T17: the two remaining `stat_trust/flag_surface.rs` spawns (`bin`/`bin_mem`) assert a WARN string ("no-trust") emitted through the process subscriber; downshifting them needs T17's scoped subscriber. Reviewer deliberately did not open a standalone follow-up — fold into T17's scope if desired.
-* T17 deviations/fallbacks: `subscriber_for` returns `(impl Subscriber, Option<WorkerGuard>)` rather than the plan's `-> impl Subscriber` — the tuple is required so callers keep the WorkerGuard alive past the `with_default` closure. Rayon caveat verified NOT binding: scan-done / effective-done:phase-A events are main-thread. Deliberate fallbacks: (1) `an_unrelated_rust_log…` kept as a process smoke — it pins `init_tracing`'s own `log start` event which a scoped stack cannot render; (2) the CP7 stat_trust fold was attempted then REVERTED — the scoped WARN assertion was intermittently flaky under threaded `cargo test` (stable under `cargo nextest`); kept its 2 spawns rather than ship a flaky test. CP8 reviewer should confirm these.
+* T17 deviations/fallbacks: `subscriber_for` returns `(impl Subscriber, Option<WorkerGuard>)` rather than the plan's `-> impl Subscriber` — the tuple is required so callers keep the WorkerGuard alive past the `with_default` closure. Rayon caveat verified NOT binding: scan-done / effective-done:phase-A events are main-thread. Deliberate fallbacks: (1) `an_unrelated_rust_log…` kept as a process smoke — it pins `init_tracing`'s own `log start` event which a scoped stack cannot render; (2) the CP7 stat_trust fold was attempted then REVERTED — the scoped WARN assertion was intermittently flaky under threaded `cargo test` (stable under `cargo nextest`); kept its 2 spawns rather than ship a flaky test. CP8 reviewer confirmed both.
+* T19 stale-report findings: the report listed six compare reimplementations but omitted a seventh (`resolve_both` in `crates/tempdir/src/test_support.rs`) — converted too. `tests/helpers.rs::phased` was listed but is actually the single-side update pipeline (no classify/open_side/plan_pairs/diff_maps), so the compare seam cannot serve it — left untouched deliberately. `compare_detailed` enters and returns its span before `cmd_compare` renders, so `end`/`report` log events are no longer inside the `girsync.compare` span; no test pins span membership and stdout is identical.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
 * T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
