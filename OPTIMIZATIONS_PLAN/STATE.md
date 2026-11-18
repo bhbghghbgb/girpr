@@ -12,10 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP1 review phase (`ORCHESTRATION.md` §4) — all four CP1
-  tasks are terminal (`pending_review`). Set CP1 `in_progress` and spawn one
-  review-and-fix session with the four commit ranges.
-* Active phase: review. All CP1 tasks are `pending_review`; CP1 is ready for review.
+* Next action: wait for the CP1 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP1 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP1 `in_progress`; all four CP1 tasks are `pending_review`.
 * Active checkpoint: none yet (CP1 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -63,7 +62,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
-| CP1 | T01–T04 | open | P0 root unit + small crates + sled2redb low-risk |
+| CP1 | T01–T04 | in_progress | P0 root unit + small crates + sled2redb low-risk |
 | CP2 | T05–T08 | open | P0 capture + sync small findings |
 | CP3 | T09–T10 | open | `repair_machinery` + `repair_plan` downshifts |
 | CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
