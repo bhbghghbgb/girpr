@@ -442,158 +442,296 @@ mod tests {
         }
     }
 
-    /// `--no-log-file` beats everything else, including the environment.
-    ///
-    /// "Write no log file" is the more specific thing to have said, so it
-    /// wins over a path the shell happened to export.
+    /// The four ways to choose a log file, in precedence order. Each row is a
+    /// policy decision; the comment on it is the reason for that decision.
     #[test]
-    fn no_log_file_beats_the_environment_and_the_flag() {
-        let env = EnvOptions {
-            log_file: Some(PathBuf::from("from-env.log")),
-            ..Default::default()
-        };
-        let mut flagged = opts();
-        flagged.log_file = Some(PathBuf::from("from-flag.log"));
-        flagged.no_log_file = true;
-        let plan = LogPlan::resolve("girpr", flagged, env);
-        assert!(plan.file_path().is_none(), "{plan:?}");
-        assert!(!plan.file_named, "there is nothing to name");
-        assert!(plan.named_file().is_none());
-    }
-
-    /// A file that was asked for is still written in a debug build.
-    ///
-    /// The debug default is about the *default*, not about the file: a caller
-    /// who names a path gets one, in every build.
-    #[test]
-    fn a_named_file_is_written_in_every_build() {
-        let mut flagged = opts();
-        flagged.log_file = Some(PathBuf::from("from-flag.log"));
-        let plan = LogPlan::resolve("girpr", flagged, EnvOptions::default());
-        assert_eq!(plan.file_path(), Some(Path::new("from-flag.log")));
-        assert!(plan.file_named);
-        assert_eq!(plan.named_file(), Some(Path::new("from-flag.log")));
-    }
-
-    /// The console is unaffected by the file being off.
-    ///
-    /// `--no-log-file` turns the *file* off. The console is where the run is
-    /// watched, and a run that cannot be watched is a different thing from a
-    /// run that leaves nothing behind.
-    #[test]
-    fn no_log_file_says_nothing_about_the_console() {
-        let mut flagged = opts();
-        flagged.no_log_file = true;
-        let plan = LogPlan::resolve("girpr", flagged, EnvOptions::default());
-        assert_eq!(plan.console_filter(), "girpr=info");
-        assert_eq!(plan.file_filter(), "debug");
-    }
-
-    #[test]
-    fn a_flag_beats_the_environment_and_the_environment_beats_the_default() {
-        let env = EnvOptions {
-            log_file: Some(PathBuf::from("from-env.log")),
-            ..Default::default()
-        };
-        let plan = LogPlan::resolve("girpr", opts(), env.clone());
-        assert_eq!(plan.file_path(), Some(Path::new("from-env.log")));
-        assert!(plan.file_named);
-
-        let mut flagged = opts();
-        flagged.log_file = Some(PathBuf::from("from-flag.log"));
-        let plan = LogPlan::resolve("girpr", flagged, env);
-        assert_eq!(plan.file_path(), Some(Path::new("from-flag.log")));
-        assert!(plan.file_named);
-    }
-
-    #[test]
-    fn the_default_file_is_not_named() {
-        let plan = LogPlan::resolve("gircap", opts(), EnvOptions::default());
-        assert!(!plan.file_named);
-        assert!(plan.named_file().is_none(), "the default is not 'named'");
-        // In a release build there is a default, and it is the timestamped
-        // one; in a debug build there is none. Either way it is not *named*.
-        if let Some(path) = plan.file_path() {
-            assert!(path.to_string_lossy().contains("gircap_"), "{plan:?}");
+    fn file_resolution_precedence() {
+        // How the resolved path is checked for one row.
+        enum Expected {
+            None,
+            Exact(&'static str),
+            DefaultContains(&'static str),
+        }
+        struct Case {
+            name: &'static str,
+            project: &'static str,
+            options: LogOptions,
+            env: EnvOptions,
+            path: Expected,
+            named: bool,
+        }
+        let cases = [
+            // `--no-log-file` beats everything else, including the environment
+            // and `--log-file`: "write no log file" is the more specific thing
+            // to have said, so it wins over a path the shell exported.
+            Case {
+                name: "no-log-file beats env and flag",
+                project: "girpr",
+                options: LogOptions {
+                    log_file: Some(PathBuf::from("from-flag.log")),
+                    no_log_file: true,
+                    ..opts()
+                },
+                env: EnvOptions {
+                    log_file: Some(PathBuf::from("from-env.log")),
+                    ..Default::default()
+                },
+                path: Expected::None,
+                named: false,
+            },
+            // A file that was asked for is still written in a debug build: the
+            // debug default is about the *default*, not about the file — a
+            // caller who names a path gets one, in every build.
+            Case {
+                name: "a named file is written in every build",
+                project: "girpr",
+                options: LogOptions {
+                    log_file: Some(PathBuf::from("from-flag.log")),
+                    ..opts()
+                },
+                env: EnvOptions::default(),
+                path: Expected::Exact("from-flag.log"),
+                named: true,
+            },
+            // The environment beats the default: `<PROJECT>_LOG_FILE` wins
+            // when the caller named nothing.
+            Case {
+                name: "env beats the default",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions {
+                    log_file: Some(PathBuf::from("from-env.log")),
+                    ..Default::default()
+                },
+                path: Expected::Exact("from-env.log"),
+                named: true,
+            },
+            // A flag beats the environment, because a flag was typed by the
+            // person running the tool and an env var is whatever the shell
+            // happened to export.
+            Case {
+                name: "flag beats the environment",
+                project: "girpr",
+                options: LogOptions {
+                    log_file: Some(PathBuf::from("from-flag.log")),
+                    ..opts()
+                },
+                env: EnvOptions {
+                    log_file: Some(PathBuf::from("from-env.log")),
+                    ..Default::default()
+                },
+                path: Expected::Exact("from-flag.log"),
+                named: true,
+            },
+            // The default is not "named": in a release build it is the
+            // timestamped `<project>_…` path, in a debug build there is none,
+            // and either way it is told about inside the file, not on stderr.
+            Case {
+                name: "the default file is not named",
+                project: "gircap",
+                options: opts(),
+                env: EnvOptions::default(),
+                path: Expected::DefaultContains("gircap_"),
+                named: false,
+            },
+        ];
+        for case in cases {
+            let plan = LogPlan::resolve(case.project, case.options, case.env);
+            match case.path {
+                Expected::None => {
+                    assert!(plan.file_path().is_none(), "{}: {plan:?}", case.name);
+                }
+                Expected::Exact(want) => {
+                    assert_eq!(plan.file_path(), Some(Path::new(want)), "{}", case.name);
+                    assert_eq!(plan.named_file(), Some(Path::new(want)), "{}", case.name);
+                }
+                Expected::DefaultContains(fragment) => {
+                    if let Some(path) = plan.file_path() {
+                        assert!(
+                            path.to_string_lossy().contains(fragment),
+                            "{}: {plan:?}",
+                            case.name
+                        );
+                    }
+                }
+            }
+            assert_eq!(plan.file_named, case.named, "{}", case.name);
+            if !case.named {
+                assert!(
+                    plan.named_file().is_none(),
+                    "{}: there is nothing to name",
+                    case.name
+                );
+            }
         }
     }
 
+    /// The two sinks' levels and filters. Each row is one policy decision; the
+    /// comment on it is the reason, and `None` means that decision is not what
+    /// this row is asserting.
     #[test]
-    fn the_file_level_is_debug_unless_something_says_otherwise() {
-        let plan = LogPlan::resolve("girpr", opts(), EnvOptions::default());
-        assert_eq!(plan.file_level, Level::Debug);
-
-        let env = EnvOptions {
-            file_level: Some(Level::Trace),
-            ..Default::default()
-        };
-        let plan = LogPlan::resolve("girpr", opts(), env);
-        assert_eq!(plan.file_level, Level::Trace);
-
-        let mut flagged = opts();
-        flagged.file_level = Some(Level::Error);
-        let env = EnvOptions {
-            file_level: Some(Level::Trace),
-            ..Default::default()
-        };
-        let plan = LogPlan::resolve("girpr", flagged, env);
-        assert_eq!(plan.file_level, Level::Error);
-    }
-
-    #[test]
-    fn the_console_is_scoped_to_the_project_and_the_file_is_not() {
-        let plan = LogPlan::resolve("girsync", opts(), EnvOptions::default());
-        assert_eq!(plan.console_filter(), "girsync=info");
-        assert_eq!(plan.file_filter(), "debug");
-    }
-
-    #[test]
-    fn rust_log_adds_to_the_console_level_and_never_replaces_it() {
-        let env = EnvOptions {
-            rust_log: Some("reqwest=debug".to_string()),
-            ..Default::default()
-        };
-        let plan = LogPlan::resolve("girpr", opts(), env);
-        assert_eq!(
-            plan.console_filter(),
-            "reqwest=debug,girpr=info",
-            "the project's own directive is last: the flag is what was typed, \
-             and a RUST_LOG that names another crate must not silence the program"
-        );
-        assert_eq!(
-            plan.file_filter(),
-            "debug",
-            "RUST_LOG is a console lever and never a file lever"
-        );
-    }
-
-    #[test]
-    fn the_projects_own_directive_is_the_one_the_flag_decides() {
-        let mut flagged = opts();
-        flagged.console_level = Level::Trace;
-        let env = EnvOptions {
-            rust_log: Some("girpr=error".to_string()),
-            ..Default::default()
-        };
-        let plan = LogPlan::resolve("girpr", flagged, env);
-        assert_eq!(
-            plan.console_filter(),
-            "girpr=error,girpr=trace",
-            "the spec carries both; the flag's is last, and a tie on the same \
-             target goes to the last directive"
-        );
-        assert_eq!(plan.own_console_directive(), "girpr=trace");
-    }
-
-    #[test]
-    fn an_empty_rust_log_is_treated_as_unset() {
-        for raw in ["", "   "] {
-            let env = EnvOptions {
-                rust_log: Some(raw.to_string()),
-                ..Default::default()
-            };
-            let plan = LogPlan::resolve("girpr", opts(), env);
-            assert_eq!(plan.console_filter(), "girpr=info", "{raw:?}");
+    fn console_and_file_filters() {
+        struct Case {
+            name: &'static str,
+            project: &'static str,
+            options: LogOptions,
+            env: EnvOptions,
+            console: Option<&'static str>,
+            file: Option<&'static str>,
+            level: Option<Level>,
+            own: Option<&'static str>,
+        }
+        let cases = [
+            // `--no-log-file` turns the *file* off, not the console: the
+            // console is where the run is watched, and nothing about saying
+            // "no file" says "no console".
+            Case {
+                name: "no-log-file says nothing about the console",
+                project: "girpr",
+                options: LogOptions {
+                    no_log_file: true,
+                    ..opts()
+                },
+                env: EnvOptions::default(),
+                console: Some("girpr=info"),
+                file: Some("debug"),
+                level: None,
+                own: None,
+            },
+            // The file's level defaults to debug.
+            Case {
+                name: "default file level is debug",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions::default(),
+                console: None,
+                file: None,
+                level: Some(Level::Debug),
+                own: None,
+            },
+            // `<PROJECT>_LOG_FILE_LEVEL` sets the file's level when the flag
+            // was not given.
+            Case {
+                name: "env file level is used",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions {
+                    file_level: Some(Level::Trace),
+                    ..Default::default()
+                },
+                console: None,
+                file: None,
+                level: Some(Level::Trace),
+                own: None,
+            },
+            // The flag's file level beats the environment's.
+            Case {
+                name: "flag file level beats the env's",
+                project: "girpr",
+                options: LogOptions {
+                    file_level: Some(Level::Error),
+                    ..opts()
+                },
+                env: EnvOptions {
+                    file_level: Some(Level::Trace),
+                    ..Default::default()
+                },
+                console: None,
+                file: None,
+                level: Some(Level::Error),
+                own: None,
+            },
+            // The console is scoped to the project; the file is not — it is
+            // every target, at the file's level.
+            Case {
+                name: "console is project-scoped, file is not",
+                project: "girsync",
+                options: opts(),
+                env: EnvOptions::default(),
+                console: Some("girsync=info"),
+                file: Some("debug"),
+                level: None,
+                own: None,
+            },
+            // `RUST_LOG` adds to the console and never replaces it: the
+            // project's own directive is last, so a spec naming another crate
+            // cannot silence the program. `RUST_LOG` is a console lever, never
+            // a file lever.
+            Case {
+                name: "RUST_LOG adds to the console",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions {
+                    rust_log: Some("reqwest=debug".to_string()),
+                    ..Default::default()
+                },
+                console: Some("reqwest=debug,girpr=info"),
+                file: Some("debug"),
+                level: None,
+                own: None,
+            },
+            // The project's own directive is the one the flag decides: the
+            // spec carries both, the flag's is last, and a tie on the same
+            // target goes to the last directive.
+            Case {
+                name: "the flag owns the project's directive",
+                project: "girpr",
+                options: LogOptions {
+                    console_level: Level::Trace,
+                    ..opts()
+                },
+                env: EnvOptions {
+                    rust_log: Some("girpr=error".to_string()),
+                    ..Default::default()
+                },
+                console: Some("girpr=error,girpr=trace"),
+                file: None,
+                level: None,
+                own: Some("girpr=trace"),
+            },
+            // An empty `RUST_LOG` is an unset `RUST_LOG`: a shell profile that
+            // exports it blank must not put a leading comma in the spec.
+            Case {
+                name: "empty RUST_LOG is unset",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions {
+                    rust_log: Some(String::new()),
+                    ..Default::default()
+                },
+                console: Some("girpr=info"),
+                file: None,
+                level: None,
+                own: None,
+            },
+            Case {
+                name: "whitespace RUST_LOG is unset",
+                project: "girpr",
+                options: opts(),
+                env: EnvOptions {
+                    rust_log: Some("   ".to_string()),
+                    ..Default::default()
+                },
+                console: Some("girpr=info"),
+                file: None,
+                level: None,
+                own: None,
+            },
+        ];
+        for case in cases {
+            let plan = LogPlan::resolve(case.project, case.options, case.env);
+            if let Some(want) = case.console {
+                assert_eq!(plan.console_filter(), want, "{}: console", case.name);
+            }
+            if let Some(want) = case.file {
+                assert_eq!(plan.file_filter(), want, "{}: file", case.name);
+            }
+            if let Some(want) = case.level {
+                assert_eq!(plan.file_level, want, "{}: level", case.name);
+            }
+            if let Some(want) = case.own {
+                assert_eq!(plan.own_console_directive(), want, "{}: own", case.name);
+            }
         }
     }
 
