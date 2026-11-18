@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T18 implementing session to finish, then apply its
-  result. T18 completes CP8's tasks, so after recording it, run the CP8 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP7 `done`; T17 `pending_review`, T18 `in_progress` (last CP8 task).
+* Next action: run the CP8 review phase (`ORCHESTRATION.md` §4) — both CP8 tasks
+  are terminal (`pending_review`). Set CP8 `in_progress` and spawn one
+  review-and-fix session with the two commit ranges.
+* Active phase: review. All CP8 tasks are `pending_review`; CP8 is ready for review.
 * Active checkpoint: none yet (CP8 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -55,7 +55,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | pending_review | P2 | CP8 | Implemented in 6f488b0b; 8 spawns downshifted, 3 smokes remain. WorkerGuard tuple deviation + 2 fallbacks (see context). |
-| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | in_progress | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
+| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | pending_review | P2 | CP8 | Implemented in b9c8d487, f1800244; 10 failure-path spawns downshifted, 1 log-file spawn remains. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
@@ -102,7 +102,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T15 | `7c787656..a2f21205` | completed |
 | T16 | `0c22b736..3bd03d22` | completed |
 | T17 | `069ca97a..6f488b0b` | — (pending CP8 review) |
-| T18–T23 | — (not started) | — |
+| T18 | `4c7625a6..f1800244` | — (pending CP8 review) |
+| T19–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -132,6 +133,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F21 | Downshift `output.rs:626` (`the_scan_counts_the_entries_the_walk_saw`) — another spawn-based test whose counters already live on `ScanStats` — the same way as T15. | T15 implementer | proposed | Real −1 spawn reduction, outside T15's scope; CP6 reviewer to decide. |
 | F22 | Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process. | T17 implementer | proposed | Real −1 spawn, needs a production seam; CP8 reviewer to decide. |
 | F23 | Investigate the WARN-capture flake (tracing callsite-interest caching with mixed subscriber filters in one process); if resolved, the 2 `stat_trust/flag_surface.rs` spawns can be downshifted. | T17 implementer | proposed | Real −2 spawns but blocked on a flake investigation; CP8 reviewer to decide. |
+| F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
+| F25 | Fold `TestCacheBackend` into `TestHooks` to fully unify the seam. | T18 implementer | proposed | Churns roughly 30 hand-built `CommonOpts` literals for no scale benefit; CP8 reviewer likely to prune. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
