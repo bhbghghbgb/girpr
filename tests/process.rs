@@ -280,14 +280,15 @@ async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
 
 #[tokio::test]
 async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
-    // The same case as the library-level case, through the real binary and its
-    // flags — because the guard this exercises is a *usage* guard, so exit 1 is
-    // what a caller sees, and only the process boundary shows that.
-    //
-    // This is `gircap`'s `removed` capture class verbatim: one `--include` for a
-    // path that is on disk and absent from the new manifest, `--purge-only`, and
-    // an assertion that the path is gone and nothing was downloaded.
-    let (mock, dir, fx, game) = start_standard_install("binary_removed").await;
+    // Reduced to a smoke: the one process-only fact worth pinning is that the
+    // shipped binary's `main` renders `SUMMARY … total=0` to stdout for the
+    // `--purge-only --include <removed path>` flag combination. The old comment
+    // claimed a process-only "exit 1 / usage guard" distinction, but the run
+    // asserts `code == 0`; the disk state, empty plan, zero chunk hits and
+    // `scoped=1`/`config_bumped=0` are all asserted at library level in
+    // `repair_purge.rs::purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest`,
+    // and CLAP acceptance of the flags is pinned in `cli_contract.rs`.
+    let (mock, dir, _fx, game) = start_standard_install("binary_removed").await;
     write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
     let (code, stdout, stderr) = run_binary(
         &[
@@ -308,23 +309,12 @@ async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
     .await;
     assert_eq!(code, 0, "must not be refused as a typo: {stderr}");
     assert!(
-        read_game_file(&dir, "game/removed.dat").is_none(),
-        "the removed path is gone"
+        stdout.contains("SUMMARY ")
+            && stdout.contains("total=0")
+            && stdout.contains("scoped=1")
+            && stdout.contains("config_bumped=0"),
+        "{stdout}"
     );
-    for f in &fx.files {
-        assert_eq!(
-            read_game_file(&dir, &f.rel).unwrap(),
-            f.data,
-            "{} must survive",
-            f.rel
-        );
-    }
-    assert!(mock.chunk_hits().is_empty(), "nothing was downloaded");
-    // The machine contract for this shape, from the process's own stdout.
-    assert!(stdout.contains("SUMMARY "), "{stdout}");
-    assert!(stdout.contains("total=0"), "{stdout}");
-    assert!(stdout.contains("scoped=1"), "{stdout}");
-    assert!(stdout.contains("config_bumped=0"), "{stdout}");
 
     mock.stop();
 }

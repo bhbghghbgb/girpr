@@ -692,11 +692,10 @@ mod tests {
         a.offset < b.offset + b.uncompressed_size && b.offset < a.offset + a.uncompressed_size
     }
 
-    #[test]
-    fn a_file_with_no_chunks_and_no_size_is_tiled() {
-        let f = file_with(0, vec![]);
-        assert!(f.layout().tiled);
-    }
+    // The `file_with(0, vec![])` (no chunks, no size) case is the "empty file"
+    // row of `layout_verdicts_and_the_cheap_tiling_check` above: that row
+    // asserts `tiled == true` (as the old standalone test did) plus equal gaps
+    // and overlaps and `is_tiled()` agreement, so it is a strict superset.
 
     // -----------------------------------------------------------------------
     // build_plan
