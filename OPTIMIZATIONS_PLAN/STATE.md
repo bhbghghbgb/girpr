@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP9 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP9 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP9 `in_progress`; T19 is `pending_review`.
-* Active checkpoint: CP9 (in review). Active batch: none.
+* Next action: pick the next `todo` task in seeded order — T20 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP9 `done`; T19 `completed`; T20–T21 are the
+  next tasks (CP10).
+* Active checkpoint: none yet (CP10 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
   any follow-up batching/implementation — is a user-directed flaky-test
@@ -55,7 +56,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | completed | P2 | CP8 | CP8 review: completed; tuple deviation and both fallbacks confirmed. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
-| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | pending_review | P2 | CP9 | Implemented in 416aeda3; ~304 net duplicated lines removed; 7th copy found and converted. |
+| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
@@ -73,7 +74,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP6 | T15 | done | sync heartbeat parameterization — completed, no fixes/reverts |
 | CP7 | T16 | done | sync record sink + `run_captured` (largest single change) — completed, no fixes/reverts |
 | CP8 | T17–T18 | done | sync logging + `TestHooks` seams — both completed, no fixes/reverts |
-| CP9 | T19 | in_progress | sync `CompareOutcome` pipeline dedup |
+| CP9 | T19 | done | sync `CompareOutcome` pipeline dedup — completed, no fixes/reverts |
 | CP10 | T20–T21 | open | `repair_scan` downshift + `peak_heap` invariant |
 | CP11 | T22–T23 | open | sled2redb production seams |
 
@@ -102,7 +103,7 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T16 | `0c22b736..3bd03d22` | completed |
 | T17 | `069ca97a..6f488b0b` | completed |
 | T18 | `4c7625a6..f1800244` | completed |
-| T19 | `416b480b..416aeda3` | — (pending CP9 review) |
+| T19 | `416b480b..416aeda3` | completed |
 | T20–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -115,7 +116,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 |---|---|---|---|---|
 | F01 | **B6:** in-process capture seam — call `run::capture/verify/materialize/list` directly and assert on `Outcome` records; removing the TCP mock needs an injected HTTP transport for `Fetcher` (report §B6 L318–L330). | report | proposed | Largest capture lever, wide/risky; B1–B5 (T05/T06/T07/T13) capture most benefit first. |
 | F02 | ~~**D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591).~~ | report | removed | CP5 reviewer removed it: zero test-count/spawn/fixture effect, pure maintenance; avoid an implement+review cycle for no scale benefit. |
-| F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Now unblocked — T19's shared comparison harness exists (416aeda3). ~14 tests. |
+| F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Priority scale item: unblocked by T19's shared seam (416aeda3), ~14 tests — CP9 reviewer recommends next lever. |
 | F04 | ~~Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range.~~ | T01 implementer | removed | CP2 reviewer removed it: non-actionable conditional watch item; adds coverage rather than reducing scale, contingent on an unplanned jitter-test extension. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
 | F06 | ~~Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines).~~ | T04 implementer | removed | CP1 reviewer removed it: no test-count effect and riskier than the fold; avoid a future implement+review cycle for zero scale benefit. |
@@ -134,8 +135,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F22 | ~~Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process.~~ | T17 implementer | removed | CP8 reviewer removed it: the smoke pins the real `init_tracing` install path; a shared helper would make it assert a re-implementation (coverage loss) for −1 spawn. |
 | F23 | If the scheduled post-task flaky-test investigation resolves the WARN-capture flake, downshift the 2 `stat_trust/flag_surface.rs` spawns. | T17 implementer | proposed | Reframed by CP8 reviewer: the flake-investigation half is subsumed by the user-directed post-task investigation; retain only the downstream −2 spawn action, gated on that investigation's outcome. |
 | F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
-| F26 | Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve. | T19 implementer | proposed | Line dedup, no test-count/spawn effect; CP9 reviewer likely to prune. |
-| F27 | Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events. | T19 implementer | proposed | Log-only, zero test-scale effect; CP9 reviewer likely to prune. |
+| F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
+| F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
 | F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
