@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T17 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP7 `done`; T17 `in_progress`, T18 `todo` (CP8).
+* Next action: pick the next `todo` task in seeded order — T18 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP7 `done`; T17 `pending_review`, T18 `todo` (CP8).
 * Active checkpoint: none yet (CP8 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -50,7 +50,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
-| T17 | Sync scoped subscriber + injectable console writer | E2 | in_progress | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
+| T17 | Sync scoped subscriber + injectable console writer | E2 | pending_review | P2 | CP8 | Implemented in 6f488b0b; 8 spawns downshifted, 3 smokes remain. WorkerGuard tuple deviation + 2 fallbacks (see context). |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | todo | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
@@ -97,7 +97,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T14 | `86b465f3..b3cf81bf` | skipped (confirmed) |
 | T15 | `7c787656..a2f21205` | completed |
 | T16 | `0c22b736..3bd03d22` | completed |
-| T17–T23 | — (not started) | — |
+| T17 | `069ca97a..6f488b0b` | — (pending CP8 review) |
+| T18–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -125,6 +126,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F19 | ~~Expose the walk's heartbeat emission count on a library result so the "fires exactly once per period" cadence can be asserted in-process rather than only via log rendering.~~ | T15 implementer | removed | CP6 reviewer removed it: coverage-adder, zero scale reduction. |
 | F20 | ~~Use a T17 scoped subscriber to pin the `scan progress: walk` / `effective progress: phase *` event names and fields in-process.~~ | T15 implementer | removed | CP6 reviewer removed it: coverage-adder, depends on T17, zero scale reduction. |
 | F21 | Downshift `output.rs:626` (`the_scan_counts_the_entries_the_walk_saw`) — another spawn-based test whose counters already live on `ScanStats` — the same way as T15. | T15 implementer | proposed | Real −1 spawn reduction, outside T15's scope; CP6 reviewer to decide. |
+| F22 | Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process. | T17 implementer | proposed | Real −1 spawn, needs a production seam; CP8 reviewer to decide. |
+| F23 | Investigate the WARN-capture flake (tracing callsite-interest caching with mixed subscriber filters in one process); if resolved, the 2 `stat_trust/flag_surface.rs` spawns can be downshifted. | T17 implementer | proposed | Real −2 spawns but blocked on a flake investigation; CP8 reviewer to decide. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
@@ -188,6 +191,7 @@ change log.
 * T11 clippy diagnostics resolved by CP4 review: `repair/phases/plan.rs:573` type_complexity originated in T02's merged table; `tests/repair_machinery.rs:119` dead_code (`Run::word`) was exposed by T09's last-caller conversion. Both benign test-only lints, no `-D warnings` gate, no behavior/coverage/scale impact — reviewer deliberately opened no follow-up.
 * T16: converted record tests now pin the real file cache because the path-keyed in-memory registry could leak across in-process runs (a few cases are slower); T18's injected cache backend could restore in-memory speed. `Report` lost `Copy`; all three by-ref `let report = log.report()` sites were audited. One pre-existing unrelated clippy warning remains in `src/hash/tests.rs`.
 * T16 CP7 review noted for T17: the two remaining `stat_trust/flag_surface.rs` spawns (`bin`/`bin_mem`) assert a WARN string ("no-trust") emitted through the process subscriber; downshifting them needs T17's scoped subscriber. Reviewer deliberately did not open a standalone follow-up — fold into T17's scope if desired.
+* T17 deviations/fallbacks: `subscriber_for` returns `(impl Subscriber, Option<WorkerGuard>)` rather than the plan's `-> impl Subscriber` — the tuple is required so callers keep the WorkerGuard alive past the `with_default` closure. Rayon caveat verified NOT binding: scan-done / effective-done:phase-A events are main-thread. Deliberate fallbacks: (1) `an_unrelated_rust_log…` kept as a process smoke — it pins `init_tracing`'s own `log start` event which a scoped stack cannot render; (2) the CP7 stat_trust fold was attempted then REVERTED — the scoped WARN assertion was intermittently flaky under threaded `cargo test` (stable under `cargo nextest`); kept its 2 spawns rather than ship a flaky test. CP8 reviewer should confirm these.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
 * T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
 * T14 (A7) partial implementation: only the purge-only trio was merged (12 → 10 tests, −2 mocks/temp dirs); the plan-out pair at `repair_purge.rs:422`/`:455` was deliberately SKIPPED. The task is internally contradictory — its Goal says merge that pair, but its Acceptance criteria and explicit guardrail say the complementary pair at `:421`/`:454` (the same tests) must NOT be folded, and the report's actual do-not-merge list (L826–L841) contains no `repair_purge.rs` pair. The implementer honored the authoritative guardrail; acceptance criteria are still met. CP5 reviewer must confirm the skip, not flag it as missed.
