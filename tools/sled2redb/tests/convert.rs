@@ -6,7 +6,7 @@
 mod common;
 
 use clap::ValueEnum;
-use common::{log, parse_ndjson, rw, temp_root};
+use common::{parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
 use girsync::report::OutputFormat;
 use md5::Md5;
@@ -205,6 +205,11 @@ fn convert_sled_dir_to_redb_file() {
     assert_eq!((c.files, c.dirs), (2, 1));
     assert!(dst.is_file(), "destination is a redb file");
     assert!(src.is_dir(), "source sled dir is left untouched");
+    assert_eq!(
+        entry_names(&work),
+        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
+        "the conversion left nothing behind"
+    );
 
     let recs = {
         let cache = open_db(&dst, true, rw()).unwrap();
@@ -253,7 +258,6 @@ fn convert_sled_dir_to_redb_file() {
     o.trust.no_trust_src = true;
     o.trust.no_trust_dst = true;
     o.common.algos = vec![girsync::hash::HashAlg::Md5, girsync::hash::HashAlg::Sha256];
-    let _ = &log();
     // record-vs-folder with extra blake3 rows: blake3 is not requested, so
     // the diff only consults md5/sha256 and must be equal.
     assert_eq!(girsync::cmd_compare(o, &common::log()).unwrap(), 0);
@@ -408,29 +412,6 @@ fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
         entry_names(&work),
         vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
         "the conversion left nothing but the cache and its source"
-    );
-}
-
-/// A conversion that succeeds creates the destination and nothing else.
-///
-/// The temporary the conversion writes into is gone, which is the half of
-/// the atomicity that is easy to forget: a leftover beside the destination
-/// is a file in the user's tree that nothing will ever clean up.
-#[test]
-fn a_successful_conversion_creates_the_destination_and_no_temporary() {
-    let t = temp_root("convert_ok");
-    let work = t.subdir("w");
-    build_sled_db(&work);
-    let src = work.join("legacy-cache");
-    let dst = work.join("girpr-cache");
-
-    let c = sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
-    assert_eq!((c.files, c.dirs), (2, 1));
-    assert!(dst.is_file(), "the destination is a redb file");
-    assert_eq!(
-        entry_names(&work),
-        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
-        "the conversion left nothing behind"
     );
 }
 
