@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T14 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP4 `done`; T13 `pending_review`, T14 `todo` (CP5).
-* Active checkpoint: none yet (CP2 `open`). Active batch: none.
+* Next action: wait for the T14 implementing session to finish, then apply its
+  result. T14 completes CP5's tasks, so after recording it, run the CP5 review
+  phase (`ORCHESTRATION.md` §4).
+* Active phase: implementation. CP1–CP4 `done`; T13 `pending_review`, T14 `in_progress` (last CP5 task).
+* Active checkpoint: none yet (CP5 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
 ## Status vocabulary
@@ -47,7 +48,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | completed | P1 | CP4 | CP4 review: completed. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | completed | P1 | CP4 | CP4 review: completed (DiskFigure deviation validated). |
 | T13 | Capture: merge mock / no-network full captures | B4 | pending_review | P1 | CP5 | Implemented in bda7e0c5; row-pin test kept separate (deviation, see context). |
-| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | todo | P1 | CP5 | Two tables over the named case sets. |
+| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | in_progress | P1 | CP5 | Two tables over the named case sets. |
 | T15 | Parameterize the sync heartbeat period | E4 | todo | P1 | CP6 | If counters stay log-only, E2 (T17) is still required. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
