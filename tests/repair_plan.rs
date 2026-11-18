@@ -10,10 +10,11 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run, run_binary, temp_dir,
-    write_game_file,
+    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run, run_binary, scope,
+    temp_dir, write_game_file,
 };
 use girpr::RunExit;
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -122,8 +123,9 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
     // an active scope is a usage error for a real run, but a plan run defers
     // the write and exits `0` with a `PLAN` whether the scan file is in scope
     // or not. The only input that varies across these cases is the `--include`
-    // scope; the body below applies the union of what each case used to assert
-    // on its own.
+    // scope. Only `no_scope` asserts a binary-level stdout fact
+    // (`audio_langs=en-us`); the two scope rows assert only library-observable
+    // facts, so they run in-process and keep the same assertions there.
     struct AudioPlanCase {
         name: &'static str,
         includes: &'static [&'static str],
@@ -155,49 +157,69 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
         .await;
         let dir = temp_dir(&format!("print_plan_audio_{}", case.name));
         let game = dir.join("install");
-        let game_arg = game.to_string_lossy().into_owned();
 
-        let mut args: Vec<&str> = vec![
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-        ];
-        for &rel in case.includes {
-            args.push("--include");
-            args.push(rel);
-        }
-        args.extend_from_slice(&[
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ]);
-
-        let (code, stdout, stderr) = run_binary(&args, &[]).await;
-        assert_eq!(code, 0, "{}: stderr: {stderr}", case.name);
-        // Language pass-through is a binary-level property, not a scope
-        // property: assert it once in the unscoped case rather than repeating
-        // the same process-level check in every scope row. The scope-specific
-        // assertions below still apply to all cases, and report_record()
-        // formatting is covered separately in src/report/tests.rs.
         if case.includes.is_empty() {
+            // Language pass-through is a binary-level property: keep the real
+            // spawn for the one case that asserts it on stdout. report_record()
+            // formatting is covered separately in src/report/tests.rs.
+            let game_arg = game.to_string_lossy().into_owned();
+            let mut args: Vec<&str> = vec![
+                "--game-path",
+                &game_arg,
+                "--biz",
+                "hk4e_global",
+                "--jobs",
+                "1",
+                "--print-plan",
+                "--audio",
+                "en-us",
+            ];
+            args.extend_from_slice(&[
+                "--hyp-base",
+                &mock.hyp_base,
+                "--sophon-base",
+                &mock.sophon_base,
+            ]);
+
+            let (code, stdout, stderr) = run_binary(&args, &[]).await;
+            assert_eq!(code, 0, "{}: stderr: {stderr}", case.name);
             assert!(
                 stdout.contains("audio_langs=en-us"),
                 "{}: the report must name the requested language:\n{stdout}",
                 case.name
             );
+            assert!(
+                stdout.lines().any(|l| l.starts_with("PLAN ")),
+                "{}: the plan must still be reported:\n{stdout}",
+                case.name
+            );
+        } else {
+            // `scan_out`/`scan_in` assert only exit 0, that a plan was
+            // reported, and the filesystem negatives — all library-observable.
+            // The `--plan-out` document is the library-observable form of the
+            // `PLAN` line (both are published together by `publish_plan`), so
+            // asserting its repair entries keeps "a plan was reported" pinned
+            // without a process spawn.
+            let out = dir.join("plan.json");
+            let mut ctx = ctx_for(game.clone(), &mock, 1);
+            ctx.print_plan = true;
+            ctx.plan_out = Some(out.clone());
+            ctx.audio = HashSet::from(["en-us".to_string()]);
+            ctx.audio_explicit = true;
+            ctx.path_scope = scope(case.includes, &[]);
+            let (_, code) = run(ctx).await.expect("print-plan runs");
+            assert_eq!(code, RunExit::Success, "{}", case.name);
+
+            let written = std::fs::read_to_string(&out).expect("--plan-out document");
+            let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+            let plan = v["repair"].as_array().expect("a published repair plan");
+            assert!(
+                !plan.is_empty(),
+                "{}: the plan must still be reported:\n{written}",
+                case.name
+            );
         }
-        assert!(
-            stdout.lines().any(|l| l.starts_with("PLAN ")),
-            "{}: the plan must still be reported:\n{stdout}",
-            case.name
-        );
+
         assert!(
             !game.exists(),
             "{}: --print-plan must not create the game dir",
