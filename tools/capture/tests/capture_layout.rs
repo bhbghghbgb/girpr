@@ -199,41 +199,6 @@ fn a_capture_leaves_no_failed_selfcheck_rows() {
     );
 }
 
-/// `cargo nextest run -p gircap` green and no network. The "no network" half
-/// is the structural one: every request the capture made went to `127.0.0.1`.
-#[test]
-fn every_request_the_capture_made_went_to_the_mock() {
-    let (mock, _s, _r, _b) = capture_ok("requests");
-    let reqs = mock.requests();
-    assert!(reqs.len() > 10, "the capture made {} requests", reqs.len());
-    for r in &reqs {
-        assert!(
-            r.path.starts_with("/hyp/")
-                || r.path.starts_with("/sophon/")
-                || r.path.starts_with("/cdn/"),
-            "a request the mock does not own: {r:?}"
-        );
-    }
-    // **Only the ordering that is real.** Only `getGameBranches` carries the
-    // `package_id` that `getBuild` needs, so `branches < builds` is the invariant;
-    // anything asserting which of two *concurrent* requests the mock happened to
-    // accept first would be a test of the mock. The four HoYoPlay endpoints are
-    // issued together, because none of them depends on another.
-    let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
-    let branches = order
-        .iter()
-        .position(|p| p.ends_with("/getGameBranches"))
-        .expect("getGameBranches");
-    let builds = order
-        .iter()
-        .position(|p| p.ends_with("/getBuild"))
-        .expect("getBuild");
-    assert!(
-        branches < builds,
-        "the branch that carries package_id is fetched before getBuild"
-    );
-}
-
 /// `api/error_shapes.json` records what the API does with requests it will not
 /// serve. This is the acceptance that needs no network: against the mock, which
 /// answers the measured way, the document must carry the measured statuses —
@@ -1328,42 +1293,16 @@ fn ureq_get(url: &str) -> Vec<u8> {
     all[split + 4..].to_vec()
 }
 
-/// **No test touches the network.** Proven, not asserted.
-///
-/// The claim is checkable from the artifact itself: `api/requests.ndjson` records
-/// the URL of every request the run made, including the manifest and chunk CDN
-/// requests whose bases come from the `getBuild` body — and that body was written
-/// by the mock. So if every recorded URL is a loopback address, there was no other
-/// address to reach, whatever the flags said.
-#[test]
-fn every_request_url_in_the_bundle_is_a_loopback_address() {
-    let (mock, _s, _r, bundle) = capture_ok("loopback");
-    let text =
-        std::fs::read_to_string(bundle.join("api/requests.ndjson")).expect("the request log");
-    let mut checked = 0;
-    for line in text.lines() {
-        let v: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
-        for field in ["url", "final_url"] {
-            let Some(url) = v[field].as_str() else {
-                continue;
-            };
-            assert!(
-                url.starts_with("http://127.0.0.1:"),
-                "{field} is not loopback: {url}"
-            );
-            assert!(
-                url.starts_with(mock.base()) || url.starts_with(&mock.hyp_base()),
-                "{field} points somewhere the mock does not own: {url}"
-            );
-            checked += 1;
-        }
-    }
-    assert!(checked >= 20, "only {checked} URLs were checked");
-}
-
 /// The bases the mock advertises are the bases the capture used, which is the
-/// other half of the same claim: a capture cannot have reached a real CDN even if
-/// it had wanted to, because nothing told it one.
+/// other half of the "no network" claim: a capture cannot have reached a real CDN
+/// even if it had wanted to, because nothing told it one.
+///
+/// This is also where the structural half of that claim is asserted: every
+/// request the capture made went to a path the loopback mock owns, and the branch
+/// that carries `package_id` was fetched before `getBuild` needed it. (Folded here
+/// from `every_request_the_capture_made_went_to_the_mock`; the byte-exact request
+/// log row pin stays in `the_request_log_rows_are_what_the_spec_says_they_are`,
+/// whose `--jobs 1` sequence is not reproducible on this default-jobs capture.)
 #[test]
 fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
     let mock = Mock::start(World::all_shapes());
@@ -1398,6 +1337,40 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
             .as_str()
             .unwrap()
             .contains("127.0.0.1")
+    );
+
+    // Folded from `every_request_the_capture_made_went_to_the_mock`: a capture
+    // whose every request went to a path the mock owns cannot have left the
+    // loopback listener, whatever the bases said.
+    let reqs = mock.requests();
+    assert!(reqs.len() > 10, "the capture made {} requests", reqs.len());
+    for req in &reqs {
+        assert!(
+            req.path.starts_with("/hyp/")
+                || req.path.starts_with("/sophon/")
+                || req.path.starts_with("/cdn/"),
+            "a request the mock does not own: {req:?}"
+        );
+    }
+    // **Only the ordering that is real.** Only `getGameBranches` carries the
+    // `package_id` that `getBuild` needs, so `branches < builds` is the invariant;
+    // anything asserting which of two *concurrent* requests the mock happened to
+    // accept first would be a test of the mock. The four HoYoPlay endpoints are
+    // issued together, because none of them depends on another. Arrival order at
+    // the mock is causal here: `getBuild` cannot be issued before the branch that
+    // supplies its `package_id` has been answered.
+    let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
+    let branches = order
+        .iter()
+        .position(|p| p.ends_with("/getGameBranches"))
+        .expect("getGameBranches");
+    let builds = order
+        .iter()
+        .position(|p| p.ends_with("/getBuild"))
+        .expect("getBuild");
+    assert!(
+        branches < builds,
+        "the branch that carries package_id is fetched before getBuild"
     );
 }
 
