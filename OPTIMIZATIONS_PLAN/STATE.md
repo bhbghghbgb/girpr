@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T20 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP9 `done`; T20 `in_progress`, T21 `todo` (CP10).
+* Next action: pick the next `todo` task in seeded order — T21 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP9 `done`; T20 `pending_review`, T21 `todo` (CP10).
 * Active checkpoint: none yet (CP10 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -56,7 +56,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T17 | Sync scoped subscriber + injectable console writer | E2 | completed | P2 | CP8 | CP8 review: completed; tuple deviation and both fallbacks confirmed. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
-| T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | in_progress | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
+| T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | pending_review | P2 | CP10 | Implemented in 5deab7fb; spawns 16→4, tests 15→14; process pins retained. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
 | T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | todo | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
@@ -103,7 +103,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T17 | `069ca97a..6f488b0b` | completed |
 | T18 | `4c7625a6..f1800244` | completed |
 | T19 | `416b480b..416aeda3` | completed |
-| T20–T23 | — (not started) | — |
+| T20 | `5d58b228..5deab7fb` | — (pending CP10 review) |
+| T21–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -134,6 +135,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F22 | ~~Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process.~~ | T17 implementer | removed | CP8 reviewer removed it: the smoke pins the real `init_tracing` install path; a shared helper would make it assert a re-implementation (coverage loss) for −1 spawn. |
 | F23 | If the scheduled post-task flaky-test investigation resolves the WARN-capture flake, downshift the 2 `stat_trust/flag_surface.rs` spawns. | T17 implementer | proposed | Reframed by CP8 reviewer: the flake-investigation half is subsumed by the user-directed post-task investigation; retain only the downstream −2 spawn action, gated on that investigation's outcome. |
 | F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
+| F28 | Pin the exact stdout line for T20's "PLAN printed with a wrong digest" via a second binary spawn (currently asserted via plan-out document content). | T20 implementer | proposed | Would ADD a spawn, contrary to the one-binary-run-per-test guardrail; CP10 reviewer likely to prune. |
+| F29 | Production seam exposing `summary.flags.plan_download_bytes` unconditionally so T20's remaining binary PLAN-line run can fully downshift. | T20 implementer | proposed | Real −1 spawn but needs a production seam (field currently only set with a --max-download-bytes ceiling); CP10 reviewer to decide. |
 | F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
 | F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
 | F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
