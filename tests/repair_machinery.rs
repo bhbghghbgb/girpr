@@ -935,10 +935,12 @@ async fn the_three_tiers_produce_the_same_file() {
     let spec = shift_down(64);
     let want = lay_out(&spec.new[0].chunks);
 
-    // Staged: the default, with a budget the payload fits.
+    // Staged: the default, with a budget the payload fits. This sub-run only
+    // reads counters (the staged byte figure) and file bytes, so it drives the
+    // library in-process; only the shortage sub-run below needs the log.
     let staged = Rig::start(&spec).await;
     staged.at_local_version();
-    let run = staged.run(&["--max-ram-bytes", "1048576"]).await;
+    let run = staged.run_lib(&["--max-ram-bytes", "1048576"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(staged.read("game/shift.dat"), want);
     assert_eq!(
@@ -947,10 +949,10 @@ async fn the_three_tiers_produce_the_same_file() {
         "the one chunk that has to move was staged"
     );
 
-    // Ordered by mode: stage nothing at all.
+    // Ordered by mode: stage nothing at all. Also counter/file-bytes only.
     let by_mode = Rig::start(&spec).await;
     by_mode.at_local_version();
-    let run = by_mode.run(&["--max-ram-bytes", "0"]).await;
+    let run = by_mode.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(by_mode.read("game/shift.dat"), want);
     assert_eq!(run.num("summary", "ram_bytes"), 0, "nothing was staged");
@@ -1277,13 +1279,16 @@ async fn a_file_that_grows_writes_only_the_growth() {
 // D7 — the mode
 // ---------------------------------------------------------------------------
 
-/// The three modes produce the **same bytes**.
+/// The three modes produce the **same bytes** and leave **no** temp file
+/// behind.
 ///
 /// `inplace` writes where the file lies, `temp` writes beside it and renames
 /// over it, and `discard` deletes the target and writes it from scratch. The
-/// mode is a choice of *how*, not of *what*.
+/// mode is a choice of *how*, not of *what*: every mode ends at the target's
+/// bytes, and none leaves a temp file (the temp path's is renamed over the
+/// target, so it is swept by the rename).
 #[tokio::test]
-async fn the_three_modes_produce_the_same_bytes() {
+async fn the_three_modes_produce_the_same_bytes_and_leave_no_temp_file() {
     let size = 64usize;
     let old = vec![
         chunk("old_a", 0x41, size, 0),
@@ -1308,25 +1313,6 @@ async fn the_three_modes_produce_the_same_bytes() {
             want,
             "{mode}: the mode is a choice of how, not of what"
         );
-    }
-}
-
-/// The in-place path leaves **no** temp file behind; the temp path leaves
-/// none either, because the temp file is renamed over the target.
-#[tokio::test]
-async fn no_mode_leaves_a_temp_file_behind() {
-    let size = 64usize;
-    let old = vec![chunk("old_a", 0x41, size, 0)];
-    let new = vec![chunk("new_b", 0x42, size, 0)];
-    let spec = FixtureSpec::new(vec![FileSpec::new("game/mode.dat", new)])
-        .with_old(vec![FileSpec::new("game/mode.dat", old.clone())])
-        .with_disk("game/mode.dat", lay_out(&old));
-
-    for mode in ["inplace", "temp", "discard"] {
-        let rig = Rig::start(&spec).await;
-        rig.at_local_version();
-        let run = rig.run_lib(&["--repair-mode", mode]).await;
-        assert_eq!(run.code, 0, "{mode}: {}\n{}", run.stdout, run.stderr);
         let leftovers: Vec<String> = std::fs::read_dir(rig.game().join("game"))
             .expect("game/")
             .flatten()
@@ -1443,48 +1429,45 @@ async fn a_hole_in_the_coverage_is_zero_filled_and_the_file_verifies() {
     );
 }
 
-/// A chunk served with a body that is **not a zstd frame** fails the file,
-/// and the run says so.
+/// Two manifest lies the decode/digest gates refuse, failing the file.
 ///
-/// The decode is the gate: a body that is not a frame has to be refused
-/// rather than landed in the install.
-#[tokio::test]
-async fn a_chunk_that_is_not_a_zstd_frame_fails_the_file() {
-    let spec = FixtureSpec::new(vec![FileSpec::new(
-        "game/bad.dat",
-        vec![chunk("bad", 0x41, 64, 0)],
-    )])
-    .with_lies(Lies {
-        not_zstd: vec!["bad".to_string()],
-        ..Default::default()
-    });
-    let rig = Rig::start(&spec).await;
-
-    let run = rig.run_lib(&["--fail-fast"]).await;
-    assert_eq!(run.code, 3, "{}\n{}", run.stdout, run.stderr);
-    assert_eq!(run.num("summary", "failed"), 1);
-    assert_eq!(run.num("summary", "repaired"), 0);
-}
-
-/// A chunk whose declared digest **no payload can match** is refused.
+/// - **not a zstd frame** — the decode is the gate: a body that is not a
+///   frame has to be refused rather than landed in the install.
+/// - **no payload can match the declared digest** — the manifest's
+///   `uncompressed_md5` is the digest gate, and a digest nothing can produce
+///   has to fail the chunk rather than land the bytes.
 ///
-/// The manifest's `uncompressed_md5` is the digest gate, and a digest that
-/// nothing can produce has to fail the chunk rather than land the bytes.
+/// With `--fail-fast` each exits `3`, fails the one file, and repairs nothing.
 #[tokio::test]
-async fn a_chunk_whose_declared_digest_no_payload_can_match_is_refused() {
-    let spec = FixtureSpec::new(vec![FileSpec::new(
-        "game/bad.dat",
-        vec![chunk("bad", 0x41, 64, 0)],
-    )])
-    .with_lies(Lies {
-        wrong_chunk_md5: vec!["bad".to_string()],
-        ..Default::default()
-    });
-    let rig = Rig::start(&spec).await;
+async fn refused_chunk_lies_fail_the_file() {
+    for (name, lies) in [
+        (
+            "not a zstd frame",
+            Lies {
+                not_zstd: vec!["bad".to_string()],
+                ..Default::default()
+            },
+        ),
+        (
+            "no payload matches the digest",
+            Lies {
+                wrong_chunk_md5: vec!["bad".to_string()],
+                ..Default::default()
+            },
+        ),
+    ] {
+        let spec = FixtureSpec::new(vec![FileSpec::new(
+            "game/bad.dat",
+            vec![chunk("bad", 0x41, 64, 0)],
+        )])
+        .with_lies(lies);
+        let rig = Rig::start(&spec).await;
 
-    let run = rig.run_lib(&["--fail-fast"]).await;
-    assert_eq!(run.code, 3, "{}\n{}", run.stdout, run.stderr);
-    assert_eq!(run.num("summary", "failed"), 1);
+        let run = rig.run_lib(&["--fail-fast"]).await;
+        assert_eq!(run.code, 3, "{name}: {}\n{}", run.stdout, run.stderr);
+        assert_eq!(run.num("summary", "failed"), 1, "{name}");
+        assert_eq!(run.num("summary", "repaired"), 0, "{name}");
+    }
 }
 
 /// A manifest whose `compressed_size` **lies** is still repaired: the size is

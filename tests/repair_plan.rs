@@ -145,16 +145,20 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
         },
     ];
 
+    // All three cases serve the same fixture through the same scan-file
+    // option, and none asserts per-case mock state, so one listener/task is
+    // shared across them: start it once above the loop and stop it once below.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+
     for case in &cases {
-        let fx = build_fixture();
-        let mock = MockServer::start(
-            fx,
-            MockOpts {
-                scan_dir: "Audio/scan.txt".to_string(),
-                ..Default::default()
-            },
-        )
-        .await;
         let dir = temp_dir(&format!("print_plan_audio_{}", case.name));
         let game = dir.join("install");
 
@@ -235,9 +239,8 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
             "{}: the scan file must not be written, even when the scope admits it",
             case.name
         );
-
-        mock.stop();
     }
+    mock.stop();
 }
 
 #[tokio::test]
