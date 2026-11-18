@@ -162,9 +162,27 @@ unknown. This investigation MUST run after all tasks are terminal and all
 checkpoints are `done`, but BEFORE any follow-up batching or implementation —
 an explicit override of the default §5 completion order.
 
-* Status: in_progress. Active session: (1) investigate.
+* Status: in_progress. Active session: (2) fix — investigate completed.
 * Scope: determine whether the flakiness originated during this orchestration
   session or before it, and determine whether and how it can be fixed.
+
+**Investigate findings (session 1):** the flake was introduced DURING this
+orchestration session by T17 and is already gone. The flaky scoped-WARN fold
+existed only in unreachable stash `c0f453dd`, was reverted before T17's final
+`6f488b0b`, and never landed on `main`; HEAD is stable (baseline `a3051a93` and
+its parent reproduced 0 failures in 7 plain-cargo-test runs). T17's claim that
+it predated its baseline is unsupported. Root cause: `tracing` caches callsite
+interest process-globally — sibling tests emit the WARN under `NoSubscriber`
+first, so the callsite is cached `never()` and a later scoped subscriber
+receives nothing (0 bytes); nextest isolates processes so it never reproduces.
+The codebase already handles this with `tracing::callsite::rebuild_interest_cache()`
+in `phases.rs`/`copy.rs`; `run_args_logged` omits it. Fix is feasible: apply the
+rebuild narrowly to the stat_trust fold (not blindly to the shared helper — a
+global call can race with output.rs's differently-filtered scoped subscribers),
+then validate with repeated plain `cargo test -p girsync --test stat_trust` plus
+a nextest control. Decision: proceed — the −2 spawns in F23 are wanted, so
+session 2 implements the narrow fix together with the F23 downshift, and session
+3 reviews it.
 * Sessions (one at a time, in this order): (1) **investigate** — establish origin
   and root cause, report findings only, no fix; (2) **fix** — implement a fix if
   the investigation warrants one; (3) **review** — review the fix. Give each
