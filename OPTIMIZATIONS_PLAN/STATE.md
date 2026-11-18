@@ -12,9 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP3 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP3 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP3 `in_progress`; both CP3 tasks are `pending_review`.
+* Next action: pick the next `todo` task in seeded order — T11 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP3 `done`; T09, T10 `completed`, T11–T12 are
+  the next tasks (CP4).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -42,8 +43,8 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T06 | Capture: device-name flag refusal → config unit test | B2 | completed | P0 | CP2 | CP2 review: completed. |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | completed | P0 | CP2 | CP2 review: completed. |
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
-| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | pending_review | P1 | CP3 | Implemented in 308a0884, ba57c637, 0e4bf161; 17 cases downshifted, 11 log cases + alias on binary. |
-| T10 | `repair_plan.rs` audio-plan partial downshift | A3 | pending_review | P1 | CP3 | Implemented in 7da360d3; −2 spawns (mock servers remain, see context). |
+| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | completed | P1 | CP3 | CP3 review: completed. |
+| T10 | `repair_plan.rs` audio-plan partial downshift | A3 | completed | P1 | CP3 | CP3 review: completed (mock-server estimate note confirmed). |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | todo | P1 | CP4 | Preserve symlink/dir → `temp` semantics; do not change `resolve_mode` itself. |
 | T13 | Capture: merge mock / no-network full captures | B4 | todo | P1 | CP5 | 4 tests → 2; verify exact row/byte pins hold on shared capture. |
@@ -64,7 +65,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 |---|---|---|---|
 | CP1 | T01–T04 | done | P0 root unit + small crates + sled2redb low-risk — all completed, no fixes/reverts |
 | CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
-| CP3 | T09–T10 | in_progress | `repair_machinery` + `repair_plan` downshifts |
+| CP3 | T09–T10 | done | `repair_machinery` + `repair_plan` downshifts — both completed, no fixes/reverts |
 | CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
 | CP5 | T13–T14 | open | capture mock merge + `repair_purge` merges |
 | CP6 | T15 | open | sync heartbeat parameterization |
@@ -89,8 +90,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T06 | `ab96ebab..6b7dfdde` | completed |
 | T07 | `c9dc8307..e6aefb87` | completed |
 | T08 | `8160cef5..c8ed2fef` | completed |
-| T09 | `4c74ef45..0e4bf161` | — (pending CP3 review) |
-| T10 | `78746658..7da360d3` | — (pending CP3 review) |
+| T09 | `4c74ef45..0e4bf161` | completed |
+| T10 | `78746658..7da360d3` | completed |
 | T11–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -110,11 +111,11 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F07 | ~~Simplify away the now-near-trivial `BundleVariant` enum and its `key()`/`extra()` methods (only `Default` remains after T05) — e.g. an argument-less `shared_bundle()`.~~ | T05 implementer | removed | CP2 reviewer removed it: pure enum hygiene, zero test-count effect (same rationale as F06). |
 | F08 | ~~Metadata-only assertion path for T07's retained measured test: compute totals from declared chunk sizes via a pure seam instead of materializing ~4.7 MB of bodies.~~ | T07 implementer | removed | CP2 reviewer removed it: needs a production seam, marginal remaining MBs, and contradicts T07's "keep one measured ground-truth pin" criterion. |
 | F09 | ~~Share the chunk-length constants between `m7_assembly` and `m6_chunk_store` (different fixture structure, carries md5 strings).~~ | T07 implementer | removed | CP2 reviewer removed it: zero test-count effect, low value. |
-| F10 | Make `Rig::logs` a lazily-initialized `OnceLock<TempDir>` so the 17 fully-converted T09 rigs stop allocating an unused log directory. | T09 implementer | proposed | No test-count/spawn effect, mostly hygiene; CP3 reviewer may prune. |
+| F10 | ~~Make `Rig::logs` a lazily-initialized `OnceLock<TempDir>` so the 17 fully-converted T09 rigs stop allocating an unused log directory.~~ | T09 implementer | removed | CP3 reviewer removed it: zero test-count/spawn effect, pure hygiene (same rationale as F06/F07/F09). |
 | F11 | Downshift the staged and by-mode sub-runs in `the_three_tiers_produce_the_same_file` (pure `ram_bytes` counters; only the shortage sub-run needs the log) — ~2 more spawns. | T09 implementer | proposed | Real spawn reduction; CP3 reviewer to decide. |
 | F12 | Merge the two `--fail-fast` malformed-manifest cases into a `Lies` table, and merge `the_three_modes_produce_the_same_bytes` with `no_mode_leaves_a_temp_file_behind` into a three-mode loop asserting bytes + leftovers. | T09 implementer | proposed | Real test-count reduction; CP3 reviewer to decide. |
 | F13 | Share one `MockServer` across all three cases of T10's audio-plan test (start before the loop, stop after) to cut 2 listener/task starts. | T10 implementer | proposed | Real but small scale reduction, low risk; outside T10's stated steps. |
-| F14 | Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion. | T10 implementer | proposed | Adds coverage rather than reducing scale; CP3 reviewer likely to prune. |
+| F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
 
 ## Follow-up batches
 
