@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T07 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1 `done`; T05, T06 `pending_review`, T07–T08 `todo` (CP2).
+* Next action: wait for the T07 implementing session to finish, then apply its
+  result (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1 `done`; T05, T06 `pending_review`, T07 `in_progress`, T08 `todo` (CP2).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -40,7 +40,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | completed | P0 | CP1 | CP1 review: completed. Protected tests intact. |
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | pending_review | P0 | CP2 | Implemented in 4a097a31; no smoke fallback needed (unit tests reach prod path). |
 | T06 | Capture: device-name flag refusal → config unit test | B2 | pending_review | P0 | CP2 | Implemented in 6b7dfdde; guardrail confirmed (refusal before HTTP). |
-| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | todo | P0 | CP2 | Verify rewrites equal old literals at measured sizes. |
+| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | in_progress | P0 | CP2 | Verify rewrites equal old literals at measured sizes. |
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | todo | P0 | CP2 | `benches/tree_shapes.rs` is SKIP (timing, not a gate). |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | todo | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
