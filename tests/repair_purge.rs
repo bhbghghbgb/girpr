@@ -306,24 +306,65 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     mock.stop();
 }
 
+/// One row of the purge-only table: an async case fn borrowing the shared mock
+/// and root temp dir. Boxing lets the three async fns share one fn-pointer type.
+type PurgeCase = for<'a> fn(
+    &'a MockServer,
+    &'a std::path::Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>;
+
+/// The three `--purge-only` variants (A7, pattern 4) share one fixture, one
+/// `MockServer` and one root temp dir. Each variant keeps its own game dir,
+/// setup and full set of assertions as one row of this table. The complementary
+/// `--plan-out` before/after pair (`:421`/`:454`) is deliberately *not* part of
+/// this table — it is on the report's do-not-merge list and stays separate.
 #[tokio::test]
-async fn purge_only_cleans_up_without_repairing() {
+async fn purge_only_variants_cleanup_without_repairing() {
+    // One mock serves all three rows. The audio-dir / deprecated-file answers
+    // the dry-run row needs are inert for the other two, which create no such
+    // files on disk.
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            res_dir: "Audio/res".to_string(),
+            cache_dir: "Audio/cache".to_string(),
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let root = temp_dir("purge_only_variants");
+
+    // Box the per-row futures so the three async case functions share one
+    // signature and can be iterated as a table.
+    let cases: [PurgeCase; 3] = [
+        |m, r| Box::pin(purge_only_cleanup_without_repairing(m, r)),
+        |m, r| Box::pin(purge_only_dry_run_deletes_and_moves_nothing(m, r)),
+        |m, r| Box::pin(purge_only_check_only_pair(m, r)),
+    ];
+    for case in cases {
+        case(&mock, &root).await;
+    }
+
+    mock.stop();
+}
+
+async fn purge_only_cleanup_without_repairing(mock: &MockServer, root: &std::path::Path) {
     // The `removed` matrix class is reachable only through the purge path, and
     // `gircap`'s own procedure said not to pass a purge flag — so it needed
     // this. `check_only` inverted: "is it intact?" vs "make it match".
     //
     // Note the absence of `purge_after`: `--purge-only` **implies** the
     // cleanup, and a flag that cleaned up nothing would be a lie.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_only");
+    let dir = root.join("cleanup");
     let fx2 = build_fixture();
     // One damaged file: purge-only must NOT repair it, but must not fail either.
     write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 2);
     ctx.purge_only = true;
     let (summary, code) = run(ctx).await.expect("purge-only runs");
     assert_eq!(code, RunExit::Success);
@@ -351,30 +392,15 @@ async fn purge_only_cleans_up_without_repairing() {
     );
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("config_bumped=0"), "{line}");
-
-    mock.stop();
 }
 
-#[tokio::test]
-async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
+async fn purge_only_dry_run_deletes_and_moves_nothing(mock: &MockServer, root: &std::path::Path) {
     // `--dry-run` is documented as writing nothing. `post::run` has two call
     // sites: the repair run, which reaches it only through `if !readonly`, and
     // the `--purge-only` early return, which is not behind that gate — so the
     // three destructive steps of the post-phase (deprecated deletes, the audio
     // cache move, the cleanup pass) have to check the flag themselves.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            res_dir: "Audio/res".to_string(),
-            cache_dir: "Audio/cache".to_string(),
-            deprecated_files: vec!["old/legacy.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("purge_only_dry");
+    let dir = root.join("dry");
     let fx2 = build_fixture();
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, &f.data);
@@ -383,7 +409,7 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
     write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 2);
     ctx.purge_only = true;
     ctx.dry_run = true;
     let (summary, code) = run(ctx).await.expect("purge-only --dry-run runs");
@@ -414,8 +440,6 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
         "byte counters stay 0 in dry-run by design"
     );
     assert!(!dir.join("config.ini").exists());
-
-    mock.stop();
 }
 
 #[tokio::test]
@@ -488,27 +512,24 @@ async fn purge_before_leaves_an_in_install_plan_out_in_place() {
     mock.stop();
 }
 
-#[tokio::test]
-async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
+async fn purge_only_check_only_pair(mock: &MockServer, root: &std::path::Path) {
     // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
     // rules, and neither repairs.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_only_pair");
+    let dir = root.join("pair");
     let fx2 = build_fixture();
     write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
     write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
 
     // check-only: damage found, nothing written, orphan kept.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 2);
     ctx.check_only = true;
     let (_, code) = run(ctx).await.expect("check runs");
     assert_eq!(code, RunExit::CheckFailed);
     assert!(read_game_file(&dir, "stray/orphan.dat").is_some());
 
     // purge-only: the orphan is gone, the damage is untouched.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 2);
     ctx.purge_only = true;
     let (_, code) = run(ctx).await.expect("purge-only runs");
     assert_eq!(code, RunExit::Success);
@@ -517,6 +538,4 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         b"not the game data"
     );
-
-    mock.stop();
 }
