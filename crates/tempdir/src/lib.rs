@@ -359,8 +359,9 @@ mod tests {
         assert!(!dir.path.exists(), "the path must not exist yet");
     }
 
-    /// `at` takes the path the caller chose, and clears whatever was there.
-    /// The directory itself is the code under test's to make.
+    /// `at` takes the path the caller chose, and clears whatever was there —
+    /// both a stale directory tree and a plain file at the path. The directory
+    /// itself is the code under test's to make.
     #[test]
     fn a_chosen_path_starts_clear() {
         let path = unique_path("girpr_tempdir_test", "chosen");
@@ -371,13 +372,10 @@ mod tests {
         assert_eq!(dir.path, path);
         assert!(!path.join("stale").exists(), "the stale file is gone");
         assert!(!path.exists(), "the path is not made for the caller");
-    }
 
-    /// A **file** at the chosen path is cleared too: `remove_dir_all` refuses
-    /// one, and the promise is that the path is clear, not that a directory
-    /// was there.
-    #[test]
-    fn a_file_at_the_chosen_path_is_cleared_too() {
+        // A **file** at the chosen path is cleared too: `remove_dir_all`
+        // refuses one, and the promise is that the path is clear, not that a
+        // directory was there.
         let path = unique_path("girpr_tempdir_test", "chosen_file");
         std::fs::write(&path, b"stale").expect("write a stale file");
 
