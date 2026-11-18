@@ -209,6 +209,20 @@ pub fn scan_file(path: &Path, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) 
 /// position is whatever the caller's last read or write left it at, and a
 /// scan that started there would hash half a file.
 pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
+    let mut buf = vec![0u8; MD5_BUF];
+    scan_reader_with_buf(f, dest, source, &mut buf)
+}
+
+/// [`scan_reader`] with a caller-supplied read buffer.
+///
+/// The sweep's arithmetic is driven by the bytes actually read, so a smaller
+/// buffer crosses the same range boundaries as the production-sized one.
+fn scan_reader_with_buf(
+    f: &mut File,
+    dest: &[ScanRange<'_>],
+    source: &[ScanRange<'_>],
+    buf: &mut [u8],
+) -> Result<Scan> {
     f.seek(SeekFrom::Start(0))?;
     let mut ranges: Vec<RangeState> = Vec::new();
     let mut index: HashMap<(u64, u64, Option<Md5>), usize> = HashMap::new();
@@ -230,12 +244,11 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     order.sort_by_key(|&i| (ranges[i].offset, ranges[i].len));
 
     let mut whole = md5::Md5::new();
-    let mut buf = vec![0u8; MD5_BUF];
     let mut pos: u64 = 0;
     let mut total: u64 = 0;
     let mut first = 0usize;
     loop {
-        let n = f.read(&mut buf)?;
+        let n = f.read(&mut buf[..])?;
         if n == 0 {
             break;
         }
@@ -368,11 +381,16 @@ pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
 /// rule [`scan_reader`] follows. This is the verify gate that only needs the
 /// whole-file answer: it does not build a digest per range.
 pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
-    f.seek(SeekFrom::Start(0))?;
     let mut buf = vec![0u8; MD5_BUF];
+    md5_reader_digest_with_buf(f, &mut buf)
+}
+
+/// [`md5_reader_digest`] with a caller-supplied read buffer.
+fn md5_reader_digest_with_buf(f: &mut File, buf: &mut [u8]) -> Result<Md5> {
+    f.seek(SeekFrom::Start(0))?;
     let mut ctx = md5::Md5::new();
     loop {
-        let n = f.read(&mut buf)?;
+        let n = f.read(&mut buf[..])?;
         if n == 0 {
             break;
         }
@@ -663,14 +681,17 @@ mod tests {
     #[test]
     fn a_file_larger_than_one_block_is_scanned_across_the_boundary() {
         // The sweep is what makes "one read, every answer" true; a range that
-        // straddles the 512 KiB block boundary is where an off-by-one would
-        // show up.
+        // straddles the read-buffer boundary is where an off-by-one would
+        // show up. A 64-byte buffer over a 100-byte file crosses it with the
+        // same `block_end`/`start`/`end` arithmetic as the production buffer.
         let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "boundary");
-        let data: Vec<u8> = (0..(MD5_BUF + 1000)).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0..100).map(|i| (i % 251) as u8).collect();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
-        let start = MD5_BUF as u64 - 10;
+        let mut buf = vec![0u8; 64];
+        let start = buf.len() as u64 - 10;
         let dest = Ranges::of(&[(start, 20, hex(&data[start as usize..start as usize + 20]))]);
-        let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
+        let mut f = File::open(dir.join("f.dat")).unwrap();
+        let scan = scan_reader_with_buf(&mut f, &dest.view(), &[], &mut buf).unwrap();
         assert_eq!(scan.dest_ok, vec![true]);
         assert_eq!(scan.file_len, data.len() as u64);
     }
@@ -678,7 +699,8 @@ mod tests {
     #[test]
     fn a_handle_digest_agrees_with_the_file_digest_at_any_position() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "reader_digest");
-        let large: Vec<u8> = (0..(MD5_BUF + 17)).map(|i| (i % 251) as u8).collect();
+        let mut buf = vec![0u8; 64];
+        let large: Vec<u8> = (0..100).map(|i| (i % 251) as u8).collect();
         for (name, data) in [
             ("empty", Vec::new()),
             ("small", b"small file".to_vec()),
@@ -688,15 +710,25 @@ mod tests {
             std::fs::write(&path, &data).unwrap();
             let want = md5_digest(&data);
             let mut f = File::open(&path).unwrap();
-            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name}");
+            assert_eq!(
+                md5_reader_digest_with_buf(&mut f, &mut buf).unwrap(),
+                want,
+                "{name}"
+            );
             // The handle is left at EOF by the read; the next digest still
             // starts at the beginning of the file.
             f.seek(SeekFrom::End(0)).unwrap();
-            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name} at EOF");
             assert_eq!(
-                md5_reader_digest(&mut f).unwrap(),
+                md5_reader_digest_with_buf(&mut f, &mut buf).unwrap(),
+                want,
+                "{name} at EOF"
+            );
+            // The production path still uses the full buffer; the small-buffer
+            // digest must agree with it byte for byte.
+            assert_eq!(
+                md5_reader_digest_with_buf(&mut f, &mut buf).unwrap(),
                 md5_file_digest(&path).unwrap(),
-                "{name}: the handle digest and the path digest are one answer"
+                "{name}: the small-buffer digest and the path digest are one answer"
             );
         }
     }
