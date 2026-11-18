@@ -205,7 +205,7 @@ session, using the same separate state commits. Statuses: `open` → `in_progres
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
 | FB1 | F11, F12, F13 | done | `b3c98719..50d0f14b` | F11/F12/F13 all completed | root `tests/` downshifts & merges (T09/T10) | −2 spawns, −2 tests, −2 listener starts |
-| FB2 | F18, F05 | open | — | — | root verify-before-removing (process test + plan fold) | F18 must be reduced to a smoke, not deleted |
+| FB2 | F18, F05 | in_progress | — | — | root verify-before-removing (process test + plan fold) | F18 must be reduced to a smoke, not deleted |
 | FB3 | F03, F24 | open | — | — | `tools/sync` remaining (table-ize + spawn downshift) | F24 needs the F23 interest-cache fix |
 | FB4 | F01 (spawn-removal half only) | open | — | — | gircap spawn removal (B6 part a) | widest/riskiest, last; `skipped` is a valid result |
 
