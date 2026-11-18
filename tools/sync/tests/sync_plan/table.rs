@@ -202,39 +202,3 @@ fn case_sensitive_is_the_same_table_without_the_rename_pass() {
         "there is no rename pass in this mode"
     );
 }
-
-/// The fixture must keep exercising every apply phase, or the checks above stop
-/// meaning anything — a table that quietly stopped covering `rmdir` would still
-/// pass. Asserted rather than assumed, so losing a row fails loudly.
-#[test]
-fn the_fixture_covers_every_apply_phase() {
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    for c in cases() {
-        for (e, _) in c.expect {
-            seen.insert(*e);
-        }
-        for (e, _) in sensitive_expect(&c) {
-            seen.insert(e);
-        }
-    }
-    // And the rename pass must stay covered, even though it is not an apply
-    // phase: it is what makes the diff possible at all.
-    assert!(
-        seen.contains("rename"),
-        "no row expects a `rename`, so the casing pass is uncovered"
-    );
-    for kind in APPLY_ORDER {
-        assert!(
-            seen.contains(kind),
-            "no row expects a `{kind}` record, so the fixture does not cover that phase"
-        );
-    }
-    // And the row that carries the planner's case flag, since it is the only thing
-    // in this file that depends on `plan_pairs` pairing by the folded key.
-    assert!(
-        cases()
-            .iter()
-            .any(|c| c.is_case_only() && c.expect.contains(&("copy", c.src_rel))),
-        "the case-only-different-content row is gone; the planner's case flag is unguarded"
-    );
-}

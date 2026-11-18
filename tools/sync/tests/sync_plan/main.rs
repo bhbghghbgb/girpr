@@ -337,11 +337,11 @@ fn sensitive_plan(case: &Case) -> Vec<(&'static str, String)> {
 /// The fixture: one row per path, each stating what the plan must do about it.
 ///
 /// Every event kind is represented, so a record kind cannot quietly stop being
-/// exercised — asserted as well as arranged, by
-/// `the_fixture_covers_every_apply_phase`.
+/// exercised — asserted as well as arranged, by the `debug_assert`s at the end
+/// of this function.
 fn cases() -> Vec<Case> {
     use Shape::*;
-    vec![
+    let cases: Vec<Case> = vec![
         // Equal on both sides: the plan must say nothing about it.
         Case {
             src_rel: "same.txt",
@@ -480,7 +480,38 @@ fn cases() -> Vec<Case> {
             dst: Absent,
             expect: &[("copy", "newdir/nested.txt")],
         },
-    ]
+    ];
+
+    // Keep the fixture honest right next to the table it guards. A table that
+    // quietly stopped covering `rmdir` — or the rename pass, or the planner's
+    // case flag — would otherwise still pass every derived assertion.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for c in &cases {
+        for (e, _) in c.expect {
+            seen.insert(*e);
+        }
+        for (e, _) in sensitive_expect(c) {
+            seen.insert(e);
+        }
+    }
+    debug_assert!(
+        seen.contains("rename"),
+        "no row expects a `rename`, so the casing pass is uncovered"
+    );
+    for kind in APPLY_ORDER {
+        debug_assert!(
+            seen.contains(kind),
+            "no row expects a `{kind}` record, so the fixture does not cover that phase"
+        );
+    }
+    debug_assert!(
+        cases
+            .iter()
+            .any(|c| c.is_case_only() && c.expect.contains(&("copy", c.src_rel))),
+        "the case-only-different-content row is gone; the planner's case flag is unguarded"
+    );
+
+    cases
 }
 
 /// Materialise the table as two trees.

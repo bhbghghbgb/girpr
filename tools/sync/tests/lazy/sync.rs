@@ -188,6 +188,22 @@ fn the_wider_handle_window_still_refuses_a_self_collision() {
         &log(),
     )
     .unwrap();
+    // This test relies on the fixture's folder-vs-record shape to trip the
+    // self-collision guard. Assert that shape here, where it is used, rather than
+    // in a separate meta-test that only re-derives it from the same construction.
+    debug_assert!(
+        matches!(classify(&dir), Side::Folder(_)),
+        "the src fixture must be a folder side"
+    );
+    debug_assert!(
+        matches!(classify(&dir.join(CACHE_PREFIX)), Side::Record(_)),
+        "the dst fixture must be the record side"
+    );
+    #[cfg(windows)]
+    debug_assert!(
+        matches!(classify(&dir.join("GIRPR-CACHE")), Side::Record(_)),
+        "a case-only spelling of a record is still a record on Windows"
+    );
     let o = girsync::CompareOpts {
         src: dir.clone(),
         dst: dir.join(CACHE_PREFIX),
@@ -199,21 +215,6 @@ fn the_wider_handle_window_still_refuses_a_self_collision() {
         format!("{:#}", err).contains("same cache"),
         "a folder against the record inside it is still refused: {:#}",
         err
-    );
-}
-
-/// The `Side` re-export is what `classify` returns; assert the classification
-/// itself so a case's fixture is not silently the wrong shape.
-#[test]
-fn fixtures_classify_as_folders() {
-    let t = temp_root("lz_classify");
-    let dir = t.subdir("w");
-    assert!(matches!(classify(&dir), Side::Folder(_)));
-    assert!(matches!(classify(&dir.join(CACHE_PREFIX)), Side::Record(_)));
-    #[cfg(windows)]
-    assert!(
-        matches!(classify(&dir.join("GIRPR-CACHE")), Side::Record(_)),
-        "a case-only spelling of a record is still a record on Windows"
     );
 }
 
