@@ -120,7 +120,7 @@ fn every_rw_setting_answers_the_same_question() {
     // pad is a stat-equal pair that only a digest can settle, so this still
     // demands that a real majority of them were hashed on the src side.
     assert!(
-        baseline.0.1.hashed > PAD_COUNT / 2,
+        baseline.0.1.hashed > pad_count() / 2,
         "the fixture must force real hashing (src hashed {}), or the comparison \
          below is vacuous",
         baseline.0.1.hashed

@@ -106,14 +106,28 @@ fn settings() -> Vec<(&'static str, RwLimits)> {
 /// fixture's `Spec` type requires.
 const PAD: [u8; 512] = [b'x'; 512];
 
+/// The largest worker pool any setting in [`settings`] resolves to.
+///
+/// Derived from the settings table rather than spelled as a literal, so raising
+/// a limit cannot silently break the "more files than workers" invariant the
+/// fixtures rely on. `split(4,4)` is currently the widest at 8 workers.
+fn widest_pool() -> usize {
+    settings()
+        .iter()
+        .map(|(_, limits)| limits.pool_size())
+        .max()
+        .expect("settings() is non-empty")
+}
+
 /// How many identical pad files the fixture carries.
 ///
-/// Kept strictly above the widest worker pool the suite exercises —
-/// `split(4,4)` in [`settings`] is 8 workers — so "more files than workers",
-/// the invariant these tests exist to pin, still holds with room for every
-/// worker to be handed more than one item. 16 is a sixth of the original 96,
-/// which is where most of this suite's fixture-write and re-hash cost came from.
-const PAD_COUNT: usize = 16;
+/// Kept strictly above [`widest_pool`] so "more files than workers", the
+/// invariant these tests exist to pin, still holds. Derived rather than a fixed
+/// constant: the old literal 16 was a sixth of the original 96, which was where
+/// most of this suite's fixture-write and re-hash cost came from.
+fn pad_count() -> usize {
+    widest_pool() + 1
+}
 
 /// A tree with every kind of work in the plan: stat-equal pairs that only a
 /// digest can settle, a pair settled by size, a src-only and a dst-only path, a
@@ -131,9 +145,10 @@ fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
         ("sub/nested.txt", Some(b"nested"), Some(b"nest")),
         ("emptydir", Some(&[]), None),
     ];
-    // More pad files than the widest tested pool of 8 workers, so every worker
-    // has to come back for another item rather than the loop finishing trivially.
-    for i in 0..PAD_COUNT {
+    // More pad files than the widest tested pool (see `pad_count`), so every
+    // worker has to come back for another item rather than the loop finishing
+    // trivially.
+    for i in 0..pad_count() {
         let rel: &'static str = Box::leak(format!("pad{i:02}.bin").into_boxed_str());
         spec.push((rel, Some(&PAD[..]), Some(&PAD[..])));
     }

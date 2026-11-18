@@ -159,6 +159,19 @@ fn limits_of_flags(flags: &[&'static str]) -> RwLimits {
     .unwrap_or_else(|e| panic!("{e:#}"))
 }
 
+/// The largest worker pool any `--rw-*` spelling resolves to.
+///
+/// Derived from the flag spellings so the `update` fixture can be sized to
+/// exceed the widest limit without a magic number that a new spelling could
+/// leave stale.
+fn widest_flag_pool() -> usize {
+    flag_spellings()
+        .iter()
+        .map(|flags| limits_of_flags(flags).pool_size())
+        .max()
+        .expect("flag_spellings() is non-empty")
+}
+
 /// **`update` hashes the same set of files at every limit.**
 ///
 /// `update` rehashes every file, so the limit applies to it like any other reader.
@@ -171,10 +184,13 @@ fn limits_of_flags(flags: &[&'static str]) -> RwLimits {
 /// the invariant is about the planner's read set, not about the CLI boundary.
 #[test]
 fn update_hashes_the_same_set_at_every_limit() {
+    // Enough files that the limiter has to come back for more than one pass, but
+    // derived from the widest pool instead of a fixed 40 per spelling (6 runs).
+    let nfiles = 2 * widest_flag_pool() + 4;
     for flags in flag_spellings() {
         let t = temp_root("rw_update");
         let dir = t.subdir("w");
-        for i in 0..40usize {
+        for i in 0..nfiles {
             let rel: &'static str = Box::leak(format!("u{i:02}.bin").into_boxed_str());
             wfile(&dir, rel, &vec![b'z'; 256 + i]);
         }
@@ -195,7 +211,7 @@ fn update_hashes_the_same_set_at_every_limit() {
         let rows = recs_of(&dir);
         let files = rows.values().filter(|r| !r.is_dir()).count();
         assert_eq!(
-            files, 40,
+            files, nfiles,
             "{flags:?} must record every file, so the counts below mean something"
         );
         for (rel, rec) in &rows {
