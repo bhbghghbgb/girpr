@@ -12,9 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP2 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP2 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP2 `in_progress`; all four CP2 tasks are `pending_review`.
+* Next action: pick the next `todo` task in seeded order — T09 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1, CP2 `done`; T05–T08 `completed`, T09–T10 are
+  the next tasks (CP3).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -38,10 +39,10 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | completed | P0 | CP1 | CP1 review: completed. |
 | T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | completed | P0 | CP1 | CP1 review: completed. D3 fixture saving did not materialize (see context). |
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | completed | P0 | CP1 | CP1 review: completed. Protected tests intact. |
-| T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | pending_review | P0 | CP2 | Implemented in 4a097a31; no smoke fallback needed (unit tests reach prod path). |
-| T06 | Capture: device-name flag refusal → config unit test | B2 | pending_review | P0 | CP2 | Implemented in 6b7dfdde; guardrail confirmed (refusal before HTTP). |
-| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | pending_review | P0 | CP2 | Implemented in e6aefb87; one measured-length pin test retained. |
-| T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | pending_review | P0 | CP2 | Implemented in fbe56813, c8ed2fef; scan.rs harness-pin bullet skipped (see context). `benches/tree_shapes.rs` untouched. |
+| T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | completed | P0 | CP2 | CP2 review: completed. |
+| T06 | Capture: device-name flag refusal → config unit test | B2 | completed | P0 | CP2 | CP2 review: completed. |
+| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | completed | P0 | CP2 | CP2 review: completed. |
+| T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | todo | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
@@ -63,7 +64,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
 | CP1 | T01–T04 | done | P0 root unit + small crates + sled2redb low-risk — all completed, no fixes/reverts |
-| CP2 | T05–T08 | in_progress | P0 capture + sync small findings |
+| CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
 | CP3 | T09–T10 | open | `repair_machinery` + `repair_plan` downshifts |
 | CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
 | CP5 | T13–T14 | open | capture mock merge + `repair_purge` merges |
@@ -85,10 +86,10 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T02 | `c6140196..ca643fec` | completed |
 | T03 | `1bfa735f..cb9226fb` | completed |
 | T04 | `0ea6802e..ccbef0ad` | completed |
-| T05 | `e5cf89dc..4a097a31` | — (pending CP2 review) |
-| T06 | `ab96ebab..6b7dfdde` | — (pending CP2 review) |
-| T07 | `c9dc8307..e6aefb87` | — (pending CP2 review) |
-| T08 | `8160cef5..c8ed2fef` | — (pending CP2 review) |
+| T05 | `e5cf89dc..4a097a31` | completed |
+| T06 | `ab96ebab..6b7dfdde` | completed |
+| T07 | `c9dc8307..e6aefb87` | completed |
+| T08 | `8160cef5..c8ed2fef` | completed |
 | T09–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -102,12 +103,12 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F01 | **B6:** in-process capture seam — call `run::capture/verify/materialize/list` directly and assert on `Outcome` records; removing the TCP mock needs an injected HTTP transport for `Fetcher` (report §B6 L318–L330). | report | proposed | Largest capture lever, wide/risky; B1–B5 (T05/T06/T07/T13) capture most benefit first. |
 | F02 | **D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591). | report | proposed | Depends on T22 exposing `Args`; maintenance, no test-count change. |
 | F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
-| F04 | Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range. | T01 implementer | proposed | Non-blocking; only relevant if jitter tests are extended past attempt 5. |
+| F04 | ~~Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range.~~ | T01 implementer | removed | CP2 reviewer removed it: non-actionable conditional watch item; adds coverage rather than reducing scale, contingent on an unplanned jitter-test extension. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
 | F06 | ~~Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines).~~ | T04 implementer | removed | CP1 reviewer removed it: no test-count effect and riskier than the fold; avoid a future implement+review cycle for zero scale benefit. |
-| F07 | Simplify away the now-near-trivial `BundleVariant` enum and its `key()`/`extra()` methods (only `Default` remains after T05) — e.g. an argument-less `shared_bundle()`. | T05 implementer | proposed | Low value / mostly hygiene, no test-count effect; CP2 reviewer may prune like F06. |
-| F08 | Metadata-only assertion path for T07's retained measured test: compute totals from declared chunk sizes via a pure seam instead of materializing ~4.7 MB of bodies. | T07 implementer | proposed | Production change, out of scope and riskier; CP2 reviewer may prune. |
-| F09 | Share the chunk-length constants between `m7_assembly` and `m6_chunk_store` (different fixture structure, carries md5 strings). | T07 implementer | proposed | Low value, no test-count effect; CP2 reviewer may prune. |
+| F07 | ~~Simplify away the now-near-trivial `BundleVariant` enum and its `key()`/`extra()` methods (only `Default` remains after T05) — e.g. an argument-less `shared_bundle()`.~~ | T05 implementer | removed | CP2 reviewer removed it: pure enum hygiene, zero test-count effect (same rationale as F06). |
+| F08 | ~~Metadata-only assertion path for T07's retained measured test: compute totals from declared chunk sizes via a pure seam instead of materializing ~4.7 MB of bodies.~~ | T07 implementer | removed | CP2 reviewer removed it: needs a production seam, marginal remaining MBs, and contradicts T07's "keep one measured ground-truth pin" criterion. |
+| F09 | ~~Share the chunk-length constants between `m7_assembly` and `m6_chunk_store` (different fixture structure, carries md5 strings).~~ | T07 implementer | removed | CP2 reviewer removed it: zero test-count effect, low value. |
 
 ## Follow-up batches
 
