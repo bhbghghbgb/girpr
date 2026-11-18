@@ -17,7 +17,7 @@ use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::{Filter, compile_patterns};
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
-use crate::report::{OutputFormat, Report};
+use crate::report::{OutputFormat, Report, ReportSink};
 use crate::rw::RwLimits;
 
 /// How the run reports itself: the log knobs and the stdout format.
@@ -51,6 +51,10 @@ pub struct LogCtx {
     pub file: Option<PathBuf>,
     /// `--output`: how stdout records are rendered.
     pub output: OutputFormat,
+    /// Where the command's records go. `Stdout` in production; a test that
+    /// drives the CLI in-process sets a capture sink so it can assert on the
+    /// records a parser would otherwise read from stdout.
+    pub report_sink: ReportSink,
 }
 
 impl LogCtx {
@@ -62,9 +66,9 @@ impl LogCtx {
         }
     }
 
-    /// The stdout writer for this run, in the requested format.
+    /// The stdout writer for this run, in the requested format and sink.
     pub fn report(&self) -> Report {
-        Report::new(self.output)
+        Report::with_sink(self.output, self.report_sink.clone())
     }
 }
 

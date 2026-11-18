@@ -12,6 +12,7 @@ pub use update::cmd_update;
 
 pub use crate::report::verdict;
 
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -21,7 +22,7 @@ use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
 use crate::effective::Side;
-use crate::report::{Report, visit_verdict};
+use crate::report::{Record, Report, ReportSink, visit_verdict};
 use crate::util::elapsed_s;
 
 /// What a side is called, in a message and in a log field.
@@ -126,10 +127,34 @@ pub(super) fn report_and_finish(
     code
 }
 
+/// Everything a caller driving the CLI in-process needs to assert on instead
+/// of spawning the binary: the exit code, the records the run emitted, and the
+/// error string `main` would have logged on failure.
+#[derive(Debug, Clone)]
+pub struct RunOutcome {
+    /// The process exit code the run resolved to: `0`/`4` from the reporter,
+    /// or `3` when a command returned an error, mirroring `main`.
+    pub code: i32,
+    /// The records the run emitted, in emit order, in the run's `Record` form
+    /// (the one both `--output` renderings are derived from).
+    pub records: Vec<Record>,
+    /// `format!("{:#}", e)` when the command failed, `None` on success — the
+    /// same string `main` writes as the `fatal` event.
+    pub error: Option<String>,
+}
+
+/// Build the shared run context for a dispatch, with the given report sink.
+fn log_ctx(cli: &Cli, plan: &girpr_log::LogPlan, sink: ReportSink) -> LogCtx {
+    LogCtx {
+        level: plan.console_level,
+        file_level: plan.file_level,
+        file: plan.file.clone(),
+        output: cli.output,
+        report_sink: sink,
+    }
+}
+
 /// Dispatch a parsed [`Cli`] to its command, returning the process exit code.
-///
-/// This is where raw CLI strings are validated into [`CommonOpts`]; every later
-/// layer works with compiled patterns and checked algorithm lists.
 ///
 /// `plan` is the resolved log policy — where the log file went, and at what
 /// level each sink runs. It is passed in rather than resolved here, because
@@ -137,19 +162,44 @@ pub(super) fn report_and_finish(
 /// second file: the default path carries a timestamp, and two timestamps are
 /// two files.
 pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
-    let log = LogCtx {
-        level: plan.console_level,
-        file_level: plan.file_level,
-        file: plan.file.clone(),
-        output: cli.output,
+    let log = log_ctx(&cli, plan, ReportSink::Stdout);
+    dispatch(cli, &log)
+}
+
+/// Run a command in-process and capture what a process test would otherwise
+/// read off stdout and stderr: the emitted [`Record`]s, the exit code, and the
+/// error string `main` logs on failure.
+///
+/// This shares the dispatch, the reporter and the exit-code mapping with
+/// [`run`] and `main`, so a value asserted here cannot drift from the binary's.
+/// Parse-error callers build the `Cli` with [`Cli::try_parse_from`].
+pub fn run_captured(cli: Cli, plan: &girpr_log::LogPlan) -> Result<RunOutcome> {
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let log = log_ctx(&cli, plan, ReportSink::Capture(Arc::clone(&records)));
+    let (code, error) = match dispatch(cli, &log) {
+        Ok(code) => (code, None),
+        Err(e) => (3, Some(format!("{:#}", e))),
     };
+    let captured = records.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(RunOutcome {
+        code,
+        records: captured,
+        error,
+    })
+}
+
+/// The one `Cli` -> command dispatch behind both [`run`] and [`run_captured`].
+///
+/// This is where raw CLI strings are validated into [`CommonOpts`]; every later
+/// layer works with compiled patterns and checked algorithm lists.
+fn dispatch(cli: Cli, log: &LogCtx) -> Result<i32> {
     match cli.cmd {
         Cmd::Update { dir, common } => cmd_update(
             UpdateOpts {
                 dir,
                 common: CommonOpts::try_from(common)?,
             },
-            &log,
+            log,
         ),
         Cmd::Compare {
             src,
@@ -163,7 +213,7 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
                 trust: trust.into(),
                 common: CommonOpts::try_from(common)?,
             },
-            &log,
+            log,
         ),
         Cmd::CompareSelf {
             dir,
@@ -175,7 +225,7 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
                 no_trust_cached_hashes,
                 common: CommonOpts::try_from(common)?,
             },
-            &log,
+            log,
         ),
         Cmd::Sync {
             src,
@@ -193,7 +243,7 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
                 keep_extra,
                 common: CommonOpts::try_from(common)?,
             },
-            &log,
+            log,
         ),
     }
 }

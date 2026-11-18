@@ -72,7 +72,9 @@ pub use girpr_log;
 pub use glob;
 
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
-pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
+pub use commands::{
+    RunOutcome, cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run, run_captured,
+};
 pub use config::{
     BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
     UpdateOpts,
@@ -89,5 +91,5 @@ pub use filter::{Filter, compile_patterns};
 pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;
-pub use report::{OutputFormat, Record, Report, verdict, visit_verdict};
+pub use report::{OutputFormat, Record, Report, ReportSink, verdict, visit_verdict};
 pub use rw::{RwLimits, RwPermit, RwRuntime, RwSide};

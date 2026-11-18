@@ -1099,6 +1099,7 @@ mod tests {
             file_level: crate::Level::Debug,
             file: None,
             output: OutputFormat::Text,
+            report_sink: Default::default(),
         }
     }
 }

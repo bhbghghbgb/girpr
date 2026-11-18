@@ -335,6 +335,7 @@ pub fn log() -> LogCtx {
         file_level: girsync::logging::Level::Debug,
         file: None,
         output: OutputFormat::Text,
+        report_sink: Default::default(),
     }
 }
 

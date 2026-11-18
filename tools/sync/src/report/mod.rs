@@ -45,6 +45,8 @@ mod record;
 
 pub use record::Record;
 
+use std::sync::{Arc, Mutex};
+
 use tracing::Level;
 use tracing::debug;
 use tracing::level_filters::STATIC_MAX_LEVEL;
@@ -82,19 +84,48 @@ impl std::fmt::Display for OutputFormat {
     }
 }
 
+/// Where a [`Report`] sends each record it emits.
+///
+/// [`ReportSink::Stdout`] is the production default and prints each rendered
+/// line exactly as before. [`ReportSink::Capture`] pushes each [`Record`] into a
+/// shared buffer instead, so an in-process caller can assert on the same values
+/// a downstream parser would read from stdout. The buffer is an
+/// `Arc<Mutex<Vec<_>>>` because `COPY` records are emitted from rayon workers
+/// under a separate emit lock — a thread-local would silently drop them. A
+/// clone of a capturing `Report` shares the same buffer.
+#[derive(Clone, Debug, Default)]
+pub enum ReportSink {
+    /// Print every record to stdout (production behaviour).
+    #[default]
+    Stdout,
+    /// Collect every record into a shared buffer instead of printing it.
+    Capture(Arc<Mutex<Vec<Record>>>),
+}
+
 /// Emits stdout records in the run's chosen [`OutputFormat`].
 ///
-/// Cheap to construct and to copy (`&Report` threads through), and the only
+/// Cheap to construct; `&Report` threads through the commands, and where a
+/// capturing sink is used a clone shares the same buffer. This is the only
 /// writer of stdout in the crate: a command reaches the data plane only by
 /// handing a `Record` to [`Report::emit`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Report {
     format: OutputFormat,
+    sink: ReportSink,
 }
 
 impl Report {
+    /// A report that prints to stdout (the production path).
     pub fn new(format: OutputFormat) -> Self {
-        Self { format }
+        Self {
+            format,
+            sink: ReportSink::Stdout,
+        }
+    }
+
+    /// A report that sends records to `sink` instead of stdout.
+    pub(crate) fn with_sink(format: OutputFormat, sink: ReportSink) -> Self {
+        Self { format, sink }
     }
 
     /// Print one record, and log it.
@@ -137,7 +168,12 @@ impl Report {
         if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
             debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
         }
-        println!("{}", self.render(&rec));
+        match &self.sink {
+            ReportSink::Stdout => println!("{}", self.render(&rec)),
+            ReportSink::Capture(records) => {
+                records.lock().unwrap_or_else(|e| e.into_inner()).push(rec);
+            }
+        }
     }
 
     /// The line this record prints in the run's format, without the newline.

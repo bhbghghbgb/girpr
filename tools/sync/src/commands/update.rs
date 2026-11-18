@@ -140,13 +140,12 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // `hashed` is logged because it is the answer to the question `--dry-run` exists
     // to ask — how much would this read? A file count cannot distinguish a run that
     // rehashed everything from one that read nothing.
-    update_summary(
+    log.report().emit(update_summary(
         &dir,
         resolved.stats.files,
         resolved.stats.dirs,
         &common.algos,
-    )
-    .emit(log.output);
+    ));
     info!(
         files = resolved.stats.files,
         dirs = resolved.stats.dirs,
