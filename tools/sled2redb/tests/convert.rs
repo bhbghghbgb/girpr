@@ -267,7 +267,10 @@ fn convert_refuses_to_overwrite_without_force() {
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
+    // A stale file at the destination is enough to exercise the refuse branch:
+    // `sled_to_redb` checks only `dst.exists()` before declining to overwrite,
+    // so no full conversion is needed to build the thing it refuses.
+    std::fs::write(&dst, b"stale").unwrap();
     assert!(sled2redb::convert::sled_to_redb(&src, &dst, false).is_err());
     // ...but succeeds with --force semantics.
     let c = sled2redb::convert::sled_to_redb(&src, &dst, true).unwrap();
