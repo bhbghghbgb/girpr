@@ -12,12 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP5 review phase (`ORCHESTRATION.md` §4) — both CP5 tasks
-  are terminal (`pending_review`). Set CP5 `in_progress` and spawn one
-  review-and-fix session with the two commit ranges (include the T13 row-pin and
-  T14 partial-implementation notes).
-* Active phase: review. All CP5 tasks are `pending_review`; CP5 is ready for review.
-* Active checkpoint: none yet (CP5 `open`). Active batch: none.
+* Next action: wait for the CP5 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP5 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP5 `in_progress`; both CP5 tasks are `pending_review`.
+* Active checkpoint: CP5 (in review). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
 ## Status vocabulary
@@ -68,7 +66,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
 | CP3 | T09–T10 | done | `repair_machinery` + `repair_plan` downshifts — both completed, no fixes/reverts |
 | CP4 | T11–T12 | done | root-unit production seams (MD5, DiskPlan) — both completed, no fixes/reverts |
-| CP5 | T13–T14 | open | capture mock merge + `repair_purge` merges |
+| CP5 | T13–T14 | in_progress | capture mock merge + `repair_purge` merges |
 | CP6 | T15 | open | sync heartbeat parameterization |
 | CP7 | T16 | open | sync record sink + `run_captured` (largest single change) |
 | CP8 | T17–T18 | open | sync logging + `TestHooks` seams |
