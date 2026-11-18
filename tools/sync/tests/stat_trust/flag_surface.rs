@@ -1,4 +1,4 @@
-//! `update`, and the flag surface through the real binary.
+//! `update`, and the flag surface (the WARN observed through a scoped subscriber).
 //!
 //! `update` accepts both flags and changes nothing — it rehashes every file either
 //! way. The parser half is checked here because a flag the CLI drops is a flag the
@@ -15,6 +15,11 @@ use girsync::planner::HashMode;
 /// Following the `--hash-any-of` and `--no-trust-cached-hashes`-on-`compare-self`
 /// precedent: a flag that cannot apply is warned about, not rejected, so a script
 /// passing it to every subcommand keeps working.
+///
+/// Both halves observe the WARN through a scoped subscriber that renders the
+/// binary's own tracing stack into a buffer — no child process. The subscriber
+/// rebuilds tracing's callsite interest cache first so the WARN cannot be
+/// swallowed by a `never()` cached under a sibling test's `NoSubscriber`.
 #[test]
 fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
     let t = temp_root("st_update");
@@ -22,7 +27,7 @@ fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
 
-    let (code, stderr) = bin(&[
+    let (code, stderr) = run_logged(&[
         "update".to_string(),
         "--dir".to_string(),
         d.clone(),
@@ -40,8 +45,7 @@ fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
     );
 
     // Unflagged, no warning: the default run must stay silent about them.
-    // This half asserts stderr only, so the child can keep its cache in memory.
-    let (code, stderr) = bin_mem(&["update".to_string(), "--dir".to_string(), d]);
+    let (code, stderr) = run_logged(&["update".to_string(), "--dir".to_string(), d]);
     assert_eq!(code, 0);
     assert!(
         !stderr.contains("no-trust"),

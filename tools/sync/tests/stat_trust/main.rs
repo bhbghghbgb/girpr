@@ -16,7 +16,8 @@
 //!   asserted end to end rather than left to the planner's arithmetic.
 //! - **the cache.** This is what `--no-trust-size` is really for, and it is invisible
 //!   in both counters and verdicts.
-//! - **the flags themselves**, through the real binary.
+//! - **the flags themselves**, including `update`'s WARN, observed through a
+//!   scoped subscriber (the same stack the binary installs, without a spawn).
 //!
 //! ## Layout
 //!
@@ -52,34 +53,62 @@ use girsync::cache::TestCacheBackend;
 use girsync::planner::StatTrust;
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
-/// One invocation of the real binary: exit code and stderr.
+/// Run the CLI in-process under a scoped copy of the binary's tracing stack and
+/// return the console bytes it rendered (plus the exit code). This replaces the
+/// `bin`/`bin_mem` spawns for the one flag-surface case that used to read a WARN
+/// off the child's stderr: the stack is the one `girsync::subscriber_for`
+/// builds, with the console written into a buffer instead of a pipe.
 ///
-/// Here rather than in whichever section first needed it: the flag surface is
-/// checked in three places — `update`'s warning, the parser's independence, and
-/// the refusal at the end — and all three are the same invocation.
-fn bin(args: &[String]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        .output()
-        .expect("spawn girsync");
-    (
-        out.status.code().expect("girsync exits with a code"),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
+/// `tracing` caches callsite interest process-globally, so a sibling test in
+/// this process may emit the WARN under `NoSubscriber` and cache that callsite
+/// as `Interest::never()`, leaving the scoped subscriber zero bytes. Two
+/// measures make capture deterministic here (the rebuild is the same fix
+/// `capture_log` in `phases.rs` and `capture_events` in `copy.rs` apply):
+///
+/// 1. Run once under `NoSubscriber` first, to force the WARN callsite to
+///    *register* before the scoped subscriber is installed. Callsite
+///    registration is a one-time event; a sibling reproducing it after our
+///    rebuild would re-cache `never()` and drop the WARN again.
+/// 2. Rebuild the interest cache as the first statement inside `with_default`,
+///    re-registering that now-known callsite against the scoped subscriber.
+///
+/// Both live here, local to this fold, rather than in the shared
+/// `common::run_args_logged` helper: they are process-global, so folding them
+/// into that helper would race with another target's differently-filtered
+/// scoped subscribers (output.rs's `logged()` tests) under plain `cargo test`.
+// `set_var` is unsafe in edition 2024; nextest isolates each test process.
+#[allow(unsafe_code)]
+fn run_logged(args: &[String]) -> (i32, String) {
+    use clap::Parser;
+    use girsync::cli::Cli;
 
-/// [`bin`] with the memory cache: for invocations whose assertions never read
-/// the cache back, since the child's memory cache dies with the child.
-fn bin_mem(args: &[String]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    (
-        out.status.code().expect("girsync exits with a code"),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
+    let make_cli = || {
+        let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+            .chain(args.iter().cloned().map(Into::into));
+        Cli::try_parse_from(argv).expect("valid CLI args")
+    };
+    let cli = make_cli();
+    let plan = girsync::plan(
+        cli.log_level,
+        cli.log_file_level,
+        cli.log_file.as_deref(),
+        cli.no_log_file,
+    );
+    // A spawned child got a fresh cache per process; keep the in-memory
+    // registry from leaking across runs that share a path.
+    unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "file") };
+    // Force the WARN callsite to register before installing the scoped
+    // subscriber. Callsite registration is a one-time, process-global event: if
+    // a sibling thread performs it after our rebuild, it would cache the site
+    // as `never()` against `NoSubscriber` and the WARN would be lost again.
+    let _ = girsync::run_captured(make_cli(), &plan).expect("pre-register callsite");
+    let console = common::SharedBuffer::default();
+    let (subscriber, _guard) = girsync::subscriber_for(&plan, console.clone());
+    let out = tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        girsync::run_captured(cli, &plan).expect("run_captured")
+    });
+    (out.code, console.text())
 }
 
 /// Restore a file's mtime to a value captured earlier.
