@@ -12,9 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T21 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP9 `done`; T20 `pending_review`, T21 `todo` (CP10).
+* Next action: wait for the T21 implementing session to finish, then apply its
+  result. T21 completes CP10's tasks, so after recording it, run the CP10 review
+  phase (`ORCHESTRATION.md` §4).
+* Active phase: implementation. CP1–CP9 `done`; T20 `pending_review`, T21 `in_progress` (last CP10 task).
 * Active checkpoint: none yet (CP10 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -57,7 +58,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | pending_review | P2 | CP10 | Implemented in 5deab7fb; spawns 16→4, tests 15→14; process pins retained. |
-| T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
+| T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | in_progress | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
 | T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | todo | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
 
