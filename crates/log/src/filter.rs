@@ -68,18 +68,19 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_spec_is_used_as_it_is() {
-        let f = filter("girpr=info", "girpr=error");
-        assert!(f.to_string().contains("girpr=info"), "{f}");
-    }
-
-    #[test]
-    fn a_broken_spec_falls_back_to_the_projects_own_level() {
-        // What makes a spec unparseable is a *level* that does not exist. A
-        // bare word is not that: `debug` is a global level directive, and any
-        // other bare word is a target, which is good syntax too.
-        let f = filter("girpr=bogus", "girpr=info");
-        assert!(f.to_string().contains("girpr=info"), "{f}");
+    fn a_valid_spec_is_used_as_it_is_and_a_broken_one_falls_back() {
+        for (spec, fallback, want) in [
+            // A spec that parses is used as it is.
+            ("girpr=info", "girpr=error", "girpr=info"),
+            // A broken spec falls back to the project's own level. What makes
+            // a spec unparseable is a *level* that does not exist. A bare word
+            // is not that: `debug` is a global level directive, and any other
+            // bare word is a target, which is good syntax too.
+            ("girpr=bogus", "girpr=info", "girpr=info"),
+        ] {
+            let f = filter(spec, fallback);
+            assert!(f.to_string().contains(want), "{spec}: {f}");
+        }
     }
 
     /// The console's spec is built as `"{rust_log},{project}={level}"`, and
