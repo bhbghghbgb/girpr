@@ -12,9 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T23 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP10 `done`; T22 `pending_review`, T23 `todo` (CP11, final checkpoint).
+* Next action: wait for the T23 implementing session to finish, then apply its
+  result. T23 is the final task, so after recording it, run the CP11 review phase
+  (`ORCHESTRATION.md` §4); then the scheduled flaky-test investigation and
+  follow-ups remain.
+* Active phase: implementation. CP1–CP10 `done`; T22 `pending_review`, T23 `in_progress` (final task, CP11).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -59,7 +61,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | completed | P2 | CP10 | CP10 review: completed; process pins retained. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | completed | P2 | CP10 | CP10 review: completed; non-vacuousness independently confirmed. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | pending_review | P2 | CP11 | Implemented in d0ad4da0; spawns 10→3, conversions 5→1 (count note in context). |
-| T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | todo | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
+| T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | in_progress | P2 | CP11 | Keep one real sled DB for round-trip, one bad-row DB for error path. |
 
 ## Review checkpoints
 
