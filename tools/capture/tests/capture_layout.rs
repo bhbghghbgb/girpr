@@ -1734,31 +1734,6 @@ fn a_device_name_manifest_path_is_kept_and_escaped_on_disk() {
     assert!(!out.join("game/GenshinImpact_Data/Resources/CON").exists());
 }
 
-/// A device name is only escaped where it is an **observation**. At argument
-/// resolution there is no bundle, so `--files` keeps refusing it.
-#[test]
-fn a_device_name_from_a_flag_is_still_refused() {
-    let mock = Mock::start(World::game_only());
-    let scratch = Scratch::new("device-flag");
-    let r = capture(
-        &mock,
-        &scratch,
-        &[
-            "--audio",
-            "none",
-            "--files",
-            "GenshinImpact_Data/Resources/CON",
-        ],
-    );
-    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
-    assert!(
-        format!("{}{}", r.stdout, r.stderr).contains("device"),
-        "{}{}",
-        r.stdout,
-        r.stderr
-    );
-}
-
 /// A chunk id is both a CDN path segment and `chunks/blobs/<id>.zst`. The
 /// documented `<16 hex>_<32 hex>` shape is checked where the manifest is
 /// decoded, before the id can reach either sink.

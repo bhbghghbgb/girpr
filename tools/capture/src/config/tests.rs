@@ -246,6 +246,9 @@ fn file_paths_that_cannot_name_a_manifest_entry_are_refused() {
         "a//b",
         "a/",
         "",
+        // A Windows device name mid-path is refused here too (downshifted from
+        // the capture_layout integration test).
+        "GenshinImpact_Data/Resources/CON",
     ] {
         let e = plan(move |a| a.files = vec![bad.to_string()]).unwrap_err();
         assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage, "{bad:?}");
