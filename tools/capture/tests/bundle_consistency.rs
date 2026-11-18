@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Dispatch, Mock, World, dispatch};
 use girpr_tempdir::TempDir;
 
 /// A scratch root that is removed when the test ends, whatever happens.
@@ -46,25 +46,6 @@ fn bin() -> PathBuf {
     p.join("gircap.exe")
 }
 
-/// One finished command.
-struct Run {
-    code: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run(args: &[&str]) -> Run {
-    let out = Command::new(bin())
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    Run {
-        code: out.status.code().expect("the process was not killed"),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
-}
-
 /// The one bundle under a scratch root, whichever way the layout nests it.
 fn bundle_in(out: &Path) -> PathBuf {
     let mut found = Vec::new();
@@ -88,11 +69,33 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The discovery test pins the *full* ordered list of `BUNDLE` records that
+/// `gircap list` renders on stdout, which the `run::list` `Outcome` does not
+/// carry (it returns only the terminal summary). That pin needs the process,
+/// so this one helper stays a spawn; every capture in this file is in-process.
+struct Run {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+fn run(args: &[&str]) -> Run {
+    let out = Command::new(bin())
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
+    Run {
+        code: out.status.code().expect("the process was not killed"),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Scratch, PathBuf) {
     let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new(name);
-    let r = run(&[
+    let d: Dispatch = dispatch(&[
         "capture",
         "--out",
         &scratch.out().to_string_lossy(),
@@ -101,7 +104,7 @@ fn capture_ok(name: &str) -> (Scratch, PathBuf) {
         "--sophon-base",
         &mock.sophon_base(),
     ]);
-    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
     let bundle = bundle_in(&scratch.out());
     (scratch, bundle)
 }

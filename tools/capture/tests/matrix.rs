@@ -11,31 +11,10 @@
 mod common;
 
 use std::path::PathBuf;
-use std::process::Command;
 
-use common::{BundleVariant, DEGENERATE_PATH, Mock, World, shared_bundle};
+use common::{BundleVariant, DEGENERATE_PATH, Dispatch, Mock, World, dispatch, shared_bundle};
+use gircap::report::{Record, Val};
 use girpr_tempdir::TempDir;
-
-fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().expect("a path");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join("gircap.exe")
-}
-
-fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(bin())
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    (
-        out.status.code().expect("not killed"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
 
 /// A scratch root removed when the test ends.
 struct Scratch {
@@ -60,27 +39,49 @@ struct Captured {
     _scratch: Scratch,
     _mock: Mock,
     bundle: PathBuf,
-    /// The run's own record: the one carrying `stage=`.
-    summary: std::collections::BTreeMap<String, String>,
-    /// The process exit code.
-    ///
-    /// Read from the process rather than the record. A run that fails its own
-    /// assertions now prints **two** `SUMMARY` lines — the run's numbers, then
-    /// the failure's — and the two disagree about `exit_code` by design: the run
-    /// did finish (`0`) and the bundle did not hold (`3`). Which is the code
-    /// depends on which line you ask.
+    /// The run's own record (the one carrying `stage=artifact`). Typed fields
+    /// are read by name from this [`Record`] instead of being parsed back out
+    /// of a rendered `SUMMARY …` line.
+    summary: Record,
+    /// The exit code `main.rs` would have ended the process with.
     code: i32,
-    /// The failure's record, when the run failed.
-    failure: std::collections::BTreeMap<String, String>,
+    /// The failure's record (`result=error`), when the run failed.
+    failure: Option<Record>,
 }
 
-fn parse_summary(line: &str) -> std::collections::BTreeMap<String, String> {
-    line.strip_prefix("SUMMARY ")
-        .unwrap_or("")
-        .split(' ')
-        .filter_map(|kv| kv.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+impl Captured {
+    /// A typed integer field of the run's own record.
+    fn int(&self, key: &str) -> u64 {
+        match self.summary.get(key) {
+            Some(Val::Int(i)) => *i as u64,
+            other => panic!("{key} is not an int on the run record: {other:?}"),
+        }
+    }
+
+    /// A typed boolean field of the run's own record.
+    fn flag(&self, key: &str) -> bool {
+        match self.summary.get(key) {
+            Some(Val::Bool(b)) => *b,
+            other => panic!("{key} is not a flag on the run record: {other:?}"),
+        }
+    }
+
+    /// A typed string field of the run's own record.
+    fn text(&self, key: &str) -> &str {
+        match self.summary.get(key) {
+            Some(Val::Str(s)) => s,
+            other => panic!("{key} is not a string on the run record: {other:?}"),
+        }
+    }
+
+    /// The one-line cause on the failure's record, when there was a failure.
+    fn detail(&self) -> Option<&str> {
+        let f = self.failure.as_ref()?;
+        match f.get("detail") {
+            Some(Val::Str(s)) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
@@ -97,39 +98,20 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, stdout, _stderr) = run(&borrowed);
-    // A failing capture prints two records: the run's own numbers, then the
-    // failure's. The run's is the one carrying `stage=artifact`, which the
-    // failure's never does — so the two are told apart by shape rather than by
-    // position, and a harness that assumed "the first SUMMARY is the one" would
-    // have read `exit_code=0` off a run that exited 3.
-    let records: Vec<&str> = stdout
-        .lines()
-        .filter(|l| l.starts_with("SUMMARY "))
-        .collect();
-    let summary = records
-        .iter()
-        .find(|l| l.contains(" stage="))
-        .map(|l| parse_summary(l))
-        // **Empty when the run never got that far.** A refusal that happens
-        // before the capture has measured anything (`--require-class` unmet)
-        // prints only the failure's record, so there is no run summary to read.
-        // The failure's own record is `failure` below, and it is the one that
-        // says what went wrong.
-        .unwrap_or_default();
-    let failure = records
-        .iter()
-        .find(|l| l.contains("artifact_trustworthy="))
-        .map(|l| parse_summary(l))
-        .unwrap_or_default();
+    let d: Dispatch = dispatch(&borrowed);
+    // A failing capture carries two records: the run's own numbers (in
+    // `preceded_by`) and the failure's. They disagree about `exit_code` by
+    // design: the run finished (`0` on its own record) and the bundle did not
+    // hold (`3` on the failure's and as the process status). `run_record` is
+    // the former; `code` is the latter.
     let bundle = find_bundle(&scratch.out());
     Captured {
         _scratch: scratch,
         _mock: mock,
         bundle,
-        summary,
-        code,
-        failure,
+        summary: d.run_record.expect("a run record"),
+        code: d.code,
+        failure: d.failure_record,
     }
 }
 
@@ -234,14 +216,13 @@ fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
 #[test]
 fn admission_is_cheapest_first_and_the_totals_add_up() {
     let c = captured("greedy", World::all_shapes(), &[]);
-    let s = &c.summary;
-    let admitted = s["captures_admitted"].parse::<u64>().expect("a count");
+    let admitted = c.int("captures_admitted");
     assert_eq!(
         admitted, 6,
         "six patch shapes are satisfiable in this world"
     );
 
-    let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
+    let bytes_admitted = c.int("capture_bytes_admitted");
     let matrix_budget = json(&c.bundle.join("diff/matrix.json"))["budget"]["spent"]
         .as_u64()
         .expect("a spent total");
@@ -316,8 +297,8 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
         "nothing was admitted, yet the cheapest candidate costs {}",
         costs[0]
     );
-    assert_eq!(
-        s["budget_unlimited"], "true",
+    assert!(
+        c.flag("budget_unlimited"),
         "no --max-download-bytes was given, so the budget is unlimited"
     );
 }
@@ -354,9 +335,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // world's bytes changed, and "the budget happened to be larger than
     // everything" looks exactly like "the budget did nothing".
     let full = captured("budget-full", World::all_shapes(), &[]);
-    let total = full.summary["capture_bytes_admitted"]
-        .parse::<u64>()
-        .expect("a size");
+    let total = full.int("capture_bytes_admitted");
     let costs = admitted_costs(&full.bundle);
     // The dearest capture is the `removed` one, and the coverage does not
     // depend on it: a two-sided capture in this world shrinks, so the size
@@ -381,24 +360,24 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // The run **succeeds**: the matrix is complete and honest about what the
     // budget would not pay for.
     assert_eq!(
-        c.code, 0,
-        "a budget the run could not afford is recorded, not fatal\n{}\n{}",
-        c.summary["exit_code"], c.failure["detail"]
+        c.code,
+        0,
+        "a budget the run could not afford is recorded, not fatal\nexit_code={:?}\ndetail={:?}",
+        c.summary.get("exit_code"),
+        c.detail()
     );
-    assert_eq!(c.summary["exit_code"], "0");
+    assert_eq!(c.int("exit_code"), 0);
 
     // **And the run's own numbers survive.** This is the reason the capture
     // summary is printed before the failure's: a caller who set a budget it
     // could not afford wants to know what it did afford most precisely.
     assert_eq!(
-        c.summary["budget_limit"],
-        keeps_the_coverage.to_string(),
+        c.int("budget_limit"),
+        keeps_the_coverage,
         "the limit is recorded"
     );
-    assert_eq!(c.summary["budget_unlimited"], "false");
-    let over = c.summary["captures_over_budget"]
-        .parse::<u64>()
-        .expect("a count");
+    assert!(!c.flag("budget_unlimited"));
+    let over = c.int("captures_over_budget");
     assert!(
         over > 0,
         "a budget of {keeps_the_coverage} out of {total} refused nothing; the \
@@ -406,13 +385,13 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         c.summary
     );
     assert!(
-        c.summary["capture_bytes_admitted"].parse::<u64>().unwrap() <= keeps_the_coverage,
+        c.int("capture_bytes_admitted") <= keeps_the_coverage,
         "and admission did not exceed it"
     );
     // The run's own record still calls itself a success: it is a record of what
     // the run *did*, and the verdict is the other line. `exit_code=0` on this
     // record means "the run completed", which it did.
-    assert_eq!(c.summary["result"], "ok");
+    assert_eq!(c.text("result"), "ok");
 
     // The matrix still records the distinction this test exists for. The bundle
     // is written before the verdict, so the evidence survives the failure -
@@ -456,9 +435,9 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         .expect("the budget refused something")
         .to_string();
     //
-    // Run through the binary directly, because the requirement is checked
-    // **before** the bundle is written: a run that refuses a class the caller
-    // named has nothing to write, and there is no bundle to read.
+    // Run in-process, because the requirement is checked **before** the bundle
+    // is written: a run that refuses a class the caller named has nothing to
+    // write, and there is no bundle to read.
     let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("budget-required");
     let args: Vec<String> = vec![
@@ -475,25 +454,16 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         refused.clone(),
     ];
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, stdout, _stderr) = run(&borrowed);
+    let d: Dispatch = dispatch(&borrowed);
     assert_eq!(
-        code, 4,
-        "a required class the budget refused is exit 4\n{stdout}"
+        d.code,
+        4,
+        "a required class the budget refused is exit 4\ndetail={:?}",
+        d.detail.as_deref()
     );
-    let record = stdout
-        .lines()
-        .filter(|l| l.starts_with("SUMMARY "))
-        .find_map(|l| {
-            let m = parse_summary(l);
-            if m.contains_key("exit_code") {
-                Some(m)
-            } else {
-                None
-            }
-        })
-        .expect("a summary");
-    assert_eq!(record["exit_code"], "4");
-    let detail = record["detail"].replace("%20", " ");
+    let record = d.failure_record.as_ref().expect("a failure record");
+    assert_eq!(record.get("exit_code"), Some(&Val::Int(4)));
+    let detail = d.detail.as_deref().expect("the refusal names why");
     assert!(
         detail.contains(&refused),
         "the refusal names the class: {detail}"
@@ -510,11 +480,13 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         &["--max-download-bytes", &narrow_budget.to_string()],
     );
     assert_eq!(
-        narrow.code, 3,
-        "a budget that takes the coverage with it is a failed run\n{}\n{}",
-        narrow.summary["exit_code"], narrow.summary["detail"]
+        narrow.code,
+        3,
+        "a budget that takes the coverage with it is a failed run\nexit_code={:?}\ndetail={:?}",
+        narrow.summary.get("exit_code"),
+        narrow.detail()
     );
-    let detail = narrow.failure["detail"].clone();
+    let detail = narrow.detail().expect("the failure names why").to_string();
     assert!(
         ["A21", "A22", "A23"].iter().any(|id| detail.contains(id)),
         "and the failure names a coverage assertion: {detail:?}"
@@ -597,7 +569,7 @@ fn audio_candidates_are_attributed_to_their_own_field() {
         );
     }
     // The pool is both, because `--audio` defaults to `en-us`.
-    assert_eq!(c.summary["selection_pool"], "game,en-us");
+    assert_eq!(c.text("selection_pool"), "game,en-us");
     let pool = &c.manifest()["selection_pool"];
     assert_eq!(pool["fields"], serde_json::json!(["game", "en-us"]));
     assert!(
@@ -613,8 +585,7 @@ fn per_class_two_admits_two_files_and_numbers_them() {
     let c = captured("perclass", World::all_shapes(), &["--per-class", "2"]);
     // `added` has exactly one candidate, so the second is refused; the point is
     // that the capture still succeeds and says which class was short.
-    let s = &c.summary;
-    assert_eq!(s["exit_code"], "0");
+    assert_eq!(c.int("exit_code"), 0);
     let ids: Vec<String> = std::fs::read_dir(c.bundle.join("patchmaps"))
         .unwrap()
         .flatten()
@@ -649,7 +620,8 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
         &["--files", "GenshinImpact_Data/Resources/browser_assets"],
     );
     assert_eq!(
-        c.summary["exit_code"], "0",
+        c.int("exit_code"),
+        0,
         "naming a file the matrix already takes is not an error"
     );
     let ids = |b: &std::path::Path| -> Vec<String> {
@@ -719,7 +691,8 @@ fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
         &["--files", first, "--files", second],
     );
     assert_eq!(
-        c.summary["exit_code"], "0",
+        c.int("exit_code"),
+        0,
         "two paths of one class are not an error"
     );
 
@@ -756,8 +729,8 @@ fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
     );
 
     // The three documents agree on how many captures exist.
-    assert_eq!(c.summary["captures_admitted"], "7");
-    assert_eq!(c.summary["patchmaps_written"], "7");
+    assert_eq!(c.int("captures_admitted"), 7);
+    assert_eq!(c.int("patchmaps_written"), 7);
     assert_eq!(
         c.manifest()["totals"]["files_captured"],
         7,
@@ -766,15 +739,11 @@ fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
 
     // And the bundle's own verify rebuilds every one of them, which is the
     // check an overwritten patchmap would defeat: it would see six.
-    let (code, stdout, stderr) = run(&["verify", "--artifact", &c.bundle.to_string_lossy()]);
-    assert_eq!(code, 0, "verify failed:\n{stdout}\n{stderr}");
-    let summary = stdout
-        .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .map(parse_summary)
-        .expect("verify prints a summary");
+    let v: Dispatch = dispatch(&["verify", "--artifact", &c.bundle.to_string_lossy()]);
+    assert_eq!(v.code, 0, "verify failed: {:?}", v.detail.as_deref());
     assert_eq!(
-        summary["captures_rebuilt"], "7",
+        v.summary().get("captures_rebuilt"),
+        Some(&Val::Int(7)),
         "every admitted capture has its own patchmap to rebuild"
     );
 }
@@ -793,13 +762,15 @@ fn a_named_path_the_manifests_do_not_carry_is_skipped_and_reported() {
         &["--files", "GenshinImpact_Data/Plugins/Nope.dll"],
     );
     assert_eq!(
-        c.summary["exit_code"], "0",
+        c.int("exit_code"),
+        0,
         "a path for a future version is not an error"
     );
-    assert_eq!(c.summary["forced_files_requested"], "1");
-    assert_eq!(c.summary["forced_files_skipped"], "1");
+    assert_eq!(c.int("forced_files_requested"), 1);
+    assert_eq!(c.int("forced_files_skipped"), 1);
     assert_eq!(
-        c.summary["forced_files_unscored"], "0",
+        c.int("forced_files_unscored"),
+        0,
         "absent from the manifests is not the same as present but unscored"
     );
 }
@@ -818,18 +789,21 @@ fn a_named_path_that_answers_no_class_is_reported_as_unscored() {
         World::with_degenerate_file(),
         &["--files", DEGENERATE_PATH],
     );
-    assert_eq!(c.summary["exit_code"], "0", "it is recorded, not fatal");
-    assert_eq!(c.summary["forced_files_requested"], "1");
+    assert_eq!(c.int("exit_code"), 0, "it is recorded, not fatal");
+    assert_eq!(c.int("forced_files_requested"), 1);
     assert_eq!(
-        c.summary["forced_files_skipped"], "0",
+        c.int("forced_files_skipped"),
+        0,
         "the manifests carry it, so it is not skipped"
     );
     assert_eq!(
-        c.summary["forced_files_unscored"], "1",
+        c.int("forced_files_unscored"),
+        1,
         "present but answers no class"
     );
     assert_eq!(
-        c.summary["captures_admitted"], "6",
+        c.int("captures_admitted"),
+        6,
         "a capture with no class would make the matrix claim something false"
     );
 

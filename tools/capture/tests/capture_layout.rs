@@ -16,11 +16,13 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{BundleVariant, File, Mock, World, minimal_bundle, shared_bundle};
-use gircap::report::percent_decode;
+use common::{BundleVariant, Dispatch, File, Mock, World, dispatch, minimal_bundle, shared_bundle};
+use gircap::report::{Record, Val};
 use girpr_tempdir::TempDir;
 
-/// The binary under test, beside this test's own executable.
+/// The binary under test, beside this test's own executable. Only the one retry
+/// case that needs a child-process env var and the zero-backoff stderr marker
+/// still spawns; everything else calls the public `run::*` APIs in-process.
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("the test binary has a path");
     p.pop(); // deps/
@@ -51,32 +53,58 @@ impl Scratch {
     }
 }
 
-/// One finished command.
+/// One finished in-process command: the typed records `main.rs` would have
+/// printed, not a parsed rendering of them.
 struct Run {
     code: i32,
+    /// The one-line cause, unescaped, read from the `Failure` rather than a
+    /// percent-encoded `detail=` token on a rendered line.
+    detail: Option<String>,
+    record: Record,
+    /// Record renderings kept only for assert *messages* (never asserted on).
     stdout: String,
     stderr: String,
 }
 
 impl Run {
-    /// The `SUMMARY` line, parsed into key=value pairs. The summary percent-encodes
-    /// whitespace and `%`, so the values are decoded back.
-    fn summary(&self) -> BTreeMap<&str, String> {
-        let line = self
-            .stdout
-            .lines()
-            .find(|l| l.starts_with("SUMMARY "))
-            .unwrap_or_else(|| {
-                panic!(
-                    "no SUMMARY on stdout:\n{}\n---\n{}",
-                    self.stdout, self.stderr
-                )
-            });
-        line.strip_prefix("SUMMARY ")
-            .expect("starts with SUMMARY")
-            .split(' ')
-            .filter_map(|kv| kv.split_once('='))
-            .map(|(k, v)| (k, percent_decode(v)))
+    fn from_dispatch(d: Dispatch) -> Run {
+        let mut lines = Vec::new();
+        if let Some(r) = &d.run_record {
+            lines.push(r.to_text_line());
+        }
+        if let Some(r) = &d.failure_record {
+            lines.push(r.to_text_line());
+        }
+        let record = d.summary().clone();
+        let detail = d.detail.clone();
+        Run {
+            code: d.code,
+            detail,
+            record,
+            stdout: lines.join("\n"),
+            stderr: String::new(),
+        }
+    }
+
+    /// The same key/value view a `SUMMARY …` line gave, read straight from the
+    /// record's typed fields (no stdout parsing, no percent codec). Numbers and
+    /// booleans render as their plain spelling — exactly what the old
+    /// `split('=')` + percent-decode produced for those fields.
+    fn summary(&self) -> BTreeMap<&'static str, String> {
+        self.record
+            .keys()
+            .filter_map(|k| {
+                self.record.get(k).map(|v| {
+                    (
+                        k,
+                        match v {
+                            Val::Str(s) => s.clone(),
+                            Val::Int(i) => i.to_string(),
+                            Val::Bool(b) => b.to_string(),
+                        },
+                    )
+                })
+            })
             .collect()
     }
 }
@@ -84,33 +112,25 @@ impl Run {
 type BTreeMap<K, V> = std::collections::BTreeMap<K, V>;
 
 fn run(args: &[&str]) -> Run {
-    run_with_env(args, &[])
+    Run::from_dispatch(dispatch(args))
 }
 
-/// `run` with extra environment variables set on the child process.
-fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> Run {
-    let mut cmd = Command::new(bin());
-    cmd.args(args);
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
-    let out = cmd
+/// Process-only `run` for the one list case that parses the *rendered* per-bundle
+/// `BUNDLE` records on stdout — a view the `run::list` `Outcome` does not carry.
+fn run_spawn(args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(bin())
+        .args(args)
         .output()
         .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    Run {
-        code: out.status.code().expect("the process was not killed"),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+    (
+        out.status.code().expect("the process was not killed"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 /// `gircap capture` against `mock`, writing into `scratch.out()`.
 fn capture(mock: &Mock, scratch: &Scratch, extra: &[&str]) -> Run {
-    capture_with_env(mock, scratch, extra, &[])
-}
-
-/// `capture` with extra environment variables set on the capture child.
-fn capture_with_env(mock: &Mock, scratch: &Scratch, extra: &[&str], env: &[(&str, &str)]) -> Run {
     let mut args: Vec<String> = vec![
         "capture".into(),
         "--out".into(),
@@ -122,7 +142,41 @@ fn capture_with_env(mock: &Mock, scratch: &Scratch, extra: &[&str], env: &[(&str
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_with_env(&borrowed, env)
+    run(&borrowed)
+}
+
+/// Process-only capture for the single retry case that needs a child env var
+/// and the zero-backoff stderr marker. Returns the raw process output; every
+/// other case in this file is in-process.
+fn capture_spawn_with_env(
+    mock: &Mock,
+    scratch: &Scratch,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (i32, String, String) {
+    let mut args: Vec<String> = vec![
+        "capture".into(),
+        "--out".into(),
+        scratch.out().to_string_lossy().into_owned(),
+        "--hyp-base".into(),
+        mock.hyp_base(),
+        "--sophon-base".into(),
+        mock.sophon_base(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let mut cmd = Command::new(bin());
+    cmd.args(&args);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
+    (
+        out.status.code().expect("the process was not killed"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 /// The one bundle under a scratch root, whichever way the layout nests it.
@@ -386,7 +440,9 @@ fn a_bundle_without_the_error_shapes_document_does_not_verify() {
             cmd[0], out.stdout, out.stderr
         );
         assert!(
-            format!("{}{}", out.stdout, out.stderr).contains("error_shapes.json"),
+            out.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("error_shapes.json")),
             "{} must name the document:\n{}{}",
             cmd[0],
             out.stdout,
@@ -421,7 +477,9 @@ fn a_bundle_without_the_error_responses_document_does_not_verify() {
             cmd[0], out.stdout, out.stderr
         );
         assert!(
-            format!("{}{}", out.stdout, out.stderr).contains("error_responses.json"),
+            out.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("error_responses.json")),
             "{} must name the document:\n{}{}",
             cmd[0],
             out.stdout,
@@ -445,7 +503,9 @@ fn a_bundle_without_the_rejection_document_does_not_verify() {
         v.stdout, v.stderr
     );
     assert!(
-        format!("{}{}", v.stdout, v.stderr).contains("rejections.json"),
+        v.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("rejections.json")),
         "the refusal must name the document:\n{}{}",
         v.stdout,
         v.stderr
@@ -531,16 +591,19 @@ fn manifest_chunk_ids(bundle: &std::path::Path, tag: &str) -> Vec<String> {
 fn list_emits_one_bundle_record_per_bundle_and_a_summary_last() {
     let (mock, scratch, r, bundle) = capture_ok("listrec");
     let root = scratch.out();
-    let v = run(&[
+    // Both `list` runs stay processes: this test pins the rendered per-bundle
+    // `BUNDLE` records (JSON and text), which `run::list`'s `Outcome` does not
+    // return — only its terminal `SUMMARY` is on the data-plane result.
+    let (vcode, vout, verr) = run_spawn(&[
         "list",
         "--root",
         &root.to_string_lossy(),
         "--output",
         "json",
     ]);
-    assert_eq!(v.code, 0, "{}\n{}", v.stdout, v.stderr);
+    assert_eq!(vcode, 0, "{}\n{}", vout, verr);
 
-    let lines: Vec<&str> = v.stdout.lines().filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = vout.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(
         lines.len(),
         2,
@@ -581,9 +644,9 @@ fn list_emits_one_bundle_record_per_bundle_and_a_summary_last() {
     assert_eq!(s["exit_code"], 0);
 
     // The text plane says the same thing.
-    let t = run(&["list", "--root", &root.to_string_lossy()]);
-    assert_eq!(t.code, 0, "{}", t.stderr);
-    let tlines: Vec<&str> = t.stdout.lines().filter(|l| !l.is_empty()).collect();
+    let (tcode, tout, terr) = run_spawn(&["list", "--root", &root.to_string_lossy()]);
+    assert_eq!(tcode, 0, "{}", terr);
+    let tlines: Vec<&str> = tout.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(tlines.len(), 2, "{tlines:?}");
     assert!(tlines[0].starts_with("BUNDLE "), "{tlines:?}");
     assert!(tlines[1].starts_with("SUMMARY "), "{tlines:?}");
@@ -1143,23 +1206,27 @@ fn a_retried_request_is_recorded_as_retried() {
     let scratch = Scratch::new("retry");
     // The 503 is still armed, fetched and recorded as a retry; only the 500 ms
     // production backoff is skipped in the child via the test-only hook.
-    let r = capture_with_env(
+    // This capture intentionally stays a process: the test-only zero-backoff
+    // hook is an env var (unsafe to set process-globally under threaded cargo
+    // test) and its self-verifying marker is a tracing line on the child's
+    // stderr, neither of which an in-process `Outcome` can carry.
+    let (code, stdout, stderr) = capture_spawn_with_env(
         &mock,
         &scratch,
         &["--jobs", "1"],
         &[("GIRCAP_TEST_ZERO_BACKOFF", "1")],
     );
-    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    assert_eq!(code, 0, "capture failed:\n{}\n{}", stdout, stderr);
     // Self-verification of the T13 hook. A refactor that drops the
     // `zero_backoff()` branch would restore the 500 ms production backoff while
     // this test still saw `attempts == 2` (only slower). The child names the
     // hook on stderr at the exact point it selects ZeroSleep, so require that
     // marker: a missing one means the zero-delay path is no longer in play.
     assert!(
-        r.stderr.contains("GIRCAP_TEST_ZERO_BACKOFF"),
+        stderr.contains("GIRCAP_TEST_ZERO_BACKOFF"),
         "the child did not report the zero-backoff hook; the 500 ms backoff may \
          have been reintroduced. stderr:\n{}",
-        r.stderr
+        stderr
     );
     let bundle = bundle_in(&scratch.out());
 
@@ -1539,7 +1606,7 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
     let scratch = Scratch::new("audiomissing");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
-    let detail = percent_decode(&r.summary()["detail"]);
+    let detail = r.detail.as_deref().expect("the refusal names the field");
     assert!(detail.contains("en-us"), "{detail}");
     assert!(
         detail.contains("published"),
@@ -1572,7 +1639,7 @@ fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
     let r = capture(&mock, &scratch, &["--audio", "none"]);
 
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
-    let text = format!("{}{}", r.stdout, r.stderr);
+    let text = r.detail.as_deref().expect("the refusal names why");
     assert!(text.contains("refused name"), "{text}");
     assert!(text.contains("escapes the bundle root"), "{text}");
     assert!(
@@ -1728,7 +1795,7 @@ fn a_manifest_chunk_id_outside_the_documented_shape_is_refused() {
     let r = capture(&mock, &scratch, &["--audio", "none"]);
 
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
-    let text = format!("{}{}", r.stdout, r.stderr);
+    let text = r.detail.as_deref().expect("the refusal names why");
     assert!(text.contains("not a chunk id"), "{text}");
     assert!(
         !scratch.root.join("gircap-chunk").exists(),
@@ -1754,10 +1821,12 @@ fn an_audio_scan_dir_that_escapes_the_bundle_is_refused() {
     world.audio_pkg_scan_dir = "../../../../../gircap-scan".into();
     let mock = Mock::start(world);
     let scratch = Scratch::new("scan-dir-escape");
-    let r = capture(&mock, &scratch, &["--audio", "none"]);
+    // Pins the raw stderr narration ("escapes the bundle root") that a scoped
+    // in-process run cannot render, so this one capture stays a process.
+    let (code, stdout, stderr) = capture_spawn_with_env(&mock, &scratch, &["--audio", "none"], &[]);
 
-    assert_eq!(r.code, 3, "{}\n{}", r.stdout, r.stderr);
-    let text = format!("{}{}", r.stdout, r.stderr);
+    assert_eq!(code, 3, "{}\n{}", stdout, stderr);
+    let text = format!("{}{}", stdout, stderr);
     assert!(text.contains("audio_pkg_scan_dir"), "{text}");
     assert!(text.contains("escapes the bundle root"), "{text}");
     assert!(
@@ -1788,7 +1857,7 @@ fn requiring_an_unmet_class_is_exit_four() {
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
-    let detail = percent_decode(&r.summary()["detail"]);
+    let detail = r.detail.as_deref().expect("the refusal names the class");
     assert!(detail.contains("identical"), "{detail}");
 }
 
@@ -2005,7 +2074,7 @@ fn an_old_tag_the_api_does_not_serve_is_refused() {
     let scratch = Scratch::new("nosuchtag");
     let r = capture(&mock, &scratch, &["--old-tag", "9.9.9"]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
-    let detail = percent_decode(&r.summary()["detail"]);
+    let detail = r.detail.as_deref().expect("the refusal names the tag");
     assert!(detail.contains("-202"), "the retcode is named: {detail}");
     assert!(detail.contains("9.9.9"), "and the tag: {detail}");
 }
@@ -2022,7 +2091,7 @@ fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
     let scratch = Scratch::new("nodiff");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
-    let detail = percent_decode(&r.summary()["detail"]);
+    let detail = r.detail.as_deref().expect("the refusal names the tag");
     assert!(
         detail.contains("6.7.0"),
         "it resolved to what diff_tags[0] names: {detail}"

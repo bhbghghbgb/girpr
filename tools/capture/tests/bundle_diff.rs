@@ -82,37 +82,19 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use common::{Mock, World};
+use common::{Mock, World, dispatch};
 use girpr_tempdir::TempDir;
-
-/// The binary under test, beside this test's own executable.
-fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().expect("the test binary has a path");
-    p.pop(); // deps/
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join(format!("gircap{}", std::env::consts::EXE_SUFFIX))
-}
 
 /// A scratch root that is removed when the test ends, whatever happens.
 type Scratch = TempDir;
 
-fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(bin())
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    (
-        out.status.code().expect("the process was not killed"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
 /// Capture `World::all_shapes()` into `<scratch>/<slot>/`.
+///
+/// The command is dispatched in-process through the same clap parse and config
+/// resolution the binary uses, so the bytes it writes are the bytes a spawned
+/// `gircap` would write. `--jobs 1` still pins the request-log row order (see
+/// the module doc); the normalization below is unchanged.
 fn capture_into(mock: &Mock, scratch: &Scratch, slot: &str) -> PathBuf {
     let out = scratch.join(slot);
     let args = [
@@ -128,8 +110,13 @@ fn capture_into(mock: &Mock, scratch: &Scratch, slot: &str) -> PathBuf {
         "--jobs",
         "1",
     ];
-    let (code, stdout, stderr) = run(&args);
-    assert_eq!(code, 0, "capture into {slot} failed:\n{stdout}\n{stderr}");
+    let d = dispatch(&args);
+    assert_eq!(
+        d.code,
+        0,
+        "capture into {slot} failed: {:?}",
+        d.detail.as_deref()
+    );
     bundle_in(&out)
 }
 

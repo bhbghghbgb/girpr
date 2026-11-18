@@ -35,6 +35,7 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
@@ -43,7 +44,110 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use fs2::FileExt;
+use gircap::cli::{Cmd, parse_from, recorded_argv};
+use gircap::config::{capture_plan, materialize_plan, verify_plan};
+use gircap::report::Record;
+use gircap::run::{self, Failure, Outcome};
 use girpr_tempdir::TempDir;
+
+// ------------------------------------------------- in-process command dispatch
+
+/// What a gircap command produced, in the shape `main.rs` would have printed.
+///
+/// The four public [`run::*`] APIs are async and return a [`Record`] plus an
+/// exit code; on failure they return a [`Failure`] that carries both its own
+/// summary and — for a run that measured before failing — the run's own summary
+/// in `preceded_by`. A harness that spawns the binary learns all of this by
+/// parsing stdout. A harness that calls the APIs in-process gets the typed
+/// values instead, which is strictly stronger: a field is read by name from a
+/// [`Record`], not recovered from a rendered `k=v` line.
+///
+/// The command is still parsed by the real clap surface and resolved by the
+/// real config functions, so the flags a test passes travel the same path a
+/// user's command line does. Only the final `print`/`exit` shim is skipped.
+pub struct Dispatch {
+    /// The run's own SUMMARY: the success record, or the one a failure carries
+    /// in `preceded_by`. `None` when the run refused before measuring anything.
+    pub run_record: Option<Record>,
+    /// The failure's own SUMMARY (`result=error`). Present only on failure.
+    pub failure_record: Option<Record>,
+    /// The one-line cause. Present only on failure.
+    pub detail: Option<String>,
+    /// The exit code the process would have ended with.
+    pub code: i32,
+}
+
+impl Dispatch {
+    /// The first SUMMARY a stdout reader would see: the run's own when it
+    /// measured, otherwise the failure's.
+    pub fn summary(&self) -> &Record {
+        self.run_record
+            .as_ref()
+            .or(self.failure_record.as_ref())
+            .expect("a command always emits one summary")
+    }
+}
+
+/// A poll driver for the `run::*` futures.
+///
+/// `verify`/`materialize`/`list` do no real awaiting, but `capture` drives
+/// reqwest's sockets and `spawn_blocking`, so it needs a real runtime's IO and
+/// time drivers. A fresh current-thread runtime per dispatch is enough and
+/// keeps a test free of a runtime dependency of its own.
+pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build a current-thread runtime")
+        .block_on(f)
+}
+
+/// Run a gircap command in-process, exactly as `main.rs` dispatches it, and
+/// return the typed records/exit code instead of printing and exiting.
+pub fn dispatch(argv: &[&str]) -> Dispatch {
+    // `main.rs` parses `args_os()`, whose first entry is the program name that
+    // clap strips. Prepend the same sentinel so the subcommand is not mistaken
+    // for argv[0], and record it so `MANIFEST.json → tool_argv` carries the same
+    // shape a spawned run would (byte-exact gates normalise only the `--out`
+    // root, so this spelling must be stable across calls).
+    let full: Vec<OsString> = std::iter::once(OsString::from("gircap"))
+        .chain(argv.iter().map(OsString::from))
+        .collect();
+    let cli = parse_from(full.iter().cloned()).expect("a valid gircap command");
+    let event = match &cli.cmd {
+        Cmd::Capture(_) => "capture",
+        Cmd::Verify(_) => "verify",
+        Cmd::Materialize(_) => "materialize",
+        Cmd::List(_) => "list",
+    };
+    let recorded = recorded_argv(full.iter().cloned());
+    let outcome: Result<Outcome, Failure> = block_on(async {
+        match cli.cmd {
+            Cmd::Capture(a) => {
+                run::capture(capture_plan(&a, recorded).expect("capture plan")).await
+            }
+            Cmd::Verify(a) => run::verify(verify_plan(&a).expect("verify plan")).await,
+            Cmd::Materialize(a) => {
+                run::materialize(materialize_plan(&a).expect("materialize plan")).await
+            }
+            Cmd::List(a) => run::list(a.root, a.common.output).await,
+        }
+    });
+    match outcome {
+        Ok((summary, code)) => Dispatch {
+            run_record: Some(summary),
+            failure_record: None,
+            detail: None,
+            code: code.code(),
+        },
+        Err(f) => Dispatch {
+            run_record: f.preceded_by.clone(),
+            failure_record: Some(f.summary(event)),
+            detail: Some(f.detail.clone()),
+            code: f.code.code(),
+        },
+    }
+}
 
 // ------------------------------------------------- the shared read-only bundle
 
@@ -250,24 +354,17 @@ pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
     SharedBundle { bundle: dir }
 }
 
-/// Run `capture` and require it to succeed. Only the healthy variants are built
-/// through the shared fixture, so a non-zero exit is a broken fixture, not a
-/// result to interpret.
+/// Run `capture` in-process and require it to succeed. Only the healthy
+/// variants are built through the shared fixture, so a non-zero exit is a
+/// broken fixture, not a result to interpret. The TCP mock is still what the
+/// capture talks to; only the process boundary is gone.
 fn capture_ok(args: &[&str]) {
-    let mut path = std::env::current_exe().expect("the test binary has a path");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    let out = std::process::Command::new(path.join("gircap.exe"))
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
-    assert!(
-        out.status.success(),
-        "shared capture failed: {}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let d = dispatch(args);
+    assert_eq!(
+        d.code,
+        0,
+        "shared capture failed: {:?}",
+        d.detail.as_deref()
     );
 }
 

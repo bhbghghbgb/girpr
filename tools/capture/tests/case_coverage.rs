@@ -36,7 +36,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Dispatch, Mock, World, dispatch};
 use girpr_tempdir::TempDir;
 
 /// The instrument, beside the crate it measures.
@@ -44,16 +44,6 @@ fn script() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tools")
         .join("case_coverage.py")
-}
-
-/// The binary under test, beside this test's own executable.
-fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().expect("the test binary has a path");
-    p.pop(); // deps/
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join("gircap.exe")
 }
 
 /// A python that runs.
@@ -91,27 +81,8 @@ impl Scratch {
     }
 }
 
-/// One finished command.
-struct Run {
-    code: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run(args: &[&str]) -> Run {
-    let out = Command::new(bin())
-        .args(args)
-        .output()
-        .expect("the capture runs");
-    Run {
-        code: out.status.code().expect("the capture exits normally"),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
-}
-
 /// The one bundle under a scratch root, whichever way the layout nests it.
-fn bundle_in(out: &Path, r: &Run) -> PathBuf {
+fn bundle_in(out: &Path, d: &Dispatch) -> PathBuf {
     let mut found = Vec::new();
     walk(out, &mut found);
     found
@@ -119,10 +90,9 @@ fn bundle_in(out: &Path, r: &Run) -> PathBuf {
         .find(|p| p.join("MANIFEST.json").is_file())
         .unwrap_or_else(|| {
             panic!(
-                "no bundle under {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                "no bundle under {}\n--- failure ---\n{:?}",
                 out.display(),
-                r.stdout,
-                r.stderr
+                d.detail.as_deref()
             )
         })
 }
@@ -200,7 +170,7 @@ fn the_instrument_reproduces_the_patchmaps_own_arithmetic() {
     };
     let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("outcome");
-    let r = run(&[
+    let d = dispatch(&[
         "capture",
         "--out",
         &scratch.out().to_string_lossy(),
@@ -209,8 +179,8 @@ fn the_instrument_reproduces_the_patchmaps_own_arithmetic() {
         "--sophon-base",
         &mock.sophon_base(),
     ]);
-    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
-    let bundle = bundle_in(&scratch.out(), &r);
+    assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
+    let bundle = bundle_in(&scratch.out(), &d);
 
     let doc = instrument_json(py, &bundle, "outcome");
     let rows = doc["outcome"].as_array().expect("an outcome array");
@@ -287,7 +257,7 @@ fn the_instrument_reproduces_the_crates_class_populations() {
     };
     let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("population");
-    let r = run(&[
+    let d = dispatch(&[
         "capture",
         "--out",
         &scratch.out().to_string_lossy(),
@@ -296,8 +266,8 @@ fn the_instrument_reproduces_the_crates_class_populations() {
         "--sophon-base",
         &mock.sophon_base(),
     ]);
-    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
-    let bundle = bundle_in(&scratch.out(), &r);
+    assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
+    let bundle = bundle_in(&scratch.out(), &d);
 
     let doc = instrument_json(py, &bundle, "population");
     let proposed = &doc["population"]["current"];
