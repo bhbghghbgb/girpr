@@ -51,6 +51,18 @@ fn run(args: &[String]) -> Run {
     }
 }
 
+/// The same invocation in-process, for cases that read only the records and
+/// exit code — the values `run_captured` exposes directly. The log tests keep
+/// `run` above: they need the real process's stderr/subscriber (finding E2 / T17).
+fn captured(args: &[String]) -> Run {
+    let out = common::run_args(args);
+    Run {
+        code: out.code,
+        records: common::values(&out),
+        stderr: out.error.unwrap_or_default(),
+    }
+}
+
 /// A src/dst pair with one of each difference class, so a report has something to
 /// say in every bucket. Casing is set up so `case-mismatch` fires too.
 fn fixture(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -99,7 +111,7 @@ fn events_with<'a>(logged: &'a [Value], message: &str) -> Vec<&'a Value> {
 fn compare_json_is_one_object_per_line_with_a_single_summary() {
     let t = temp_root("out_cmp");
     let (src, dst) = fixture(&t);
-    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    let r = captured(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
     // Every line parsed — `parse_ndjson` would have panicked otherwise — and every
     // one names its event, so a consumer dispatches on a single key.
@@ -134,7 +146,7 @@ fn compare_folds_ascii_case_but_not_non_ascii_case() {
     wfile(&dst, "ärger.txt", b"same");
     sync_mtime(&src.join("Ärger.txt"), &dst.join("ärger.txt"));
 
-    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    let r = captured(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4, "the differences exit 4: {}", r.show());
     assert_eq!(
         summary_of(&r.records),
@@ -181,7 +193,7 @@ fn compare_json_is_the_verdict_the_library_builds() {
     // `--case-sensitive` because the library-side harness below is case-sensitive,
     // and the two must be answering the same question for the comparison to mean
     // anything.
-    let r = run(&compare_args(
+    let r = captured(&compare_args(
         &src,
         &dst,
         &["--output", "json", "--case-sensitive"],
@@ -219,6 +231,8 @@ fn update_json_names_the_directory_it_refreshed() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
+    // Kept as a real-process smoke test (with the log tests) so the binary's
+    // clap -> main -> stdout journey for `update` stays covered.
     let r = run(&[
         "update".to_string(),
         "--dir".to_string(),
@@ -255,18 +269,14 @@ fn the_two_formats_report_the_same_records_in_the_same_order() {
         "--dry-run".into(),
     ];
 
-    let text = {
+    let (code, text) = {
         let mut a = base.clone();
         a.push("--output".into());
         a.push("text".into());
-        std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-            .args(&a)
-            .output()
-            .expect("spawn girsync")
+        common::run_text(&a)
     };
-    assert!(text.status.success());
-    let lines: Vec<String> = String::from_utf8(text.stdout)
-        .expect("utf-8")
+    assert_eq!(code, 0, "sync failed");
+    let lines: Vec<String> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.to_string())
@@ -274,7 +284,7 @@ fn the_two_formats_report_the_same_records_in_the_same_order() {
 
     base.push("--output".into());
     base.push("json".into());
-    let r = run(&base);
+    let r = captured(&base);
 
     assert_eq!(
         lines.len(),
@@ -325,15 +335,9 @@ fn json_stdout_stays_clean_while_the_run_narrates() {
 /// must never get text and have to notice.
 #[test]
 fn an_unknown_output_format_is_rejected_by_the_parser() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(["compare", "--src", "a", "--dst", "b", "--output", "yaml"])
-        .output()
-        .expect("spawn girsync");
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "a bad --output is a parse error, not a fallback"
-    );
+    let (code, _) =
+        common::run_error_text(["compare", "--src", "a", "--dst", "b", "--output", "yaml"]);
+    assert_eq!(code, 2, "a bad --output is a parse error, not a fallback");
 }
 
 /// **`--log-level debug` still logs every record, fields and all.**

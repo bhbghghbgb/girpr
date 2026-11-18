@@ -97,21 +97,21 @@ fn the_rw_limit_does_not_change_what_is_reported() {
 fn parallel_copies_actually_land_on_disk() {
     let t = temp_root("asdone_disk");
     let (src, dst) = build(&t);
-    // A real run this time: the point is that the files arrive.
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .arg("--rw-threads")
-        .arg("4")
-        .arg("--output")
-        .arg("json")
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert!(out.status.success(), "sync failed");
+    // A real run in-process: the point is that the files arrive, and that the
+    // COPY records emitted from the rayon workers are captured too (the Arc<Mutex>
+    // sink exists for exactly this case).
+    let out = common::run_args([
+        "sync",
+        "--src",
+        &src.display().to_string(),
+        "--dst",
+        &dst.display().to_string(),
+        "--rw-threads",
+        "4",
+        "--output",
+        "json",
+    ]);
+    assert_eq!(out.code, 0, "sync failed: {:?}", out.error);
     for rel in [
         "onlysrc.txt",
         "differs.txt",

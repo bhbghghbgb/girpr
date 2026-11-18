@@ -55,29 +55,13 @@ fn md5_in_file(path: &Path, rel: &str) -> Vec<u8> {
         .to_vec()
 }
 
-/// Run the real binary and return the records it reported on stdout.
+/// Run `girsync sync` in-process and return the records it reported.
 ///
-/// `--output json` throughout, so what a test reads is what a machine reads. The
-/// alternative — matching rendered text lines — makes every case a second,
-/// quieter statement of the vocabulary, and a reworded message fails a test whose
-/// point was the plan.
-///
-/// `envs` are added on top of the in-memory cache switch, for the test-only
-/// `GIRSYNC_TEST_COMMIT_*` limits a fixture lowers to make a commit observable.
+/// `--output json` throughout, so what a test reads is the records a machine
+/// would parse off stdout. The alternative — matching rendered text lines —
+/// makes every case a second, quieter statement of the vocabulary.
 fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(src)
-        .arg("--dst")
-        .arg(dst)
-        .arg("--output")
-        .arg("json")
-        .args(extra)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .envs(envs.iter().copied())
-        .output()
-        .expect("spawn girsync");
+    let out = run_binary_raw(src, dst, extra, envs);
     assert!(
         out.status.success(),
         "sync failed: {}\n{}",
@@ -87,19 +71,55 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> 
     parse_ndjson(&out.stdout)
 }
 
-/// Run the real binary and return its records, without asserting success.
+/// Run `girsync sync` in-process and return its exit status, records and error
+/// string, without asserting success.
 ///
 /// `run_binary` above is the happy-path form; a case whose point is the exit
-/// code needs the raw output, because the assertion is on stderr and on what was
-/// *not* written.
-///
-/// Like `run_binary`, this defaults the child to the in-memory cache: most
-/// callers assert on the console records or the filesystem, not on cache-file
-/// bytes, and should not pay for a 1 MB redb create per binary run. A test that
-/// *does* inspect on-disk cache bytes opts out by passing an explicit
-/// `("GIRSYNC_TEST_CACHE", "file")` in `envs`; because this default is set before
-/// `envs`, the caller's value wins.
-fn run_binary_raw(
+/// code or the error text needs the raw output, because the assertion is on
+/// what was (or was not) reported. `envs` is kept in the signature for the
+/// process-based helpers below; the in-process path pins the file cache, which
+/// is what the on-disk-cache cases want anyway.
+fn run_binary_raw(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]) -> RawRun {
+    let mut args: Vec<String> = vec![
+        "sync".into(),
+        "--src".into(),
+        src.display().to_string(),
+        "--dst".into(),
+        dst.display().to_string(),
+        "--output".into(),
+        "json".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let out = common::run_args(args);
+    let stdout = common::values(&out)
+        .iter()
+        .map(|r| format!("{r}\n"))
+        .collect::<String>()
+        .into_bytes();
+    let stderr = out.error.map(|e| e.into_bytes()).unwrap_or_default();
+    RawRun {
+        status: Status { code: out.code },
+        stdout,
+        stderr,
+    }
+}
+
+/// Spawn the real binary with per-run environment hooks. Only the cases that
+/// inject a failure (`GIRSYNC_TEST_*`) or assert on a log file need a real child;
+/// the hooks are process-global and several are `OnceLock`-cached, so they
+/// cannot be toggled in-process (that is finding E5 / task T18).
+fn run_binary_process(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
+    let out = run_binary_raw_process(src, dst, extra, envs);
+    assert!(
+        out.status.success(),
+        "sync failed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    parse_ndjson(&out.stdout)
+}
+
+fn run_binary_raw_process(
     src: &Path,
     dst: &Path,
     extra: &[&str],
@@ -118,6 +138,30 @@ fn run_binary_raw(
         .envs(envs.iter().copied())
         .output()
         .expect("spawn girsync")
+}
+
+/// The process-free stand-in for the parts of `std::process::Output` these
+/// cases read: exit status, captured stdout records and the `fatal` error string
+/// `main` would have logged to stderr. Keeping the shape lets the call sites read
+/// unchanged.
+struct RawRun {
+    status: Status,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+struct Status {
+    code: i32,
+}
+
+impl Status {
+    fn success(&self) -> bool {
+        self.code == 0
+    }
+    fn code(&self) -> Option<i32> {
+        Some(self.code)
+    }
 }
 
 /// The `path` of every record with `event` `name`, in order.
@@ -932,7 +976,7 @@ fn a_failed_case_rename_leaves_no_record() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_RENAME", "data.txt")]);
+    let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_RENAME", "data.txt")]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -972,7 +1016,7 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw(
+    let out = run_binary_raw_process(
         &src,
         &dst,
         &[],
@@ -1021,7 +1065,7 @@ fn a_failed_case_rename_step2_rolls_back() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw(
+    let out = run_binary_raw_process(
         &src,
         &dst,
         &[],
@@ -1192,7 +1236,7 @@ fn a_copied_file_carries_the_sources_timestamp() {
         .unwrap();
 
     for no_fsync in ["0", "1"] {
-        let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", no_fsync)]);
+        let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", no_fsync)]);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -1403,7 +1447,7 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
     }
 
     let logfile = t.subdir("logs").join("run.json");
-    let recs = run_binary(
+    let recs = run_binary_process(
         &src,
         &dst,
         &[
@@ -1668,7 +1712,7 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 
     // `GIRSYNC_TEST_NO_FSYNC=0` because the workspace's nextest setup turns the
     // flush off for speed; this case is about the flush itself.
-    let out = run_binary_raw(
+    let out = run_binary_raw_process(
         &src,
         &dst,
         &[],
@@ -1697,7 +1741,7 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
     );
 
     // No resume: the rerun copies it and caches it. Still reads `recs(&dst)`.
-    let out = run_binary_raw(
+    let out = run_binary_raw_process(
         &src,
         &dst,
         &[],
@@ -1751,7 +1795,7 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     wfile(&src, "mmm.bin", b"fails first");
     wfile(&src, "zzz.bin", b"the control");
 
-    let out = run_binary_raw(
+    let out = run_binary_raw_process(
         &src,
         &dst,
         &["--rw-threads", "2"],
@@ -1819,7 +1863,7 @@ fn a_reported_copy_failure_is_the_copy_and_the_cause() {
     let dst = t.subdir("dst");
     wfile(&src, "mmm.bin", b"payload");
 
-    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_COPY", "mmm.bin")]);
+    let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_COPY", "mmm.bin")]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -2409,23 +2453,16 @@ fn run_backup_retain_zero_is_refused() {
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .arg("--backup-retain")
-        .arg("0")
-        .output()
-        .expect("spawn girsync");
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "a runtime usage mistake exits 3: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (code, stderr) = common::run_error_text([
+        "sync",
+        "--src",
+        &src.display().to_string(),
+        "--dst",
+        &dst.display().to_string(),
+        "--backup-retain",
+        "0",
+    ]);
+    assert_eq!(code, 3, "a runtime usage mistake exits 3: {stderr}");
     assert!(
         stderr.contains("--backup-retain"),
         "the message names the flag: {stderr}"
