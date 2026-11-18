@@ -12,10 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP4 review phase (`ORCHESTRATION.md` §4) — both CP4 tasks
-  are terminal (`pending_review`). Set CP4 `in_progress` and spawn one
-  review-and-fix session with the two commit ranges (include the clippy note).
-* Active phase: review. All CP4 tasks are `pending_review`; CP4 is ready for review.
+* Next action: wait for the CP4 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP4 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP4 `in_progress`; both CP4 tasks are `pending_review`.
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -66,7 +65,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP1 | T01–T04 | done | P0 root unit + small crates + sled2redb low-risk — all completed, no fixes/reverts |
 | CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
 | CP3 | T09–T10 | done | `repair_machinery` + `repair_plan` downshifts — both completed, no fixes/reverts |
-| CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
+| CP4 | T11–T12 | in_progress | root-unit production seams (MD5, DiskPlan) |
 | CP5 | T13–T14 | open | capture mock merge + `repair_purge` merges |
 | CP6 | T15 | open | sync heartbeat parameterization |
 | CP7 | T16 | open | sync record sink + `run_captured` (largest single change) |
