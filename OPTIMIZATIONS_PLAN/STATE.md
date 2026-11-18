@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T09 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1, CP2 `done`; T09 `in_progress`, T10 `todo` (CP3).
+* Next action: pick the next `todo` task in seeded order — T10 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1, CP2 `done`; T09 `pending_review`, T10 `todo` (CP3).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -42,7 +42,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T06 | Capture: device-name flag refusal → config unit test | B2 | completed | P0 | CP2 | CP2 review: completed. |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | completed | P0 | CP2 | CP2 review: completed. |
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
-| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | in_progress | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
+| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | pending_review | P1 | CP3 | Implemented in 308a0884, ba57c637, 0e4bf161; 17 cases downshifted, 11 log cases + alias on binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | todo | P1 | CP4 | Preserve symlink/dir → `temp` semantics; do not change `resolve_mode` itself. |
@@ -89,7 +89,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T06 | `ab96ebab..6b7dfdde` | completed |
 | T07 | `c9dc8307..e6aefb87` | completed |
 | T08 | `8160cef5..c8ed2fef` | completed |
-| T09–T23 | — (not started) | — |
+| T09 | `4c74ef45..0e4bf161` | — (pending CP3 review) |
+| T10–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -108,6 +109,9 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F07 | ~~Simplify away the now-near-trivial `BundleVariant` enum and its `key()`/`extra()` methods (only `Default` remains after T05) — e.g. an argument-less `shared_bundle()`.~~ | T05 implementer | removed | CP2 reviewer removed it: pure enum hygiene, zero test-count effect (same rationale as F06). |
 | F08 | ~~Metadata-only assertion path for T07's retained measured test: compute totals from declared chunk sizes via a pure seam instead of materializing ~4.7 MB of bodies.~~ | T07 implementer | removed | CP2 reviewer removed it: needs a production seam, marginal remaining MBs, and contradicts T07's "keep one measured ground-truth pin" criterion. |
 | F09 | ~~Share the chunk-length constants between `m7_assembly` and `m6_chunk_store` (different fixture structure, carries md5 strings).~~ | T07 implementer | removed | CP2 reviewer removed it: zero test-count effect, low value. |
+| F10 | Make `Rig::logs` a lazily-initialized `OnceLock<TempDir>` so the 17 fully-converted T09 rigs stop allocating an unused log directory. | T09 implementer | proposed | No test-count/spawn effect, mostly hygiene; CP3 reviewer may prune. |
+| F11 | Downshift the staged and by-mode sub-runs in `the_three_tiers_produce_the_same_file` (pure `ram_bytes` counters; only the shortage sub-run needs the log) — ~2 more spawns. | T09 implementer | proposed | Real spawn reduction; CP3 reviewer to decide. |
+| F12 | Merge the two `--fail-fast` malformed-manifest cases into a `Lies` table, and merge `the_three_modes_produce_the_same_bytes` with `no_mode_leaves_a_temp_file_behind` into a three-mode loop asserting bytes + leftovers. | T09 implementer | proposed | Real test-count reduction; CP3 reviewer to decide. |
 
 ## Follow-up batches
 
