@@ -12,11 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP10 review phase (`ORCHESTRATION.md` §4) — both CP10 tasks
-  are terminal (`pending_review`). Set CP10 `in_progress` and spawn one
-  review-and-fix session with the two commit ranges.
-* Active phase: review. All CP10 tasks are `pending_review`; CP10 is ready for review.
-* Active checkpoint: none yet (CP10 `open`). Active batch: none.
+* Next action: wait for the CP10 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP10 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP10 `in_progress`; both CP10 tasks are `pending_review`.
+* Active checkpoint: CP10 (in review). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
   any follow-up batching/implementation — is a user-directed flaky-test
@@ -75,7 +74,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP7 | T16 | done | sync record sink + `run_captured` (largest single change) — completed, no fixes/reverts |
 | CP8 | T17–T18 | done | sync logging + `TestHooks` seams — both completed, no fixes/reverts |
 | CP9 | T19 | done | sync `CompareOutcome` pipeline dedup — completed, no fixes/reverts |
-| CP10 | T20–T21 | open | `repair_scan` downshift + `peak_heap` invariant |
+| CP10 | T20–T21 | in_progress | `repair_scan` downshift + `peak_heap` invariant |
 | CP11 | T22–T23 | open | sled2redb production seams |
 
 ## Commit ranges for review
