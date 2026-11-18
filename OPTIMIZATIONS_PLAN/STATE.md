@@ -12,10 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T09 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1, CP2 `done`; T05–T08 `completed`, T09–T10 are
-  the next tasks (CP3).
+* Next action: wait for the T09 implementing session to finish, then apply its
+  result (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1, CP2 `done`; T09 `in_progress`, T10 `todo` (CP3).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -43,7 +42,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T06 | Capture: device-name flag refusal → config unit test | B2 | completed | P0 | CP2 | CP2 review: completed. |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | completed | P0 | CP2 | CP2 review: completed. |
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
-| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | todo | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
+| T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | in_progress | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | todo | P1 | CP4 | Preserve symlink/dir → `temp` semantics; do not change `resolve_mode` itself. |
