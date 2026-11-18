@@ -1257,7 +1257,7 @@ async fn a_file_that_grows_writes_only_the_growth() {
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
     let run = rig
-        .run(&["--max-write-bytes", "1048576", "--repair-mode", "inplace"])
+        .run_lib(&["--max-write-bytes", "1048576", "--repair-mode", "inplace"])
         .await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
@@ -1301,7 +1301,7 @@ async fn the_three_modes_produce_the_same_bytes() {
     for mode in ["inplace", "temp", "discard"] {
         let rig = Rig::start(&spec).await;
         rig.at_local_version();
-        let run = rig.run(&["--repair-mode", mode]).await;
+        let run = rig.run_lib(&["--repair-mode", mode]).await;
         assert_eq!(run.code, 0, "{mode}: {}\n{}", run.stdout, run.stderr);
         assert_eq!(
             rig.read("game/mode.dat"),
@@ -1325,7 +1325,7 @@ async fn no_mode_leaves_a_temp_file_behind() {
     for mode in ["inplace", "temp", "discard"] {
         let rig = Rig::start(&spec).await;
         rig.at_local_version();
-        let run = rig.run(&["--repair-mode", mode]).await;
+        let run = rig.run_lib(&["--repair-mode", mode]).await;
         assert_eq!(run.code, 0, "{mode}: {}\n{}", run.stdout, run.stderr);
         let leftovers: Vec<String> = std::fs::read_dir(rig.game().join("game"))
             .expect("game/")
@@ -1366,7 +1366,7 @@ async fn the_in_place_path_re_verifies_and_continues() {
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
     let first = rig
-        .run(&[
+        .run_lib(&[
             "--scan",
             "--max-write-bytes",
             "1048576",
@@ -1383,7 +1383,7 @@ async fn the_in_place_path_re_verifies_and_continues() {
     rig.write("game/resume.dat", &damaged);
 
     let second = rig
-        .run(&[
+        .run_lib(&[
             "--scan",
             "--max-write-bytes",
             "1048576",
@@ -1460,7 +1460,7 @@ async fn a_chunk_that_is_not_a_zstd_frame_fails_the_file() {
     });
     let rig = Rig::start(&spec).await;
 
-    let run = rig.run(&["--fail-fast"]).await;
+    let run = rig.run_lib(&["--fail-fast"]).await;
     assert_eq!(run.code, 3, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "failed"), 1);
     assert_eq!(run.num("summary", "repaired"), 0);
@@ -1482,7 +1482,7 @@ async fn a_chunk_whose_declared_digest_no_payload_can_match_is_refused() {
     });
     let rig = Rig::start(&spec).await;
 
-    let run = rig.run(&["--fail-fast"]).await;
+    let run = rig.run_lib(&["--fail-fast"]).await;
     assert_eq!(run.code, 3, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "failed"), 1);
 }
@@ -1499,7 +1499,7 @@ async fn a_manifest_that_lies_about_the_size_is_still_repaired() {
     });
     let rig = Rig::start(&spec).await;
 
-    let run = rig.run(&["--max-download-bytes", "1048576"]).await;
+    let run = rig.run_lib(&["--max-download-bytes", "1048576"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "repaired"), 1);
     assert_eq!(
