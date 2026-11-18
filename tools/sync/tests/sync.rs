@@ -116,41 +116,6 @@ fn run_binary_raw_with_hooks(src: &Path, dst: &Path, extra: &[&str], hooks: Test
     }
 }
 
-/// Spawn the real binary with per-run environment hooks. Only the case that
-/// asserts on a written log file still needs a real child; every failure-path
-/// case now injects a [`TestHooks`] in-process instead (finding E5 / task T18).
-fn run_binary_process(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
-    let out = run_binary_raw_process(src, dst, extra, envs);
-    assert!(
-        out.status.success(),
-        "sync failed: {}\n{}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
-    );
-    parse_ndjson(&out.stdout)
-}
-
-fn run_binary_raw_process(
-    src: &Path,
-    dst: &Path,
-    extra: &[&str],
-    envs: &[(&str, &str)],
-) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(src)
-        .arg("--dst")
-        .arg(dst)
-        .arg("--output")
-        .arg("json")
-        .args(extra)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .envs(envs.iter().copied())
-        .output()
-        .expect("spawn girsync")
-}
-
 /// The process-free stand-in for the parts of `std::process::Output` these
 /// cases read: exit status, captured stdout records and the `fatal` error string
 /// `main` would have logged to stderr. Keeping the shape lets the call sites read
@@ -1437,6 +1402,146 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
     }
 }
 
+// --- F24: in-process capture of the copy-phase commit ordering ----------------
+//
+// A scoped subscriber (`common::run_args_logged`) cannot capture these trace
+// events reliably under plain, threaded `cargo test`: tracing caches callsite
+// interest process-globally and ANDs it across every live `Dispatch`, so sibling
+// tests leave the commit/copy-done callsites at `never()`. The F23 narrow fix
+// (pre-register + rebuild) is stable in the quiet `stat_trust` binary but was
+// verified to flake here. Instead one process-global subscriber is installed for
+// this binary; it captures every event's message and a couple of distinguishing
+// fields while a global buffer is armed. Rows are filtered by an op threshold
+// injected as a `TestHooks` value unique to this test, so concurrent tests cannot
+// pollute the capture.
+
+#[derive(Default, Clone, Debug)]
+struct F24Event {
+    message: String,
+    ops: Option<u64>,
+    total: Option<u64>,
+}
+
+static F24_CAPTURE: std::sync::Mutex<Option<Vec<F24Event>>> = std::sync::Mutex::new(None);
+
+#[derive(Clone)]
+struct F24CaptureLayer;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for F24CaptureLayer {
+    fn register_callsite(
+        &self,
+        _meta: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::sometimes()
+    }
+
+    fn enabled(
+        &self,
+        _meta: &tracing::Metadata<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        F24_CAPTURE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        #[derive(Default)]
+        struct Visit(F24Event);
+        impl tracing::field::Visit for Visit {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.0.message = value.to_owned();
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0.message = format!("{value:?}");
+                }
+            }
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                self.record_num(field, value);
+            }
+            fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+                self.record_num(field, value as u64);
+            }
+        }
+        impl Visit {
+            fn record_num(&mut self, field: &tracing::field::Field, value: u64) {
+                match field.name() {
+                    "ops" => self.0.ops = Some(value),
+                    "total" => self.0.total = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        let mut v = Visit::default();
+        event.record(&mut v);
+        if !v.0.message.is_empty()
+            && let Some(buf) = &mut *F24_CAPTURE.lock().unwrap_or_else(|e| e.into_inner())
+        {
+            buf.push(v.0);
+        }
+    }
+}
+
+static F24_SUBSCRIBER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+fn install_f24_subscriber() {
+    use tracing_subscriber::prelude::*;
+    F24_SUBSCRIBER.get_or_init(|| {
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(F24CaptureLayer),
+        )
+        .expect("install the F24 capture subscriber");
+    });
+}
+
+/// Run `girsync sync` in-process with an injected commit policy, capturing the
+/// tracing events its phases emit via the global F24 layer.
+#[allow(unsafe_code)] // `set_var` is unsafe in edition 2024; nextest isolates each test process
+fn run_copy_commit_captured(
+    src: &Path,
+    dst: &Path,
+    limits: CommitLimits,
+) -> (girsync::RunOutcome, Vec<F24Event>) {
+    use clap::Parser;
+    use girsync::cli::Cli;
+
+    let argv = [
+        std::ffi::OsString::from("girsync"),
+        "sync".into(),
+        "--src".into(),
+        src.as_os_str().to_owned(),
+        "--dst".into(),
+        dst.as_os_str().to_owned(),
+        "--output".into(),
+        "json".into(),
+        "--rw-threads".into(),
+        "8".into(),
+        "--hash-all-of".into(),
+        "none".into(),
+    ];
+    let cli = Cli::try_parse_from(argv).expect("valid CLI args");
+    let plan = girsync::plan(girsync::logging::Level::Error, None, None, true);
+    let hooks = TestHooks::default().with_commit(limits);
+
+    unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "file") };
+    *F24_CAPTURE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
+    let out = girsync::run_captured_with_hooks(cli, &plan, hooks).expect("run_captured");
+    let events = F24_CAPTURE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or_default();
+    (out, events)
+}
+
 /// **The copy phase commits its cache rows while it is still copying.**
 ///
 /// `CacheWrite`'s `CommitLimits` are only a bound on the work an interrupted run
@@ -1445,21 +1550,33 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
 /// the phase itself no threshold could fire: a run that died mid-copy lost every
 /// row, however many files had already landed on disk.
 ///
-/// The log file is the observable. A threshold tripping is logged as
+/// The trace log is the observable. A threshold tripping is logged as
 /// `cache batch committed` (trace), and the phase logs `copy done` after the pool
 /// joins, so the last batch commit must come *before* that line. Under the old
 /// layout the only batch commit of the phase came after it, with every file
 /// already durable.
 ///
-/// The fixture is one-sided and small: `GIRSYNC_TEST_COMMIT_OPS` lowers the
-/// op-count trigger, so `copy_files` crosses it in ten copies rather than in
-/// `COMMIT_BATCH`. One-sided on purpose: with nothing to hash, the scan and the
-/// pre-drop each auto-commit before the copy phase starts, and nothing after it
-/// does — so the *last* commit in the log is the copy phase's.
+/// The run is in-process (no child spawn). A process-global capture subscriber
+/// collects the run's events; the commit policy is injected as a `TestHooks`
+/// value with an op limit unique to this test, so its `cache batch committed`
+/// events and the `copy done` event with this fixture's file total can be picked
+/// out of the shared capture. The fixture is one-sided on purpose: with nothing
+/// to hash, the scan and the pre-drop each auto-commit before the copy phase, and
+/// nothing after it does — so the last matching commit is the copy phase's.
 #[test]
 fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
-    let ops = 10;
-    let files = 2 * ops;
+    // An op threshold of 7 and 23 copies: both the scan and the copy phase cross
+    // it several times. 7 and 23 are unique to this test (no other case uses them),
+    // so the captured `ops=7` commits and `total=23` copy-done are this run's.
+    let ops = 7u64;
+    let files = 23usize;
+    let limits = CommitLimits {
+        max_ops: ops as usize,
+        max_bytes: u64::MAX,
+        // Keep the time trigger out of it: the op count is the only commit this
+        // fixture may observe during the copy phase.
+        max_interval: std::time::Duration::from_secs(60),
+    };
     let t = temp_root("copy_commit");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
@@ -1469,55 +1586,36 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
         wfile(&src, &format!("f{i:04}.bin"), b"");
     }
 
-    let logfile = t.subdir("logs").join("run.json");
-    let recs = run_binary_process(
-        &src,
-        &dst,
-        &[
-            "--log-file",
-            logfile.to_str().expect("the temp path is utf-8"),
-            // The file layer defaults to debug, and the commit event is trace.
-            "--log-file-level",
-            "trace",
-            // Eight workers, so the fixture is not a queue of fsyncs.
-            "--rw-threads",
-            "8",
-            // No digest to compute: this test is about when the row is written,
-            // not about what it holds, and hashing would only add time.
-            "--hash-all-of",
-            "none",
-        ],
-        &[
-            // A threshold this fixture crosses mid-copy.
-            ("GIRSYNC_TEST_COMMIT_OPS", "10"),
-            // Keep the interval trigger out of it, so the commit seen during
-            // the copies can only be the op-count one.
-            ("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000"),
-        ],
-    );
+    install_f24_subscriber();
+    let (out, events) = run_copy_commit_captured(&src, &dst, limits);
+    assert_eq!(out.code, 0, "sync failed: {:?}", out.error);
+    let recs = common::values(&out);
     assert_eq!(
         paths(&recs, "copy").len(),
         files,
         "the fixture must make the copy phase cross the op-count threshold"
     );
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    fn message(e: &Value) -> &str {
-        e["fields"]["message"].as_str().unwrap_or("")
-    }
-    let commits: Vec<usize> = logged
+    // Filter the global capture to this run: commits that tripped our op limit,
+    // and this run's copy-phase end. Concurrent tests use other thresholds/totals.
+    let commits: Vec<usize> = events
         .iter()
         .enumerate()
-        .filter(|(_, e)| message(e) == "cache batch committed")
+        .filter(|(_, e)| e.message == "cache batch committed" && e.ops == Some(ops))
         .map(|(i, _)| i)
         .collect();
-    let done = logged
+    assert!(
+        !commits.is_empty(),
+        "the fixture crossed the op limit, so at least one batch commit must be in the log; \
+         an empty list would make the ordering assertion below vacuous: {events:?}"
+    );
+    let done = events
         .iter()
-        .position(|e| message(e) == "copy done")
+        .position(|e| e.message == "copy done" && e.total == Some(files as u64))
         .expect("the copy phase logs its end");
     assert!(
         commits.last().is_some_and(|&i| i < done),
-        "no batch commit before `copy done` (index {done}): commits were at {commits:?}, \
+        "no batch commit before `copy done` (event {done}): commits were at {commits:?}, \
          so the copy phase still hoards its rows until every file is on disk"
     );
 }
