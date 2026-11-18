@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T11 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP3 `done`; T11 `in_progress`, T12 `todo` (CP4).
+* Next action: pick the next `todo` task in seeded order — T12 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP3 `done`; T11 `pending_review`, T12 `todo` (CP4).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -44,7 +44,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | completed | P1 | CP3 | CP3 review: completed. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | completed | P1 | CP3 | CP3 review: completed (mock-server estimate note confirmed). |
-| T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | in_progress | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
+| T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | pending_review | P1 | CP4 | Implemented in 787c35f0; private seam, behavior unchanged. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | todo | P1 | CP4 | Preserve symlink/dir → `temp` semantics; do not change `resolve_mode` itself. |
 | T13 | Capture: merge mock / no-network full captures | B4 | todo | P1 | CP5 | 4 tests → 2; verify exact row/byte pins hold on shared capture. |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | todo | P1 | CP5 | Two tables over the named case sets. |
@@ -91,7 +91,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T08 | `8160cef5..c8ed2fef` | completed |
 | T09 | `4c74ef45..0e4bf161` | completed |
 | T10 | `78746658..7da360d3` | completed |
-| T11–T23 | — (not started) | — |
+| T11 | `6117c5ff..787c35f0` | — (pending CP4 review) |
+| T12–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -114,6 +115,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F11 | Downshift the staged and by-mode sub-runs in `the_three_tiers_produce_the_same_file` (pure `ram_bytes` counters; only the shortage sub-run needs the log) — ~2 more spawns. | T09 implementer | proposed | Real spawn reduction; CP3 reviewer to decide. |
 | F12 | Merge the two `--fail-fast` malformed-manifest cases into a `Lies` table, and merge `the_three_modes_produce_the_same_bytes` with `no_mode_leaves_a_temp_file_behind` into a three-mode loop asserting bytes + leftovers. | T09 implementer | proposed | Real test-count reduction; CP3 reviewer to decide. |
 | F13 | Share one `MockServer` across all three cases of T10's audio-plan test (start before the loop, stop after) to cut 2 listener/task starts. | T10 implementer | proposed | Real but small scale reduction, low risk; outside T10's stated steps. |
+| F15 | Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer. | T11 implementer | proposed | Production perf change, beyond test-scale scope; CP4 reviewer likely to prune. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
 
 ## Follow-up batches
@@ -172,3 +174,4 @@ change log.
 * T08 (E6) bullet 2 (`src/scan.rs:240–248` harness pin) was deliberately skipped: dropping `heartbeat_entries()` removes zero tests/fixtures/spawns (report calls it "marginal; skip if unclear") and the pure helper already covers unset→2000. Constant pin `HEARTBEAT_ENTRIES == 2000` untouched. CP2 reviewer should confirm this skip.
 * T08 deviation: `fixtures_classify_as_folders` was folded into the relying test `the_wider_handle_window_still_refuses_a_self_collision` as `debug_assert`s, not literally into `pair()`/`fixture()` — no local `fixture()` exists and `pair()` lives in `girpr-tempdir` (cannot depend on girsync's `classify`). The same three assertions are preserved.
 * T10 (A3): report predicted "−2 spawns and mock servers", but only −2 binary spawns are realizable test-only — the downshifted cases still issue HTTP via `hyp_base_override`/`sophon_base_override`, so each keeps its `MockServer`; removing them needs a production data-injection seam the task does not call for. Not a missed optimization; CP3 reviewer should not flag it.
+* T11 implementer reported clippy diagnostics in `repair/phases/plan.rs:573` and `tests/repair_machinery.rs:119` described as pre-existing (files touched by T02/T09). CP4 reviewer should confirm they are not regressions from those tasks.
