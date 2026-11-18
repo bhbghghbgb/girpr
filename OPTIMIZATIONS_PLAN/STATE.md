@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: spawn the follow-up **batching review** session first (`ORCHESTRATION.md` §5) to decide batches for the surviving follow-ups (F01, F03, F05, F11, F12, F13, F18, F24). Record its batches in the Follow-up batches table. F30 stays `scheduled` for the orchestrator's final cleanup commit.
-* Active phase: follow-up batching. All 23 tasks terminal; all 11 checkpoints `done`; the post-task flaky-test investigation (investigate → fix → review) is `done`.
-* Active checkpoint: none (all `done`). Active batch: none (batching review not started).
+* Next action: spawn the FB1 implementing session (F11, F12, F13) — see the batch details. Set FB1 `in_progress` first (`ORCHESTRATION.md` §5).
+* Active phase: follow-up implementation. Batching review done: FB1–FB4 recorded; all 23 tasks and 11 checkpoints done; investigation done.
+* Active checkpoint: none (all `done`). Active batch: FB1 (about to start).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -203,7 +203,19 @@ session, using the same separate state commits. Statuses: `open` → `in_progres
 
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
-| — | none yet | — | — | — | — | Batching review decides after tasks complete. |
+| FB1 | F11, F12, F13 | open | — | — | root `tests/` downshifts & merges (T09/T10) | low risk, first |
+| FB2 | F18, F05 | open | — | — | root verify-before-removing (process test + plan fold) | F18 must be reduced to a smoke, not deleted |
+| FB3 | F03, F24 | open | — | — | `tools/sync` remaining (table-ize + spawn downshift) | F24 needs the F23 interest-cache fix |
+| FB4 | F01 (spawn-removal half only) | open | — | — | gircap spawn removal (B6 part a) | widest/riskiest, last; `skipped` is a valid result |
+
+### Follow-up batch details (from the batching review)
+
+All prerequisites are on `main` (T09/T10/T17/T19/T23 and F23's `046a4628`); batches are ordered by risk, not dependency. No adds/removals were made.
+
+* **FB1 — root integration downshifts (F11, F12, F13).** F11: in `tests/repair_machinery.rs::the_three_tiers_produce_the_same_file` (~:932) downshift the *staged* and *by-mode* sub-runs `.run()` → `.run_lib()` (they assert only `ram_bytes` 64 vs 0 and file bytes); keep the *shortage* sub-run on the binary for the log substring "the moving bytes do not fit the RAM budget" → −2 spawns. F12a (~:1452, :1474): merge the two `--fail-fast` cases (`a_chunk_that_is_not_a_zstd_frame_fails_the_file` + `a_chunk_whose_declared_digest_no_payload_can_match_is_refused`) into a `Lies` table, preserving the `repaired == 0` assertion unique to the not-zstd case. F12b (~:1286, :1317): merge `the_three_modes_produce_the_same_bytes` + `no_mode_leaves_a_temp_file_behind` into one three-mode loop asserting bytes and leftover `_tmp` files → −2 tests total. F13: in `tests/repair_plan.rs::print_plan_with_audio_writes_no_scan_file_and_names_the_language` (~:118–241) hoist `MockServer::start` above the 3-case loop and `stop` below it → −2 listener/task starts; keep `no_scope`'s binary stdout pins. Pointers: T09 `4c74ef45..0e4bf161`, T10 `78746658..7da360d3`, ORCHESTRATION §0. Review focus: every distinct assertion survives each merge; no process-only stdout fact lost.
+* **FB2 — verify-before-removing (F18, F05).** F18: `tests/process.rs::a_scoped_cleanup_of_a_removed_path_works_through_the_binary` (:281–330) — the "exit 1 / process-only" comment is false (asserts `code == 0`), BUT the test uniquely pins the real binary rendering `SUMMARY … total=0` to stdout, so **reduce to a one-line smoke, do not delete** → −1 test/spawn/mock. Pointers: `tests/repair_purge.rs:256–307`, `src/report/emit.rs:185–200`, `src/report/tests.rs:156–170`, `tests/cli_contract.rs` (~:646, :756, :764, :1317, :1328), report §A6 L172–L183. F05: fold `src/repair/phases/plan.rs:696` (`a_file_with_no_chunks_and_no_size_is_tiled`) into T02's merged layout table's `"empty file"` row (:610), a strict superset → −1 test; skip cleanly if that stops holding. Review focus (§0): confirm the process-only `main`-emits-`summary_record` fact is still pinned and `cli_contract.rs` still pins the flags; for F05 confirm the row asserts everything the standalone test did.
+* **FB3 — tools/sync remaining (F03, F24).** F03: table-ize the 15 `#[test]` fns in `tools/sync/tests/lazy/compare.rs` (lines 14, 36, 68, 103, 127, 156, 181, 193, 227, 247, 285, 311, 346, 380, 414) on T19's `CompareOutcome`/`run_pair` seam; each row keeps `records()` verdict assertions, `hashed`/`src_hashed`/`dst_hashed` read counts and exit code → ~14 tests removed. F24: in `tools/sync/tests/sync.rs::the_copy_phase_commits_its_cache_rows_while_it_copies` (~:1459, range 1440–1523) replace `run_binary_process` with an in-process run using T17's scoped-subscriber helper + `--log-level trace` + injectable `GIRSYNC_TEST_COMMIT_OPS`/`INTERVAL_MS`; assert `cache batch committed` (trace) precedes `copy done`; if the trace callsite fails to register, apply F23's narrow fix (`046a4628`) scoped to this test only → −1 spawn. Pointers: T19 `416b480b..416aeda3`, T18 `4c7625a6..f1800244`, F23 fix `046a4628`, report §E3 L717–719. Review focus: merge harness/table, not distinct mechanisms; prove the log-ordering assertion is non-vacuous and validate under repeated plain `cargo test`, not just nextest.
+* **FB4 — gircap spawn removal, scoped (F01 part a).** Across `tools/capture/tests/*.rs` replace `bin()`/`Command::new` gircap spawns with direct calls to public `run::capture`/`verify`/`materialize`/`list`, asserting on `Outcome.0` records. **Keep the TCP `MockServer`s** so byte-exact body/request-log pins survive. **Out of scope:** the injected HTTP-transport trait for `Fetcher` (B6 part b) — a risky production change; if wanted later, open a new follow-up. If a case's pin cannot be preserved by `Outcome` assertions, keep that case's spawn. Pointers: report §B6 L318–L330; `src/http/fetcher.rs` (context only), `src/http/transport.rs:72–135` (injection pattern, context only); T05/T06/T07/T13 ranges. Review focus: `Outcome` assertions strictly at least as strong as parsed stdout; all byte-exact pins survive; any skip is for coverage, not convenience.
 
 ## Known constraints from the report (persistent)
 
