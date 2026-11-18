@@ -18,6 +18,9 @@ implementers always validate against current code before editing.
 * Active phase: implementation. CP1–CP7 `done`; T17 `pending_review`, T18 `in_progress` (last CP8 task).
 * Active checkpoint: none yet (CP8 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
+* Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
+  any follow-up batching/implementation — is a user-directed flaky-test
+  investigation (investigate → fix → review sessions). See its section below.
 
 ## Status vocabulary
 
@@ -132,6 +135,27 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
+
+## Post-task flaky-test investigation (user-directed)
+
+Scheduled by the user after T17 reported flaky tests under plain `cargo test`
+(stable under `cargo nextest`) that were already present in its given baseline;
+whether this was introduced during this orchestration session or predates it is
+unknown. This investigation MUST run after all tasks are terminal and all
+checkpoints are `done`, but BEFORE any follow-up batching or implementation —
+an explicit override of the default §5 completion order.
+
+* Status: scheduled (not started).
+* Scope: determine whether the flakiness originated during this orchestration
+  session or before it, and determine whether and how it can be fixed.
+* Sessions (one at a time, in this order): (1) **investigate** — establish origin
+  and root cause, report findings only, no fix; (2) **fix** — implement a fix if
+  the investigation warrants one; (3) **review** — review the fix. Give each
+  session pointers and use separate `STATE.md` commits for status changes, as
+  with the task loop.
+* Evidence seed: T17's `6f488b0b` scoped-subscriber work; the scoped WARN
+  assertion was intermittently flaky under threaded `cargo test` but stable
+  under `cargo nextest`, so the stat_trust fold was reverted (see context).
 
 ## Follow-up batches
 
