@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T07 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1 `done`; T05, T06 `pending_review`, T07 `in_progress`, T08 `todo` (CP2).
+* Next action: pick the next `todo` task in seeded order — T08 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1 `done`; T05, T06, T07 `pending_review`, T08 `todo` (CP2).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -40,7 +40,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | completed | P0 | CP1 | CP1 review: completed. Protected tests intact. |
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | pending_review | P0 | CP2 | Implemented in 4a097a31; no smoke fallback needed (unit tests reach prod path). |
 | T06 | Capture: device-name flag refusal → config unit test | B2 | pending_review | P0 | CP2 | Implemented in 6b7dfdde; guardrail confirmed (refusal before HTTP). |
-| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | in_progress | P0 | CP2 | Verify rewrites equal old literals at measured sizes. |
+| T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | pending_review | P0 | CP2 | Implemented in e6aefb87; one measured-length pin test retained. |
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | todo | P0 | CP2 | `benches/tree_shapes.rs` is SKIP (timing, not a gate). |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | todo | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
@@ -87,7 +87,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T04 | `0ea6802e..ccbef0ad` | completed |
 | T05 | `e5cf89dc..4a097a31` | — (pending CP2 review) |
 | T06 | `ab96ebab..6b7dfdde` | — (pending CP2 review) |
-| T07–T23 | — (not started) | — |
+| T07 | `c9dc8307..e6aefb87` | — (pending CP2 review) |
+| T08–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -104,6 +105,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
 | F06 | ~~Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines).~~ | T04 implementer | removed | CP1 reviewer removed it: no test-count effect and riskier than the fold; avoid a future implement+review cycle for zero scale benefit. |
 | F07 | Simplify away the now-near-trivial `BundleVariant` enum and its `key()`/`extra()` methods (only `Default` remains after T05) — e.g. an argument-less `shared_bundle()`. | T05 implementer | proposed | Low value / mostly hygiene, no test-count effect; CP2 reviewer may prune like F06. |
+| F08 | Metadata-only assertion path for T07's retained measured test: compute totals from declared chunk sizes via a pure seam instead of materializing ~4.7 MB of bodies. | T07 implementer | proposed | Production change, out of scope and riskier; CP2 reviewer may prune. |
+| F09 | Share the chunk-length constants between `m7_assembly` and `m6_chunk_store` (different fixture structure, carries md5 strings). | T07 implementer | proposed | Low value, no test-count effect; CP2 reviewer may prune. |
 
 ## Follow-up batches
 
