@@ -561,56 +561,69 @@ mod tests {
     // the chunk layout
     // -----------------------------------------------------------------------
 
+    /// The full layout verdict for a range of chunk shapes — `tiled`, `gaps`
+    /// and `overlaps` — plus the agreement between `is_tiled()` and
+    /// `layout().tiled`. `is_tiled()` is the allocation-free half of `layout()`,
+    /// used to gate it in `build_plan`: on the sorted chunk list `build_plan`
+    /// produces, the two must always agree, including the gap, overlap and
+    /// tail cases.
     #[test]
-    fn a_layout_that_covers_the_file_exactly_is_tiled() {
-        let f = file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]);
-        let layout = f.layout();
-        assert!(layout.tiled);
-        assert!(layout.gaps.is_empty());
-        assert!(layout.overlaps.is_empty());
-    }
+    fn layout_verdicts_and_the_cheap_tiling_check() {
+        // (name, file, tiled, gaps, overlaps)
+        let cases: [(&str, PlannedFile, bool, Vec<(u64, u64)>, Vec<(u64, u64)>); 6] = [
+            (
+                "exact cover",
+                file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
+                true,
+                vec![],
+                vec![],
+            ),
+            (
+                // A 64-byte hole between the two chunks.
+                "hole",
+                file_with(192, vec![chunk("a", 0, 64), chunk("b", 128, 64)]),
+                false,
+                vec![(64, 64)],
+                vec![],
+            ),
+            (
+                "overlap",
+                file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]),
+                false,
+                vec![],
+                vec![(0, 32)],
+            ),
+            (
+                "tail",
+                file_with(200, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
+                false,
+                vec![(128, 72)],
+                vec![],
+            ),
+            (
+                "past size",
+                file_with(64, vec![chunk("a", 0, 128)]),
+                false,
+                vec![],
+                vec![],
+            ),
+            ("empty file", file_with(0, vec![]), true, vec![], vec![]),
+        ];
+        for (name, f, tiled, gaps, overlaps) in &cases {
+            let layout = f.layout();
+            assert_eq!(layout.tiled, *tiled, "{name}: tiled");
+            assert_eq!(layout.gaps, *gaps, "{name}: gaps");
+            assert_eq!(layout.overlaps, *overlaps, "{name}: overlaps");
+            assert_eq!(f.is_tiled(), layout.tiled, "{name}: is_tiled agrees");
+        }
 
-    #[test]
-    fn a_hole_in_the_coverage_is_reported() {
-        // 64 bytes of hole between the two chunks.
-        let f = file_with(192, vec![chunk("a", 0, 64), chunk("b", 128, 64)]);
-        let layout = f.layout();
-        assert!(!layout.tiled);
-        assert_eq!(layout.gaps, vec![(64, 64)]);
-        assert!(layout.overlaps.is_empty());
-    }
-
-    #[test]
-    fn a_tail_no_chunk_covers_is_a_hole_too() {
-        let f = file_with(200, vec![chunk("a", 0, 64), chunk("b", 64, 64)]);
-        let layout = f.layout();
-        assert!(!layout.tiled);
-        assert_eq!(layout.gaps, vec![(128, 72)]);
-    }
-
-    #[test]
-    fn an_overlapping_pair_is_reported() {
-        let f = file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]);
-        let layout = f.layout();
-        assert!(!layout.tiled);
-        assert_eq!(layout.overlaps, vec![(0, 32)]);
-    }
-
-    #[test]
-    fn chunks_that_claim_more_than_the_file_has_is_not_tiled() {
-        let f = file_with(64, vec![chunk("a", 0, 128)]);
-        let layout = f.layout();
-        assert!(!layout.tiled);
-        assert!(layout.gaps.is_empty());
-    }
-
-    #[test]
-    fn the_layout_answer_does_not_depend_on_the_order_of_the_chunks() {
+        // The verdict does not depend on the order the chunks are given in.
         let a = chunk("a", 0, 64);
         let b = chunk("b", 64, 64);
-        let forward = file_with(128, vec![a.clone(), b.clone()]).layout();
-        let backward = file_with(128, vec![b, a]).layout();
-        assert_eq!(forward, backward);
+        assert_eq!(
+            file_with(128, vec![a.clone(), b.clone()]).layout(),
+            file_with(128, vec![b, a]).layout(),
+        );
     }
 
     /// [`Layout::overlaps`] names **both** sides of every overlap: the offsets
@@ -683,39 +696,6 @@ mod tests {
     fn a_file_with_no_chunks_and_no_size_is_tiled() {
         let f = file_with(0, vec![]);
         assert!(f.layout().tiled);
-    }
-
-    /// `is_tiled()` is the allocation-free half of `layout()`, used to gate it
-    /// in `build_plan`: on the sorted chunk list the plan guarantees, the two
-    /// must always agree — including the gap, overlap and tail cases.
-    #[test]
-    fn the_cheap_tiling_check_agrees_with_the_layout() {
-        let cases = [
-            (
-                "tiled",
-                file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
-            ),
-            (
-                "hole",
-                file_with(192, vec![chunk("a", 0, 64), chunk("b", 128, 64)]),
-            ),
-            (
-                "overlap",
-                file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]),
-            ),
-            (
-                "tail",
-                file_with(200, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
-            ),
-            ("past size", file_with(64, vec![chunk("a", 0, 128)])),
-            ("empty file", file_with(0, vec![])),
-        ];
-        for (name, f) in &cases {
-            assert_eq!(f.is_tiled(), f.layout().tiled, "{name}");
-        }
-        assert!(cases[0].1.is_tiled(), "the chunks cover the file exactly");
-        assert!(!cases[1].1.is_tiled(), "a hole is not tiled");
-        assert!(!cases[2].1.is_tiled(), "an overlap is not tiled");
     }
 
     // -----------------------------------------------------------------------
