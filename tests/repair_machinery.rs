@@ -7,15 +7,17 @@
 //! own business**, and it is tested here, where the inputs are kilobytes and
 //! the assertions are exact.
 //!
-//! # Why the real binary
+//! # Where the assertions come from
 //!
-//! The decisions are made by the tool the user runs, and several of them are
-//! only visible on the **data plane**: the live and the settled byte figures,
-//! `local_manifest`, the write accounting. Those are the binary's `--output
-//! json` records, so these cases run the binary rather than the library —
-//! which also means the flags under test (`--repair-mode`, `--max-ram-bytes`,
-//! `--scan`, `--max-write-bytes`, `--include`) are exercised as the user
-//! spells them.
+//! The decisions are made by the tool the user runs. Every figure asserted
+//! below — the live and the settled byte figures, `local_manifest`, the write
+//! accounting, the fetch set — is on the public `Summary` data plane, so the
+//! counter-only cases drive `girpr::run` in-process and read the very
+//! `summary_record` the binary renders. The cases that assert on the **trace
+//! log** (write order, trim timing, the download records) still run the real
+//! binary: a file log is a process-level artifact. One of those keeps the
+//! deprecated `--io-threads` alias alive in this suite; `--output json` and
+//! the flag wiring are pinned in `cli_contract.rs`.
 //!
 //! The server is the mock in `tests/common`: a local HoYoPlay + Sophon on
 //! `127.0.0.1`, no external network. The fixtures are described rather than
@@ -52,9 +54,11 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
-    md5hex, stamp_ago, stamp_ahead, temp_dir,
+    ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, ctx_for,
+    field, lay_out, md5hex, scope, stamp_ago, stamp_ahead, temp_dir,
 };
+use girpr::test_support::{RepairMode, summary_record};
+use girpr::{RunExit, Summary};
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -118,6 +122,51 @@ impl Run {
             .unwrap_or_else(|| panic!("{event}.{key} is not a string in {:?}", self.record(event)))
             .to_string()
     }
+}
+
+/// The data-plane result of a case that only reads counters.
+///
+/// This is the in-process counterpart of [`Run`]: it holds the one `SUMMARY`
+/// line the binary would have printed (rendered from the public [`Summary`] by
+/// [`summary_record`]) and the exit code. It deliberately has no `log()`: a
+/// case that asserts on the trace log must use [`Rig::run`] instead. The
+/// `event` argument on [`LibRun::num`]/[`LibRun::word`] is kept so converted
+/// cases can keep their assertions verbatim — there is only one record here,
+/// the terminal `SUMMARY`.
+struct LibRun {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl LibRun {
+    fn new(summary: &Summary, code: RunExit) -> Self {
+        Self {
+            code: code.code(),
+            stdout: summary_record(summary, code.code()).text(),
+            stderr: String::new(),
+        }
+    }
+
+    fn num(&self, _event: &str, key: &str) -> u64 {
+        field(&self.stdout, key)
+    }
+
+    fn word(&self, _event: &str, key: &str) -> String {
+        self.stdout
+            .split_whitespace()
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("no {key} in {}", self.stdout))
+            .to_string()
+    }
+}
+
+/// The value of a value-taking flag in a [`Rig::run_lib`] argument list.
+fn flag_value<'a>(flags: &[&'a str], at: usize) -> &'a str {
+    flags
+        .get(at + 1)
+        .copied()
+        .unwrap_or_else(|| panic!("flag {} needs a value", flags[at]))
 }
 
 /// A scratch install and the mock that serves it.
@@ -241,6 +290,59 @@ impl Rig {
             log_path: log,
             log_cache: OnceLock::new(),
         }
+    }
+
+    /// Drive `girpr::run` in-process and return the `SUMMARY` a binary run
+    /// would have printed, for cases that only read counters.
+    ///
+    /// The install, biz, endpoint overrides and single job mirror what
+    /// [`Rig::run_at_level`] spells on the command line; only the flags the
+    /// converted cases use are mapped onto the public fields of a `RunCtx`.
+    /// No process is spawned and no log file is written, so this is not a
+    /// substitute for the log-asserting cases.
+    async fn run_lib(&self, flags: &[&str]) -> LibRun {
+        let mut ctx = ctx_for(self.game(), &self.mock, 1);
+        let mut i = 0;
+        while i < flags.len() {
+            let flag = flags[i];
+            match flag {
+                "--scan" => ctx.scan = true,
+                "--fail-fast" => ctx.fail_fast = true,
+                "--repair-mode" => {
+                    ctx.repair_mode = match flag_value(flags, i) {
+                        "auto" => RepairMode::Auto,
+                        "inplace" => RepairMode::Inplace,
+                        "temp" => RepairMode::Temp,
+                        "discard" => RepairMode::Discard,
+                        other => panic!("unknown repair mode {other}"),
+                    };
+                    ctx.repair_mode_explicit = true;
+                    i += 1;
+                }
+                "--max-ram-bytes" => {
+                    ctx.limits.ram_bytes = Some(flag_value(flags, i).parse().expect("RAM bytes"));
+                    i += 1;
+                }
+                "--max-write-bytes" => {
+                    ctx.limits.write_bytes =
+                        Some(flag_value(flags, i).parse().expect("write bytes"));
+                    i += 1;
+                }
+                "--max-download-bytes" => {
+                    ctx.limits.download_bytes =
+                        Some(flag_value(flags, i).parse().expect("download bytes"));
+                    i += 1;
+                }
+                "--include" => {
+                    ctx.path_scope = scope(&[flag_value(flags, i)], &[]);
+                    i += 1;
+                }
+                other => panic!("run_lib does not map flag {other}"),
+            }
+            i += 1;
+        }
+        let (summary, code) = common::run(ctx).await.expect("in-process run");
+        LibRun::new(&summary, code)
     }
 }
 
@@ -417,7 +519,7 @@ async fn an_intact_file_is_planned_skipped_and_never_touched() {
     let want = lay_out(&spec.new[0].chunks);
     rig.write("game/intact.dat", &want);
 
-    let run = rig.run(&["--scan"]).await;
+    let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "total"), 1, "it is planned");
     assert_eq!(run.num("summary", "skipped"), 1);
@@ -471,7 +573,7 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     // The disk holds the old file, with the kept chunk already in place.
     rig.write("game/three.dat", &lay_out(&old));
 
-    let run = rig.run(&["--scan", "--repair-mode", "inplace"]).await;
+    let run = rig.run_lib(&["--scan", "--repair-mode", "inplace"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "repaired"), 1);
     assert_eq!(
@@ -666,7 +768,7 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
         return;
     };
 
-    let run = rig.run(&["--scan"]).await;
+    let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
         run.num("summary", "repaired"),
@@ -737,7 +839,7 @@ async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_chang
     };
     set_mtime(&target, ahead);
 
-    let run = rig.run(&["--scan"]).await;
+    let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
         run.num("summary", "repaired"),
@@ -798,7 +900,7 @@ async fn without_a_local_manifest_every_chunk_is_fetched() {
     let rig = Rig::start(&spec).await;
     rig.write("game/three.dat", &[0u8; 192]);
 
-    let run = rig.run(&["--scan"]).await;
+    let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
         rig.mock.chunk_hits(),
@@ -1331,7 +1433,7 @@ async fn a_hole_in_the_coverage_is_zero_filled_and_the_file_verifies() {
     let rig = Rig::start(&spec).await;
     rig.write("game/hole.dat", &on_disk);
 
-    let run = rig.run(&["--scan"]).await;
+    let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "repaired"), 1);
     assert_eq!(
