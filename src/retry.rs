@@ -128,21 +128,29 @@ fn backoff(attempt: u32, salt: u64) -> Duration {
     Duration::from_secs(u64::from(attempt)) + jitter(attempt, salt)
 }
 
+/// The modulus of jitter's spread, in nanoseconds — just under 251 ms.
+/// `= 2^7 · 5^9`.
+const JITTER_RANGE: u64 = 250_000_000;
+
+/// The salt multiplier. Coprime with [`JITTER_RANGE`] (odd, not divisible by 5),
+/// so it is a permutation of the spread range over one full salt period.
+const JITTER_MULTIPLIER: u64 = 0x9E37_79B1;
+
+/// The per-attempt mixing constant (the golden-ratio increment).
+const JITTER_ATTEMPT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
+
 /// The spread added to an attempt's whole seconds.
 ///
 /// The range is just under 251 ms, and the multiplier shares no factor with it,
 /// so distinct loop salts land on distinct spreads until the residues repeat:
-/// the first repeat is a salt difference of `RANGE` (250,000,000). The
+/// the first repeat is a salt difference of [`JITTER_RANGE`] (250,000,000). The
 /// multiplier product also wraps the `u64` space near 6.9e9 salts, a looser
 /// second limit. Both are far beyond the loops a process can start.
 fn jitter(attempt: u32, salt: u64) -> Duration {
-    const RANGE: u64 = 250_000_000;
-    const MULTIPLIER: u64 = 0x9E37_79B1;
-
     let mixed = salt
-        .wrapping_mul(MULTIPLIER)
-        .wrapping_add(u64::from(attempt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    Duration::from_nanos(mixed % RANGE)
+        .wrapping_mul(JITTER_MULTIPLIER)
+        .wrapping_add(u64::from(attempt).wrapping_mul(JITTER_ATTEMPT_MIX));
+    Duration::from_nanos(mixed % JITTER_RANGE)
 }
 
 #[cfg(test)]
@@ -289,22 +297,57 @@ mod tests {
         }
     }
 
+    /// Integer greatest common divisor (Euclid; a handful of steps here).
+    fn gcd(mut a: u64, mut b: u64) -> u64 {
+        while b != 0 {
+            let r = a % b;
+            a = b;
+            b = r;
+        }
+        a
+    }
+
     /// The spread is injective over one attempt's caller range.
     ///
     /// [`next_salt`] hands each loop in the process a consecutive salt
     /// (`process id + instance`), so callers racing at the same attempt must
-    /// not share a spread. The range checked is far below the interval over
-    /// which the multiplier is a permutation of the spread range.
+    /// not share a spread. This used to sample 4096 salts per attempt — about
+    /// 0.0016% of the period — and merely hope no collision was missed. Instead
+    /// prove the property over the whole period: for a fixed attempt the spread
+    /// is `((salt·M + c) mod 2^64) mod RANGE`. Across one full salt period
+    /// `[0, RANGE)` the `u64` product never wraps (asserted below), so this is
+    /// the affine map `(salt·M + c) mod RANGE`, which is a bijection exactly
+    /// when `gcd(M, RANGE) == 1`. Caller salts are consecutive and a caller
+    /// range is far below `RANGE`, so two of them cannot land on the same
+    /// spread. A short empirical loop keeps a concrete example honest.
     #[test]
     fn jitter_is_injective_over_an_attempts_caller_range() {
-        const CALLERS: u64 = 4096;
-        let base = u64::from(std::process::id());
-        for attempt in 1..=5 {
+        // The arithmetic core: M is a permutation of the spread residues.
+        assert_eq!(
+            gcd(JITTER_MULTIPLIER, JITTER_RANGE),
+            1,
+            "jitter's multiplier and range must be coprime for injectivity"
+        );
+
+        // Soundness of reducing jitter to the affine map: for every salt in a
+        // full period and every attempt used here, `salt*M + c` stays within
+        // u64, so production's wrapping operations never change the residue.
+        let two_pow_64 = 1u128 << 64;
+        let max_addend = (1u128..=5)
+            .map(|a| (a * u128::from(JITTER_ATTEMPT_MIX)) % two_pow_64)
+            .max()
+            .expect("attempts 1..=5");
+        assert!(
+            u128::from(JITTER_RANGE - 1) * u128::from(JITTER_MULTIPLIER) + max_addend < two_pow_64,
+            "jitter's u64 product wraps within one salt period; the affine proof would not hold"
+        );
+
+        // Concrete sanity: consecutive salts for a few attempts stay distinct.
+        for attempt in 1..=5u32 {
             let mut seen = std::collections::HashSet::new();
-            for caller in 0..CALLERS {
-                let spread = jitter(attempt, base.wrapping_add(caller));
+            for caller in 0..16u64 {
                 assert!(
-                    seen.insert(spread),
+                    seen.insert(jitter(attempt, caller)),
                     "attempt {attempt}: caller {caller} repeated a spread"
                 );
             }
