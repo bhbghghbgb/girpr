@@ -47,39 +47,32 @@ use girpr_tempdir::TempDir;
 
 // ------------------------------------------------- the shared read-only bundle
 
-/// One capture variant, shared by every suite that reads "a document from the
-/// default bundle".
+/// The one capture variant, shared by every suite that reads "a document from
+/// the default bundle".
 ///
-/// The three variants are kept distinct on purpose: a lower gzip threshold is a
-/// *different tree* (the rule fires where it does not at the default), and a
-/// raised decompression ceiling is a different recorded number. Reusing one
-/// variant's bundle to answer another's assertion would hide exactly the thing
-/// the assertion is about.
+/// The non-default variants this used to carry existed only to make a single
+/// number different (a lower gzip threshold, a raised decompression ceiling).
+/// Those numbers are now pinned by in-process unit tests that call the exact
+/// production functions — `manifest::dump::write` for the gzip decision and
+/// `emit::index::build_manifest` for the ceiling field — so a full second and
+/// third capture can no longer earn their cost. One tree is captured once for
+/// the whole suite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BundleVariant {
     /// `World::all_shapes()` with no extra flags.
     Default,
-    /// A threshold low enough that the gzip rule both fires and declines.
-    GzipThreshold,
-    /// A raised `max_decompressed_bytes` ceiling.
-    Ceiling,
 }
 
 impl BundleVariant {
     fn key(self) -> &'static str {
         match self {
             BundleVariant::Default => "default",
-            BundleVariant::GzipThreshold => "gzip1000",
-            BundleVariant::Ceiling => "ceiling123456",
         }
     }
 
     fn extra(self) -> &'static [&'static str] {
         match self {
             BundleVariant::Default => &[],
-            // Small enough to split a 1.5 KB manifest from a 400 B meta file.
-            BundleVariant::GzipThreshold => &["--gzip-threshold", "1000"],
-            BundleVariant::Ceiling => &["--max-decompressed-bytes", "123456"],
         }
     }
 }

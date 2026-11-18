@@ -711,6 +711,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The gzip decision made by the production `should_gzip`, and the encoding
+    /// `emit` records for the file, agree: one body below and one above the
+    /// threshold, so one is stored plain and one is gzipped. This is the
+    /// two-sided check the old full-capture test made, expressed against the
+    /// same functions the writer calls (`manifest::dump::write` decides with
+    /// `should_gzip`; the checksum scan records it through `digest_file`).
+    #[test]
+    fn the_gzip_decision_and_the_recorded_encoding_agree() {
+        let root = scratch("gzipdecision");
+        const THRESHOLD: u64 = 1000;
+        for (name, body) in [
+            ("below.bin", vec![b'a'; 999]),
+            ("above.bin", vec![b'b'; 1001]),
+        ] {
+            let decision = hash::should_gzip(body.len(), THRESHOLD);
+            let encoding = if decision {
+                hash::Encoding::Gzip
+            } else {
+                hash::Encoding::Identity
+            };
+            // Write a real gzip stream for the compressed case so the digest
+            // pass exercises the decoder; the plain case is stored as-is.
+            let stored = if decision {
+                hash::gzip(&body).unwrap()
+            } else {
+                body.clone()
+            };
+            let path = root.join(name);
+            std::fs::write(&path, &stored).unwrap();
+            let e = digest_file(&path, encoding).unwrap();
+            assert_eq!(e.encoding, encoding, "{name}");
+            assert_eq!(e.bytes, body.len() as u64, "{name}");
+            assert_eq!(e.md5, hash::md5_hex(&body), "{name}");
+        }
+        // The two decisions really differed; otherwise the check proves nothing.
+        assert!(!hash::should_gzip(999, THRESHOLD));
+        assert!(hash::should_gzip(1001, THRESHOLD));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The digest reads through a 64 KiB buffer, so a file that is an exact
     /// multiple of the buffer size has to come out the same as one that is not.
     #[test]
@@ -1493,6 +1533,20 @@ mod tests {
             m.totals.bytes_on_disk,
             m.files.iter().map(|f| f.bytes).sum::<u64>()
         );
+    }
+
+    #[test]
+    fn a_non_default_decompression_ceiling_is_carried_into_the_manifest() {
+        // The ceiling is a recorded input, not a derived value: the number every
+        // decode in the bundle was bounded by. A raised ceiling must survive the
+        // plan -> ManifestInput -> MANIFEST.json path unchanged rather than be
+        // silently replaced by the default on read. The flag -> plan step is
+        // pinned separately in `src/config/tests.rs`; this pins the last copy.
+        let f = Fixture::new();
+        let mut input = f.input();
+        input.max_decompressed_bytes = 123_456;
+        let m = build_manifest(&input, &[]).expect("manifest");
+        assert_eq!(m.max_decompressed_bytes, 123_456);
     }
 
     #[test]

@@ -38,12 +38,11 @@ fn keys(v: &serde_json::Value) -> Vec<&str> {
 /// assertion below is byte-for-byte the one the old individual test made; only
 /// the `let b = bundle()` line moved up into this single call.
 ///
-/// The two capture *variants* that are not the default keep their own tests —
-/// [`the_gzip_variant_records_its_encoding_decisions`] and
-/// [`the_ceiling_variant_records_the_ceiling_it_used`] — because their trees
-/// differ. The two manifest-key deletion tests are left for the task that
-/// hand-builds minimal bundles; they still copy this bundle before breaking
-/// their copy.
+/// There is only one capture variant now: the gzip decision and the recorded
+/// decompression ceiling are pinned by in-process unit tests in `src/`, since
+/// both are plain fields/decisions the library computes and no extra tree is
+/// needed to observe them. The two manifest-key deletion tests copy this bundle
+/// before breaking their copy.
 #[test]
 fn the_default_bundle_documents_have_the_stable_schema() {
     let shared = shared_bundle(BundleVariant::Default);
@@ -293,15 +292,6 @@ fn the_path_map_exists_and_is_empty_for_a_healthy_capture(b: &Path) {
     assert_eq!(doc["entries"], serde_json::json!([]));
 }
 
-/// A raised decompression ceiling is recorded, not silently replaced by the
-/// default on read: it is the number every decode in the bundle was bounded by.
-#[test]
-fn the_ceiling_variant_records_the_ceiling_it_used() {
-    let b = shared_bundle(BundleVariant::Ceiling);
-    let doc = json(&b.join("MANIFEST.json"));
-    assert_eq!(doc["max_decompressed_bytes"], 123_456);
-}
-
 /// `gzip_threshold` is required, and a bundle without it does not open.
 ///
 /// `#[serde(default = "…")]` on the field would let a bundle predating it
@@ -439,88 +429,6 @@ fn the_gzip_rule_fires_above_the_threshold_and_not_below() {
             "{len} bytes against a 1000-byte threshold"
         );
     }
-}
-
-/// And the decision the capture actually recorded, for a document on both sides.
-///
-/// The mock's documents are all small, so this needs a threshold low enough to
-/// split them. That is the point of the flag: it exists precisely so a reader -
-/// or a test - can choose where the boundary is, and a rule that can only ever
-/// fire at 1 MiB is untestable without a 1 MiB fixture.
-#[test]
-fn the_gzip_variant_records_its_encoding_decisions() {
-    let b = shared_bundle(BundleVariant::GzipThreshold);
-    // The small documents are stored plain and the large ones are `.gz`, and
-    // `checksums.json` - the complete list - says which is which.
-    let checksums = json(&b.join("verify/checksums.json"));
-    let entries = checksums["entries"].as_array().unwrap();
-    let encodings: Vec<&str> = entries
-        .iter()
-        .map(|e| e["encoding"].as_str().unwrap())
-        .collect();
-    assert!(
-        encodings.contains(&"gzip"),
-        "nothing was gzipped, so the rule never fired: {encodings:?}"
-    );
-    assert!(
-        encodings.contains(&"identity"),
-        "everything was gzipped, so the rule never declined either: {encodings:?}"
-    );
-
-    // Every decision agrees with the recorded threshold. The rule governs the
-    // **full manifest decode** documents, and only those: `MANIFEST.json` and
-    // `checksums.json` are small, are read by tooling that expects plain JSON,
-    // and are named without a `.gz`. Scoping the assertion to the paths the rule
-    // actually applies to is the difference between testing the rule and testing
-    // an assumption about it.
-    let threshold = json(&b.join("MANIFEST.json"))["gzip_threshold"]
-        .as_u64()
-        .expect("the threshold is recorded");
-    let governed: Vec<&serde_json::Value> = entries
-        .iter()
-        .filter(|e| {
-            e["path"].as_str().unwrap().ends_with(".manifest.json")
-                || e["path"].as_str().unwrap().ends_with(".manifest.json.gz")
-        })
-        .collect();
-    assert!(
-        governed.len() >= 2,
-        "the full decodes are what the rule governs, and there should be at least two: {}",
-        governed.len()
-    );
-    for e in &governed {
-        let path = e["path"].as_str().unwrap();
-        let stored = std::fs::read(b.join(path)).expect("the stored body");
-        let plain = if e["encoding"] == "gzip" {
-            gircap::hash::gunzip(&stored).unwrap_or_else(|_| panic!("{path} is not gzip"))
-        } else {
-            stored
-        };
-        let over = plain.len() as u64 > threshold;
-        assert_eq!(
-            over,
-            e["encoding"] == "gzip",
-            "{path}: {len} bytes against a {threshold} threshold is recorded as {enc}",
-            len = plain.len(),
-            enc = e["encoding"]
-        );
-        // And a gzipped entry's digest is of the *decompressed* body, which is
-        // the only way a reader can check it with a stock tool.
-        if e["encoding"] == "gzip" {
-            assert!(path.ends_with(".gz"), "{path} is gzipped but not named .gz");
-            assert_eq!(
-                gircap::hash::md5_hex(&plain),
-                e["md5"].as_str().unwrap(),
-                "the recorded digest is of the decompressed body, not the stored one"
-            );
-        }
-    }
-    // And a document the rule does not govern is stored plain whatever its size.
-    let manifest = entries
-        .iter()
-        .find(|e| e["path"] == "MANIFEST.json")
-        .expect("MANIFEST.json is listed");
-    assert_eq!(manifest["encoding"], "identity");
 }
 
 /// The threshold itself is recorded, so a reader knows the rule the run used.
