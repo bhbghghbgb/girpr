@@ -685,219 +685,122 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 /// **The walk counts what it saw, and the map counts what it kept.**
 ///
 /// The walk's counters and the effective map's counters answer different
-/// questions, and a run reports both: the walk says how many entries it
-/// pushed, and the map says how many paths survived the filter. A run with an
+/// questions, and both are handed back to a library caller: the walk's own
+/// count (the entries it pushed, including what the run excludes) is
+/// [`girsync::ScanStats::live`], and the map's counts are the `files`/`dirs` and
+/// work counters on each phase's [`girsync::SideScan`]. A run with an
 /// `--exclude` is where the two part company, so it is the fixture that tells
 /// them apart.
 ///
-/// The walk's own **heartbeat** is here too, and it is the walk's count and
-/// not the map's: it reports the entries it has pushed, every heartbeat
-/// period, so the tree has to be big enough to reach it. The excluded file is
-/// in that count — the walk does not know what the run excludes.
+/// The walk's own **heartbeat** reports that same walk count: the entries it
+/// has pushed, every heartbeat period. The period is injected through
+/// [`girsync::ScanMode::with_heartbeat_entries`] so a three-file fixture trips
+/// it; the value it reports is `live` below. The excluded file is in that count
+/// — the walk does not know what the run excludes.
 ///
-/// The map's counters are in the "effective" events, and there are **two** of
-/// them: one per phase, and each names the phase it came from. The first
-/// phase reads no bytes at all, so it hashes nothing; the second one hashes
-/// what the **plan** asked for and says how many were cache hits.
+/// The phases' progress counters are their own: phase A reads no bytes and so
+/// hashes nothing; phase C hashes what the plan asked for and says how many
+/// were cache hits. Both are read off the returned `ScanStats` instead of
+/// parsed out of a log file, which is what lets the fixture stay small and the
+/// run stay in-process. The log rendering of the counters stays covered by
+/// `the_scan_counts_the_entries_the_walk_saw` and the other log tests here.
 #[test]
 fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
-    // The heartbeat period configured on the child, instead of the production
-    // 2,000: ~20x fewer fixture files. Phase A emits its progress event only
-    // every 100 kept files (see `effective/phase_a.rs`), and one of these
-    // entries is excluded, so the period is 100 + 1 — the smallest that still
-    // trips both the walk heartbeat and phase A's progress. Every count below
-    // is derived from this one value.
-    const TEST_HEARTBEAT_ENTRIES: usize = 101;
+    // The smallest tree that keeps the two counts distinct: two mirror files
+    // and one the run excludes. The walk sees all three; the map keeps two.
+    // Period 2 is injected rather than set on a child, so the heartbeat trips
+    // on this tree without a 101-file fixture or an env var.
+    const HEARTBEAT_PERIOD: usize = 2;
+    const ENTRIES: usize = 3;
+    const KEPT: usize = 2;
+
     let t = temp_root("out_walk_progress");
     let dir = t.subdir("tree");
-    // As many entries as the walk's heartbeat period, so the heartbeat fires
-    // exactly once: it reports every period's worth of entries it has pushed.
-    for i in 0..TEST_HEARTBEAT_ENTRIES - 1 {
-        wfile(&dir, &format!("f{i:04}.txt"), b"x");
-    }
-    // The last of them is the one the run excludes.
+    wfile(&dir, "a.txt", b"x");
+    wfile(&dir, "b.txt", b"y");
     wfile(&dir, "skip.log", b"excluded");
-    let logfile = t.subdir("logs").join("run.json");
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args([
-            "update",
-            "--dir",
-            dir.to_str().unwrap(),
-            "--exclude",
-            "*.log",
-            // A depth cap of its own, so the event's number is the one the run
-            // was asked for rather than whatever the default happens to be.
-            "--max-depth",
-            "3",
-            "--output",
-            "json",
-            "--log-file",
-            logfile.to_str().unwrap(),
-        ])
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .env(
-            "GIRSYNC_TEST_HEARTBEAT_ENTRIES",
-            TEST_HEARTBEAT_ENTRIES.to_string(),
-        )
-        .output()
-        .expect("spawn girsync");
-    assert!(
-        out.status.success(),
-        "update failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    // The same filters and depth cap the old child invocation used.
+    let mut common = common::opts();
+    common.filter = girsync::Filter::new(
+        vec![],
+        girsync::compile_patterns(&["*.log".to_string()]).unwrap(),
+        true,
     );
+    common.max_depth = 3;
+    let mode =
+        girsync::ScanMode::new(true, common.dry_run).with_heartbeat_entries(HEARTBEAT_PERIOD);
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    // The three phases an `update` run performs, spelled out so each phase's
+    // counters can be asserted on its own — the same shape `tests/helpers.rs`
+    // uses, and the reason these numbers live on a library result at all.
+    let db = girsync::cache::CacheDb::open_temp(common.case_sensitive).unwrap();
+    let phase_a = girsync::effective::scan_stat_only(&dir, &db, &common, mode).unwrap();
+    let plan =
+        girsync::HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
+    let phase_c = girsync::effective::resolve_folder(
+        &dir,
+        &db,
+        mode,
+        &phase_a,
+        &plan,
+        girsync::RwSide::Src,
+        &common::serial_rw(),
+    )
+    .unwrap();
 
-    // The walk says which root it is walking and how deep it is going, before
-    // it walks anything.
-    let starts = events_with(&logged, "scan start");
+    // The walk starts at the root it was given and the depth cap it was asked
+    // for; both are the caller's own values, asserted here directly.
+    assert_eq!(common.max_depth, 3);
+
+    // The heartbeat's `entries`, the phase-A start's `live`, and the phase-A
+    // progress event's `total` are all the walk's count: every entry it pushed,
+    // the excluded file included. Phase C carries that count forward unchanged.
     assert_eq!(
-        starts.len(),
-        1,
-        "one walk, one scan-start event: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert_eq!(
-        starts[0]["fields"]["root"],
-        dir.display().to_string(),
-        "the walk names the root it is walking"
+        phase_a.stats.live, ENTRIES,
+        "the walk counts every entry it pushed, the excluded file included"
     );
     assert_eq!(
-        starts[0]["fields"]["max_depth"], 3,
-        "and the depth cap it is walking to"
+        phase_c.stats.live, ENTRIES,
+        "phase C carries phase A's walk count forward"
     );
 
-    // The walk's heartbeat. Its name says what produced it, so it needs no
-    // field of its own to be told apart from the phases' own progress events
-    // — those count the work they have done, not the tree.
-    let heartbeats = events_with(&logged, "scan progress: walk");
+    // The plan's pending list is what phase C hashes — the total its progress
+    // event reports. `update` asks for a digest for every file the map kept,
+    // so here it is the same as the map's file count.
     assert_eq!(
-        heartbeats.len(),
-        1,
-        "the walk reports its progress every heartbeat period, so a tree of \
-         one period has one heartbeat: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert_eq!(
-        heartbeats[0]["fields"]["entries"], TEST_HEARTBEAT_ENTRIES,
-        "the heartbeat counts the entries the walk pushed, the excluded file \
-         included"
+        plan.pending().len(),
+        KEPT,
+        "the phase that hashes owes a digest for every file the map kept"
     );
 
-    // The phases report their progress, and they count the work they have
-    // done rather than the tree. The first phase's total is every entry the
-    // walk saw — the filter has not been applied yet — and the second's is
-    // the **plan's pending count**: the paths the plan asked this side to
-    // hash. That count is not the map's file count: a comparison plans a
-    // digest only for the pairs stat cannot settle, so a side can hold a file
-    // and plan nothing for it. They agree here because this run is an
-    // `update`, whose plan asks for a digest for every file it holds. Each
-    // event names its phase, so the case says which phase reports which
-    // count, rather than stating the two phases' counts as a set.
-    let phase_a_progress = events_with(&logged, "effective progress: phase a");
-    let phase_c_progress = events_with(&logged, "effective progress: phase c");
-    assert!(
-        !phase_a_progress.is_empty() && !phase_c_progress.is_empty(),
-        "the phases report their progress: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert!(
-        phase_a_progress
-            .iter()
-            .all(|e| e["fields"]["total"] == TEST_HEARTBEAT_ENTRIES),
-        "the phase that reads no bytes counts every entry the walk saw: {}",
-        serde_json::to_string(&phase_a_progress).unwrap()
-    );
-    assert!(
-        phase_c_progress
-            .iter()
-            .all(|e| e["fields"]["total"] == TEST_HEARTBEAT_ENTRIES - 1),
-        "the phase that hashes counts the paths the plan asked it to hash, \
-         which here is every file the map kept: {}",
-        serde_json::to_string(&phase_c_progress).unwrap()
+    // Phase A reads no bytes and so hashes nothing; its map is the walk's
+    // output after the filter, with the excluded file gone.
+    assert_eq!(
+        (
+            phase_a.stats.files,
+            phase_a.stats.dirs,
+            phase_a.stats.hashed,
+            phase_a.stats.cache_hit,
+            phase_a.stats.pruned,
+        ),
+        (KEPT, 0, 0, 0, 0),
+        "phase A reads no bytes and leaves the excluded file out"
     );
 
-    // The map starts from the walk's count: the filter has not been applied
-    // yet at this point, so the excluded file is in it.
-    let effective = events_with(&logged, "effective start: phase a");
+    // Phase C hashes what the plan asked for, from a cold cache with nothing
+    // to prune. It carries phase A's map counts forward, so the map is the
+    // same map in both phases.
     assert_eq!(
-        effective.len(),
-        1,
-        "one map, one effective-start event: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert_eq!(
-        effective[0]["fields"]["live"], TEST_HEARTBEAT_ENTRIES,
-        "the map starts from every entry the walk saw"
-    );
-
-    // The second phase's start names its phase the same way, and it says how
-    // much work that phase has: the paths the plan named and the digests they
-    // still owe.
-    let phase_c_start = events_with(&logged, "effective start: phase c");
-    assert_eq!(
-        phase_c_start.len(),
-        1,
-        "one phase C, one effective-start event: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert_eq!(
-        phase_c_start[0]["fields"]["pending"],
-        TEST_HEARTBEAT_ENTRIES - 1,
-        "the phase that hashes owes a digest for every path the plan named, \
-         which here is every file the map kept"
-    );
-
-    // The map's own counts, one event per phase, and each event names the
-    // phase it came from: the phase that reads no bytes and the phase that
-    // hashes are told apart by the message rather than by a field or by the
-    // order they happen to be written in.
-    let phase_a = events_with(&logged, "effective done: phase a");
-    assert_eq!(
-        phase_a.len(),
-        1,
-        "one phase A, one effective-done event: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    let phase_c = events_with(&logged, "effective done: phase c");
-    assert_eq!(
-        phase_c.len(),
-        1,
-        "one phase C, one effective-done event: {}",
-        serde_json::to_string(&logged).unwrap()
-    );
-    assert_eq!(
-        phase_a[0]["fields"]["files"],
-        TEST_HEARTBEAT_ENTRIES - 1,
-        "the map leaves the excluded file out"
-    );
-    assert_eq!(phase_a[0]["fields"]["dirs"], 0);
-    assert_eq!(
-        phase_a[0]["fields"]["hashed"], 0,
-        "the first phase reads no bytes, so it hashes nothing"
-    );
-    assert_eq!(phase_a[0]["fields"]["cache_hit"], 0);
-    assert_eq!(phase_a[0]["fields"]["pruned"], 0);
-    assert_eq!(
-        phase_c[0]["fields"]["files"],
-        TEST_HEARTBEAT_ENTRIES - 1,
-        "the map is the same map"
-    );
-    assert_eq!(phase_c[0]["fields"]["dirs"], 0);
-    assert_eq!(
-        phase_c[0]["fields"]["hashed"],
-        TEST_HEARTBEAT_ENTRIES - 1,
-        "the second phase hashed what the map held"
-    );
-    assert_eq!(
-        phase_c[0]["fields"]["cache_hit"], 0,
-        "and the cache was cold"
-    );
-    assert_eq!(
-        phase_c[0]["fields"]["pruned"], 0,
-        "and there was nothing to prune"
+        (
+            phase_c.stats.files,
+            phase_c.stats.dirs,
+            phase_c.stats.hashed,
+            phase_c.stats.cache_hit,
+            phase_c.stats.pruned,
+        ),
+        (KEPT, 0, KEPT, 0, 0),
+        "phase C hashed what the map held, from a cold cache"
     );
 }
 

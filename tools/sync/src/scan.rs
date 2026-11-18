@@ -28,7 +28,7 @@ pub const HEARTBEAT_ENTRIES: usize = 2000;
 /// non-numeric, or zero value leaves [`HEARTBEAT_ENTRIES`] in place, so the hook
 /// is default-off and production is unchanged. Deliberately not `cfg(test)`:
 /// the slow suites spawn the real binary and set the variable on the child.
-fn heartbeat_entries() -> usize {
+pub(crate) fn heartbeat_entries() -> usize {
     heartbeat_entries_from(
         std::env::var("GIRSYNC_TEST_HEARTBEAT_ENTRIES")
             .ok()
@@ -76,10 +76,29 @@ pub struct LiveEnt {
     pub is_link: bool,
 }
 
-/// Walk `root` up to `max_depth`, following symlinks.
+/// Walk `root` up to `max_depth`, following symlinks, with the resolved
+/// heartbeat period.
+///
+/// Resolves [`heartbeat_entries`] once per walk and delegates to
+/// [`walk_live_with`]. With the test hook unset that is [`HEARTBEAT_ENTRIES`],
+/// so every existing caller behaves exactly as it did before the seam; the
+/// child-process suites that set `GIRSYNC_TEST_HEARTBEAT_ENTRIES` keep that
+/// fallback.
+pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
+    walk_live_with(root, max_depth, heartbeat_entries())
+}
+
+/// Walk `root` up to `max_depth`, following symlinks, with an explicit
+/// heartbeat period.
 ///
 /// `girpr-cache*` subtrees are pruned. Any walk error (dangling link, loop,
 /// IO failure) aborts the whole run rather than yielding a partial listing.
+///
+/// The period is a parameter rather than a read of the environment so a caller
+/// that already holds a resolved period — a [`crate::config::ScanMode`], see
+/// [`crate::config::ScanMode::with_heartbeat_entries`] — can trip the heartbeat
+/// with a small fixture. [`walk_live`] is the environment-driven default path.
+/// A period of `0` is treated as `1`, so the modulo below cannot divide by zero.
 ///
 /// The walk reports itself in three events, and each of them names it: `scan
 /// start`, `scan progress: walk` (the heartbeat) and `scan done`. A reader
@@ -89,16 +108,22 @@ pub struct LiveEnt {
 ///
 /// The "scan done" event carries what the walk saw — the entries it pushed and
 /// the files and directories among them — and those counts are the walk's own,
-/// not the effective map's. They are read from the log file; see the counters'
-/// note at the subtraction below.
-#[tracing::instrument(skip_all, fields(root = %root.display(), max_depth))]
-pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
+/// not the effective map's. They are also returned to the caller as the walk's
+/// length, which is what an in-process assertion reads; see the counters' note
+/// at the subtraction below.
+#[tracing::instrument(skip_all, fields(root = %root.display(), max_depth, heartbeat_entries))]
+pub fn walk_live_with(
+    root: &Path,
+    max_depth: usize,
+    heartbeat_entries: usize,
+) -> Result<Vec<LiveEnt>> {
     debug!(root = %root.display(), max_depth, "scan start");
     let t0 = std::time::Instant::now();
     let mut out = Vec::new();
     // Resolved once per walk, so a walk cannot change its heartbeat period
-    // halfway through (see `heartbeat_entries`).
-    let heartbeat_period = heartbeat_entries();
+    // halfway through. The caller passes either the environment-resolved
+    // period (`walk_live`) or one injected through `ScanMode`.
+    let heartbeat_period = heartbeat_entries.max(1);
     // Counted as the entries are pushed, so the walk does not walk its own
     // output a second time to find out how many files it saw. A dir is the
     // other half of the count, and the two add up to the entries.
@@ -160,8 +185,9 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     false
                 };
                 // Progress: trace every entry (file log), debug heartbeat every
-                // period's worth of entries (the production default is
-                // HEARTBEAT_ENTRIES; see `heartbeat_entries`).
+                // period's worth of entries. The period is resolved once per
+                // walk (see `walk_live_with`); the production default is
+                // HEARTBEAT_ENTRIES.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {

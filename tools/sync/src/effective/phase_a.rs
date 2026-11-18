@@ -9,7 +9,7 @@ use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::ExcludeMemo;
 use crate::hash::{DigestSet, HashAlg};
-use crate::scan::{LiveEnt, check_mixed_case, walk_live};
+use crate::scan::{LiveEnt, check_mixed_case, walk_live_with};
 use crate::util::{elapsed_s, path_key};
 
 use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_matches};
@@ -288,9 +288,14 @@ pub fn scan_stat_only(
     let ScanMode {
         no_trust_cached_hashes,
         dry_run,
+        heartbeat_entries,
     } = mode;
 
-    let live = walk_live(root, max_depth)?;
+    // An injected period wins; otherwise resolve the environment hook exactly
+    // as `walk_live` always did, so production and the child-process suites
+    // that set `GIRSYNC_TEST_HEARTBEAT_ENTRIES` keep their former behaviour.
+    let heartbeat_period = heartbeat_entries.unwrap_or_else(crate::scan::heartbeat_entries);
+    let live = walk_live_with(root, max_depth, heartbeat_period)?;
     check_mixed_case(&live, &root.display().to_string(), case_sensitive)?;
     let mut map: HashMap<String, SideEntry> = HashMap::new();
     // Borrowed from `live`, which is why the scan below walks `&live` rather
@@ -679,6 +684,7 @@ mod tests {
     use crate::filter::{Filter, compile_patterns};
     use crate::planner::{HashMode, StatTrust};
     use crate::rw::RwLimits;
+    use crate::scan::walk_live;
 
     /// A fixture's files, with the directories they imply.
     fn tree(root: &Path, files: &[(&str, &[u8])]) {

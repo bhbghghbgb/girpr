@@ -456,15 +456,39 @@ pub struct ScanMode {
     /// [`crate::effective::open_folder_cache`]'s decision, so no command can
     /// honour it incorrectly by opening the wrong kind of handle.
     pub dry_run: bool,
+    /// The walk's heartbeat period, when a caller injects one.
+    ///
+    /// `None` (the production default from [`ScanMode::new`]) leaves the period
+    /// to the environment, which with the test hook unset is
+    /// [`crate::scan::HEARTBEAT_ENTRIES`]. `Some(n)` fixes it for this mode so a small fixture
+    /// can trip the heartbeat. It is a *period*, not a count: the walk treats
+    /// `Some(0)` as `1`, so the modulo cannot divide by zero.
+    pub heartbeat_entries: Option<usize>,
 }
 
 impl ScanMode {
     /// Both decisions are explicit: neither has a default, so a caller cannot
     /// omit the dry-run half and silently persist a run meant to write nothing.
+    ///
+    /// The heartbeat period is left to the environment (`None`), so production
+    /// and the child-process suites that set `GIRSYNC_TEST_HEARTBEAT_ENTRIES`
+    /// keep exactly the behaviour this constructor always had.
     pub const fn new(no_trust_cached_hashes: bool, dry_run: bool) -> Self {
         Self {
             no_trust_cached_hashes,
             dry_run,
+            heartbeat_entries: None,
         }
+    }
+
+    /// Fix this mode's walk heartbeat period, overriding the environment.
+    ///
+    /// The production path never calls this: `None` keeps the environment
+    /// fallback (and therefore [`crate::scan::HEARTBEAT_ENTRIES`] when unset). A test that
+    /// injects a small period reads the counters off the returned
+    /// [`crate::effective::SideScan`] instead of parsing log events.
+    pub fn with_heartbeat_entries(mut self, heartbeat_entries: usize) -> Self {
+        self.heartbeat_entries = Some(heartbeat_entries);
+        self
     }
 }
