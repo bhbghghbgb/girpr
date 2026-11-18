@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP8 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP8 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP8 `in_progress`; both CP8 tasks are `pending_review`.
-* Active checkpoint: CP8 (in review). Active batch: none.
+* Next action: pick the next `todo` task in seeded order — T19 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP8 `done`; T17, T18 `completed`; T19 is the
+  next task (CP9).
+* Active checkpoint: none yet (CP9 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
   any follow-up batching/implementation — is a user-directed flaky-test
@@ -53,8 +54,8 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
-| T17 | Sync scoped subscriber + injectable console writer | E2 | pending_review | P2 | CP8 | Implemented in 6f488b0b; 8 spawns downshifted, 3 smokes remain. WorkerGuard tuple deviation + 2 fallbacks (see context). |
-| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | pending_review | P2 | CP8 | Implemented in b9c8d487, f1800244; 10 failure-path spawns downshifted, 1 log-file spawn remains. |
+| T17 | Sync scoped subscriber + injectable console writer | E2 | completed | P2 | CP8 | CP8 review: completed; tuple deviation and both fallbacks confirmed. |
+| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
@@ -72,7 +73,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP5 | T13–T14 | done | capture mock merge + `repair_purge` merges — T13 completed, T14 skipped (confirmed), no fixes/reverts |
 | CP6 | T15 | done | sync heartbeat parameterization — completed, no fixes/reverts |
 | CP7 | T16 | done | sync record sink + `run_captured` (largest single change) — completed, no fixes/reverts |
-| CP8 | T17–T18 | in_progress | sync logging + `TestHooks` seams |
+| CP8 | T17–T18 | done | sync logging + `TestHooks` seams — both completed, no fixes/reverts |
 | CP9 | T19 | open | sync `CompareOutcome` pipeline dedup |
 | CP10 | T20–T21 | open | `repair_scan` downshift + `peak_heap` invariant |
 | CP11 | T22–T23 | open | sled2redb production seams |
@@ -100,8 +101,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T14 | `86b465f3..b3cf81bf` | skipped (confirmed) |
 | T15 | `7c787656..a2f21205` | completed |
 | T16 | `0c22b736..3bd03d22` | completed |
-| T17 | `069ca97a..6f488b0b` | — (pending CP8 review) |
-| T18 | `4c7625a6..f1800244` | — (pending CP8 review) |
+| T17 | `069ca97a..6f488b0b` | completed |
+| T18 | `4c7625a6..f1800244` | completed |
 | T19–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -129,11 +130,11 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F18 | A6 (out of T14 scope): `tests/process.rs:281–330` duplicates the library-level removed-path case at `repair_purge.rs:257–307`; its comment claims a process-only distinction that does not exist (asserts `code == 0`). Could be removed or reduced to a one-line flag smoke. | T14 implementer | proposed | Separate finding, explicitly out of T14's guardrails. |
 | F19 | ~~Expose the walk's heartbeat emission count on a library result so the "fires exactly once per period" cadence can be asserted in-process rather than only via log rendering.~~ | T15 implementer | removed | CP6 reviewer removed it: coverage-adder, zero scale reduction. |
 | F20 | ~~Use a T17 scoped subscriber to pin the `scan progress: walk` / `effective progress: phase *` event names and fields in-process.~~ | T15 implementer | removed | CP6 reviewer removed it: coverage-adder, depends on T17, zero scale reduction. |
-| F21 | Downshift `output.rs:626` (`the_scan_counts_the_entries_the_walk_saw`) — another spawn-based test whose counters already live on `ScanStats` — the same way as T15. | T15 implementer | proposed | Real −1 spawn reduction, outside T15's scope; CP6 reviewer to decide. |
-| F22 | Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process. | T17 implementer | proposed | Real −1 spawn, needs a production seam; CP8 reviewer to decide. |
-| F23 | Investigate the WARN-capture flake (tracing callsite-interest caching with mixed subscriber filters in one process); if resolved, the 2 `stat_trust/flag_surface.rs` spawns can be downshifted. | T17 implementer | proposed | Real −2 spawns but blocked on a flake investigation; CP8 reviewer to decide. |
+| F21 | ~~Downshift `output.rs:626` (`the_scan_counts_the_entries_the_walk_saw`) — another spawn-based test whose counters already live on `ScanStats` — the same way as T15.~~ | T15 implementer | removed | CP8 reviewer removed it as stale: T17 already downshifted that test in `6f488b0b`. |
+| F22 | ~~Extract `init_tracing`'s `log file:`/`log start` announcements into a shared helper so T17's remaining RUST_LOG smoke can be downshifted in-process.~~ | T17 implementer | removed | CP8 reviewer removed it: the smoke pins the real `init_tracing` install path; a shared helper would make it assert a re-implementation (coverage loss) for −1 spawn. |
+| F23 | If the scheduled post-task flaky-test investigation resolves the WARN-capture flake, downshift the 2 `stat_trust/flag_surface.rs` spawns. | T17 implementer | proposed | Reframed by CP8 reviewer: the flake-investigation half is subsumed by the user-directed post-task investigation; retain only the downstream −2 spawn action, gated on that investigation's outcome. |
 | F24 | Downshift T18's remaining log-file-ordering spawn with T17's scoped-subscriber helper and `--log-level trace` now that commit limits are injectable. | T18 implementer | proposed | Real −1 spawn, needs log-ordering capture; CP8 reviewer to decide. |
-| F25 | Fold `TestCacheBackend` into `TestHooks` to fully unify the seam. | T18 implementer | proposed | Churns roughly 30 hand-built `CommonOpts` literals for no scale benefit; CP8 reviewer likely to prune. |
+| F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
