@@ -20,39 +20,71 @@ mod common;
 use std::path::Path;
 
 use common::{
-    dir_link, entry_names, file_link, is_link, log, parse_ndjson, recs_of, rfile,
-    skip_if_case_insensitive, skip_if_no_link, sync_mem, temp_root, wfile,
+    dir_link, entry_names, file_link, is_link, log, recs_of, rfile, skip_if_case_insensitive,
+    skip_if_no_link, sync_mem, temp_root, wfile,
 };
 use girsync::scan::walk_live;
 use girsync::{cmd_compare_self, cmd_sync};
 use serde_json::Value;
 
-/// Run the real binary and hand back its whole output.
-///
-/// The in-process `cmd_sync` cannot show what was *reported* — stdout belongs to
-/// the binary. The refusal cases also need stderr, because that is where the
-/// error goes.
-fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(src)
-        .arg("--dst")
-        .arg(dst)
-        .arg("--output")
-        .arg("json")
-        .args(extra)
-        // The case asserts the tree and the records, not the cache file; an
-        // in-memory cache keeps the fixture off the disk entirely.
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync")
+/// The process-free stand-in for the parts of `std::process::Output` these
+/// cases assert on: the exit status, the records on stdout, and the error string
+/// `main` logged to stderr. Keeping the shape lets the cases read unchanged.
+struct RawRun {
+    status: Status,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    records: Vec<Value>,
 }
 
-/// Run the real binary, returning its exit status and records.
-fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>) {
+#[derive(Clone, Copy)]
+struct Status {
+    code: i32,
+}
+
+impl Status {
+    fn success(&self) -> bool {
+        self.code == 0
+    }
+    fn code(&self) -> Option<i32> {
+        Some(self.code)
+    }
+}
+
+/// Run `girsync sync` in-process and capture what a spawned binary would have
+/// written: the records on stdout and the `fatal` error string on stderr. The
+/// whole CLI journey — clap, dispatch, the plan guards — still runs.
+fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> RawRun {
+    let mut args: Vec<String> = vec![
+        "sync".into(),
+        "--src".into(),
+        src.display().to_string(),
+        "--dst".into(),
+        dst.display().to_string(),
+        "--output".into(),
+        "json".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let out = common::run_args(args);
+    let records = common::values(&out);
+    let stdout = records
+        .iter()
+        .map(|r| format!("{r}\n"))
+        .collect::<String>()
+        .into_bytes();
+    let stderr = out.error.map(|e| e.into_bytes()).unwrap_or_default();
+    RawRun {
+        status: Status { code: out.code },
+        stdout,
+        stderr,
+        records,
+    }
+}
+
+/// Run `girsync sync` in-process, returning its exit status and records.
+fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (Status, Vec<Value>) {
     let out = sync_bin_raw(src, dst, extra);
-    (out.status, parse_ndjson(&out.stdout))
+    (out.status, out.records)
 }
 
 /// The `path` of every record with `event` `name`, in order.
@@ -443,7 +475,7 @@ fn keep_extra_spares_a_dst_directory_link_and_its_target() {
 /// is where a user learns what the link would have reached, so a reworded
 /// consequence has to fail a test rather than ship unnoticed.
 fn assert_refused_src_link_into_dst(
-    out: &std::process::Output,
+    out: &RawRun,
     dst: &Path,
     rel: &str,
     link: &str,
@@ -897,7 +929,7 @@ fn a_case_only_dst_link_is_refused_in_both_modes() {
             stderr.contains("refusing") && stderr.contains("link"),
             "the error names the refusal and the link: {stderr}"
         );
-        let recs = parse_ndjson(&out.stdout);
+        let recs = &out.records;
         assert!(
             !recs.iter().any(|r| r["event"] == "copy"),
             "no COPY is reported for a write through the link: {recs:?}"
