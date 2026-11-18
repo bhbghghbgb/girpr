@@ -12,9 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T01 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. T01 is `in_progress`; CP1 is the first checkpoint.
+* Next action: pick the next `todo` task in seeded order — T02 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. T01 is `pending_review`; CP1 is the first checkpoint
+  and is not yet complete (T02–T04 still `todo`).
 * Active checkpoint: none yet (CP1 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -34,7 +35,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 
 | ID | Title | Findings | Status | Priority | CP | Notes |
 |---|---|---|---|---|---|---|
-| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | in_progress | P0 | CP1 | |
+| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | pending_review | P0 | CP1 | Implemented in 934eadcb. |
 | T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | todo | P0 | CP1 | |
 | T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | todo | P0 | CP1 | |
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | todo | P0 | CP1 | |
@@ -81,7 +82,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 
 | Task | Commit range | Review verdict |
 |---|---|---|
-| T01–T23 | — (not started) | — |
+| T01 | `5b5a10cb..934eadcb` | — (pending CP1 review) |
+| T02–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -94,6 +96,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F01 | **B6:** in-process capture seam — call `run::capture/verify/materialize/list` directly and assert on `Outcome` records; removing the TCP mock needs an injected HTTP transport for `Fetcher` (report §B6 L318–L330). | report | proposed | Largest capture lever, wide/risky; B1–B5 (T05/T06/T07/T13) capture most benefit first. |
 | F02 | **D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591). | report | proposed | Depends on T22 exposing `Args`; maintenance, no test-count change. |
 | F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
+| F04 | Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range. | T01 implementer | proposed | Non-blocking; only relevant if jitter tests are extended past attempt 5. |
 
 ## Follow-up batches
 
