@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T02 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. T01 is `pending_review`; CP1 is the first checkpoint
-  and is not yet complete (T02–T04 still `todo`).
+* Next action: wait for the T02 implementing session to finish, then apply its
+  result (`ORCHESTRATION.md` §3).
+* Active phase: implementation. T01 `pending_review`, T02 `in_progress`; CP1 is the
+  first checkpoint and is not yet complete (T03–T04 still `todo`).
 * Active checkpoint: none yet (CP1 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -36,7 +36,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | ID | Title | Findings | Status | Priority | CP | Notes |
 |---|---|---|---|---|---|---|
 | T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | pending_review | P0 | CP1 | Implemented in 934eadcb. |
-| T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | todo | P0 | CP1 | |
+| T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | in_progress | P0 | CP1 | |
 | T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | todo | P0 | CP1 | |
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | todo | P0 | CP1 | |
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | todo | P0 | CP2 | Do B1+B5 together (bundle_source_key hashes all src). B5 may need thin e2e smoke fallback. |
