@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T08 implementing session to finish, then apply its
-  result. T08 completes CP2's tasks, so after recording it, run the CP2 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1 `done`; T05, T06, T07 `pending_review`, T08 `in_progress` (last CP2 task).
+* Next action: run the CP2 review phase (`ORCHESTRATION.md` §4) — all four CP2
+  tasks are terminal (`pending_review`). Set CP2 `in_progress` and spawn one
+  review-and-fix session with the four commit ranges.
+* Active phase: review. All CP2 tasks are `pending_review`; CP2 is ready for review.
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -42,7 +42,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | pending_review | P0 | CP2 | Implemented in 4a097a31; no smoke fallback needed (unit tests reach prod path). |
 | T06 | Capture: device-name flag refusal → config unit test | B2 | pending_review | P0 | CP2 | Implemented in 6b7dfdde; guardrail confirmed (refusal before HTTP). |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | pending_review | P0 | CP2 | Implemented in e6aefb87; one measured-length pin test retained. |
-| T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | in_progress | P0 | CP2 | `benches/tree_shapes.rs` is SKIP (timing, not a gate). |
+| T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | pending_review | P0 | CP2 | Implemented in fbe56813, c8ed2fef; scan.rs harness-pin bullet skipped (see context). `benches/tree_shapes.rs` untouched. |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | todo | P1 | CP3 | Large; ~13–18 of 28 cases convertible (validate each). Keep log-asserting cases + `--io-threads` alias case on the binary. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | todo | P1 | CP3 | Keep binary spawn for `no_scope` only. |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
@@ -89,7 +89,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T05 | `e5cf89dc..4a097a31` | — (pending CP2 review) |
 | T06 | `ab96ebab..6b7dfdde` | — (pending CP2 review) |
 | T07 | `c9dc8307..e6aefb87` | — (pending CP2 review) |
-| T08–T23 | — (not started) | — |
+| T08 | `8160cef5..c8ed2fef` | — (pending CP2 review) |
+| T09–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -162,3 +163,5 @@ change log.
 
 * T03 (D3): report predicted "−1 sled fixture", but `build_sled_db` is still required by the `--force` conversion whose `(2,1)` result is asserted — real effect is −1 conversion only. Not a missed optimization; CP1 reviewer should not flag it.
 * T04 (D5): plan.rs went 13 → 5 tests (−8), not the report's approximated "−7 / ~6", because fully folding the ten explicitly-listed anchors into the two required tables yields −8. Internal consistency, not a missed case; CP1 reviewer should not flag it.
+* T08 (E6) bullet 2 (`src/scan.rs:240–248` harness pin) was deliberately skipped: dropping `heartbeat_entries()` removes zero tests/fixtures/spawns (report calls it "marginal; skip if unclear") and the pure helper already covers unset→2000. Constant pin `HEARTBEAT_ENTRIES == 2000` untouched. CP2 reviewer should confirm this skip.
+* T08 deviation: `fixtures_classify_as_folders` was folded into the relying test `the_wider_handle_window_still_refuses_a_self_collision` as `debug_assert`s, not literally into `pair()`/`fixture()` — no local `fixture()` exists and `pair()` lives in `girpr-tempdir` (cannot depend on girsync's `classify`). The same three assertions are preserved.
