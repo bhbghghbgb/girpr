@@ -12,10 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP3 review phase (`ORCHESTRATION.md` §4) — both CP3 tasks
-  are terminal (`pending_review`). Set CP3 `in_progress` and spawn one
-  review-and-fix session with the two commit ranges.
-* Active phase: review. All CP3 tasks are `pending_review`; CP3 is ready for review.
+* Next action: wait for the CP3 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP3 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP3 `in_progress`; both CP3 tasks are `pending_review`.
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -65,7 +64,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 |---|---|---|---|
 | CP1 | T01–T04 | done | P0 root unit + small crates + sled2redb low-risk — all completed, no fixes/reverts |
 | CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
-| CP3 | T09–T10 | open | `repair_machinery` + `repair_plan` downshifts |
+| CP3 | T09–T10 | in_progress | `repair_machinery` + `repair_plan` downshifts |
 | CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
 | CP5 | T13–T14 | open | capture mock merge + `repair_purge` merges |
 | CP6 | T15 | open | sync heartbeat parameterization |
