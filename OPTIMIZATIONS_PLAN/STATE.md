@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP1 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP1 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP1 `in_progress`; all four CP1 tasks are `pending_review`.
-* Active checkpoint: none yet (CP1 `open`). Active batch: none.
+* Next action: pick the next `todo` task in seeded order — T05 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1 review `done`; T01–T04 `completed`, T05–T08
+  are the next tasks (CP2).
+* Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
 ## Status vocabulary
@@ -34,10 +35,10 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 
 | ID | Title | Findings | Status | Priority | CP | Notes |
 |---|---|---|---|---|---|---|
-| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | pending_review | P0 | CP1 | Implemented in 934eadcb. |
-| T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | pending_review | P0 | CP1 | Implemented in be7d2dc5, ca643fec. |
-| T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | pending_review | P0 | CP1 | Implemented in fdad6e62, cb9226fb. D3 fixture saving did not materialize (see context). |
-| T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | pending_review | P0 | CP1 | Implemented in d9899f1d, e9f779f5, ccbef0ad. Protected tests intact. |
+| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | completed | P0 | CP1 | CP1 review: completed. |
+| T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | completed | P0 | CP1 | CP1 review: completed. |
+| T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | completed | P0 | CP1 | CP1 review: completed. D3 fixture saving did not materialize (see context). |
+| T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | completed | P0 | CP1 | CP1 review: completed. Protected tests intact. |
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | todo | P0 | CP2 | Do B1+B5 together (bundle_source_key hashes all src). B5 may need thin e2e smoke fallback. |
 | T06 | Capture: device-name flag refusal → config unit test | B2 | todo | P0 | CP2 | |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | todo | P0 | CP2 | Verify rewrites equal old literals at measured sizes. |
@@ -62,7 +63,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 
 | CP | Tasks | Status | Notes |
 |---|---|---|---|
-| CP1 | T01–T04 | in_progress | P0 root unit + small crates + sled2redb low-risk |
+| CP1 | T01–T04 | done | P0 root unit + small crates + sled2redb low-risk — all completed, no fixes/reverts |
 | CP2 | T05–T08 | open | P0 capture + sync small findings |
 | CP3 | T09–T10 | open | `repair_machinery` + `repair_plan` downshifts |
 | CP4 | T11–T12 | open | root-unit production seams (MD5, DiskPlan) |
@@ -81,10 +82,10 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 
 | Task | Commit range | Review verdict |
 |---|---|---|
-| T01 | `5b5a10cb..934eadcb` | — (pending CP1 review) |
-| T02 | `c6140196..ca643fec` | — (pending CP1 review) |
-| T03 | `1bfa735f..cb9226fb` | — (pending CP1 review) |
-| T04 | `0ea6802e..ccbef0ad` | — (pending CP1 review) |
+| T01 | `5b5a10cb..934eadcb` | completed |
+| T02 | `c6140196..ca643fec` | completed |
+| T03 | `1bfa735f..cb9226fb` | completed |
+| T04 | `0ea6802e..ccbef0ad` | completed |
 | T05–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -100,7 +101,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
 | F04 | Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range. | T01 implementer | proposed | Non-blocking; only relevant if jitter tests are extended past attempt 5. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
-| F06 | Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines). | T04 implementer | proposed | No test-count effect, riskier than the fold; left out of scope. |
+| F06 | ~~Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines).~~ | T04 implementer | removed | CP1 reviewer removed it: no test-count effect and riskier than the fold; avoid a future implement+review cycle for zero scale benefit. |
 
 ## Follow-up batches
 
