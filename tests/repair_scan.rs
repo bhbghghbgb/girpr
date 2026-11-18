@@ -10,8 +10,54 @@ use common::{
     PLAN_SCAN_BYTES_KEY, build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field,
     load_counters, logs_of, read_game_file, run, run_binary, temp_dir, write_game_file,
 };
-use girpr::RunExit;
+use girpr::test_support::RepairMode;
+use girpr::{RunExit, Summary};
+use std::path::Path;
 use std::sync::atomic::Ordering;
+
+// ---------------------------------------------------------------------------
+// in-process plan/estimate helpers
+// ---------------------------------------------------------------------------
+
+/// Sum the per-file `est_download_bytes` recorded in a `--plan-out` document.
+///
+/// This is the figure the `PLAN` line folds the same document into, so reading
+/// it from the artifact the library writes needs no binary spawn.
+fn plan_out_estimate(path: &Path) -> u64 {
+    let written = std::fs::read_to_string(path).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
+    })
+}
+
+/// Drive `girpr::run` in-process with a `--plan-out` artifact, the way the
+/// estimate cases used to drive the binary. `print_plan` makes the run read-only
+/// (it returns right after publishing the document); `scan`, `repair_mode` and
+/// `ram_bytes` map the remaining flags. No process is spawned.
+async fn run_plan(
+    dir: &Path,
+    mock: &MockServer,
+    scan: bool,
+    print_plan: bool,
+    repair_mode: Option<RepairMode>,
+    ram_bytes: Option<u64>,
+    out: &Path,
+) -> (u64, Summary, RunExit) {
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 1);
+    ctx.scan = scan;
+    ctx.print_plan = print_plan;
+    if let Some(mode) = repair_mode {
+        ctx.repair_mode = mode;
+        ctx.repair_mode_explicit = true;
+    }
+    if let Some(bytes) = ram_bytes {
+        ctx.limits.ram_bytes = Some(bytes);
+    }
+    ctx.plan_out = Some(out.to_path_buf());
+    let (summary, code) = run(ctx).await.expect("in-process plan run");
+    (plan_out_estimate(out), summary, code)
+}
 
 // ---------------------------------------------------------------------------
 // zero-length manifest entries
@@ -206,45 +252,17 @@ async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
     )
     .unwrap();
     write_game_file(&dir, &old_rel, &old_bytes);
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-        "--max-ram-bytes",
-        "0",
-    ];
-
-    // One scanned run at the ordered budget: the plan document is written
-    // before execution, so its per-file estimate and the SUMMARY's real
-    // download come from a single binary — no separate `--print-plan` spawn.
-    // The document's per-file halves are the same split the PLAN total folds
-    // from, so this checks the same estimate-vs-reality parity as the PLAN line.
+    // One scanned in-process run at the ordered budget: the plan document is
+    // written before execution, so its per-file estimate and the SUMMARY's real
+    // download come from a single run — no separate `--print-plan` spawn. The
+    // document's per-file halves are the same split the PLAN total folds from,
+    // so this checks the same estimate-vs-reality parity as the PLAN line.
+    // `--max-ram-bytes 0` maps to a zero RAM ceiling, which forces the ordered
+    // tier this case is about.
     let out = dir.join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--plan-out", &out_arg]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let estimate = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
-    let downloaded = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("SUMMARY "))
-            .expect("the SUMMARY line"),
-        "download_bytes",
-    );
+    let (estimate, summary, code) = run_plan(&dir, &mock, true, false, None, Some(0), &out).await;
+    assert_eq!(code, RunExit::Success);
+    let downloaded = summary.download.settled();
     assert_eq!(
         estimate, downloaded,
         "the scanned estimate is the ordered tier's real cost: {estimate} vs {downloaded}"
@@ -261,168 +279,131 @@ async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
 #[tokio::test]
 async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
     // The assertion that did not exist before `--scan`: the plan's estimate
-    // and the repair's actual cost are the same number.
-    //
-    // Without the scan the estimate counts every chunk the reuse map cannot
-    // supply — which is what the *temp* path downloads, but not what the
-    // in-place path does: it keeps the chunk that is already correct where
-    // it belongs. So the unscanned estimate is an upper bound, and the
-    // scanned one is the figure.
+    // and the repair's actual cost are the same number. Two modes share the
+    // parity assertion below; the in-place path keeps the correct chunk where
+    // it lies (so an unscanned estimate is an upper bound), while the temp
+    // path re-hashes a candidate and fetches the corrupt chunk instead.
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+
+    for (name, tag, temp, upper_bound) in [
+        ("inplace", LOCAL_TAG, None, true),
+        ("temp", LATEST_TAG, Some(RepairMode::Temp), false),
+    ] {
+        let dir = temp_dir(&format!("scan_exact_{name}"));
+        if temp.is_some() {
+            // config.ini names the installed build, so the temp path has
+            // candidates to re-hash. The in-place case has none.
+            std::fs::write(
+                dir.join("config.ini"),
+                format!("[General]\ngame_version={tag}\n"),
+            )
+            .unwrap();
+        }
+        let fx = build_fixture();
+        write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+        let mut half_bad = fx.files[0].data.clone();
+        for b in half_bad.iter_mut().skip(64) {
+            *b ^= 0xFF;
+        }
+        write_game_file(&dir, &fx.files[0].rel, &half_bad);
+
+        let upper = if upper_bound {
+            // The unscanned plan is read-only: print_plan returns right after
+            // publishing its document, so the install is still dirty for the
+            // scanned repair below.
+            let up = dir.join("unscanned.json");
+            let (n, _, c) = run_plan(&dir, &mock, false, true, None, None, &up).await;
+            assert_eq!(c, RunExit::Success, "{name}");
+            n
+        } else {
+            0
+        };
+
+        // One scanned run per mode writes its plan document before execution,
+        // so the estimate and the SUMMARY's real download are from the same
+        // run. The document's per-file halves are the PLAN total's split.
+        let hits_before = mock.chunk_hits().len();
+        let out = dir.join("plan.json");
+        let (estimate, summary, code) = run_plan(&dir, &mock, true, false, temp, None, &out).await;
+        assert_eq!(code, RunExit::Success, "{name}");
+        let downloaded = summary.download.settled();
+        assert_eq!(
+            estimate, downloaded,
+            "{name}: the scanned estimate is the real cost: {estimate} vs {downloaded}"
+        );
+        assert!(
+            estimate > 0,
+            "{name}: a bad chunk must be priced, not reused"
+        );
+        if upper_bound {
+            assert!(
+                estimate < upper,
+                "{name}: the scan knows the intact chunk is kept: {estimate} vs {upper}"
+            );
+            assert_eq!(
+                summary.flags.damaged_chunks,
+                Some(1),
+                "{name}: one chunk was found wrong"
+            );
+        }
+        if temp.is_some() {
+            assert_eq!(
+                &mock.chunk_hits()[hits_before..],
+                &["chunk_foo1".to_string()],
+                "{name}: the corrupt candidate is fetched, the intact one is reused"
+            );
+        }
+    }
+
+    // One process-level run stays for the PLAN line: its conditional
+    // scan_bytes key and its est_download_bytes total are rendered by the
+    // binary's record writer, with no in-process seam. Reusing this same run
+    // to pin the plan-out document's sum against the line adds no spawn. The
+    // shared mock serves it, so no extra server is started either.
+    let dir = temp_dir("scan_exact_plan_line");
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scan_exact");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
     let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    // 1. the plan, unscanned: the upper bound.
-    let mut args = base.clone();
-    args.extend_from_slice(&["--print-plan"]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let unscanned = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("PLAN "))
-            .expect("the PLAN line"),
-        "est_download_bytes",
-    );
-
-    // 2. the plan, scanned: the exact figure, and the per-file document must
-    //    carry the same split the total was folded from.
-    let out = dir.join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--print-plan", "--plan-out", &out_arg]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    let plan_out = dir.join("plan.json");
+    let plan_out_arg = plan_out.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--jobs",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+            "--scan",
+            "--print-plan",
+            "--plan-out",
+            &plan_out_arg,
+        ],
+        &[],
+    )
+    .await;
     assert_eq!(code, 0, "{stderr}");
     let plan_line = stdout
         .lines()
         .find(|l| l.starts_with("PLAN "))
         .expect("the PLAN line");
-    let scanned = field(plan_line, "est_download_bytes");
-    assert!(
-        scanned < unscanned,
-        "the scan knows the intact chunk is kept: {scanned} vs {unscanned}"
-    );
     assert!(
         plan_line.contains(&format!("{PLAN_SCAN_BYTES_KEY}={}", 128 + 48)),
         "the scan reports the bytes it read: {plan_line}"
     );
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
     assert_eq!(
-        doc_sum, scanned,
-        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
-    );
-
-    // 3. the repair: what it really downloaded.
-    let mut args = base.clone();
-    args.push("--scan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let summary = stdout
-        .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .expect("the SUMMARY line");
-    let downloaded = field(summary, "download_bytes");
-    assert_eq!(
-        scanned, downloaded,
-        "the scanned estimate is the real cost: {scanned} vs {downloaded}"
-    );
-    assert!(summary.contains("damaged_chunks=1"), "{summary}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
-    // Both of foo's chunks
-    // have a candidate entry (config.ini names the installed build), but
-    // chunk 1 is corrupt on disk: the temp path re-hashes the candidate
-    // slice, refuses it and fetches `chunk_foo1`. The scanned plan must price
-    // that chunk, and the price must be what the repair really spends.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scan_exact_temp");
-    let fx2 = build_fixture();
-    std::fs::write(
-        dir.join("config.ini"),
-        format!("[General]\ngame_version={LATEST_TAG}\n"),
-    )
-    .unwrap();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    // One scanned run in temp mode: the plan document is written before
-    // execution, so its per-file estimate and the SUMMARY's real download come
-    // from a single binary — no separate `--print-plan` spawn. The document's
-    // per-file halves are the same split the PLAN total folds from.
-    let out = dir.join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--repair-mode", "temp", "--plan-out", &out_arg]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let scanned = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
-    assert!(
-        scanned > 0,
-        "the corrupt candidate cannot be reused, so the chunk is a download: {written}"
-    );
-    let summary = stdout
-        .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .expect("the SUMMARY line");
-    let downloaded = field(summary, "download_bytes");
-    assert_eq!(
-        scanned, downloaded,
-        "the scanned temp estimate is the real cost: {scanned} vs {downloaded}"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
-        "the corrupt candidate is fetched, the intact one is reused"
+        plan_out_estimate(&plan_out),
+        field(plan_line, "est_download_bytes"),
+        "the document's per-file halves sum to the scanned PLAN total: {plan_line}"
     );
 
     mock.stop();
@@ -513,46 +494,74 @@ async fn a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs() {
     // Option (b): the range gate is in `build_plan`, so `--check-only`,
     // `--dry-run` and `--print-plan` all refuse the manifest at exit `2`
     // instead of one of them reporting a false clean or printing an unrunnable
-    // plan. Nothing is written in any mode.
-    for mode in ["--check-only", "--dry-run", "--print-plan"] {
-        let fx = build_fixture_spec(
-            &FixtureSpec::new(vec![FileSpec::new(
-                "game/foo.dat",
-                vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
-            )])
-            .with_lies(Lies {
-                huge_offset: vec!["chunk_foo0".into()],
-                ..Default::default()
-            }),
-        );
-        // The file on disk is the one the manifest's size and MD5 describe, so
-        // without the plan gate `--check-only` would call it intact and exit
-        // `0` for the wrong reason.
-        let expected = fx.files[0].data.clone();
-        let mock = MockServer::start(fx, MockOpts::default()).await;
+    // plan. Nothing is written in any mode. The "no PLAN / no CHECK" pins are
+    // process-level — the binary is the only thing that renders those lines —
+    // so they stay on one binary run. The other modes assert the same verdict
+    // and immutability in-process.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/foo.dat",
+            vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
+        )])
+        .with_lies(Lies {
+            huge_offset: vec!["chunk_foo0".into()],
+            ..Default::default()
+        }),
+    );
+    // The file on disk is the one the manifest's size and MD5 describe, so
+    // without the plan gate `--check-only` would call it intact and exit
+    // `0` for the wrong reason. All three modes share one mock: the gate
+    // fetches nothing, so `chunk_hits` stays empty across the loop.
+    let expected = fx.files[0].data.clone();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+
+    for (mode, on_binary) in [
+        ("--check-only", false),
+        ("--dry-run", false),
+        ("--print-plan", true),
+    ] {
         let dir = temp_dir("readonly_hostile_range");
         let game = dir.join("install");
         write_game_file(&game, "game/foo.dat", &expected);
-        let game_arg = game.to_string_lossy().into_owned();
 
-        let (code, stdout, stderr) = run_binary(
-            &[
-                "--game-path",
-                &game_arg,
-                "--biz",
-                "hk4e_global",
-                "--jobs",
-                "1",
-                mode,
-                "--hyp-base",
-                &mock.hyp_base,
-                "--sophon-base",
-                &mock.sophon_base,
-            ],
-            &[],
-        )
-        .await;
-        assert_eq!(code, 2, "{mode}: a hostile range is metadata: {stderr}");
+        let code = if on_binary {
+            let game_arg = game.to_string_lossy().into_owned();
+            let (code, stdout, stderr) = run_binary(
+                &[
+                    "--game-path",
+                    &game_arg,
+                    "--biz",
+                    "hk4e_global",
+                    "--jobs",
+                    "1",
+                    mode,
+                    "--hyp-base",
+                    &mock.hyp_base,
+                    "--sophon-base",
+                    &mock.sophon_base,
+                ],
+                &[],
+            )
+            .await;
+            assert!(!stdout.contains("PLAN "), "{mode}: no plan: {stdout}");
+            assert!(!stdout.contains("CHECK"), "{mode}: no CHECK line: {stdout}");
+            assert_eq!(code, 2, "{mode}: a hostile range is metadata: {stderr}");
+            code
+        } else {
+            let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+            match mode {
+                "--check-only" => ctx.check_only = true,
+                "--dry-run" => ctx.dry_run = true,
+                _ => unreachable!("only the two in-process modes reach here"),
+            }
+            let code = match run(ctx).await {
+                Ok((_, c)) => c.code(),
+                Err(f) => f.exit_code.code(),
+            };
+            assert_eq!(code, 2, "{mode}: a hostile range is metadata");
+            code
+        };
+        assert_eq!(code, 2, "{mode}: the gate refuses before any mode runs");
         assert_eq!(
             read_game_file(&game, "game/foo.dat").as_deref(),
             Some(expected.as_slice()),
@@ -563,20 +572,12 @@ async fn a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs() {
             "{mode}: config.ini must not be written"
         );
         assert!(
-            !stdout.contains("PLAN "),
-            "{mode}: no plan may be printed: {stdout}"
-        );
-        assert!(
-            !stdout.contains("CHECK"),
-            "{mode}: no CHECK line may call the file clean: {stdout}"
-        );
-        assert!(
             mock.chunk_hits().is_empty(),
             "{mode}: no chunk may be fetched"
         );
-
-        mock.stop();
     }
+
+    mock.stop();
 }
 
 #[tokio::test]
@@ -595,51 +596,54 @@ async fn a_legitimate_empty_file_passes_every_mode_untouched() {
     let game = dir.join("install");
     // Present and empty, exactly as the manifest describes it.
     write_game_file(&game, "game/empty.dat", b"");
-    let game_arg = game.to_string_lossy().into_owned();
-    let base = [
-        "--game-path",
-        &game_arg,
-        "--biz",
-        "hk4e_global",
-        "--jobs",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
 
-    let mut args = base.to_vec();
-    args.push("--check-only");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(
-        code, 0,
-        "--check-only must call the empty file clean: {stderr}"
-    );
+    // The three data-plane verdicts run in-process; only the PLAN line needs
+    // the binary (a record rendered by the process, with no library seam).
+    let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    ctx.check_only = true;
+    let (_, code) = run(ctx).await.expect("check-only runs");
+    assert_eq!(code, RunExit::Success, "--check-only must call it clean");
     assert_eq!(
         read_game_file(&game, "game/empty.dat"),
         Some(Vec::new()),
         "the check must not touch the file"
     );
 
-    let mut args = base.to_vec();
-    args.push("--dry-run");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--dry-run: {stderr}");
+    let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    ctx.dry_run = true;
+    let (_, code) = run(ctx).await.expect("dry-run runs");
+    assert_eq!(code, RunExit::Success, "--dry-run accepts the empty file");
 
-    let mut args = base.to_vec();
-    args.push("--print-plan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    let game_arg = game.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--jobs",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+            "--print-plan",
+        ],
+        &[],
+    )
+    .await;
     assert_eq!(code, 0, "--print-plan: {stderr}");
     assert!(
         stdout.lines().any(|l| l.starts_with("PLAN ")),
         "an empty file is still a planned file:\n{stdout}"
     );
 
-    let (code, _, stderr) = run_binary(&base, &[]).await;
+    let ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    let (_, code) = run(ctx).await.expect("repair runs");
     assert_eq!(
-        code, 0,
-        "the repair must accept the correct empty file: {stderr}"
+        code,
+        RunExit::Success,
+        "the repair must accept the correct empty file"
     );
     assert_eq!(
         read_game_file(&game, "game/empty.dat"),
@@ -669,6 +673,51 @@ async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
     let dir = temp_dir("empty_bad_md5");
     let game = dir.join("install");
     write_game_file(&game, "game/empty.dat", b"");
+
+    // The three read-only verdicts run in-process. For the plan case the
+    // binary's "PLAN printed" line is process-rendered, so its data-level
+    // counterpart is the plan document the library still publishes even with
+    // a wrong digest.
+    let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    ctx.check_only = true;
+    let (_, code) = run(ctx).await.expect("check-only runs");
+    assert_eq!(
+        code,
+        RunExit::CheckFailed,
+        "--check-only must report the mismatch"
+    );
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "the check must not touch the file"
+    );
+
+    let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    ctx.dry_run = true;
+    let (_, code) = run(ctx).await.expect("dry-run runs");
+    assert_eq!(code, RunExit::Success, "--dry-run");
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "--dry-run must not touch the file"
+    );
+
+    let plan = dir.join("plan.json");
+    let mut ctx = ctx_for(game.to_path_buf(), &mock, 1);
+    ctx.print_plan = true;
+    ctx.plan_out = Some(plan.clone());
+    let (_, code) = run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, RunExit::Success, "--print-plan");
+    assert!(
+        std::fs::read_to_string(&plan)
+            .expect("plan-out file")
+            .contains("\"repair\""),
+        "the plan is still published even though the digest is wrong"
+    );
+
+    // The terminal repair stays on the binary: its stderr carries the retry
+    // wording ("attempt failed", the whole-file digest gate) that only the
+    // process boundary renders, and the stdout summary pins stay with it.
     let game_arg = game.to_string_lossy().into_owned();
     let base = [
         "--game-path",
@@ -682,39 +731,6 @@ async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
         "--sophon-base",
         &mock.sophon_base,
     ];
-
-    let mut args = base.to_vec();
-    args.push("--check-only");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(
-        code, 4,
-        "--check-only must report the digest mismatch: {stderr}"
-    );
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "the check must not touch the file"
-    );
-
-    let mut args = base.to_vec();
-    args.push("--dry-run");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--dry-run: {stderr}");
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "--dry-run must not touch the file"
-    );
-
-    let mut args = base.to_vec();
-    args.push("--print-plan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--print-plan: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan is printed even though the digest is wrong:\n{stdout}"
-    );
-
     // The digest mismatch is deterministic: the file has no chunks, so the
     // next attempt would assemble the same empty bytes and fail the same gate.
     // It is therefore terminal, not retried — exactly one attempt is made even
