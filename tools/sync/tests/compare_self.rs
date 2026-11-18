@@ -151,32 +151,29 @@ fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
     assert_eq!(recs_of(&dir), before, "still writes nothing");
 }
 
-/// The records the real binary reported for a `compare-self` run.
+/// The records an in-process `compare-self` run reported.
 ///
 /// `cmd_compare_self` returns an exit code, so the records *are* the result, and a
-/// case that cares which ones appeared has to read them from somewhere. The binary
-/// also differs from the in-process default in one way that matters here:
-/// `--case-sensitive` defaults to **off**, so this is insensitive mode.
+/// case that cares which ones appeared has to read them from somewhere. Parsing
+/// the same argv the binary took keeps `--case-sensitive` defaulting to **off**,
+/// so this is insensitive mode.
 fn records(dir: &Path) -> Vec<serde_json::Value> {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("compare-self")
-        .arg("--dir")
-        .arg(dir)
-        .arg("--output")
-        .arg("json")
-        .output()
-        .expect("spawn girsync");
+    let out = common::run_args([
+        "compare-self",
+        "--dir",
+        &dir.display().to_string(),
+        "--output",
+        "json",
+    ]);
     // Exit 4 is the *answer* here, not a failure: it means "the cache has drifted",
     // which is exactly what these fixtures arrange. Only 0 and 4 are success here;
-    // anything else is the command refusing to run (3), and stdout is then not a
-    // report at all.
+    // anything else is the command refusing to run (3), and there is then no report.
     assert!(
-        matches!(out.status.code(), Some(0) | Some(4)),
-        "compare-self failed: {}\n{}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
+        matches!(out.code, 0 | 4),
+        "compare-self failed: {:?}",
+        out.error
     );
-    common::parse_ndjson(&out.stdout)
+    common::values(&out)
 }
 
 /// The `path` of every `event`, sorted, so an assertion names what was reported

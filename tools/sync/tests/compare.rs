@@ -715,25 +715,22 @@ fn a_case_only_pair_exits_four_with_total_diff_zero() {
     wfile(&dst, "A.txt", b"identical bytes");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("compare")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .arg("--output")
-        .arg("json")
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
+    let out = common::run_args([
+        "compare",
+        "--src",
+        &src.display().to_string(),
+        "--dst",
+        &dst.display().to_string(),
+        "--output",
+        "json",
+    ]);
     assert_eq!(
-        out.status.code(),
-        Some(4),
-        "a case-only difference is a difference: stderr {}",
-        String::from_utf8_lossy(&out.stderr)
+        out.code, 4,
+        "a case-only difference is a difference: {:?}",
+        out.error
     );
 
-    let recs = common::parse_ndjson(&out.stdout);
+    let recs = common::values(&out);
     let summary = common::summary_of(&recs);
     assert_eq!(
         summary["case_mismatch"], 1,

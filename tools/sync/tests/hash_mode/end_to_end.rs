@@ -115,19 +115,10 @@ fn update_populates_every_algorithm_under_any_of() {
     );
 }
 
-/// One invocation of the real binary: exit code and stderr.
+/// One in-process invocation: exit code and the error text a caller reads on
+/// stderr — clap's parse-error text or the `anyhow` string `main` logs as fatal.
 fn bin(args: &[&str]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        // The cases assert flag acceptance and the error text, not the cache
-        // file; the successful invocations need no cache on disk.
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    (
-        out.status.code().expect("girsync exits with a code"),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
+    common::run_error_text(args)
 }
 
 /// **`--hash-any-of none` is rejected.** "Any of the requested algorithms", with

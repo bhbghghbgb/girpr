@@ -54,6 +54,26 @@ where
     run_cli(Cli::try_parse_from(argv).expect("valid CLI args"))
 }
 
+/// Parse argv, run in-process, and return the exit code plus the error message
+/// a caller would read off stderr: clap's own text for a parse error (exit 2),
+/// or the `anyhow` string `main` logs as `fatal` (exit 3). Empty on success.
+#[allow(dead_code)]
+pub fn run_error_text<I, S>(args: I) -> (i32, String)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    match Cli::try_parse_from(argv) {
+        Err(e) => (2, e.to_string()),
+        Ok(cli) => {
+            let out = run_cli(cli);
+            (out.code, out.error.unwrap_or_default())
+        }
+    }
+}
+
 /// The captured records as the JSON values a `--output json` parser would read.
 #[allow(dead_code)]
 pub fn values(out: &RunOutcome) -> Vec<Value> {
