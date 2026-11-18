@@ -12,10 +12,12 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP11 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP11 `done` (last checkpoint).
-* Active phase: review. CP11 `in_progress`; T22, T23 are `pending_review`.
-* Active checkpoint: CP11 (in review). Active batch: none.
+* Next action: start the user-directed post-task flaky-test investigation — spawn
+  the **investigate** session first (see its section). It must complete before
+  any follow-up batching.
+* Active phase: post-task flaky-test investigation (investigate → fix → review),
+  before follow-ups. All 23 tasks terminal; all 11 checkpoints `done`.
+* Active checkpoint: none (all `done`). Active batch: none (follow-ups not started).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -59,8 +61,8 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | completed | P2 | CP9 | CP9 review: completed; ~301 net lines removed, harnesses only. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | completed | P2 | CP10 | CP10 review: completed; process pins retained. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | completed | P2 | CP10 | CP10 review: completed; non-vacuousness independently confirmed. |
-| T22 | Expose `Args` + conversion record from sled2redb lib | D1 | pending_review | P2 | CP11 | Implemented in d0ad4da0; spawns 10→3, conversions 5→1 (count note in context). |
-| T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | pending_review | P2 | CP11 | Implemented in 02be1d0d; fixtures 7→4, conversions 9→6, tests 10→9 (deviation in context). |
+| T22 | Expose `Args` + conversion record from sled2redb lib | D1 | completed | P2 | CP11 | CP11 review: completed. |
+| T23 | Split `convert_into` at the sled-read / redb-write boundary | D2 | completed | P2 | CP11 | CP11 review: completed; fixture deviation confirmed coverage-preserving. |
 
 ## Review checkpoints
 
@@ -76,7 +78,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP8 | T17–T18 | done | sync logging + `TestHooks` seams — both completed, no fixes/reverts |
 | CP9 | T19 | done | sync `CompareOutcome` pipeline dedup — completed, no fixes/reverts |
 | CP10 | T20–T21 | done | `repair_scan` downshift + `peak_heap` invariant — both completed, no fixes/reverts |
-| CP11 | T22–T23 | in_progress | sled2redb production seams |
+| CP11 | T22–T23 | done | sled2redb production seams — both completed, no fixes/reverts |
 
 ## Commit ranges for review
 
@@ -106,8 +108,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T19 | `416b480b..416aeda3` | completed |
 | T20 | `5d58b228..5deab7fb` | completed |
 | T21 | `351e3e4d..8aa7021c` | completed |
-| T22 | `49ac1645..d0ad4da0` | — (pending CP11 review) |
-| T23 | `adfbbeff..02be1d0d` | — (pending CP11 review) |
+| T22 | `49ac1645..d0ad4da0` | completed |
+| T23 | `adfbbeff..02be1d0d` | completed |
 
 ## Follow-ups
 
@@ -141,8 +143,8 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F28 | ~~Pin the exact stdout line for T20's "PLAN printed with a wrong digest" via a second binary spawn (currently asserted via plan-out document content).~~ | T20 implementer | removed | CP10 reviewer removed it: would add a spawn; the PLAN line is already pinned elsewhere and the wrong-digest case is pinned at data level. |
 | F29 | ~~Production seam exposing `summary.flags.plan_download_bytes` unconditionally so T20's remaining binary PLAN-line run can fully downshift.~~ | T20 implementer | removed | CP10 reviewer removed it: retained binary run pins genuinely process-rendered facts, so the seam buys no spawn reduction. |
 | F30 | Clean stale docs referencing the deleted peak_heap measurement: root `README.md:478–480` (calls the deleted allocator "the one explicit test-only exception") and `docs/03-repair-rust-implementation-plan.md:132,184`. | T21 implementer | scheduled | CP10 reviewer: now factually wrong after T21; README is read-only during the task loop, so handle in the orchestrator's final cleanup commit, not a follow-up implementation session. |
-| F32 | Drop T23's refuse/force-success sled fixture by using an empty plain directory as the sled source (no fsync), changing that case's asserted counts from (2,1) to (0,0). | T23 implementer | proposed | Loses representativeness and changes asserted counts; CP11 reviewer likely to prune. |
-| F33 | Add a `case_sensitive = false` case through `write_records` to pin case routing more directly. | T23 implementer | proposed | Adds coverage, not scale reduction; CP11 reviewer likely to prune. |
+| F32 | ~~Drop T23's refuse/force-success sled fixture by using an empty plain directory as the sled source (no fsync), changing that case's asserted counts from (2,1) to (0,0).~~ | T23 implementer | removed | CP11 reviewer removed it: drops the only fixture pinning force-replace and changes asserted counts — coverage loss for −1 fixture. |
+| F33 | ~~Add a `case_sensitive = false` case through `write_records` to pin case routing more directly.~~ | T23 implementer | removed | CP11 reviewer removed it: pure coverage-adder, zero scale reduction. |
 | F31 | ~~End-to-end pin through `stream_chunk_to` itself via a body-injection seam on the public `ChunkFetch` struct (avoids a socket).~~ | T21 implementer | removed | CP10 reviewer removed it: production API change, zero scale effect; stream_body invariant already non-vacuous. |
 | F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
 | F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
