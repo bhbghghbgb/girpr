@@ -62,34 +62,29 @@ mod table;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use common::{TempDir, parse_ndjson, summary_of, sync_mtime, temp_root, wfile};
+use common::{TempDir, summary_of, sync_mtime, temp_root, wfile};
 use serde_json::Value;
 
-/// Run `girsync sync --output json` and return the records it reported.
+/// Run `girsync sync --output json` in-process and return the records it reported.
 ///
-/// The real binary rather than the library, so the `rename` record is covered: it
-/// comes from the rename pass, not the plan builder, and the rename pass is the part
-/// of `sync` most exposed to the planner running before it.
+/// The whole CLI journey — clap, dispatch, the rename pass and the reporter — runs
+/// here, so the `rename` record (from the rename pass, not the plan builder) is
+/// still covered. The records are the ones the binary would have printed: one
+/// definition, captured from the same `Report` the process path uses.
 fn run(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(src)
-        .arg("--dst")
-        .arg(dst)
-        .arg("--output")
-        .arg("json")
-        .args(extra)
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert!(
-        out.status.success(),
-        "sync failed: {}\n{}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
-    );
-    parse_ndjson(&out.stdout)
+    let mut args: Vec<String> = vec![
+        "sync".into(),
+        "--src".into(),
+        src.display().to_string(),
+        "--dst".into(),
+        dst.display().to_string(),
+        "--output".into(),
+        "json".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let out = common::run_args(args);
+    assert_eq!(out.code, 0, "sync failed: {:?}", out.error);
+    common::values(&out)
 }
 
 /// What a path looks like on one side.

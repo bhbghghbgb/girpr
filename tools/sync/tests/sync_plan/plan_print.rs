@@ -62,24 +62,22 @@ fn sync_reports_the_diff_as_its_plan_before_it_acts() {
 fn sync_still_exits_zero_with_a_non_empty_plan() {
     let t = temp_root("plan_exit");
     let (src, dst) = build(&t);
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .arg("--dry-run")
-        .arg("--output")
-        .arg("json")
-        .output()
-        .expect("spawn girsync");
+    let out = common::run_args([
+        "sync",
+        "--src",
+        &src.display().to_string(),
+        "--dst",
+        &dst.display().to_string(),
+        "--dry-run",
+        "--output",
+        "json",
+    ]);
     assert_eq!(
-        out.status.code(),
-        Some(0),
-        "a non-empty plan must not change sync's exit code: {}",
-        String::from_utf8_lossy(&out.stdout)
+        out.code, 0,
+        "a non-empty plan must not change sync's exit code: {:?}",
+        out.error
     );
-    let recs = parse_ndjson(&out.stdout);
+    let recs = common::values(&out);
     let s = summary_of(&recs);
     assert!(
         s["total_diff"].as_u64().unwrap_or(0) > 0 || s["renamed"].as_u64().unwrap_or(0) > 0,

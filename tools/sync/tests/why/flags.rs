@@ -4,25 +4,14 @@
 
 use super::*;
 
-/// One invocation of the real binary: exit code and stdout as text.
+/// One in-process invocation of the CLI: exit code and rendered stdout.
 ///
-/// The binary rather than the library because the flag's whole journey — clap,
-/// `CommonOpts::try_from`, the `Report` a command holds — exists only in the real
-/// process. A tag asserted against `Verdict::why_tag` can be right while `--why`
-/// never reaches the printer.
+/// The whole flag journey — clap, `CommonOpts::try_from`, the `Report` a command
+/// holds — still runs here, so a tag asserted against `Verdict::why_tag` cannot
+/// be right while `--why` fails to reach the printer. The text is produced from
+/// the captured `Record`s by the same renderer the binary uses.
 fn bin(args: &[String]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        // These cases assert the rendered report, not the cache file. Serving the
-        // caches from memory keeps the real flag journey (clap, `CommonOpts`,
-        // the reporter) and drops the per-spawn redb create + fsync.
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    (
-        out.status.code().expect("girsync exits with a code"),
-        String::from_utf8(out.stdout).expect("stdout is utf-8"),
-    )
+    common::run_text(args)
 }
 
 /// A src/dst pair with one of every difference class, so a report has something to
@@ -272,16 +261,10 @@ fn compare_self_reports_a_reason_too() {
             "--case-sensitive".to_string(),
         ];
         args.extend(extra.iter().map(|s| s.to_string()));
-        // No memory override here: `compare-self` needs the cache `cmd_update`
-        // wrote above, and a child process has its own (empty) memory registry.
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-            .args(&args)
-            .output()
-            .expect("spawn girsync");
-        (
-            out.status.code().expect("exit code"),
-            String::from_utf8(out.stdout).expect("utf-8"),
-        )
+        // `compare-self` reads the cache `cmd_update` wrote above. The file
+        // backend is pinned by `common::run_text`, so it sees the same file the
+        // in-process `cmd_update` wrote.
+        common::run_text(&args)
     };
     let (off_code, off) = run(&[]);
     let (on_code, on) = run(&["--why"]);
