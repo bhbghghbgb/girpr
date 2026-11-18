@@ -1249,13 +1249,19 @@ mod m6_chunk_store {
 
 /// Assembly over the same frozen pair.
 ///
-/// The id *prefixes*, offsets and sizes below are the real ones the live
-/// 7.0.0 -> 7.1.0 capture produced; the content behind them is synthetic,
+/// The id *prefixes* and the identity structure below are the real ones the
+/// live 7.0.0 -> 7.1.0 capture produced; the content behind them is synthetic,
 /// because a chunk's digest has to match the bytes a test hands it or nothing
 /// downstream is exercised. What this pins is the identity structure the live
 /// pair has — one shared chunk with two builds declaring the same id, and two
 /// others at the same offset with different content — which is the part a
 /// synthetic fixture invented from scratch would get wrong.
+///
+/// The measured byte counts (and the offsets derived from them) are pinned by
+/// `the_measured_patch_reuses_one_chunk_and_fetches_two`. The structural tests
+/// use `TINY_LENGTHS` instead: shrinking the bodies changes no assembly
+/// decision, and the size relations they assert are written so that feeding
+/// them the measured lengths reproduces the original literals.
 mod m7_assembly {
     use super::*;
 
@@ -1315,24 +1321,40 @@ mod m7_assembly {
         }
     }
 
-    /// `HoYoChannel.dll` with the measured layout: offset 0 is the same length
-    /// but different content in each build, offset 690 719 is byte-identical,
-    /// and the tail differs.
-    fn hoyo_pair() -> FilePair {
+    /// The three chunk lengths of the measured `HoYoChannel.dll`, in order:
+    /// the offset-0 chunk, the chunk shared by both builds, and the tail.
+    /// Only `the_measured_patch_reuses_one_chunk_and_fetches_two` uses these;
+    /// it carries the literal totals the other three tests assert relationally.
+    const MEASURED_LENGTHS: [usize; 3] = [690_719, 1_626_019, 23_526];
+
+    /// Small stand-ins with the same identity structure: distinct prefixes on
+    /// the two offset-0 chunks and the two tails, one byte-identical shared
+    /// chunk at offset `first`. Only the byte counts differ from the measured
+    /// pair — no assembly decision depends on their magnitude.
+    const TINY_LENGTHS: [usize; 3] = [64, 128, 16];
+
+    /// `HoYoChannel.dll` at the caller's three chunk lengths: offset 0 is the
+    /// same length but different content in each build, the chunk at offset
+    /// `first` is byte-identical, and the tail differs. The id prefixes, which
+    /// chunk is shared, and which two chunks share an offset with different
+    /// content are the real measured ones; only the byte counts vary.
+    fn hoyo_pair([first, shared, tail]: [usize; 3]) -> FilePair {
+        let shared_offset = first as i64;
+        let tail_offset = (first + shared) as i64;
         let old = entry_of(
             HOYO,
             vec![
-                measured("7d3f050443837e58", 0, 690_719, 259_794),
-                measured("f5dc3ca1f3a0ba3d", 690_719, 1_626_019, 638_614),
-                measured("a4314f3c1ba1d7d4", 2_316_738, 23_526, 14_619),
+                measured("7d3f050443837e58", 0, first, 259_794),
+                measured("f5dc3ca1f3a0ba3d", shared_offset, shared, 638_614),
+                measured("a4314f3c1ba1d7d4", tail_offset, tail, 14_619),
             ],
         );
         let new = entry_of(
             HOYO,
             vec![
-                measured("ddb31a9fd85346c4", 0, 690_719, 259_795),
-                measured("f5dc3ca1f3a0ba3d", 690_719, 1_626_019, 638_614),
-                measured("340ca86ee8ac9be0", 2_316_738, 23_526, 14_631),
+                measured("ddb31a9fd85346c4", 0, first, 259_795),
+                measured("f5dc3ca1f3a0ba3d", shared_offset, shared, 638_614),
+                measured("340ca86ee8ac9be0", tail_offset, tail, 14_631),
             ],
         );
         FilePair {
@@ -1381,10 +1403,11 @@ mod m7_assembly {
         .expect("the measured pair assembles")
     }
 
-    /// A7, A8, A9, A10, A11, A12 — every row green on the measured layout.
+    /// A7, A8, A9, A10, A11, A12 — every row green on the measured identity
+    /// structure (tiny bodies; the count-sensitive totals are pinned elsewhere).
     #[test]
     fn the_measured_pair_is_green_on_a7_through_a12() {
-        let a = assemble_measured(&hoyo_pair());
+        let a = assemble_measured(&hoyo_pair(TINY_LENGTHS));
         let rows = a.selfcheck_rows();
         let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
@@ -1410,7 +1433,10 @@ mod m7_assembly {
     /// and a download cost that matches the schema doc's worked example.
     #[test]
     fn the_measured_patch_reuses_one_chunk_and_fetches_two() {
-        let a = assemble_measured(&hoyo_pair());
+        // The one test that keeps the measured byte counts. Every literal the
+        // other three used to pin is either here or reproduced by a size
+        // relation there when fed these same lengths.
+        let a = assemble_measured(&hoyo_pair(MEASURED_LENGTHS));
         let p = a.patch.as_ref().unwrap();
         assert_eq!(p.reused, 1);
         assert_eq!(p.fetched, 2);
@@ -1423,6 +1449,16 @@ mod m7_assembly {
         assert_eq!(t.download_bytes, 274_426, "the schema doc's figure");
         assert_eq!(t.materialize_old_bytes, 2_340_264);
         assert_eq!(t.materialize_new_bytes, 2_340_264);
+        assert_eq!(
+            a.map.plan.as_ref().unwrap()[0].uncompressed_size,
+            690_719,
+            "the measured offset-0 chunk length"
+        );
+        assert_eq!(
+            a.new.as_ref().unwrap().bytes.len(),
+            2_340_264,
+            "the reference bundle's HoYoChannel.dll size"
+        );
         assert_eq!(a.map.expectations.must_not_fetch.len(), 1);
         assert_eq!(
             a.map.expectations.must_not_fetch[0]
@@ -1439,18 +1475,19 @@ mod m7_assembly {
     /// FETCH.
     #[test]
     fn the_chunk_at_the_same_offset_with_new_bytes_is_fetched_not_reused() {
-        let pair = hoyo_pair();
+        let pair = hoyo_pair(TINY_LENGTHS);
         let a = assemble_measured(&pair);
         let plan = a.map.plan.as_ref().unwrap();
         let e = &plan[0];
         assert_eq!(e.decision, Decision::Fetch);
         assert!(e.source_range.is_none());
+        let old0 = &pair.old.as_ref().unwrap().entry.chunks[0];
+        // At the measured lengths this relation is 690 719: the chunk is FETCH
+        // because its bytes differ, not because its length does.
         assert_eq!(
-            e.uncompressed_size, 690_719,
+            e.uncompressed_size, old0.uncompressed_size,
             "the same length in both builds"
         );
-        let old0 = &pair.old.as_ref().unwrap().entry.chunks[0];
-        assert_eq!(old0.uncompressed_size, e.uncompressed_size);
         assert_ne!(
             old0.uncompressed_md5, e.uncompressed_md5,
             "but not the same bytes"
@@ -1462,7 +1499,8 @@ mod m7_assembly {
     /// different code paths, so byte-equality is evidence.
     #[test]
     fn the_patch_flow_byte_equals_the_direct_new_assembly_on_the_measured_pair() {
-        let a = assemble_measured(&hoyo_pair());
+        let pair = hoyo_pair(TINY_LENGTHS);
+        let a = assemble_measured(&pair);
         let p = a.patch.as_ref().unwrap();
         let n = a.new.as_ref().unwrap();
         // The patch flow's output is compared against the direct assembly inside
@@ -1474,12 +1512,20 @@ mod m7_assembly {
             p.equals_new,
             "A9: the patch flow and the direct assembly disagree on the measured pair"
         );
-        // The measured length moves to the side that survives. It pinned the
-        // patch flow's output before; now it pins the direct assembly's, which is
-        // the side the bundle actually stores — a better place for the same
-        // number to be checked, and 2 340 264 B is what the reference bundle's
-        // `HoYoChannel.dll` is.
-        assert_eq!(n.bytes.len(), 2_340_264);
+        // The direct assembly's length is a relation over the new side's
+        // declared chunk sizes, not a magic number: at the measured lengths it
+        // reproduces 2 340 264 B (the reference bundle's `HoYoChannel.dll`),
+        // pinned literally in `the_measured_patch_reuses_one_chunk_and_fetches_two`.
+        let new_size: usize = pair
+            .new
+            .as_ref()
+            .unwrap()
+            .entry
+            .chunks
+            .iter()
+            .map(|c| c.uncompressed_size as usize)
+            .sum();
+        assert_eq!(n.bytes.len(), new_size);
         assert_eq!(p.md5, n.md5);
         assert_eq!(
             n.md5, n.declared_md5,
