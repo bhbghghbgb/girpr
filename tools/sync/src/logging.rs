@@ -31,6 +31,7 @@
 
 use std::path::Path;
 use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*};
 
 pub use girpr_log::Level;
@@ -101,13 +102,78 @@ pub fn init_tracing(
 ) -> LogGuard {
     let plan = plan(console_level, file_level, log_file, no_log_file);
 
+    // The console is stderr in the binary; `subscriber_for` is the same stack
+    // with the writer injected, so an in-process caller can install it as a
+    // scoped default and read the rendered events back from its own buffer.
+    let (subscriber, worker) = subscriber_for(&plan, std::io::stderr);
+
+    // A subscriber that is already installed would swallow the file layer
+    // whole: the events would go to somebody else's subscriber and the log file
+    // would stay empty, with nothing to say so. It cannot happen in this
+    // binary's own `main`, and if it ever does, the run says so rather than
+    // pretending to have logged.
+    if let Err(e) = subscriber.try_init() {
+        eprintln!("WARN cannot install the tracing subscriber: {e}");
+    }
+
+    // The file's fate, said out loud and said the same way in all three
+    // projects: `log file: <path>`, or `log file: none` when there is no file.
+    // A run that leaves nothing behind should say so, rather than saying
+    // nothing and leaving the reader to guess.
+    match plan.file_path() {
+        Some(path) => info!("log file: {}", path.display()),
+        None => info!("log file: none"),
+    }
+
+    info!(
+        path = %plan
+            .file_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".into()),
+        console_level = %plan.console_level,
+        file_level = %plan.file_level,
+        pid = std::process::id(),
+        "log start"
+    );
+
+    LogGuard {
+        plan,
+        _file: worker,
+    }
+}
+
+/// Build the tracing stack a resolved plan describes, with the console sink
+/// writing through `console_writer` instead of a hardwired `std::io::stderr`.
+///
+/// This is the seam behind both installation paths: [`init_tracing`] passes
+/// `std::io::stderr` and installs the subscriber as the process-wide default,
+/// while a test passes a shared buffer and installs it thread-scoped with
+/// `tracing::subscriber::with_default`. The layer stack, the two filters, the
+/// JSON format and the file path are identical either way — only the console
+/// writer and where the subscriber is installed differ.
+///
+/// The returned [`WorkerGuard`] keeps the non-blocking file writer's queue
+/// alive. It is returned separately from the subscriber so the caller can make
+/// it outlive every event: `init_tracing` folds it into the [`LogGuard`] that
+/// `main` drops at exit, and a scoped caller keeps it in a local binding for the
+/// whole closure. Dropping it early loses the tail of the log.
+pub fn subscriber_for<W>(
+    plan: &girpr_log::LogPlan,
+    console_writer: W,
+) -> (
+    impl tracing::Subscriber + Send + Sync + 'static,
+    Option<WorkerGuard>,
+)
+where
+    W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
     let console_layer = fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(console_writer)
         .with_ansi(true)
         .with_target(true)
         .with_filter(girpr_log::filter(
-            &console_filter(&plan),
-            &console_fallback(&plan),
+            &console_filter(plan),
+            &console_fallback(plan),
         ));
 
     // The file is opened append-only, so two runs against one path do not
@@ -140,43 +206,12 @@ pub fn init_tracing(
             .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
     });
 
-    // A subscriber that is already installed would swallow the file layer
-    // whole: the events would go to somebody else's subscriber and the log file
-    // would stay empty, with nothing to say so. It cannot happen in this
-    // binary's own `main`, and if it ever does, the run says so rather than
-    // pretending to have logged.
-    if let Err(e) = tracing_subscriber::registry()
-        .with(console_layer)
-        .with(file_layer)
-        .try_init()
-    {
-        eprintln!("WARN cannot install the tracing subscriber: {e}");
-    }
-
-    // The file's fate, said out loud and said the same way in all three
-    // projects: `log file: <path>`, or `log file: none` when there is no file.
-    // A run that leaves nothing behind should say so, rather than saying
-    // nothing and leaving the reader to guess.
-    match plan.file_path() {
-        Some(path) => info!("log file: {}", path.display()),
-        None => info!("log file: none"),
-    }
-
-    info!(
-        path = %plan
-            .file_path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "none".into()),
-        console_level = %plan.console_level,
-        file_level = %plan.file_level,
-        pid = std::process::id(),
-        "log start"
-    );
-
-    LogGuard {
-        plan,
-        _file: worker,
-    }
+    (
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer),
+        worker,
+    )
 }
 
 /// The console's filter spec: `redb=warn`, then `RUST_LOG`, then this

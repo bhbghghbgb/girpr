@@ -89,7 +89,7 @@ pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 // pattern too - but it is the one that names the offending glob.
 pub use filter::{Filter, compile_patterns};
 pub use girpr_log::Level;
-pub use logging::{LogGuard, init_tracing, plan};
+pub use logging::{LogGuard, init_tracing, plan, subscriber_for};
 pub use planner::HashPlan;
 pub use report::{OutputFormat, Record, Report, ReportSink, verdict, visit_verdict};
 pub use rw::{RwLimits, RwPermit, RwRuntime, RwSide};

@@ -52,14 +52,27 @@ fn run(args: &[String]) -> Run {
 }
 
 /// The same invocation in-process, for cases that read only the records and
-/// exit code — the values `run_captured` exposes directly. The log tests keep
-/// `run` above: they need the real process's stderr/subscriber (finding E2 / T17).
+/// exit code — the values `run_captured` exposes directly.
 fn captured(args: &[String]) -> Run {
     let out = common::run_args(args);
     Run {
         code: out.code,
         records: common::values(&out),
         stderr: out.error.unwrap_or_default(),
+    }
+}
+
+/// An in-process invocation under a scoped copy of the binary's subscriber, for
+/// the cases that used to spawn the binary just to read its log.
+/// The console layer renders into the returned `stderr` buffer and the file
+/// layer writes the log file the args name; only the installation scope and the
+/// console writer differ from the real process's `run` above.
+fn logged(args: &[String]) -> Run {
+    let (out, console) = common::run_args_logged(args.iter().cloned(), &[]);
+    Run {
+        code: out.code,
+        records: common::values(&out),
+        stderr: console.text(),
     }
 }
 
@@ -305,19 +318,21 @@ fn the_two_formats_report_the_same_records_in_the_same_order() {
     }
 }
 
-/// The point of the flag: stdout is a clean NDJSON stream even while the run
-/// narrates.
+/// The point of the flag: the record channel and the narration channel are
+/// separate even while the run narrates.
 ///
-/// The default `--log-level` is `info`, so this run *does* emit log events. If
-/// any of them landed on stdout, every consumer would have to filter the stream
-/// it asked for, and `--output json` would be a formatting preference rather than
-/// a machine interface.
+/// The default `--log-level` is `info`, so this run *does* emit log events. In
+/// process the records reach the captured data channel while the events render
+/// on the console buffer; the process-level pin that the console is stderr (and
+/// stdout a clean NDJSON stream) lives in the two surviving binary smokes and in
+/// `init_tracing` writing through `std::io::stderr`. What is asserted here is
+/// that both channels are populated and distinct.
 #[test]
 fn json_stdout_stays_clean_while_the_run_narrates() {
     let t = temp_root("out_clean");
     let (src, dst) = fixture(&t);
     // No --log-level: the default narrates at info, the noisiest ordinary setting.
-    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    let r = logged(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4);
     assert!(
         r.records.len() > 1,
@@ -326,7 +341,7 @@ fn json_stdout_stays_clean_while_the_run_narrates() {
     );
     assert!(
         !r.stderr.is_empty(),
-        "and it narrated on stderr, so the assertion above is not vacuous"
+        "and it narrated on the console, so the assertion above is not vacuous"
     );
 }
 
@@ -361,7 +376,7 @@ fn a_record_is_logged_with_its_fields_at_debug_level() {
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
 
-    let r = run(&args);
+    let r = logged(&args);
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
     let printed: Vec<&str> = r
         .records
@@ -449,11 +464,11 @@ fn a_record_reaches_the_file_log_at_the_default_log_level() {
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
 
-    let r = run(&args);
+    let r = logged(&args);
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    let report_events: Vec<&serde_json::Value> = logged
+    let logged_events = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let report_events: Vec<&serde_json::Value> = logged_events
         .iter()
         .filter(|e| e["fields"]["message"] == "report")
         .collect();
@@ -461,7 +476,7 @@ fn a_record_reaches_the_file_log_at_the_default_log_level() {
         report_events.len(),
         r.records.len(),
         "the always-trace file layer captured every record at the default level: {}",
-        serde_json::to_string(&logged).unwrap()
+        serde_json::to_string(&logged_events).unwrap()
     );
     // And with its fields, so the gate did not degenerate into logging the name.
     assert!(
@@ -506,28 +521,23 @@ fn the_file_level_can_be_narrowed_by_the_flag_or_the_environment() {
             args.push("error".into());
         }
 
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
-        cmd.args(&args).env("GIRSYNC_TEST_CACHE", "memory");
-        if *use_env {
-            cmd.env("GIRSYNC_LOG_FILE_LEVEL", "error");
-        }
-        let out = cmd.output().expect("spawn girsync");
-        assert_eq!(
-            out.status.code(),
-            Some(4),
-            "{name}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        let env: &[(&str, &str)] = if *use_env {
+            &[("GIRSYNC_LOG_FILE_LEVEL", "error")]
+        } else {
+            &[]
+        };
+        let (out, _console) = common::run_args_logged(args.iter().cloned(), env);
+        assert_eq!(out.code, 4, "{name}: {:?}", out.error);
 
-        let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+        let logged_events = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
         assert_eq!(
-            logged
+            logged_events
                 .iter()
                 .filter(|e| e["fields"]["message"] == "report")
                 .count(),
             0,
             "{name}: the file is at `error`, so it kept no debug record: {}",
-            serde_json::to_string(&logged).unwrap()
+            serde_json::to_string(&logged_events).unwrap()
         );
     }
 }
@@ -543,6 +553,10 @@ fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
 
     // The environment names another crate: the program still speaks, at its
     // own level.
+    // Kept as a process smoke: the `log start` assertion pins an event emitted
+    // by `init_tracing` itself, which a scoped `subscriber_for` (builds the
+    // stack but does not run `init_tracing`) cannot render. Falling back keeps
+    // that assertion exact rather than rewriting it around a different event.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &[]))
         .env("RUST_LOG", "redb=debug")
@@ -636,29 +650,21 @@ fn the_scan_counts_the_entries_the_walk_saw() {
     wfile(&dir, "skip.log", b"excluded");
     let logfile = t.subdir("logs").join("run.json");
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args([
-            "update",
-            "--dir",
-            dir.to_str().unwrap(),
-            "--exclude",
-            "*.log",
-            "--output",
-            "json",
-            "--log-file",
-            logfile.to_str().unwrap(),
-        ])
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert!(
-        out.status.success(),
-        "update failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let r = logged(&[
+        "update".to_string(),
+        "--dir".to_string(),
+        dir.display().to_string(),
+        "--exclude".to_string(),
+        "*.log".to_string(),
+        "--output".to_string(),
+        "json".to_string(),
+        "--log-file".to_string(),
+        logfile.display().to_string(),
+    ]);
+    assert_eq!(r.code, 0, "update failed: {}", r.stderr);
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
-    let scans: Vec<&Value> = logged
+    let logged_events = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let scans: Vec<&Value> = logged_events
         .iter()
         .filter(|e| e["fields"]["message"] == "scan done")
         .collect();
@@ -666,7 +672,7 @@ fn the_scan_counts_the_entries_the_walk_saw() {
         scans.len(),
         1,
         "one walk, one scan-done event: {}",
-        serde_json::to_string(&logged).unwrap()
+        serde_json::to_string(&logged_events).unwrap()
     );
     // The excluded file is counted: these are the walk's counts, and the walk
     // does not know what the run excludes.
@@ -679,9 +685,8 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 
     // The run's own record counts the effective map, which the filter has
     // already pruned — so the excluded file is not in it.
-    let recs = parse_ndjson(&out.stdout);
     assert_eq!(
-        recs[0]["files"], 2,
+        r.records[0]["files"], 2,
         "the run's own count leaves the excluded file out"
     );
 }
@@ -830,35 +835,27 @@ fn a_pruned_cache_subtree_is_in_no_count() {
     wfile(&dir, "girpr-cache-old-2/deep/inner.bin", b"tool state");
     let logfile = t.subdir("logs").join("run.json");
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args([
-            "update",
-            "--dir",
-            dir.to_str().unwrap(),
-            "--output",
-            "json",
-            "--log-file",
-            logfile.to_str().unwrap(),
-        ])
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert!(
-        out.status.success(),
-        "update failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let r = logged(&[
+        "update".to_string(),
+        "--dir".to_string(),
+        dir.display().to_string(),
+        "--output".to_string(),
+        "json".to_string(),
+        "--log-file".to_string(),
+        logfile.display().to_string(),
+    ]);
+    assert_eq!(r.code, 0, "update failed: {}", r.stderr);
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let logged_events = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
 
     // The walk's own count: the two files and the directory between them, and
     // nothing of the cache subtrees.
-    let scans = events_with(&logged, "scan done");
+    let scans = events_with(&logged_events, "scan done");
     assert_eq!(
         scans.len(),
         1,
         "one walk, one scan-done event: {}",
-        serde_json::to_string(&logged).unwrap()
+        serde_json::to_string(&logged_events).unwrap()
     );
     assert_eq!(
         scans[0]["fields"]["entries"], 3,
@@ -868,12 +865,12 @@ fn a_pruned_cache_subtree_is_in_no_count() {
     assert_eq!(scans[0]["fields"]["dirs"], 1);
 
     // The map's count: the same tree, minus the pruned subtree.
-    let phase_a = events_with(&logged, "effective done: phase a");
+    let phase_a = events_with(&logged_events, "effective done: phase a");
     assert_eq!(
         phase_a.len(),
         1,
         "one phase A, one effective-done event: {}",
-        serde_json::to_string(&logged).unwrap()
+        serde_json::to_string(&logged_events).unwrap()
     );
     assert_eq!(phase_a[0]["fields"]["files"], 2, "the map holds two files");
     assert_eq!(
@@ -882,9 +879,8 @@ fn a_pruned_cache_subtree_is_in_no_count() {
     );
 
     // And the run's own record, which counts the map.
-    let recs = parse_ndjson(&out.stdout);
-    assert_eq!(recs[0]["files"], 2, "the record counts the map");
-    assert_eq!(recs[0]["dirs"], 1);
+    assert_eq!(r.records[0]["files"], 2, "the record counts the map");
+    assert_eq!(r.records[0]["dirs"], 1);
 }
 
 /// **A sync run counts each side on its own.**
@@ -907,35 +903,27 @@ fn a_sync_run_counts_each_side_separately() {
     wfile(&dst, "a.txt", b"hello");
     let logfile = t.subdir("logs").join("run.json");
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args([
-            "sync",
-            "--src",
-            src.to_str().unwrap(),
-            "--dst",
-            dst.to_str().unwrap(),
-            "--output",
-            "json",
-            "--log-file",
-            logfile.to_str().unwrap(),
-        ])
-        .env("GIRSYNC_TEST_CACHE", "memory")
-        .output()
-        .expect("spawn girsync");
-    assert!(
-        out.status.success(),
-        "sync failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let r = logged(&[
+        "sync".to_string(),
+        "--src".to_string(),
+        src.display().to_string(),
+        "--dst".to_string(),
+        dst.display().to_string(),
+        "--output".to_string(),
+        "json".to_string(),
+        "--log-file".to_string(),
+        logfile.display().to_string(),
+    ]);
+    assert_eq!(r.code, 0, "sync failed: {}", r.stderr);
 
-    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let logged_events = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
 
-    let scans = events_with(&logged, "scan done");
+    let scans = events_with(&logged_events, "scan done");
     assert_eq!(
         scans.len(),
         2,
         "a sync run walks both sides, once each: {}",
-        serde_json::to_string(&logged).unwrap()
+        serde_json::to_string(&logged_events).unwrap()
     );
 
     // The src's counts: two files and the directory between them.

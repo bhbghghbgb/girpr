@@ -13,6 +13,8 @@ pub use girpr_tempdir::test_support::*;
 #[allow(unused_imports)]
 pub use girpr_tempdir::{skip_if_case_insensitive, skip_if_no_link};
 
+use std::sync::{Arc, Mutex};
+
 use clap::Parser;
 use girsync::cli::Cli;
 use girsync::logging::Level;
@@ -107,4 +109,82 @@ where
     let format = cli.output;
     let out = run_cli(cli);
     (out.code, rendered(&out, format))
+}
+
+/// A console sink a test can read back: each event's formatted bytes are
+/// appended to one shared buffer, so a scoped subscriber's stderr is available
+/// even though no child process was spawned.
+#[derive(Clone, Default)]
+pub struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+#[allow(dead_code)] // each integration target gets its own copy of `common`
+impl SharedBuffer {
+    /// Everything the console layer has rendered so far, as text.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+    }
+}
+
+pub struct BufferWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for BufferWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
+    type Writer = BufferWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        BufferWriter(Arc::clone(&self.0))
+    }
+}
+
+/// Parse argv and run the CLI in-process under a scoped copy of the binary's
+/// tracing stack, with the console rendered into a returned buffer.
+///
+/// This is the seam for the tests that used to spawn the binary to read its
+/// log: the plan is resolved from the same CLI as `main` resolves it, the layer
+/// stack is the one [`girsync::subscriber_for`] builds, and the non-blocking
+/// file guard is held in a binding that outlives the `with_default` closure so
+/// the log file's tail is flushed before this returns. `env` lists any variable
+/// the plan must see (`RUST_LOG`, `<PROJECT>_LOG_FILE_LEVEL`); each is removed
+/// afterwards so a second run in the same test starts clean.
+#[allow(unsafe_code, dead_code)] // `set_var`/`remove_var` are unsafe in edition 2024; nextest isolates each test process
+pub fn run_args_logged<I, S>(args: I, env: &[(&str, &str)]) -> (RunOutcome, SharedBuffer)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    let cli = Cli::try_parse_from(argv).expect("valid CLI args");
+    for (key, value) in env {
+        unsafe { std::env::set_var(key, value) };
+    }
+    let plan = plan(
+        cli.log_level,
+        cli.log_file_level,
+        cli.log_file.as_deref(),
+        cli.no_log_file,
+    );
+    unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "file") };
+    let console = SharedBuffer::default();
+    let (subscriber, _guard) = girsync::subscriber_for(&plan, console.clone());
+    let out = tracing::subscriber::with_default(subscriber, || {
+        girsync::run_captured(cli, &plan).expect("run_captured")
+    });
+    for (key, _) in env {
+        unsafe { std::env::remove_var(key) };
+    }
+    (out, console)
 }
