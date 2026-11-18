@@ -162,7 +162,7 @@ unknown. This investigation MUST run after all tasks are terminal and all
 checkpoints are `done`, but BEFORE any follow-up batching or implementation —
 an explicit override of the default §5 completion order.
 
-* Status: scheduled (not started).
+* Status: in_progress. Active session: (1) investigate.
 * Scope: determine whether the flakiness originated during this orchestration
   session or before it, and determine whether and how it can be fixed.
 * Sessions (one at a time, in this order): (1) **investigate** — establish origin
