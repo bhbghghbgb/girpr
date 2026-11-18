@@ -8,11 +8,13 @@ use girsync::rw::RwLimits;
 
 use common::{
     compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
-    log, parse_ndjson, recs_of, rfile, skip_if_no_link, strip_ansi, sync, sync_dry, sync_mem,
-    sync_mtime, temp_root, update, update_mem, wfile,
+    log, parse_ndjson, recs_of, rfile, skip_if_no_link, sync, sync_dry, sync_mem, sync_mtime,
+    temp_root, update, update_mem, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, CacheOpen, TestCacheBackend, load_all_records, open_db};
-use girsync::{BackupPolicy, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::cache::{
+    CACHE_PREFIX, CacheOpen, CommitLimits, TestCacheBackend, load_all_records, open_db,
+};
+use girsync::{BackupPolicy, TestHooks, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::path::Path;
 
@@ -80,6 +82,16 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> 
 /// process-based helpers below; the in-process path pins the file cache, which
 /// is what the on-disk-cache cases want anyway.
 fn run_binary_raw(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]) -> RawRun {
+    // The environment fallback keeps the runner's inherited hooks (NO_FSYNC,
+    // DURABILITY) for every case that does not inject its own.
+    run_binary_raw_with_hooks(src, dst, extra, TestHooks::from_env())
+}
+
+/// The in-process form of [`run_binary_raw`] with hooks injected as data. This
+/// is the downshift of the failure-path child spawns: no `GIRSYNC_TEST_*`
+/// variable is set on a child, so two runs in one test can ask for different
+/// failures without a process-global `OnceLock` getting in the way.
+fn run_binary_raw_with_hooks(src: &Path, dst: &Path, extra: &[&str], hooks: TestHooks) -> RawRun {
     let mut args: Vec<String> = vec![
         "sync".into(),
         "--src".into(),
@@ -90,7 +102,7 @@ fn run_binary_raw(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]
         "json".into(),
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
-    let out = common::run_args(args);
+    let out = common::run_args_with_hooks(args, hooks);
     let stdout = common::values(&out)
         .iter()
         .map(|r| format!("{r}\n"))
@@ -104,10 +116,9 @@ fn run_binary_raw(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]
     }
 }
 
-/// Spawn the real binary with per-run environment hooks. Only the cases that
-/// inject a failure (`GIRSYNC_TEST_*`) or assert on a log file need a real child;
-/// the hooks are process-global and several are `OnceLock`-cached, so they
-/// cannot be toggled in-process (that is finding E5 / task T18).
+/// Spawn the real binary with per-run environment hooks. Only the case that
+/// asserts on a written log file still needs a real child; every failure-path
+/// case now injects a [`TestHooks`] in-process instead (finding E5 / task T18).
 fn run_binary_process(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
     let out = run_binary_raw_process(src, dst, extra, envs);
     assert!(
@@ -976,7 +987,12 @@ fn a_failed_case_rename_leaves_no_record() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_RENAME", "data.txt")]);
+    let out = run_binary_raw_with_hooks(
+        &src,
+        &dst,
+        &[],
+        TestHooks::default().with_fail_rename_before_claim("data.txt"),
+    );
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -1016,11 +1032,11 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_process(
+    let out = run_binary_raw_with_hooks(
         &src,
         &dst,
         &[],
-        &[("GIRSYNC_TEST_FAIL_RENAME_STEP1", "data.txt")],
+        TestHooks::default().with_fail_rename_step1("data.txt"),
     );
     assert_eq!(
         out.status.code(),
@@ -1065,11 +1081,11 @@ fn a_failed_case_rename_step2_rolls_back() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_process(
+    let out = run_binary_raw_with_hooks(
         &src,
         &dst,
         &[],
-        &[("GIRSYNC_TEST_FAIL_RENAME_STEP2", "data.txt")],
+        TestHooks::default().with_fail_rename_step2("data.txt"),
     );
     assert_eq!(
         out.status.code(),
@@ -1215,7 +1231,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
 /// **Both flush shapes**, because the stamp is ordered against the flush: the
 /// flush puts the bytes on the disk, and the stamp has to land after it and
 /// before the handle closes. A shape that stamped before the flush would let
-/// the flush's own write-back move it again. `GIRSYNC_TEST_NO_FSYNC` picks
+/// the flush's own write-back move it again. The injected `no_fsync` hook picks
 /// which shape runs, so both are asked for explicitly rather than inheriting
 /// the workspace's choice.
 #[test]
@@ -1235,8 +1251,15 @@ fn a_copied_file_carries_the_sources_timestamp() {
         .set_modified(stamp)
         .unwrap();
 
-    for no_fsync in ["0", "1"] {
-        let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", no_fsync)]);
+    // Both flush shapes are asked for explicitly through the injected hook,
+    // rather than by setting a process-global variable on a child.
+    for no_fsync in [false, true] {
+        let out = run_binary_raw_with_hooks(
+            &src,
+            &dst,
+            &[],
+            TestHooks::default().with_no_fsync(no_fsync),
+        );
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -1558,23 +1581,21 @@ fn a_failed_copy_discards_only_the_uncommitted_cache_tail() {
     }
 
     // A file-cache run: the rows have to outlive the process that wrote them.
+    // The commit threshold and the injected failure are carried as hooks, so
+    // both runs happen in-process without a child or an env var.
+    let limits = CommitLimits {
+        max_ops: 2,
+        max_bytes: u64::MAX,
+        // Keep the time trigger out of it: the op count is the only commit this
+        // fixture may observe during the copy phase.
+        max_interval: std::time::Duration::from_secs(60),
+    };
     let run = |fail: Option<&str>| {
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
-        cmd.arg("sync")
-            .arg("--src")
-            .arg(&src)
-            .arg("--dst")
-            .arg(&dst)
-            .arg("--output")
-            .arg("json")
-            .env("GIRSYNC_TEST_COMMIT_OPS", "2")
-            // Keep the time trigger out of it: the op count is the only commit
-            // this fixture may observe during the copy phase.
-            .env("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000");
+        let mut hooks = TestHooks::default().with_commit(limits);
         if let Some(rel) = fail {
-            cmd.env("GIRSYNC_TEST_FAIL_COPY", rel);
+            hooks = hooks.with_fail_copy(rel);
         }
-        cmd.output().expect("spawn girsync")
+        run_binary_raw_with_hooks(&src, &dst, &[], hooks)
     };
 
     let out = run(Some("f2.bin"));
@@ -1710,19 +1731,17 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
     let dst = t.subdir("dst");
     wfile(&src, "a.bin", b"payload");
 
-    // `GIRSYNC_TEST_NO_FSYNC=0` because the workspace's nextest setup turns the
-    // flush off for speed; this case is about the flush itself.
-    let out = run_binary_raw_process(
+    // `no_fsync` is explicitly false because the workspace's nextest setup
+    // turns the flush off for speed; this case is about the flush itself. The
+    // on-disk cache rows are read via `recs(&dst)`, and the harness pins the
+    // file backend for in-process runs.
+    let out = run_binary_raw_with_hooks(
         &src,
         &dst,
         &[],
-        &[
-            // This case inspects on-disk cache rows via `recs(&dst)`, so opt out
-            // of the memory default. `NO_FSYNC=0` is left intact.
-            ("GIRSYNC_TEST_CACHE", "file"),
-            ("GIRSYNC_TEST_FAIL_FLUSH", "a.bin"),
-            ("GIRSYNC_TEST_NO_FSYNC", "0"),
-        ],
+        TestHooks::default()
+            .with_no_fsync(false)
+            .with_fail_flush("a.bin"),
     );
     assert_eq!(
         out.status.code(),
@@ -1741,15 +1760,7 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
     );
 
     // No resume: the rerun copies it and caches it. Still reads `recs(&dst)`.
-    let out = run_binary_raw_process(
-        &src,
-        &dst,
-        &[],
-        &[
-            ("GIRSYNC_TEST_CACHE", "file"),
-            ("GIRSYNC_TEST_NO_FSYNC", "0"),
-        ],
-    );
+    let out = run_binary_raw_with_hooks(&src, &dst, &[], TestHooks::default().with_no_fsync(false));
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -1795,21 +1806,20 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     wfile(&src, "mmm.bin", b"fails first");
     wfile(&src, "zzz.bin", b"the control");
 
-    let out = run_binary_raw_process(
+    let out = run_binary_raw_with_hooks(
         &src,
         &dst,
         &["--rw-threads", "2"],
-        &[
-            ("GIRSYNC_TEST_FAIL_COPY", "mmm.bin"),
-            ("GIRSYNC_TEST_FAIL_FLUSH", "aaa.bin"),
+        TestHooks::default()
+            .with_fail_copy("mmm.bin")
+            .with_fail_flush("aaa.bin")
             // The workspace's nextest setup turns the flush off for speed; this
             // case is about the flush.
-            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+            .with_no_fsync(false)
             // The barrier: `aaa.bin` does not begin until `mmm.bin` has failed,
             // so the failure recorded first is the one that comes *later* in
             // the plan.
-            ("GIRSYNC_TEST_GATE_COPY", "aaa.bin:mmm.bin"),
-        ],
+            .with_gate_copy("aaa.bin:mmm.bin"),
     );
     assert_eq!(
         out.status.code(),
@@ -1817,16 +1827,13 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
         "two copies failed, so the run failed; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // The colour is taken out first: the console writes the level and the
-    // target in their own colours, and the escape sequences land between the
-    // text a check is looking at.
-    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
-    // The reported copy is named as the path inside the mirror, and the name
-    // is the whole of it: a check for a bare `aaa.bin` would accept a longer
-    // path that starts with it, and the plan's first copy is the one the
-    // report has to name.
+    // In-process, the raw `anyhow` chain is exposed as the error string (the
+    // binary's `error="…"` wrapper is added by `main`'s fatal event, which a
+    // captured run does not emit). The reported copy is named as the path
+    // inside the mirror, and the whole line starts with `copy <rel>: `.
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains(r#"error="copy aaa.bin: "#),
+        stderr.contains("copy aaa.bin: "),
         "the failure reported is the first copy in the plan: {stderr}"
     );
     assert!(
@@ -1863,7 +1870,12 @@ fn a_reported_copy_failure_is_the_copy_and_the_cause() {
     let dst = t.subdir("dst");
     wfile(&src, "mmm.bin", b"payload");
 
-    let out = run_binary_raw_process(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_COPY", "mmm.bin")]);
+    let out = run_binary_raw_with_hooks(
+        &src,
+        &dst,
+        &[],
+        TestHooks::default().with_fail_copy("mmm.bin"),
+    );
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -1871,9 +1883,11 @@ fn a_reported_copy_failure_is_the_copy_and_the_cause() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    // The in-process error is the raw `anyhow` chain: the phase, the relative
+    // path and the injected cause, with nothing else around it.
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains(r#"error="copy mmm.bin: test: injected copy failure for mmm.bin""#),
+        stderr.contains("copy mmm.bin: test: injected copy failure for mmm.bin"),
         "the failure names the copy and the cause, and nothing else: {stderr}"
     );
 }

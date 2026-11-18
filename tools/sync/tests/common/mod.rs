@@ -19,7 +19,7 @@ use clap::Parser;
 use girsync::cli::Cli;
 use girsync::logging::Level;
 use girsync::report::OutputFormat;
-use girsync::{Report, RunOutcome, plan};
+use girsync::{Report, RunOutcome, TestHooks, plan};
 use serde_json::Value;
 
 /// The quiet log policy an in-process run is dispatched under: no console
@@ -39,8 +39,19 @@ fn capture_plan() -> girsync::girpr_log::LogPlan {
 /// `set_var` cannot leak to another test.
 #[allow(unsafe_code, dead_code)] // `set_var` is unsafe in edition 2024; nextest isolates each test process
 pub fn run_cli(cli: Cli) -> RunOutcome {
+    run_cli_with_hooks(cli, TestHooks::from_env())
+}
+
+/// Run a parsed CLI in-process with the given hooks injected, capturing records,
+/// exit code and error string exactly as [`run_cli`] does.
+///
+/// This is the seam the failure-path cases use instead of spawning a child just
+/// to set a `GIRSYNC_TEST_*` variable: the hooks are data, so two runs in one
+/// process can ask for different failures without a `OnceLock` or a subprocess.
+#[allow(unsafe_code, dead_code)] // `set_var` is unsafe in edition 2024; nextest isolates each test process
+pub fn run_cli_with_hooks(cli: Cli, hooks: TestHooks) -> RunOutcome {
     unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "file") };
-    girsync::run_captured(cli, &capture_plan()).expect("run_captured")
+    girsync::run_captured_with_hooks(cli, &capture_plan(), hooks).expect("run_captured")
 }
 
 /// Parse arguments (as passed to `Command::args`, without a program name) and
@@ -54,6 +65,18 @@ where
     let argv = std::iter::once(std::ffi::OsString::from("girsync"))
         .chain(args.into_iter().map(Into::into));
     run_cli(Cli::try_parse_from(argv).expect("valid CLI args"))
+}
+
+/// [`run_args`] with hooks injected through [`run_cli_with_hooks`].
+#[allow(dead_code)]
+pub fn run_args_with_hooks<I, S>(args: I, hooks: TestHooks) -> RunOutcome
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    run_cli_with_hooks(Cli::try_parse_from(argv).expect("valid CLI args"), hooks)
 }
 
 /// Parse argv, run in-process, and return the exit code plus the error message
