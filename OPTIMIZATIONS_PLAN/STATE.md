@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T16 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP6 `done`; T15 `completed`; T16 is the next
-  task (CP7, largest single change).
+* Next action: wait for the T16 implementing session to finish, then apply its
+  result. T16 is the sole CP7 task, so after recording it, run the CP7 review
+  phase (`ORCHESTRATION.md` §4).
+* Active phase: implementation. CP1–CP6 `done`; T16 `in_progress` (sole CP7 task,
+  largest single change).
 * Active checkpoint: none yet (CP7 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -50,7 +51,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T13 | Capture: merge mock / no-network full captures | B4 | completed | P1 | CP5 | CP5 review: completed; row-pin deviation confirmed. |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
-| T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
+| T16 | Sync injectable record sink + `run_captured` | E1 | in_progress | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | todo | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
