@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: spawn the FB1 implementing session (F11, F12, F13) — see the batch details. Set FB1 `in_progress` first (`ORCHESTRATION.md` §5).
-* Active phase: follow-up implementation. Batching review done: FB1–FB4 recorded; all 23 tasks and 11 checkpoints done; investigation done.
-* Active checkpoint: none (all `done`). Active batch: FB1 (about to start).
+* Next action: spawn the FB1 review session with commit range `b3c98719..50d0f14b`, then apply its verdict and mark FB1 `done` (`ORCHESTRATION.md` §5).
+* Active phase: follow-up review. FB1 `pending_review`; FB2–FB4 `open`.
+* Active checkpoint: none (all `done`). Active batch: FB1 (in review).
 * Active checkpoint: none yet (CP11 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -145,6 +145,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F34 | ~~Add a warning comment in `tools/sync/tests/common/mod.rs` discouraging future process-global tracing calls in `run_args_logged`.~~ | fix session | removed | Investigation reviewer removed it: hygiene with zero scale effect, redundant with the fix's own doc comment. |
 | F35 | ~~Apply the registration-then-rebuild guard to any future scoped-subscriber fold sharing a WARN callsite with sibling tests in one process.~~ | fix session | removed | Investigation reviewer removed it: speculative future guidance, no current target or action. |
 | F31 | ~~End-to-end pin through `stream_chunk_to` itself via a body-injection seam on the public `ChunkFetch` struct (avoids a socket).~~ | T21 implementer | removed | CP10 reviewer removed it: production API change, zero scale effect; stream_body invariant already non-vacuous. |
+| F36 | Remove the now-dead `Run::word` helper at `tests/repair_machinery.rs:119` (pre-existing from T09). | FB1 implementer | proposed | Pure hygiene, zero scale effect; FB1 reviewer likely to prune. |
 | F26 | ~~Production single-side seam (`scan_stat_only → plan_one_side → resolve_folder`) to dedup `tests/helpers.rs::phased` (~28-line copy), which T19 could not serve.~~ | T19 implementer | removed | CP9 reviewer removed it: ~100-line production seam for one ~28-line helper, zero test-count/spawn effect; `phased` intentionally spells out phases for per-phase assertions. |
 | F27 | ~~Have `compare_detailed` return its `EnteredSpan` for the caller to hold while rendering, restoring exact span fidelity for `end`/`report` events.~~ | T19 implementer | removed | CP9 reviewer removed it: log-only, zero test-scale effect, no test pins span membership. |
 | F25 | ~~Fold `TestCacheBackend` into `TestHooks` to fully unify the seam.~~ | T18 implementer | removed | CP8 reviewer removed it: zero scale benefit, churns roughly 30 hand-built `CommonOpts` literals. |
@@ -203,7 +204,7 @@ session, using the same separate state commits. Statuses: `open` → `in_progres
 
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
-| FB1 | F11, F12, F13 | in_progress | — | — | root `tests/` downshifts & merges (T09/T10) | low risk, first |
+| FB1 | F11, F12, F13 | pending_review | `b3c98719..50d0f14b` | — | root `tests/` downshifts & merges (T09/T10) | −2 spawns, −2 tests, −2 listener starts |
 | FB2 | F18, F05 | open | — | — | root verify-before-removing (process test + plan fold) | F18 must be reduced to a smoke, not deleted |
 | FB3 | F03, F24 | open | — | — | `tools/sync` remaining (table-ize + spawn downshift) | F24 needs the F23 interest-cache fix |
 | FB4 | F01 (spawn-removal half only) | open | — | — | gircap spawn removal (B6 part a) | widest/riskiest, last; `skipped` is a valid result |
