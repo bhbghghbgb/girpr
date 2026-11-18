@@ -12,10 +12,11 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the CP5 review-and-fix session to finish, then apply its
-  verdicts and follow-up recommendations and mark CP5 `done` (`ORCHESTRATION.md` §4).
-* Active phase: review. CP5 `in_progress`; both CP5 tasks are `pending_review`.
-* Active checkpoint: CP5 (in review). Active batch: none.
+* Next action: pick the next `todo` task in seeded order — T15 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP5 `done`; T13 `completed`, T14 `skipped`,
+  T15 is the next task (CP6).
+* Active checkpoint: none yet (CP6 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
 ## Status vocabulary
@@ -46,8 +47,8 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | completed | P1 | CP3 | CP3 review: completed (mock-server estimate note confirmed). |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | completed | P1 | CP4 | CP4 review: completed. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | completed | P1 | CP4 | CP4 review: completed (DiskFigure deviation validated). |
-| T13 | Capture: merge mock / no-network full captures | B4 | pending_review | P1 | CP5 | Implemented in bda7e0c5; row-pin test kept separate (deviation, see context). |
-| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | pending_review | P1 | CP5 | Partial: purge-only trio merged in b3cf81bf; plan-out pair skipped (contradiction, see context). |
+| T13 | Capture: merge mock / no-network full captures | B4 | completed | P1 | CP5 | CP5 review: completed; row-pin deviation confirmed. |
+| T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
 | T15 | Parameterize the sync heartbeat period | E4 | todo | P1 | CP6 | If counters stay log-only, E2 (T17) is still required. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
@@ -66,7 +67,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP2 | T05–T08 | done | P0 capture + sync small findings — all completed, no fixes/reverts |
 | CP3 | T09–T10 | done | `repair_machinery` + `repair_plan` downshifts — both completed, no fixes/reverts |
 | CP4 | T11–T12 | done | root-unit production seams (MD5, DiskPlan) — both completed, no fixes/reverts |
-| CP5 | T13–T14 | in_progress | capture mock merge + `repair_purge` merges |
+| CP5 | T13–T14 | done | capture mock merge + `repair_purge` merges — T13 completed, T14 skipped (confirmed), no fixes/reverts |
 | CP6 | T15 | open | sync heartbeat parameterization |
 | CP7 | T16 | open | sync record sink + `run_captured` (largest single change) |
 | CP8 | T17–T18 | open | sync logging + `TestHooks` seams |
@@ -93,8 +94,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T10 | `78746658..7da360d3` | completed |
 | T11 | `6117c5ff..787c35f0` | completed |
 | T12 | `ae909714..08ca4e98` | completed |
-| T13 | `2758abff..bda7e0c5` | — (pending CP5 review) |
-| T14 | `86b465f3..b3cf81bf` | — (pending CP5 review) |
+| T13 | `2758abff..bda7e0c5` | completed |
+| T14 | `86b465f3..b3cf81bf` | skipped (confirmed) |
 | T15–T23 | — (not started) | — |
 
 ## Follow-ups
@@ -106,7 +107,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | ID | Description | Source | Status | Note |
 |---|---|---|---|---|
 | F01 | **B6:** in-process capture seam — call `run::capture/verify/materialize/list` directly and assert on `Outcome` records; removing the TCP mock needs an injected HTTP transport for `Fetcher` (report §B6 L318–L330). | report | proposed | Largest capture lever, wide/risky; B1–B5 (T05/T06/T07/T13) capture most benefit first. |
-| F02 | **D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591). | report | proposed | Depends on T22 exposing `Args`; maintenance, no test-count change. |
+| F02 | ~~**D8:** render the real `sled2redb::Args::command()` for the help pin instead of the hand-built `clap::Command` (report §D8 L583–L591).~~ | report | removed | CP5 reviewer removed it: zero test-count/spawn/fixture effect, pure maintenance; avoid an implement+review cycle for no scale benefit. |
 | F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
 | F04 | ~~Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range.~~ | T01 implementer | removed | CP2 reviewer removed it: non-actionable conditional watch item; adds coverage rather than reducing scale, contingent on an unplanned jitter-test extension. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
