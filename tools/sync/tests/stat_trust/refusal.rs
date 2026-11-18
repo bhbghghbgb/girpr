@@ -39,7 +39,7 @@ fn no_digest_available_with_a_distrusted_field_is_refused() {
             "--case-sensitive".to_string(),
         ];
         args.extend(flags.clone());
-        let (code, stderr) = bin(&args);
+        let (code, stderr) = common::run_error_text(&args);
         assert_ne!(
             code, 0,
             "{flags:?} with no digest cannot be honoured, so it must not exit 0 — and \
@@ -124,7 +124,7 @@ fn the_refusal_is_uniform_across_subcommands() {
     let t = temp_root("st_refuse_update");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    let (code, stderr) = bin(&[
+    let (code, stderr) = common::run_error_text(&[
         "update".to_string(),
         "--dir".to_string(),
         dir.display().to_string(),

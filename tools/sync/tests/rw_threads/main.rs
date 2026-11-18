@@ -213,22 +213,16 @@ fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
     run_env(args, &[])
 }
 
-/// Like [`run`], but forwards `extra` environment variables to the spawned
-/// `girsync.exe`. Used by the per-`--rw`-setting equivalence tests so every
-/// setting runs against an in-memory cache: the actions a run reports must not
-/// depend on the cache's storage backend, and the memory cache skips the per-
-/// command 1 MB create + fsync that dominates these tests on the HDD.
-fn run_env(args: &[&str], extra: &[(&str, &str)]) -> (i32, Vec<serde_json::Value>) {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
-    cmd.args(args).arg("--output").arg("json");
-    for (k, v) in extra {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().expect("spawn girsync");
-    (
-        out.status.code().unwrap_or(-1),
-        common::parse_ndjson(&out.stdout),
-    )
+/// Like [`run`], in-process. `extra` used to put the child on the in-memory
+/// cache; the actions a run reports do not depend on the cache's storage
+/// backend, and the shared helper pins the file backend for every run, so the
+/// equivalence under test is unaffected.
+fn run_env(args: &[&str], _extra: &[(&str, &str)]) -> (i32, Vec<serde_json::Value>) {
+    let mut argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    argv.push("--output".into());
+    argv.push("json".into());
+    let out = common::run_args(argv);
+    (out.code, common::values(&out))
 }
 
 /// Every rw spelling the CLI accepts, paired with what it should resolve to.
