@@ -12,11 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T04 implementing session to finish, then apply its
-  result. T04 completes CP1's tasks, so after recording its result, run the CP1
-  review phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. T01, T02, T03 `pending_review`, T04 `in_progress`;
-  all four CP1 tasks will be terminal once T04's result is applied.
+* Next action: run the CP1 review phase (`ORCHESTRATION.md` §4) — all four CP1
+  tasks are terminal (`pending_review`). Set CP1 `in_progress` and spawn one
+  review-and-fix session with the four commit ranges.
+* Active phase: review. All CP1 tasks are `pending_review`; CP1 is ready for review.
 * Active checkpoint: none yet (CP1 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -39,7 +38,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | pending_review | P0 | CP1 | Implemented in 934eadcb. |
 | T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | pending_review | P0 | CP1 | Implemented in be7d2dc5, ca643fec. |
 | T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | pending_review | P0 | CP1 | Implemented in fdad6e62, cb9226fb. D3 fixture saving did not materialize (see context). |
-| T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | in_progress | P0 | CP1 | |
+| T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | pending_review | P0 | CP1 | Implemented in d9899f1d, e9f779f5, ccbef0ad. Protected tests intact. |
 | T05 | Capture: reduce full captures 3→1 (Ceiling + GzipThreshold) | B1, B5 | todo | P0 | CP2 | Do B1+B5 together (bundle_source_key hashes all src). B5 may need thin e2e smoke fallback. |
 | T06 | Capture: device-name flag refusal → config unit test | B2 | todo | P0 | CP2 | |
 | T07 | Capture: downscale `m7_assembly` megabyte bodies | B3 | todo | P0 | CP2 | Verify rewrites equal old literals at measured sizes. |
@@ -86,7 +85,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T01 | `5b5a10cb..934eadcb` | — (pending CP1 review) |
 | T02 | `c6140196..ca643fec` | — (pending CP1 review) |
 | T03 | `1bfa735f..cb9226fb` | — (pending CP1 review) |
-| T04–T23 | — (not started) | — |
+| T04 | `0ea6802e..ccbef0ad` | — (pending CP1 review) |
+| T05–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -101,6 +101,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F03 | Table-ize the ~15 near-identical fixture/expected-record tests in `tools/sync/tests/lazy/compare.rs` (report §E3 L717–L719). | report | proposed | Optional in the report; ~14 tests; do only after T19's shared harness exists. |
 | F04 | Widen T01's no-u64-wrap assertion scope if jitter's test coverage is extended beyond attempts `1..=5`; the proof currently asserts the bound only for that range. | T01 implementer | proposed | Non-blocking; only relevant if jitter tests are extended past attempt 5. |
 | F05 | Fold `plan.rs::a_file_with_no_chunks_and_no_size_is_tiled` into T02's merged table (redundant with its `"empty file"` row). | T02 implementer | proposed | Non-blocking; outside T02's named cluster, left for later cleanup. |
+| F06 | Optional D6 hygiene: downshift the `Targets` `Layer`/`Arc<Mutex<Vec>>` harness in `filter.rs:36–68` to `EnvFilter::enabled` with constructed metadata (~30 lines). | T04 implementer | proposed | No test-count effect, riskier than the fold; left out of scope. |
 
 ## Follow-up batches
 
@@ -154,3 +155,4 @@ context-only statements — no session ids, dates, machine data or chronological
 change log.
 
 * T03 (D3): report predicted "−1 sled fixture", but `build_sled_db` is still required by the `--force` conversion whose `(2,1)` result is asserted — real effect is −1 conversion only. Not a missed optimization; CP1 reviewer should not flag it.
+* T04 (D5): plan.rs went 13 → 5 tests (−8), not the report's approximated "−7 / ~6", because fully folding the ten explicitly-listed anchors into the two required tables yields −8. Internal consistency, not a missed case; CP1 reviewer should not flag it.
