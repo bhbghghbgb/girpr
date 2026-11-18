@@ -12,10 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T11 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP3 `done`; T09, T10 `completed`, T11–T12 are
-  the next tasks (CP4).
+* Next action: wait for the T11 implementing session to finish, then apply its
+  result (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP3 `done`; T11 `in_progress`, T12 `todo` (CP4).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -45,7 +44,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T08 | Sync smaller findings: helper meta-tests + fixture trims | E6 | completed | P0 | CP2 | CP2 review: completed; scan.rs harness-pin skip confirmed. |
 | T09 | `repair_machinery.rs` in-process `Summary` downshift | A1 | completed | P1 | CP3 | CP3 review: completed. |
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | completed | P1 | CP3 | CP3 review: completed (mock-server estimate note confirmed). |
-| T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | todo | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
+| T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | in_progress | P1 | CP4 | Production seam: `*_with_buf` private helpers. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | todo | P1 | CP4 | Preserve symlink/dir → `temp` semantics; do not change `resolve_mode` itself. |
 | T13 | Capture: merge mock / no-network full captures | B4 | todo | P1 | CP5 | 4 tests → 2; verify exact row/byte pins hold on shared capture. |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | todo | P1 | CP5 | Two tables over the named case sets. |
