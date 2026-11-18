@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T15 implementing session to finish, then apply its
-  result. T15 is the sole CP6 task, so after recording it, run the CP6 review
-  phase (`ORCHESTRATION.md` §4).
-* Active phase: implementation. CP1–CP5 `done`; T15 `in_progress` (sole CP6 task).
+* Next action: run the CP6 review phase (`ORCHESTRATION.md` §4) — T15 is terminal
+  (`pending_review`). Set CP6 `in_progress` and spawn one review-and-fix session
+  with its single commit range.
+* Active phase: review. T15 is `pending_review`; CP6 is ready for review.
 * Active checkpoint: none yet (CP6 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -49,7 +49,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | completed | P1 | CP4 | CP4 review: completed (DiskFigure deviation validated). |
 | T13 | Capture: merge mock / no-network full captures | B4 | completed | P1 | CP5 | CP5 review: completed; row-pin deviation confirmed. |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | skipped | P1 | CP5 | CP5 review: skipped (deliberate plan-out skip confirmed); purge-only trio merged in b3cf81bf (12→10 tests), acceptance criteria met. |
-| T15 | Parameterize the sync heartbeat period | E4 | in_progress | P1 | CP6 | If counters stay log-only, E2 (T17) is still required. |
+| T15 | Parameterize the sync heartbeat period | E4 | pending_review | P1 | CP6 | Implemented in a2f21205; counters were already on ScanStats, guardrail did not bind. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | todo | P2 | CP8 | Verify rayon event threading before downshifting output.rs:703. Sequence after T16. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | todo | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
@@ -96,7 +96,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T12 | `ae909714..08ca4e98` | completed |
 | T13 | `2758abff..bda7e0c5` | completed |
 | T14 | `86b465f3..b3cf81bf` | skipped (confirmed) |
-| T15–T23 | — (not started) | — |
+| T15 | `7c787656..a2f21205` | — (pending CP6 review) |
+| T16–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -121,6 +122,9 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F13 | Share one `MockServer` across all three cases of T10's audio-plan test (start before the loop, stop after) to cut 2 listener/task starts. | T10 implementer | proposed | Real but small scale reduction, low risk; outside T10's stated steps. |
 | F17 | Capture the on-disk shared bundle with `--jobs 1` so request `seq` is deterministic, letting T13's row-pin test read from it too (→ one fewer capture) — but it serializes the shared bundle read by ~20 offline tests. | T13 implementer | proposed | Trades fixture-build speed for one fewer test; reviewer decision only if fixture time acceptable. |
 | F18 | A6 (out of T14 scope): `tests/process.rs:281–330` duplicates the library-level removed-path case at `repair_purge.rs:257–307`; its comment claims a process-only distinction that does not exist (asserts `code == 0`). Could be removed or reduced to a one-line flag smoke. | T14 implementer | proposed | Separate finding, explicitly out of T14's guardrails. |
+| F19 | Expose the walk's heartbeat emission count on a library result so the "fires exactly once per period" cadence can be asserted in-process rather than only via log rendering. | T15 implementer | proposed | Adds coverage, not scale reduction; CP6 reviewer likely to prune. |
+| F20 | Use a T17 scoped subscriber to pin the `scan progress: walk` / `effective progress: phase *` event names and fields in-process. | T15 implementer | proposed | Depends on T17; adds coverage, CP6 reviewer likely to prune. |
+| F21 | Downshift `output.rs:626` (`the_scan_counts_the_entries_the_walk_saw`) — another spawn-based test whose counters already live on `ScanStats` — the same way as T15. | T15 implementer | proposed | Real −1 spawn reduction, outside T15's scope; CP6 reviewer to decide. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
