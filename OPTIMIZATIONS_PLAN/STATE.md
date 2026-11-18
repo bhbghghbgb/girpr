@@ -12,9 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: wait for the T13 implementing session to finish, then apply its
-  result (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP4 `done`; T13 `in_progress`, T14 `todo` (CP5).
+* Next action: pick the next `todo` task in seeded order — T14 — and spawn its
+  implementing session (`ORCHESTRATION.md` §3).
+* Active phase: implementation. CP1–CP4 `done`; T13 `pending_review`, T14 `todo` (CP5).
 * Active checkpoint: none yet (CP2 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -46,7 +46,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T10 | `repair_plan.rs` audio-plan partial downshift | A3 | completed | P1 | CP3 | CP3 review: completed (mock-server estimate note confirmed). |
 | T11 | Inject the MD5 buffer; shrink 513 KiB files | C2 | completed | P1 | CP4 | CP4 review: completed. |
 | T12 | Pure `DiskPlan::from_figures` seam | C5 | completed | P1 | CP4 | CP4 review: completed (DiskFigure deviation validated). |
-| T13 | Capture: merge mock / no-network full captures | B4 | in_progress | P1 | CP5 | 4 tests → 2; verify exact row/byte pins hold on shared capture. |
+| T13 | Capture: merge mock / no-network full captures | B4 | pending_review | P1 | CP5 | Implemented in bda7e0c5; row-pin test kept separate (deviation, see context). |
 | T14 | `repair_purge.rs` plan-out + purge-only merges | A7 | todo | P1 | CP5 | Two tables over the named case sets. |
 | T15 | Parameterize the sync heartbeat period | E4 | todo | P1 | CP6 | If counters stay log-only, E2 (T17) is still required. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | todo | P2 | CP7 | Highest-value item (~85 spawns). Keep ~3 smoke process tests + output.rs log tests. |
@@ -93,7 +93,8 @@ the review-and-fix session. Keep each range until its checkpoint is `done`.
 | T10 | `78746658..7da360d3` | completed |
 | T11 | `6117c5ff..787c35f0` | completed |
 | T12 | `ae909714..08ca4e98` | completed |
-| T13–T23 | — (not started) | — |
+| T13 | `2758abff..bda7e0c5` | — (pending CP5 review) |
+| T14–T23 | — (not started) | — |
 
 ## Follow-ups
 
@@ -116,6 +117,7 @@ are done and a batching review session has decided the batches (`ORCHESTRATION.m
 | F11 | Downshift the staged and by-mode sub-runs in `the_three_tiers_produce_the_same_file` (pure `ram_bytes` counters; only the shortage sub-run needs the log) — ~2 more spawns. | T09 implementer | proposed | Real spawn reduction; CP3 reviewer to decide. |
 | F12 | Merge the two `--fail-fast` malformed-manifest cases into a `Lies` table, and merge `the_three_modes_produce_the_same_bytes` with `no_mode_leaves_a_temp_file_behind` into a three-mode loop asserting bytes + leftovers. | T09 implementer | proposed | Real test-count reduction; CP3 reviewer to decide. |
 | F13 | Share one `MockServer` across all three cases of T10's audio-plan test (start before the loop, stop after) to cut 2 listener/task starts. | T10 implementer | proposed | Real but small scale reduction, low risk; outside T10's stated steps. |
+| F17 | Capture the on-disk shared bundle with `--jobs 1` so request `seq` is deterministic, letting T13's row-pin test read from it too (→ one fewer capture) — but it serializes the shared bundle read by ~20 offline tests. | T13 implementer | proposed | Trades fixture-build speed for one fewer test; reviewer decision only if fixture time acceptable. |
 | F15 | ~~Replace T11's per-call 512 KiB `Vec` allocations in the production `scan_reader`/`md5_reader_digest` wrappers with a caller-owned or pooled buffer.~~ | T11 implementer | removed | CP4 reviewer removed it: production perf change, zero test-scale benefit. |
 | F16 | ~~Add a pure `DiskFigure::Unresolved`/`Unreadable` figure test for stronger T12 coverage of the warning path.~~ | T12 implementer | removed | CP4 reviewer removed it: adds coverage only, zero scale reduction. |
 | F14 | ~~Pin T10's in-process plan to its expected 2 `repair` entries for a stronger "plan reported" assertion.~~ | T10 implementer | removed | CP3 reviewer removed it: adds coverage, not scale reduction (same rationale as F04). |
@@ -178,3 +180,4 @@ change log.
 * T10 (A3): report predicted "−2 spawns and mock servers", but only −2 binary spawns are realizable test-only — the downshifted cases still issue HTTP via `hyp_base_override`/`sophon_base_override`, so each keeps its `MockServer`; removing them needs a production data-injection seam the task does not call for. Not a missed optimization; CP3 reviewer should not flag it.
 * T11 clippy diagnostics resolved by CP4 review: `repair/phases/plan.rs:573` type_complexity originated in T02's merged table; `tests/repair_machinery.rs:119` dead_code (`Run::word`) was exposed by T09's last-caller conversion. Both benign test-only lints, no `-D warnings` gate, no behavior/coverage/scale impact — reviewer deliberately opened no follow-up.
 * T12 deviation: the injected item is a `DiskFigure` enum (`Measured(FileLen, bool, PathBuf)` / `Unresolved`) rather than the plan's `(FileLen, bool)` tuple — a plain tuple cannot distinguish the escaping-rel case from `(Absent, false)` broken symlink. Symlink/dir → `temp` is preserved via `symlink_metadata(...).is_file()` (same probe `resolve_mode` uses). Report's "6 files" fixture count was stale; 4 files were removed. CP4 reviewer sanity-check: symlink length now read via `symlink_metadata` not `metadata` — affects only the unreadable-warning path for symlinks with inaccessible targets.
+* T13 (B4) guardrail-driven deviation: the plan proposed folding the `:1092` request-log row-pin test onto the shared bundle, but implementer verified empirically that "same world ⇒ same requests" is FALSE for the byte-exact pins — `seq` is assigned at issue time (`src/http/log.rs:63–73`), default `--jobs` is 4 (`cli/mod.rs:200`) vs the test's `--jobs 1`, so seq→row mappings differ. Folding it would have weakened the pins, so `:1092` was kept separate. Net still 4 tests → 2 (−2 captures, −2 mocks); the folded ordering assertion is causal and stable over 5 runs. CP5 reviewer should confirm.
