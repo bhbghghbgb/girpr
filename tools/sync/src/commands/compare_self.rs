@@ -50,9 +50,11 @@
 //! [`cmd_compare_self`] warns rather than erroring.
 
 use anyhow::{Result, bail};
+use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use crate::commands::CompareOutcome;
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
@@ -71,8 +73,27 @@ use super::{report_and_finish, side_label};
 /// for a path that is gone, `EXTRA` is a path on disk the cache never recorded,
 /// and `CHANGED` is a stat or digest disagreement. Same vocabulary, same exit
 /// code as `compare`; both print through one shared reporter.
+///
+/// The computation lives in [`compare_self_detailed`]; this wrapper only renders
+/// what that returns, so the records and exit rule cannot drift from the data an
+/// in-process caller asserts on.
 pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
+    let why = opts.common.why;
+    let show_identical = opts.common.show_identical;
+    let outcome = compare_self_detailed(opts, log)?;
+    let code = report_and_finish(&outcome.diff, &log.report(), why, show_identical, t0);
+    Ok(code)
+}
+
+/// Compute a `compare-self` audit without rendering it.
+///
+/// The audit's one difference from `compare` is which handles the two sides get:
+/// the record is opened read-only and the disk side is scanned against an empty
+/// in-memory cache, so every stat-equal pair must be rehashed. That shape is kept
+/// intact here — the same handles, the same `ScanMode`, the same `RwSide` — and
+/// the result is handed back as data for an in-process caller to assert on.
+pub fn compare_self_detailed(opts: CompareSelfOpts, log: &LogCtx) -> Result<CompareOutcome> {
     let CompareSelfOpts {
         dir,
         no_trust_cached_hashes,
@@ -265,20 +286,35 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         "disk side loaded"
     );
 
-    let (rec, disk) = (rec.map, disk.map);
     info!(
-        record_entries = rec.len(),
-        disk_entries = disk.len(),
+        record_entries = rec.map.len(),
+        disk_entries = disk.map.len(),
         "diffing"
     );
+    // The record cannot hash from disk, so its digest total is the plan's
+    // request rather than work done; read both before the plans are dropped.
+    let src_digests = plans.src.digest_count();
+    let dst_digests = plans.dst.digest_count();
     let diff = diff_maps(
-        &rec,
-        &disk,
+        &rec.map,
+        &disk.map,
         &plans.required,
         plans.stat,
         pairing,
         common.show_identical,
     );
-    let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
-    Ok(code)
+    let code = if diff.is_empty() { 0 } else { 4 };
+    // `ScanStats` is `Copy`; read the counters before the sides move out.
+    let src_stats = rec.stats;
+    let dst_stats = disk.stats;
+    Ok(CompareOutcome {
+        diff,
+        src: rec,
+        dst: disk,
+        src_stats,
+        dst_stats,
+        src_digests,
+        dst_digests,
+        code,
+    })
 }

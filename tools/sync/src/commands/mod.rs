@@ -5,8 +5,8 @@ mod compare_self;
 mod sync;
 mod update;
 
-pub use compare::cmd_compare;
-pub use compare_self::cmd_compare_self;
+pub use compare::{cmd_compare, compare_detailed};
+pub use compare_self::{cmd_compare_self, compare_self_detailed};
 pub use sync::{cmd_sync, cmd_sync_with_hooks};
 pub use update::cmd_update;
 
@@ -23,9 +23,41 @@ use crate::config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, TestHooks, UpdateOpts,
 };
 use crate::diff::Diff;
-use crate::effective::Side;
+use crate::effective::{ScanStats, Side, SideScan};
 use crate::report::{Record, Report, ReportSink, visit_verdict};
 use crate::util::elapsed_s;
+
+/// The full result of a `compare` computation, before anything is rendered.
+///
+/// `cmd_compare` and `cmd_compare_self` expose this so an in-process caller can
+/// assert on the *same* verdict, resolved maps and counters the commands render,
+/// instead of re-deriving the pipeline in a harness. Rendering (stdout records and
+/// the `end` log line) stays in the command; the outcome is pure data.
+///
+/// `src` is the record/left side and `dst` the folder/right side, so a record-vs-
+/// folder audit names the record first, exactly as the reporter does. `src_stats`
+/// and `dst_stats` are the work counters of those two sides (`src`/`dst` carry the
+/// maps they describe); `src_digests`/`dst_digests` are the per-side digest totals
+/// the planner asked for — a plan-level fact the resolved counters cannot show.
+#[derive(Debug)]
+pub struct CompareOutcome {
+    /// The verdict buckets the reporter renders.
+    pub diff: Diff,
+    /// Resolved left side: effective map plus its phase-C counters.
+    pub src: SideScan,
+    /// Resolved right side: effective map plus its phase-C counters.
+    pub dst: SideScan,
+    /// The left side's work counters (the `stats` of [`Self::src`]).
+    pub src_stats: ScanStats,
+    /// The right side's work counters (the `stats` of [`Self::dst`]).
+    pub dst_stats: ScanStats,
+    /// Digests the planner asked the left side to compute.
+    pub src_digests: usize,
+    /// Digests the planner asked the right side to compute.
+    pub dst_digests: usize,
+    /// The process exit code the command resolves to: `0` in step, `4` if drifted.
+    pub code: i32,
+}
 
 /// What a side is called, in a message and in a log field.
 ///

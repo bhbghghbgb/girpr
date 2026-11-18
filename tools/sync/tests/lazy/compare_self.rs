@@ -42,87 +42,30 @@ fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempDir, PathBuf) {
 
 /// What one `compare-self` audit produced: its verdict and how much it read.
 ///
-/// **The phases are driven here, not through `cmd_compare_self`,** and the reason
-/// is specific to this command rather than a general caveat: it writes *nothing*,
-/// by design, so there is no cache footprint left behind to read a counter out of.
-/// A lazy scan leaves stat-only rows where an eager one would leave digests, so
-/// `sync` could be gated on `digests_of`; here nothing is written at all, so the
-/// only honest observable of how much was read is the counter itself.
-///
-/// The cost of that is the usual one — this proves the phases decide correctly,
-/// not that the command calls them — which is why the wiring is pinned separately
-/// and end-to-end by `hidden_content_drift_is_reported_without_a_flag` and
-/// `run_compare_self_reports_drift_with_record_as_src` in `compare_self.rs`. Those
-/// two cannot pass unless the command reaches the planner: a command that served
-/// the disk side from the record would report "in step" on hidden content drift.
+/// `cmd_compare_self` writes nothing by design, so there is no cache footprint to
+/// read a counter out of — the only honest observable of how much was read is the
+/// counter itself. `compare_self_detailed` is the command's own pipeline handed
+/// back as data: the read-only record handle, the empty disk handle, the labels
+/// and the `ScanMode`/`RwSide` threading all live there, not in a second copy here.
+/// The command's wiring to it is pinned end-to-end by
+/// `hidden_content_drift_is_reported_without_a_flag` and
+/// `run_compare_self_reports_drift_with_record_as_src` in `tests/compare_self.rs`.
 fn self_audit(dir: &Path) -> Run {
-    let common = opts_mem();
-    let mode = ScanMode::new(false, true);
-    // The record: the folder's own cache, read-only. Its side of the comparison.
-    // A folder `update`d with `opts_mem` left its rows in the shared memory cache;
-    // fall back to the file for any future case that warms one on disk.
-    let cache_path = dir.join(CACHE_PREFIX);
-    let record = CacheDb::memory_cache_at(&cache_path)
-        .unwrap_or_else(|| open_db(&cache_path, true, CacheOpen::ReadOnly).unwrap());
-    let rec = load_record_side_from(&record, &common, "record").unwrap();
-    // The disk: **an empty handle**, because this audit must not be able to
-    // compare the record with itself. A folder side's phase A takes only digests
-    // from a cache, so handing it the record's rows would make every stat-equal
-    // content comparison vacuous.
-    let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
-    let disk_a = scan_stat_only(dir, &cold, &common, mode).unwrap();
-    // Labels only so a coverage error can name a side. Every audited folder here
-    // is `update`d with the algorithms the audit asks for, so coverage holds.
-    //
-    // The labels come from the same helper the commands use, so a test cannot
-    // keep a second spelling of how a side is named.
-    let rec_label = side_label(&Side::Record(dir.join(CACHE_PREFIX)));
-    let disk_label = side_label(&Side::Folder(dir.to_path_buf()));
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &rec.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: SideCapability::record(),
-            label: &rec_label,
-            repopulate: side_folder(&Side::Record(dir.join(CACHE_PREFIX))),
-        },
-        SideRequest {
-            entries: &disk_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: SideCapability::for_folder(&cold, mode),
-            label: &disk_label,
-            repopulate: side_folder(&Side::Folder(dir.to_path_buf())),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap();
-    let disk = resolve_folder(
-        dir,
-        &cold,
-        mode,
-        &disk_a,
-        &plans.dst,
-        RwSide::Dst,
-        &serial_rw(),
-    )
-    .unwrap();
-    let rec = resolve_record(&rec);
+    let opts = girsync::CompareSelfOpts {
+        dir: dir.to_path_buf(),
+        no_trust_cached_hashes: false,
+        common: opts_mem(),
+    };
+    let outcome = girsync::commands::compare_self_detailed(opts, &log())
+        .expect("an audited folder is covered");
     Run {
-        diff: diff_maps(
-            &rec.map,
-            &disk.map,
-            &plans.required,
-            plans.stat,
-            CasePairing::from(common.case_sensitive),
-            false,
-        ),
-        hashed: disk.stats.hashed,
-        src_hashed: plans.src.pending().len(),
-        dst_hashed: disk.stats.hashed,
+        diff: outcome.diff,
+        hashed: outcome.dst_stats.hashed,
+        // The record side cannot hash from disk, so its digest *request* is the
+        // honest "was it asked to hash" observable — the same count the harness
+        // used to read off `plans.src.pending()`.
+        src_hashed: outcome.src_digests,
+        dst_hashed: outcome.dst_stats.hashed,
     }
 }
 

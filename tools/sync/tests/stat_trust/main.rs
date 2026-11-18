@@ -47,13 +47,9 @@ mod other_commands;
 mod refusal;
 mod verdict;
 
-use common::{
-    TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update_mem, wfile,
-};
+use common::{TempDir, age, log, opts, recs_of, sync_mtime, temp_root, update_mem, wfile};
 use girsync::cache::TestCacheBackend;
-use girsync::commands::side_label;
-use girsync::effective::side_folder;
-use girsync::planner::{CasePairing, StatTrust};
+use girsync::planner::StatTrust;
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 /// One invocation of the real binary: exit code and stderr.
@@ -169,43 +165,16 @@ fn four_states(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 /// Resolving a folder side **writes to its cache**, so this is not a pure function of
 /// its inputs and a case must not measure two configurations against one fixture — the
 /// first run backfills whatever the second would then find cached. Every case here
-/// builds a fresh fixture per configuration.
+/// builds a fresh fixture per configuration. The counters come from the command's own
+/// computation, so only the cache side effect is re-derived here, not the pipeline.
 fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> usize {
-    use girsync::config::ScanMode;
-    use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
-    use girsync::planner::{SideRequest, plan_pairs};
-    use girsync::rw::RwSide;
-
-    let (s_side, d_side) = (classify(src), classify(dst));
-    ensure_distinct_sides(&s_side, &d_side).unwrap();
-    let mode = ScanMode::new(false, false);
-    let mut s = open_side(&s_side, common, mode).unwrap();
-    let mut d = open_side(&d_side, common, mode).unwrap();
-    let s_label = side_label(&s_side);
-    let d_label = side_label(&d_side);
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &s.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: s.cap,
-            label: &s_label,
-            repopulate: side_folder(&s_side),
-        },
-        SideRequest {
-            entries: &d.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: d.cap,
-            label: &d_label,
-            repopulate: side_folder(&d_side),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap();
-    let sm = resolve_side(&mut s, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
-    let dm = resolve_side(&mut d, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
-    sm.stats.hashed + dm.stats.hashed
+    let opts = girsync::CompareOpts {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        trust: girsync::TrustOpts::default(),
+        common: common.clone(),
+    };
+    let outcome = girsync::commands::compare_detailed(opts, &log())
+        .expect("two folders cannot fail coverage");
+    outcome.src_stats.hashed + outcome.dst_stats.hashed
 }

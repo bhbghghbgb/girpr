@@ -42,14 +42,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use common::*;
-use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use girsync::cache::CACHE_PREFIX;
 use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
-    Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
-    open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
-    side_folder,
+    Side, SideCapability, classify, open_folder_cache, resolve_folder, scan_stat_only, side_folder,
 };
 use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};
@@ -87,78 +85,28 @@ impl Run {
     }
 }
 
-/// Resolve both sides and diff them, the way `cmd_compare` does.
+/// Resolve both sides and diff them through the production computation.
 ///
-/// The phases are driven here rather than through `cmd_compare` because
-/// `cmd_compare` returns only an exit code, and the counter is the thing under
-/// test. `cmd_compare_reports_the_same_verdict_and_its_exit_code` covers the
-/// wiring.
+/// `cmd_compare` renders a verdict and an exit code, so the per-side counters a
+/// laziness case needs to assert are not reachable from it. `compare_detailed`
+/// is the very same pipeline handed back as data: the phases, the side labels and
+/// the per-side `ScanMode`/`RwSide` threading all live in the command, not in a
+/// second copy here. The wiring of the command to that computation is pinned
+/// end-to-end in `tests/compare.rs`.
 fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Run {
-    let s_side = classify(src);
-    let d_side = classify(dst);
-    ensure_distinct_sides(&s_side, &d_side).unwrap();
-    let mode = |no_trust: bool| ScanMode::new(no_trust, false);
-    // Both handles stay live across plan and resolve.
-    let mut s = open_side(&s_side, common, mode(trust.no_trust_src)).unwrap();
-    let mut d = open_side(&d_side, common, mode(trust.no_trust_dst)).unwrap();
-
-    // Labels only so a coverage error can name a side. Every case here is two
-    // folders, so coverage cannot fail and the labels are never read.
-    //
-    // Built by the same helper the commands use, so a test cannot keep a second
-    // spelling of how a side is named.
-    let s_label = side_label(&s_side);
-    let d_label = side_label(&d_side);
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &s.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_src,
-            cap: s.cap,
-            label: &s_label,
-            repopulate: side_folder(&s_side),
-        },
-        SideRequest {
-            entries: &d.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_dst,
-            cap: d.cap,
-            label: &d_label,
-            repopulate: side_folder(&d_side),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap();
-    let sm = resolve_side(
-        &mut s,
-        mode(trust.no_trust_src),
-        &plans.src,
-        RwSide::Src,
-        &serial_rw(),
-    )
-    .unwrap();
-    let dm = resolve_side(
-        &mut d,
-        mode(trust.no_trust_dst),
-        &plans.dst,
-        RwSide::Dst,
-        &serial_rw(),
-    )
-    .unwrap();
+    let opts = girsync::CompareOpts {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        trust,
+        common: common.clone(),
+    };
+    let outcome = girsync::commands::compare_detailed(opts, &log())
+        .expect("two folders cannot fail coverage");
     Run {
-        diff: diff_maps(
-            &sm.map,
-            &dm.map,
-            &plans.required,
-            plans.stat,
-            CasePairing::from(common.case_sensitive),
-            false,
-        ),
-        hashed: sm.stats.hashed + dm.stats.hashed,
-        src_hashed: sm.stats.hashed,
-        dst_hashed: dm.stats.hashed,
+        diff: outcome.diff,
+        hashed: outcome.src_stats.hashed + outcome.dst_stats.hashed,
+        src_hashed: outcome.src_stats.hashed,
+        dst_hashed: outcome.dst_stats.hashed,
     }
 }
 

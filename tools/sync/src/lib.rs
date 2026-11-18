@@ -73,8 +73,8 @@ pub use glob;
 
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{
-    RunOutcome, cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run, run_captured,
-    run_captured_with_hooks,
+    CompareOutcome, RunOutcome, cmd_compare, cmd_compare_self, cmd_sync, cmd_update,
+    compare_detailed, compare_self_detailed, run, run_captured, run_captured_with_hooks,
 };
 pub use config::{
     BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TestHooks,

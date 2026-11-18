@@ -22,14 +22,11 @@
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
-use girsync::commands::side_label;
-use girsync::effective::{
-    SideScan, classify, ensure_distinct_sides, open_side, resolve_side, side_folder,
-};
+use girsync::effective::SideScan;
 use girsync::hash::{DigestSet, HashAlg};
-use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{HashMode, StatTrust};
 use girsync::report::OutputFormat;
-use girsync::rw::{RwLimits, RwRuntime, RwSide};
+use girsync::rw::{RwLimits, RwRuntime};
 use girsync::{
     BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, Filter, LogCtx, ScanMode, SyncOpts,
     TrustOpts, UpdateOpts,
@@ -708,66 +705,21 @@ pub fn with_algos_mem(algos: &[&str]) -> CommonOpts {
 /// The exact phase sequence `cmd_compare` runs — open both sides, one
 /// `plan_pairs`, resolve both — with the per-side trust flags applied.
 ///
-/// Driven by the tests rather than delegated to, so that a case can assert what
-/// the planner decided *and* what the sides ended up reading. Every phase
-/// happens here, in this order; that is the property under test.
+/// Delegated to the command's own `compare_detailed` so a caller asserts on the
+/// maps the command produces, not a second derivation of them. The semantic suites
+/// assert maps and counters, so the caches can live in memory; a caller with a
+/// warmed fixture must have warmed it with `pair_mem`, or this resolve starts cold.
 pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, SideScan) {
-    // Semantic harness: the callers assert maps and verdicts, so the caches can
-    // live in memory. A caller with a warmed fixture must have warmed it with
-    // `pair_mem`, or this resolve starts cold.
     let common = CommonOpts {
         test_cache: TestCacheBackend::Memory,
         ..with_algos(&["md5"])
     };
-    let src = classify(src);
-    let dst = classify(dst);
-    ensure_distinct_sides(&src, &dst).unwrap();
-    let mut s = open_side(&src, &common, ScanMode::new(trust.no_trust_src, false)).unwrap();
-    let mut d = open_side(&dst, &common, ScanMode::new(trust.no_trust_dst, false)).unwrap();
-    // The labels exist only so a coverage error can name a side; a fixture that
-    // reaches one is a test failure, not something to read.
-    //
-    // Built by the same helper the commands use, so a test cannot keep a second
-    // spelling of how a side is named.
-    let s_label = side_label(&src);
-    let d_label = side_label(&dst);
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &s.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_src,
-            cap: s.cap,
-            label: &s_label,
-            repopulate: side_folder(&src),
-        },
-        SideRequest {
-            entries: &d.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_dst,
-            cap: d.cap,
-            label: &d_label,
-            repopulate: side_folder(&dst),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap();
-    let sm = resolve_side(
-        &mut s,
-        ScanMode::new(trust.no_trust_src, false),
-        &plans.src,
-        RwSide::Src,
-        &serial_rw(),
-    )
-    .unwrap();
-    let dm = resolve_side(
-        &mut d,
-        ScanMode::new(trust.no_trust_dst, false),
-        &plans.dst,
-        RwSide::Dst,
-        &serial_rw(),
-    )
-    .unwrap();
-    (sm, dm)
+    let opts = CompareOpts {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        trust,
+        common,
+    };
+    let outcome = girsync::commands::compare_detailed(opts, &log()).expect("compare two folders");
+    (outcome.src, outcome.dst)
 }

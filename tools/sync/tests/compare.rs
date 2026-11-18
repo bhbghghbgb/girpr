@@ -6,18 +6,13 @@ use std::num::NonZeroUsize;
 
 use common::{
     TempDir, compare, compare_dry, compare_mem, compare_self_opts, has_backup_sibling, log,
-    recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
+    recs_of, rfile, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
-use girsync::commands::side_label;
-use girsync::config::{CommonOpts, ScanMode};
-use girsync::effective::{
-    EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
-    side_folder,
-};
+use girsync::config::CommonOpts;
+use girsync::effective::{EffRec, ScanStats};
 use girsync::hash::{DigestSet, HashAlg};
-use girsync::planner::{CasePairing, SideRequest, plan_pairs};
-use girsync::rw::{RwLimits, RwSide};
+use girsync::rw::RwLimits;
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 /// One digest per name, `byte` repeated to that algorithm's length.
@@ -86,9 +81,11 @@ fn two_trees(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     (src, dst)
 }
 
-/// Resolve both sides the way `cmd_compare` does and hand back the maps, the
-/// per-side counters, and the total hashed count, so two runs can be compared on
-/// more than their verdicts.
+/// Resolve both sides through the production computation and hand back the maps,
+/// the per-side counters and the total hashed count, so two runs can be compared
+/// on more than their verdicts. `compare_detailed` runs the exact pipeline
+/// `cmd_compare` runs; this harness only reads its result, so the digests asserted
+/// below are the ones the command would render, not a test copy of them.
 fn effective_maps(
     src: &std::path::Path,
     dst: &std::path::Path,
@@ -103,51 +100,18 @@ fn effective_maps(
         dry_run,
         ..common::opts_mem()
     };
-    let (s, d) = (classify(src), classify(dst));
-    ensure_distinct_sides(&s, &d).unwrap();
-    let mode = ScanMode::new(false, dry_run);
-    let mut so = open_side(&s, &common, mode).unwrap();
-    let mut do_ = open_side(&d, &common, mode).unwrap();
-    // Labels only so a coverage error can name a side; these fixtures are both
-    // folders and fully covered, so it never fires.
-    //
-    // Built by the same helper the commands use, so this harness cannot keep a
-    // second spelling of how a side is named.
-    let s_label = side_label(&s);
-    let d_label = side_label(&d);
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &so.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: so.cap,
-            label: &s_label,
-            repopulate: side_folder(&s),
-        },
-        SideRequest {
-            entries: &do_.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: do_.cap,
-            label: &d_label,
-            repopulate: side_folder(&d),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap();
-    let sm: SideScan = resolve_side(&mut so, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
-    let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
-    // `ScanStats` derives `PartialEq`, so this can be asserted whole rather than
-    // field by field — which is the point: a new counter added later cannot
-    // quietly diverge between the two modes without this test noticing.
-    (
-        sm.map.clone(),
-        dm.map.clone(),
-        sm.stats,
-        sm.stats.hashed + dm.stats.hashed,
-    )
+    let opts = girsync::CompareOpts {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        trust: girsync::TrustOpts::default(),
+        common,
+    };
+    let outcome = girsync::commands::compare_detailed(opts, &log()).expect("two folders compare");
+    // `ScanStats` derives `PartialEq`, so the whole src counter can be asserted
+    // rather than field by field — a new counter cannot silently diverge between
+    // the two modes without these tests noticing.
+    let total = outcome.src_stats.hashed + outcome.dst_stats.hashed;
+    (outcome.src.map, outcome.dst.map, outcome.src_stats, total)
 }
 
 /// **The general form of the dry-run contract: same counters, not merely same

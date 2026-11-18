@@ -1,8 +1,10 @@
 //! `girsync compare` — report how dst differs from src, changing nothing itself.
 
 use anyhow::Result;
+use std::time::Instant;
 use tracing::info;
 
+use crate::commands::CompareOutcome;
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
@@ -18,8 +20,34 @@ use super::{report_and_finish, side_kind, side_label};
 ///
 /// Each side may independently be a folder root or a `girpr-cache*` record
 /// directory, so all four combinations work. Exits `4` if anything differs.
+///
+/// The computation lives in [`compare_detailed`]; this wrapper only renders what
+/// that returns, so stdout and the exit rule cannot drift from the data an
+/// in-process caller asserts on.
 pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
+    // Read the two rendering flags before `opts` moves into the computation;
+    // neither reaches the diff itself (see `report_diff`).
+    let why = opts.common.why;
+    let show_identical = opts.common.show_identical;
+    let outcome = compare_detailed(opts, log)?;
+    let code = report_and_finish(&outcome.diff, &log.report(), why, show_identical, t0);
+    Ok(code)
+}
+
+/// Compute a two-sided comparison without rendering it.
+///
+/// This is the exact pipeline [`cmd_compare`] runs — classify, open both sides,
+/// one `plan_pairs`, resolve both, diff — handed back as data so a caller can
+/// assert on the verdict, the resolved maps and the work counters the command
+/// itself renders. Side labels are still built through [`side_label`] and the
+/// run's `ScanMode`/`RwSide` are still threaded per side; only the final report is
+/// left to the caller.
+///
+/// `log` is read for the span's fields (console/file levels, log path, output
+/// format), the same fields the command's span carries, so the narration is
+/// identical whether or not a report follows.
+pub fn compare_detailed(opts: CompareOpts, log: &LogCtx) -> Result<CompareOutcome> {
     let CompareOpts {
         src,
         dst,
@@ -147,6 +175,12 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         dst_pending = plans.dst.by_rel.len(),
         "planned"
     );
+    // The digest totals are a plan-level fact: `--hash-any-of` can ask for one
+    // digest where `all-of` asks for two on the same file, and `stats.hashed`
+    // counts files opened, not digests computed. Read them before the plans are
+    // dropped so the caller can assert on the request as well as the work.
+    let src_digests = plans.src.digest_count();
+    let dst_digests = plans.dst.digest_count();
     // Both sides resolve at once. Under one shared counter the gate serialises them,
     // so the run is sequential; under a split limit they genuinely overlap, which
     // is the whole point of a per-side budget. src's error is taken first so the
@@ -162,16 +196,32 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         dst_hashed = dm.stats.hashed,
         "resolved"
     );
-    let (sm, dm) = (sm.map, dm.map);
-    info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
+    info!(
+        src_entries = sm.map.len(),
+        dst_entries = dm.map.len(),
+        "diffing"
+    );
     let diff = diff_maps(
-        &sm,
-        &dm,
+        &sm.map,
+        &dm.map,
         &plans.required,
         plans.stat,
         pairing,
         common.show_identical,
     );
-    let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
-    Ok(code)
+    let code = if diff.is_empty() { 0 } else { 4 };
+    // `ScanStats` is `Copy`; read the counters out before the sides move into the
+    // outcome, so the named fields always agree with the maps they describe.
+    let src_stats = sm.stats;
+    let dst_stats = dm.stats;
+    Ok(CompareOutcome {
+        diff,
+        src: sm,
+        dst: dm,
+        src_stats,
+        dst_stats,
+        src_digests,
+        dst_digests,
+        code,
+    })
 }

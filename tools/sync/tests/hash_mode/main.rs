@@ -46,21 +46,14 @@ mod read_count;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
-use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
-use girsync::commands::side_label;
-use girsync::config::ScanMode;
+use common::{digests_of, log, opts, pair_mem, recs_of, sync_mtime, temp_root, wfile};
+use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::diff::diff_maps;
-use girsync::effective::{
-    EffRec, Repopulate, Side, SideCapability, SideEntry, classify, ensure_distinct_sides,
-    load_record_side_from, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
-    side_folder,
-};
+use girsync::effective::{EffRec, Repopulate, SideCapability, SideEntry};
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };
-use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
 // -- fixtures -----------------------------------------------------------------
@@ -188,115 +181,45 @@ fn asking_mem(algos: &[&str], mode: HashMode) -> CommonOpts {
 
 /// `(files opened, digests computed)` for a two-sided `compare`.
 ///
-/// Spelled out rather than borrowed from `lazy/`: that harness asserts verdicts
-/// across every difference class, and these cases are about a read count on a tree
-/// with no differences at all — a fixture with `CHANGED` paths in it would make
-/// the number depend on the prune and rename paths too.
-///
 /// Both at once because they are different facts and a case wants both. `hashed`
 /// counts **files opened**, while `hash_file` computes every algorithm for a path in
 /// one pass — so two algorithms on one file is one read and two digests. That
 /// distinction is the only thing `any-of` changes when a pair shares no algorithm,
-/// and it is invisible in `hashed`.
+/// and it is invisible in `hashed`. `compare_detailed` is the command's own pipeline,
+/// so neither number is re-derived in this harness.
 ///
 /// **A fresh fixture per call.** Resolving a folder side *writes to its cache*, so
 /// this is not a pure function of its inputs: measuring two modes against one pair
 /// makes the second run find a warm cache the first one backfilled, and reports the
 /// second mode as free.
 fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
-    let s = classify(src);
-    let d = classify(dst);
-    ensure_distinct_sides(&s, &d).unwrap();
-    let mode = ScanMode::new(false, false);
-    let mut so = open_side(&s, common, mode).unwrap();
-    let mut do_ = open_side(&d, common, mode).unwrap();
-    // The labels come from the same helper the commands use, so a test cannot
-    // keep a second spelling of how a side is named.
-    let s_label = side_label(&s);
-    let d_label = side_label(&d);
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &so.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: so.cap,
-            label: &s_label,
-            repopulate: side_folder(&s),
-        },
-        SideRequest {
-            entries: &do_.phase_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: do_.cap,
-            label: &d_label,
-            repopulate: side_folder(&d),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
+    let opts = girsync::CompareOpts {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        trust: girsync::TrustOpts::default(),
+        common: common.clone(),
+    };
+    let outcome = girsync::commands::compare_detailed(opts, &log())
+        .unwrap_or_else(|e| panic!("two folders cannot fail coverage: {e:#}"));
+    (
+        outcome.src_stats.hashed + outcome.dst_stats.hashed,
+        outcome.src_digests + outcome.dst_digests,
     )
-    .unwrap_or_else(|e| panic!("two folders cannot fail coverage: {e:#}"));
-    let digests = plans.src.digest_count() + plans.dst.digest_count();
-    let sm = resolve_side(&mut so, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
-    let dm = resolve_side(&mut do_, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
-    (sm.stats.hashed + dm.stats.hashed, digests)
 }
 
 /// A `compare-self` audit's read count and exit code: `(hashed, code)`.
 ///
 /// The disk side is scanned against an **empty** handle, so an undecided pair is
-/// always rehashed - which is what makes the count a measure of the plan rather than
-/// of whatever the record happened to hold.
+/// always rehashed — which is what makes the count a measure of the plan rather than
+/// of whatever the record happened to hold. Both come from `compare_self_detailed`,
+/// the computation the command itself runs.
 fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
-    let mode = ScanMode::new(false, true);
-    let record = open_db(&dir.join(CACHE_PREFIX), true, CacheOpen::ReadOnly).unwrap();
-    let rec = load_record_side_from(&record, common, "record").unwrap();
-    let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
-    let disk_a = scan_stat_only(dir, &cold, common, mode).unwrap();
-    // The labels come from the same helper the commands use, so a test cannot
-    // keep a second spelling of how a side is named.
-    let rec_label = side_label(&Side::Record(dir.join(CACHE_PREFIX)));
-    let disk_label = side_label(&Side::Folder(dir.to_path_buf()));
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &rec.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: SideCapability::record(),
-            label: &rec_label,
-            repopulate: side_folder(&Side::Record(dir.join(CACHE_PREFIX))),
-        },
-        SideRequest {
-            entries: &disk_a.map,
-            algos: &common.algos,
-            no_trust: false,
-            cap: SideCapability::for_folder(&cold, mode),
-            label: &disk_label,
-            repopulate: side_folder(&Side::Folder(dir.to_path_buf())),
-        },
-        CasePairing::from(common.case_sensitive),
-        common.hash_mode,
-        common.stat,
-    )
-    .unwrap_or_else(|e| panic!("the record holds md5, so this is answerable: {e:#}"));
-    let disk = resolve_folder(
-        dir,
-        &cold,
-        mode,
-        &disk_a,
-        &plans.dst,
-        RwSide::Dst,
-        &serial_rw(),
-    )
-    .unwrap();
-    let rec = resolve_record(&rec);
-    let diff = diff_maps(
-        &rec.map,
-        &disk.map,
-        &plans.required,
-        plans.stat,
-        CasePairing::from(common.case_sensitive),
-        false,
-    );
-    (disk.stats.hashed, if diff.is_empty() { 0 } else { 4 })
+    let opts = girsync::CompareSelfOpts {
+        dir: dir.to_path_buf(),
+        no_trust_cached_hashes: false,
+        common: common.clone(),
+    };
+    let outcome = girsync::commands::compare_self_detailed(opts, &log())
+        .unwrap_or_else(|e| panic!("the record holds the requested digests: {e:#}"));
+    (outcome.dst_stats.hashed, outcome.code)
 }
