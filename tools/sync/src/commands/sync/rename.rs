@@ -10,23 +10,24 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+use crate::config::TestHooks;
 use crate::report::{Record, Report};
 use crate::util::folded_keys;
 
 /// The point of a case-fix step a test hook asks to fail at.
 ///
-/// `GIRSYNC_TEST_FAIL_RENAME` fails before the temporary is claimed.
-/// `GIRSYNC_TEST_FAIL_RENAME_STEP1` fails after the claim (so the
-/// file placeholder exists) and `GIRSYNC_TEST_FAIL_RENAME_STEP2` after step 1
-/// (so the entry is in the temporary). The three are separately named because
-/// they exercise three different cleanup paths: nothing to clean, placeholder
-/// removal, and rollback.
+/// [`TestHooks::fail_rename_before_claim`](crate::config::TestHooks::fail_rename_before_claim)
+/// fails before the temporary is claimed (from `GIRSYNC_TEST_FAIL_RENAME`).
+/// `fail_rename_step1` fails after the claim (so the file placeholder exists)
+/// and `fail_rename_step2` after step 1 (so the entry is in the temporary). The
+/// three are separately named because they exercise three different cleanup
+/// paths: nothing to clean, placeholder removal, and rollback.
 ///
 /// **The stage is the switch's name and not part of its value.** Every failure
 /// hook's value is then a plain relative path — the shape the copy and flush
 /// hooks use — so the family has one kind of value to parse. Each stage reads
-/// its own variable and holds its own path, so a test names a stage and a path
-/// per variable.
+/// its own field and holds its own path, so a test names a stage and a path per
+/// hook.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     BeforeClaim,
@@ -34,23 +35,20 @@ enum Stage {
     Step2,
 }
 
-/// Whether the test-only hook for `stage` names `rel`.
+/// Whether the hook for `stage` names `rel`.
 ///
-/// Default **off**: an unset variable matches nothing. A test needs the failure
-/// because a real failed `fs::rename` (a lock, a permission, a volume that went
-/// away) cannot be arranged portably; naming one relative path exercises the
-/// same error path the production call takes, including the rule that a failed
-/// rename publishes no `RENAME` record.
-fn test_fail_rename(rel: &str, stage: Stage) -> bool {
-    static BEFORE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    static STEP1: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    static STEP2: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let (var, slot) = match stage {
-        Stage::BeforeClaim => ("GIRSYNC_TEST_FAIL_RENAME", &BEFORE),
-        Stage::Step1 => ("GIRSYNC_TEST_FAIL_RENAME_STEP1", &STEP1),
-        Stage::Step2 => ("GIRSYNC_TEST_FAIL_RENAME_STEP2", &STEP2),
+/// Default **off**: no path named. A test needs the failure because a real
+/// failed `fs::rename` (a lock, a permission, a volume that went away) cannot be
+/// arranged portably; naming one relative path exercises the same error path
+/// the production call takes, including the rule that a failed rename publishes
+/// no `RENAME` record.
+fn test_fail_rename(rel: &str, stage: Stage, hooks: &TestHooks) -> bool {
+    let named = match stage {
+        Stage::BeforeClaim => &hooks.fail_rename_before_claim,
+        Stage::Step1 => &hooks.fail_rename_step1,
+        Stage::Step2 => &hooks.fail_rename_step2,
     };
-    slot.get_or_init(|| std::env::var(var).ok()).as_deref() == Some(rel)
+    named.as_deref() == Some(rel)
 }
 
 /// The dst paths that must move to src's casing, as `(dst rel, src rel)` pairs.
@@ -395,6 +393,7 @@ pub(super) fn rename_to_src_casing(
     dm: &mut HashMap<String, crate::effective::EffRec>,
     dry_run: bool,
     report: &Report,
+    hooks: &TestHooks,
 ) -> Result<RenameOutcome> {
     let renames: Vec<(String, String)> = case_renames(src, dm)
         .into_iter()
@@ -432,7 +431,7 @@ pub(super) fn rename_to_src_casing(
             renamed += 1;
             continue;
         }
-        if test_fail_rename(&step.from, Stage::BeforeClaim) {
+        if test_fail_rename(&step.from, Stage::BeforeClaim, hooks) {
             bail!("test: injected rename failure for {}", step.from);
         }
 
@@ -447,7 +446,7 @@ pub(super) fn rename_to_src_casing(
         // replaced by step1 (silent loss), and a directory there makes step1
         // fail after the record had already been published.
         let tmp = claim_case_tmp(&from, step.is_dir)?;
-        if test_fail_rename(&step.from, Stage::Step1) {
+        if test_fail_rename(&step.from, Stage::Step1, hooks) {
             return Err(fail_step1(
                 std::io::Error::other(format!(
                     "test: injected rename failure at step1 for {}",
@@ -461,7 +460,7 @@ pub(super) fn rename_to_src_casing(
         if let Err(step1) = std::fs::rename(&from, &tmp) {
             return Err(fail_step1(step1, &from, &tmp, step.is_dir));
         }
-        if test_fail_rename(&step.from, Stage::Step2) {
+        if test_fail_rename(&step.from, Stage::Step2, hooks) {
             return Err(fail_step2(
                 std::io::Error::other(format!(
                     "test: injected rename failure at step2 for {}",
@@ -729,7 +728,16 @@ mod tests {
         let db = crate::cache::CacheDb::open_temp(false).unwrap();
 
         let report = Report::new(OutputFormat::Text);
-        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, true, &report).unwrap();
+        let out = rename_to_src_casing(
+            &sm,
+            &dst,
+            &db,
+            &mut dm,
+            true,
+            &report,
+            &TestHooks::default(),
+        )
+        .unwrap();
         assert_eq!(out.renamed, 1);
         assert_eq!(
             out.on_disk
@@ -816,7 +824,16 @@ mod tests {
         let db = crate::cache::CacheDb::open_temp(false).unwrap();
 
         let report = Report::new(OutputFormat::Text);
-        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, false, &report).unwrap();
+        let out = rename_to_src_casing(
+            &sm,
+            &dst,
+            &db,
+            &mut dm,
+            false,
+            &report,
+            &TestHooks::default(),
+        )
+        .unwrap();
         assert_eq!(out.renamed, 1);
         assert!(out.on_disk.is_none());
         assert!(dst.join("Data.txt").is_file(), "the real rename happened");
@@ -968,7 +985,16 @@ mod tests {
         }
 
         let report = Report::new(OutputFormat::Text);
-        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, false, &report).unwrap();
+        let out = rename_to_src_casing(
+            &sm,
+            &dst,
+            &db,
+            &mut dm,
+            false,
+            &report,
+            &TestHooks::default(),
+        )
+        .unwrap();
         assert_eq!(out.renamed, 3);
         assert_eq!(
             cache_reads(),

@@ -74,10 +74,11 @@ pub use glob;
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{
     RunOutcome, cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run, run_captured,
+    run_captured_with_hooks,
 };
 pub use config::{
-    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
-    UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TestHooks,
+    TrustOpts, UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 // The filter's type and the crate's own way to build its patterns, re-exported

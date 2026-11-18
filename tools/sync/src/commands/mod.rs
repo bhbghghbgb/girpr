@@ -7,7 +7,7 @@ mod update;
 
 pub use compare::cmd_compare;
 pub use compare_self::cmd_compare_self;
-pub use sync::cmd_sync;
+pub use sync::{cmd_sync, cmd_sync_with_hooks};
 pub use update::cmd_update;
 
 pub use crate::report::verdict;
@@ -19,7 +19,9 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::cli::{Cli, Cmd};
-use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
+use crate::config::{
+    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, TestHooks, UpdateOpts,
+};
 use crate::diff::Diff;
 use crate::effective::Side;
 use crate::report::{Record, Report, ReportSink, visit_verdict};
@@ -163,7 +165,8 @@ fn log_ctx(cli: &Cli, plan: &girpr_log::LogPlan, sink: ReportSink) -> LogCtx {
 /// two files.
 pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
     let log = log_ctx(&cli, plan, ReportSink::Stdout);
-    dispatch(cli, &log)
+    // The binary's one source of hooks is the environment, as it always was.
+    dispatch(cli, &log, &TestHooks::from_env())
 }
 
 /// Run a command in-process and capture what a process test would otherwise
@@ -172,11 +175,29 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
 ///
 /// This shares the dispatch, the reporter and the exit-code mapping with
 /// [`run`] and `main`, so a value asserted here cannot drift from the binary's.
-/// Parse-error callers build the `Cli` with [`Cli::try_parse_from`].
+/// Parse-error callers build the `Cli` with [`Cli::try_parse_from`]. Hooks come
+/// from the environment, the same fallback the binary uses.
 pub fn run_captured(cli: Cli, plan: &girpr_log::LogPlan) -> Result<RunOutcome> {
+    run_captured_with_hooks(cli, plan, TestHooks::from_env())
+}
+
+/// [`run_captured`] with the process-global hooks injected as a value.
+///
+/// A test that used to spawn a child just to set a `GIRSYNC_TEST_*` variable
+/// passes a [`TestHooks`] here instead; the failure points and error strings
+/// the command produces are the ones the env hook produced, but no child and
+/// no process-global state are involved. Hooks not set on `hooks` stay at their
+/// safe [`Default`] values rather than leaking from the environment — so start
+/// from [`TestHooks::from_env`] and override the ones a case cares about when
+/// it also wants the runner's inherited hooks (e.g. `NO_FSYNC`).
+pub fn run_captured_with_hooks(
+    cli: Cli,
+    plan: &girpr_log::LogPlan,
+    hooks: TestHooks,
+) -> Result<RunOutcome> {
     let records = Arc::new(Mutex::new(Vec::new()));
     let log = log_ctx(&cli, plan, ReportSink::Capture(Arc::clone(&records)));
-    let (code, error) = match dispatch(cli, &log) {
+    let (code, error) = match dispatch(cli, &log, &hooks) {
         Ok(code) => (code, None),
         Err(e) => (3, Some(format!("{:#}", e))),
     };
@@ -191,8 +212,10 @@ pub fn run_captured(cli: Cli, plan: &girpr_log::LogPlan) -> Result<RunOutcome> {
 /// The one `Cli` -> command dispatch behind both [`run`] and [`run_captured`].
 ///
 /// This is where raw CLI strings are validated into [`CommonOpts`]; every later
-/// layer works with compiled patterns and checked algorithm lists.
-fn dispatch(cli: Cli, log: &LogCtx) -> Result<i32> {
+/// layer works with compiled patterns and checked algorithm lists. `hooks` is
+/// the resolved test seam, threaded to the one command that reads it (`sync`);
+/// the other commands ignore it.
+fn dispatch(cli: Cli, log: &LogCtx, hooks: &TestHooks) -> Result<i32> {
     match cli.cmd {
         Cmd::Update { dir, common } => cmd_update(
             UpdateOpts {
@@ -234,7 +257,7 @@ fn dispatch(cli: Cli, log: &LogCtx) -> Result<i32> {
             keep_extra,
             trust,
             common,
-        } => cmd_sync(
+        } => cmd_sync_with_hooks(
             SyncOpts {
                 src,
                 dst,
@@ -244,6 +267,7 @@ fn dispatch(cli: Cli, log: &LogCtx) -> Result<i32> {
                 common: CommonOpts::try_from(common)?,
             },
             log,
+            hooks,
         ),
     }
 }

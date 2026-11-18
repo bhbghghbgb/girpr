@@ -161,7 +161,15 @@ impl<'a> Applier<'a> {
         // held, and never nested with the emit lock above. A commit that trips
         // inside `put` only makes another worker's `put` wait; that worker holds no
         // permit and needs none.
-        let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
+        // The batch handle's commit policy is the run's: an injected hook
+        // supplies small thresholds so a fixture can cross them mid-copy, and
+        // `None` leaves the policy to the environment as before. This is the
+        // one write that matters to the copy-phase commit tests, so the
+        // injection stays here rather than reaching into the cache module.
+        let cache = std::sync::Mutex::new(match self.hooks.commit {
+            Some(limits) => self.dst_db.begin_write_with(limits)?,
+            None => self.dst_db.begin_write()?,
+        });
         // The algorithms every copy in this phase computes and judges, built
         // once for the whole phase rather than once per copied file. The set is
         // the run's request, and the verify judges exactly what the copy
@@ -182,9 +190,10 @@ impl<'a> Applier<'a> {
         let failure: std::sync::Mutex<Option<(usize, anyhow::Error)>> = std::sync::Mutex::new(None);
         let copied = std::sync::atomic::AtomicUsize::new(0);
         // The test-only rendezvous between two copies of this run, if the
-        // environment asks for one. Absent in production, and absent in every
-        // run that does not ask.
-        let gate = CopyGate::from_env();
+        // resolved hooks ask for one. Built fresh per run — not cached in a
+        // process-global `OnceLock` — so an in-process caller can ask for a
+        // different gate on its next run.
+        let gate = self.hooks.gate_copy.as_deref().and_then(gate_from_spec);
         pool.install(|| {
             use rayon::prelude::*;
             plan.copy
@@ -211,6 +220,7 @@ impl<'a> Applier<'a> {
                                 &item.rel,
                                 algos,
                                 buf,
+                                self.hooks,
                             )
                         };
                         let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -459,16 +469,17 @@ const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A rendezvous between two copies of one run.
 ///
-/// **Test-only, default off.** The gate is asked for by
-/// `GIRSYNC_TEST_GATE_COPY=<wait>:<on>`: the copy of `<wait>` does not begin
-/// until the copy of `<on>` has **failed**. A run that asks for no gate never
-/// waits, and an unset variable names no gate at all — so this is a switch
-/// that is off in production and says nothing a user can meet.
+/// **Test-only, default off.** The gate is asked for by the `<wait>:<on>`
+/// specification on [`TestHooks::gate_copy`](crate::config::TestHooks::gate_copy)
+/// (resolved from `GIRSYNC_TEST_GATE_COPY` for a CLI run): the copy of `<wait>`
+/// does not begin until the copy of `<on>` has **failed**. A run that asks for
+/// no gate never waits, so this is a switch that is off in production and says
+/// nothing a user can meet.
 ///
 /// **Both names are relative paths inside the mirror**, and that is what makes
 /// the colon split unambiguous: the rule is checked where the value is read,
 /// and it refuses a half that carries a colon of its own. A value that is not
-/// two such paths asks for no gate — and says so — see [`CopyGate::from_env`].
+/// two such paths asks for no gate — and says so — see [`gate_from_spec`].
 ///
 /// The release happens when the failure has been **recorded**, so a copy
 /// waiting on it is released only once the failure it waits for is already
@@ -492,20 +503,6 @@ struct CopyGate {
 }
 
 impl CopyGate {
-    /// The gate the environment asks for, or `None` when it asks for none.
-    ///
-    /// Read once per process, like the other test-only switches: the answer
-    /// cannot change under a run. A malformed specification asks for no gate
-    /// **and is reported** — see [`gate_from_spec`].
-    fn from_env() -> Option<Arc<Self>> {
-        static GATE: std::sync::OnceLock<Option<Arc<CopyGate>>> = std::sync::OnceLock::new();
-        GATE.get_or_init(|| {
-            let spec = std::env::var("GIRSYNC_TEST_GATE_COPY").ok()?;
-            gate_from_spec(&spec)
-        })
-        .clone()
-    }
-
     /// Wait for the named copy's failure, if this copy is the one that waits.
     fn wait(&self, rel: &str) -> Result<()> {
         if rel != self.wait {

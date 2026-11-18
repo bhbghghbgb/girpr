@@ -8,6 +8,7 @@ use std::path::Path;
 use tracing::{error, trace};
 
 use crate::cache::FileRec;
+use crate::config::TestHooks;
 use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, hash_file};
 use crate::util::{mtime_ns_of, path_within};
 
@@ -76,37 +77,6 @@ fn verify_digests(path: &Path, algos: &AlgoSet, src: &DigestSet, dst: &DigestSet
     Ok(())
 }
 
-/// Whether the test-only `GIRSYNC_TEST_FAIL_COPY` hook names `rel`, i.e. this
-/// copy must fail before it writes anything.
-///
-/// Default **off**: an unset variable matches nothing. A test that needs a
-/// mid-copy failure - to observe what the cache committed before the abort -
-/// names one relative path and gets a deterministic failure in that copy only.
-/// The failure is raised before the dst file is opened, so the fixture asserts
-/// the cache's durability without also having to reason about a truncated file.
-fn test_fail_copy(rel: &str) -> bool {
-    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    FAIL_REL
-        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_COPY").ok())
-        .as_deref()
-        == Some(rel)
-}
-
-/// Whether the test-only `GIRSYNC_TEST_FAIL_FLUSH` hook names `rel`, i.e. the
-/// flush after this copy must fail.
-///
-/// Default **off**, and read once per process like [`test_fail_copy`]. A test
-/// needs it because a real `sync_all` failure (disk full, quota, a network
-/// volume that went away) cannot be arranged portably; naming one relative path
-/// exercises the same error path the production call takes.
-fn test_fail_flush(rel: &str) -> bool {
-    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    FAIL_REL
-        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_FLUSH").ok())
-        .as_deref()
-        == Some(rel)
-}
-
 /// Flush one copied file, or return the injected test failure.
 ///
 /// The result is **not** discarded: a failed flush must not be allowed to pass
@@ -114,33 +84,17 @@ fn test_fail_flush(rel: &str) -> bool {
 /// let the run exit 0 claiming durability. The caller turns this into the run
 /// error (exit 3), and the pre-drop has already removed the row, so a rerun
 /// recopies.
-fn flush_file(fout: &std::fs::File, rel: &str) -> io::Result<()> {
-    if test_fail_flush(rel) {
+///
+/// `hooks.fail_flush` names the relative path whose flush must fail — the same
+/// fault the old `GIRSYNC_TEST_FAIL_FLUSH` variable injected, but carried as
+/// data so an in-process caller can reach it without a child.
+fn flush_file(fout: &std::fs::File, rel: &str, hooks: &TestHooks) -> io::Result<()> {
+    if hooks.fail_flush.as_deref() == Some(rel) {
         return Err(io::Error::other(format!(
             "test: injected flush failure for {rel}"
         )));
     }
     fout.sync_all()
-}
-
-/// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
-///
-/// Default **off**: an unset variable, or any value other than an unambiguous
-/// truthy one (`1`, `true`, `yes`, `on`), leaves the per-file `sync_all` in
-/// place. Production therefore always flushes a copied file before the verify
-/// re-read. Tests opt in through `.config/nextest.toml` so the HDD copy suites
-/// stop paying a flush per file; the value is read once per process, not once
-/// per copied file. The bytes written, the size/mtime checks and the cache
-/// records are unchanged, so content and reopen assertions still hold — the
-/// tests merely stop exercising the `sync_all` itself.
-fn test_no_fsync() -> bool {
-    static NO_FSYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *NO_FSYNC.get_or_init(|| {
-        matches!(
-            std::env::var("GIRSYNC_TEST_NO_FSYNC").as_deref(),
-            Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-        )
-    })
 }
 
 /// Refuse a copy whose destination is reached **through** a link.
@@ -297,6 +251,7 @@ fn copy_and_stamp(
     rel: &str,
     algos: &AlgoSet,
     buf: &mut Vec<u8>,
+    hooks: &TestHooks,
 ) -> Result<VerifyInputs> {
     let smeta = std::fs::metadata(s).with_context(|| format!("stat {}", s.display()))?;
     let ssize = smeta.len();
@@ -314,8 +269,8 @@ fn copy_and_stamp(
     // digests judged are the same set by construction.
     let src_digests = copy_and_digest(&mut fin, &mut fout, algos, buf)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
-    if !test_no_fsync() {
-        flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
+    if !hooks.no_fsync {
+        flush_file(&fout, rel, hooks).with_context(|| format!("flush {}", d.display()))?;
     }
     if let Some(st) = smtime_sys {
         fout.set_modified(st)
@@ -407,9 +362,10 @@ pub(super) fn copy_one(
     rel: &str,
     algos: AlgoSet,
     buf: &mut Vec<u8>,
+    hooks: &TestHooks,
 ) -> Result<FileRec> {
     trace!("copy_one start");
-    if test_fail_copy(rel) {
+    if hooks.fail_copy.as_deref() == Some(rel) {
         bail!("test: injected copy failure for {rel}");
     }
     refuse_link_ancestor(dst_root, rel)?;
@@ -419,7 +375,7 @@ pub(super) fn copy_one(
     clear_blocking_dir(&d)?;
     create_parent(&d)?;
     refuse_hard_linked_dst(&d, rel)?;
-    let inputs = copy_and_stamp(&s, &d, rel, &algos, buf)?;
+    let inputs = copy_and_stamp(&s, &d, rel, &algos, buf, hooks)?;
     // verify: size + mtime + hash
     let dmeta = std::fs::metadata(&d).with_context(|| format!("stat {}", d.display()))?;
     if dmeta.len() != inputs.size {
@@ -947,6 +903,7 @@ mod tests {
             "a.txt",
             aset(&["md5"]),
             &mut buf,
+            &TestHooks::default(),
         )
         .expect("the copy succeeds");
         assert_eq!(
@@ -1098,6 +1055,7 @@ mod tests {
             "a.txt",
             aset(&["md5"]),
             &mut buf,
+            &TestHooks::default(),
         )
         .expect_err("a destination with two names must be refused");
         let msg = err.to_string();
@@ -1160,6 +1118,7 @@ mod tests {
             "a.txt",
             aset(&["md5"]),
             &mut buf,
+            &TestHooks::default(),
         )
         .expect_err("the copy must refuse a link into src");
         assert!(

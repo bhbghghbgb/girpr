@@ -29,7 +29,7 @@ use tracing::info;
 
 use super::plan::{DirPrefixes, Plan};
 use crate::cache::{CacheDb, FileRec};
-use crate::config::CommonOpts;
+use crate::config::{CommonOpts, TestHooks};
 use crate::effective::EffRec;
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
@@ -66,6 +66,10 @@ pub(super) struct Applier<'a> {
     /// what it *would* take; both go through this one writer, so the two are the
     /// same document rather than two printers that must agree.
     pub report: &'a Report,
+    /// The resolved test hooks, read by the copy phase (failure/gate/commit)
+    /// and carried down to [`super::copy::copy_one`]. A reference so every
+    /// rayon worker sees the same value without a second resolution.
+    pub hooks: &'a TestHooks,
 }
 
 /// What a run actually did, for the `SUMMARY` record.

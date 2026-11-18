@@ -105,7 +105,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
-use crate::config::{LogCtx, ScanMode, SyncOpts};
+use crate::config::{LogCtx, ScanMode, SyncOpts, TestHooks};
 use crate::diff::diff_maps;
 use crate::effective::{
     Side, SideCapability, SideEntry, classify, ensure_distinct_sides, open_folder_cache,
@@ -126,7 +126,17 @@ use rename::{RenameOutcome, rename_to_src_casing};
 use super::side_label;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
+///
+/// The environment-driven entry point: hooks come from the same `GIRSYNC_TEST_*`
+/// variables the binary has always read. A caller driving the CLI in-process
+/// with injected hooks uses [`cmd_sync_with_hooks`] (reached through
+/// [`crate::run_captured_with_hooks`]).
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
+    cmd_sync_with_hooks(opts, log, &TestHooks::from_env())
+}
+
+/// Mirror `src` onto `dst` with the process-global hooks injected as a value.
+pub fn cmd_sync_with_hooks(opts: SyncOpts, log: &LogCtx, hooks: &TestHooks) -> Result<i32> {
     let t0 = std::time::Instant::now();
     // One writer for every record this run emits, in the requested format. Held
     // across all three phases so `--dry-run` and a real run go through exactly
@@ -235,7 +245,18 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // here would produce a second timestamped pair mid-run. `open_folder_cache`
     // is also the only thing that decides how a dry run opens a cache, so this
     // stays a plain call rather than a second policy.
-    let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, dry_run);
+    // The heartbeat period was exposed by T15 on `ScanMode`. The resolved
+    // `TestHooks` carries the same value; fix it on the mode only when a caller
+    // injected one, otherwise leave `None` so the environment (and, with it
+    // unset, the production period) still answers. This is the one heartbeat
+    // knob — there is no second period field to keep in step.
+    let scan_mode = |no_trust_cached_hashes| {
+        let mut mode = ScanMode::new(no_trust_cached_hashes, dry_run);
+        if let Some(entries) = hooks.heartbeat_entries {
+            mode = mode.with_heartbeat_entries(entries);
+        }
+        mode
+    };
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);
     let src_db = open_folder_cache(&src, &common, src_mode, false)?;
@@ -385,7 +406,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let RenameOutcome { renamed, on_disk } = if common.case_sensitive {
         RenameOutcome::default()
     } else {
-        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
+        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report, hooks)?
     };
 
     // 7. Diff, plan and the guards.
@@ -494,6 +515,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         common: &common,
         rw: &rw,
         report: &report,
+        hooks,
     }
     .apply(&plan)?;
     // No final flush: every apply phase commits its own mutations, and the

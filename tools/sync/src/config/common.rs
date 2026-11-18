@@ -12,13 +12,148 @@ use std::path::PathBuf;
 
 use girpr_log::Level;
 
-use crate::cache::TestCacheBackend;
+use crate::cache::{CommitLimits, TestCacheBackend};
 use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::{Filter, compile_patterns};
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report, ReportSink};
 use crate::rw::RwLimits;
+
+/// The process-global test hooks, gathered into one value that a caller can
+/// inject instead of reaching for the environment.
+///
+/// Every field here was once read straight from a `GIRSYNC_TEST_*` variable,
+/// and several were `OnceLock`-cached, which is why a test that needed one had
+/// to spawn a child. Resolving them once into a struct — from the environment
+/// for a production/CLI run, or built by hand for an in-process test — removes
+/// that reason: a caller that already drives a command in-process can now
+/// inject a failure, a gate or a small threshold as data.
+///
+/// [`Default`] is all-off: no failure, no gate, no injected commit policy, no
+/// heartbeat override, and `no_fsync` false (a copied file is flushed). That is
+/// the safe answer for a hand-built hook value. [`TestHooks::from_env`] is what
+/// the CLI uses, and it preserves the old environment behaviour — including
+/// `.config/nextest-test-env` setting `GIRSYNC_TEST_NO_FSYNC` and
+/// `GIRSYNC_TEST_DURABILITY` — by reading the same variables the old hook sites
+/// read.
+///
+/// The production code paths read only these fields, never `std::env`, so an
+/// injected value cannot be blocked by a stale `OnceLock` and two runs in one
+/// process cannot see each other's hooks.
+#[derive(Debug, Clone, Default)]
+pub struct TestHooks {
+    /// Relative path whose copy must fail before it writes anything
+    /// (`GIRSYNC_TEST_FAIL_COPY`). `None` matches nothing.
+    pub fail_copy: Option<String>,
+    /// Relative path whose post-copy flush must fail
+    /// (`GIRSYNC_TEST_FAIL_FLUSH`). `None` matches nothing.
+    pub fail_flush: Option<String>,
+    /// Skip the per-file `sync_all` after a copy (`GIRSYNC_TEST_NO_FSYNC`).
+    pub no_fsync: bool,
+    /// Relative path whose case-fix rename fails before its temporary is
+    /// claimed (`GIRSYNC_TEST_FAIL_RENAME`).
+    pub fail_rename_before_claim: Option<String>,
+    /// Relative path whose case-fix rename fails at step 1
+    /// (`GIRSYNC_TEST_FAIL_RENAME_STEP1`).
+    pub fail_rename_step1: Option<String>,
+    /// Relative path whose case-fix rename fails at step 2
+    /// (`GIRSYNC_TEST_FAIL_RENAME_STEP2`).
+    pub fail_rename_step2: Option<String>,
+    /// The `<wait>:<on>` copy rendezvous (`GIRSYNC_TEST_GATE_COPY`).
+    pub gate_copy: Option<String>,
+    /// The injected commit policy for the copy phase's batched cache write.
+    /// `None` leaves it to the environment (see `CommitLimits::from_env_opt`).
+    pub commit: Option<CommitLimits>,
+    /// The walk's heartbeat period (`GIRSYNC_TEST_HEARTBEAT_ENTRIES`), folded
+    /// in from the knob T15 exposed on [`ScanMode`]. `None` leaves the period to
+    /// the environment (and the production constant when that is unset).
+    pub heartbeat_entries: Option<usize>,
+}
+
+impl TestHooks {
+    /// Resolve the hooks from the environment — the fallback that keeps the
+    /// CLI and `.config/nextest-test-env` working exactly as before.
+    pub fn from_env() -> Self {
+        let truthy = |name: &str| {
+            matches!(
+                std::env::var(name).as_deref(),
+                Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+            )
+        };
+        let positive = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&n| n > 0)
+        };
+        Self {
+            fail_copy: std::env::var("GIRSYNC_TEST_FAIL_COPY").ok(),
+            fail_flush: std::env::var("GIRSYNC_TEST_FAIL_FLUSH").ok(),
+            no_fsync: truthy("GIRSYNC_TEST_NO_FSYNC"),
+            fail_rename_before_claim: std::env::var("GIRSYNC_TEST_FAIL_RENAME").ok(),
+            fail_rename_step1: std::env::var("GIRSYNC_TEST_FAIL_RENAME_STEP1").ok(),
+            fail_rename_step2: std::env::var("GIRSYNC_TEST_FAIL_RENAME_STEP2").ok(),
+            gate_copy: std::env::var("GIRSYNC_TEST_GATE_COPY").ok(),
+            commit: CommitLimits::from_env_opt(),
+            heartbeat_entries: positive("GIRSYNC_TEST_HEARTBEAT_ENTRIES"),
+        }
+    }
+
+    /// Fail the copy of `rel`.
+    pub fn with_fail_copy(mut self, rel: &str) -> Self {
+        self.fail_copy = Some(rel.to_string());
+        self
+    }
+
+    /// Fail the flush of `rel`.
+    pub fn with_fail_flush(mut self, rel: &str) -> Self {
+        self.fail_flush = Some(rel.to_string());
+        self
+    }
+
+    /// Choose whether copies skip their per-file flush.
+    pub fn with_no_fsync(mut self, no_fsync: bool) -> Self {
+        self.no_fsync = no_fsync;
+        self
+    }
+
+    /// Fail the case-fix rename of `rel` before its temporary is claimed.
+    pub fn with_fail_rename_before_claim(mut self, rel: &str) -> Self {
+        self.fail_rename_before_claim = Some(rel.to_string());
+        self
+    }
+
+    /// Fail the case-fix rename of `rel` at step 1.
+    pub fn with_fail_rename_step1(mut self, rel: &str) -> Self {
+        self.fail_rename_step1 = Some(rel.to_string());
+        self
+    }
+
+    /// Fail the case-fix rename of `rel` at step 2.
+    pub fn with_fail_rename_step2(mut self, rel: &str) -> Self {
+        self.fail_rename_step2 = Some(rel.to_string());
+        self
+    }
+
+    /// Ask for the `<wait>:<on>` copy rendezvous.
+    pub fn with_gate_copy(mut self, spec: &str) -> Self {
+        self.gate_copy = Some(spec.to_string());
+        self
+    }
+
+    /// Inject the copy phase's commit policy.
+    pub fn with_commit(mut self, limits: CommitLimits) -> Self {
+        self.commit = Some(limits);
+        self
+    }
+
+    /// Fix the walk's heartbeat period.
+    pub fn with_heartbeat_entries(mut self, entries: usize) -> Self {
+        self.heartbeat_entries = Some(entries);
+        self
+    }
+}
 
 /// How the run reports itself: the log knobs and the stdout format.
 ///

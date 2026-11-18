@@ -71,7 +71,7 @@ impl CommitLimits {
     ///
     /// Deliberately not CLI flags: they exist so a small fixture can make a
     /// commit observable, not to tune a real run.
-    fn from_env() -> Self {
+    pub fn from_env() -> Self {
         let mut limits = Self::default();
         if let Some(ops) = env_limit("GIRSYNC_TEST_COMMIT_OPS") {
             limits.max_ops = ops;
@@ -83,6 +83,22 @@ impl CommitLimits {
             limits.max_interval = Duration::from_millis(ms);
         }
         limits
+    }
+
+    /// [`Some`] with the environment's overrides when any `GIRSYNC_TEST_COMMIT_*`
+    /// variable is set, and [`None`] when none is. This lets a resolved
+    /// [`TestHooks`](crate::config::TestHooks) leave the commit policy to the
+    /// environment (its `None`) while still carrying an explicit policy when a
+    /// caller injects one.
+    pub fn from_env_opt() -> Option<Self> {
+        let any = [
+            "GIRSYNC_TEST_COMMIT_OPS",
+            "GIRSYNC_TEST_COMMIT_BYTES",
+            "GIRSYNC_TEST_COMMIT_INTERVAL_MS",
+        ]
+        .iter()
+        .any(|name| std::env::var(name).is_ok());
+        any.then(Self::from_env)
     }
 }
 
