@@ -24,8 +24,7 @@ default-members = ["."]
 # motivates it. Warnings stay warnings; CI decides whether to deny them.
 # The two dev tools set a smaller subset of their own; see their manifests.
 [workspace.lints.rust]
-# The product has no `unsafe`; the allocator instrument in `tests/peak_heap.rs`
-# is the one deliberate exception and says so itself.
+# The product and its tests have no `unsafe`.
 unsafe_code = "deny"
 
 [workspace.lints.clippy]

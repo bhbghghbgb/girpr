@@ -658,6 +658,89 @@ mod tests {
         );
     }
 
+    /// A sink that records the length of each `write` call instead of keeping
+    /// the bytes — the structural stand-in for the old heap probe.
+    #[derive(Default)]
+    struct CountingSink {
+        /// Length of each `write` call, in arrival order.
+        writes: Vec<usize>,
+    }
+
+    impl Write for CountingSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes.push(buf.len());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl ChunkSink for CountingSink {
+        fn restart(&mut self) -> std::io::Result<()> {
+            self.writes.clear();
+            Ok(())
+        }
+    }
+
+    /// Scale-free structural invariant replacing the `#[ignore]`d,
+    /// non-asserting peak-heap measurement in `tests/peak_heap.rs`.
+    ///
+    /// The streaming path exists because it never holds a whole chunk: decoded
+    /// bytes leave for the sink as they are produced. This asserts that shape
+    /// directly at the `stream_body` seam that `stream_chunk_to` drives — the
+    /// decoded body reaches the sink in more than one write, every byte arrives,
+    /// and no single write is the whole body. A change that buffers the decoded
+    /// body and writes it once (the risk the old measurement existed to catch)
+    /// collapses this to one full-body write and fails here.
+    ///
+    /// This trades the human-read peak-heap ratio for a structural bound; it is
+    /// not a runtime measurement and claims no speedup. The body is in memory,
+    /// so there is no socket, counting allocator, TCP server or incompressible
+    /// 256 KiB payload.
+    #[tokio::test]
+    async fn the_streamed_decode_writes_in_pieces_not_one_buffer() {
+        // The decoder's write-side buffer is 32 KiB; a body comfortably larger
+        // than that must be flushed to the sink in several writes.
+        const DECODED: usize = 128 * 1024;
+        let payload: Vec<u8> = (0..DECODED).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let mut sink = CountingSink::default();
+        let body = futures_util::stream::iter(pieces(&compressed, 1024));
+
+        let digest = stream_body(
+            body,
+            Some(DECODED as u64),
+            Some(compressed.len() as u64),
+            &mut sink,
+        )
+        .await
+        .expect("the frame decodes");
+
+        assert_eq!(digest.bytes, DECODED as u64, "the whole body was decoded");
+        assert_eq!(
+            digest.md5.to_hex(),
+            crate::util::md5::md5_digest(&payload).to_hex(),
+            "and the sink hashed the right bytes"
+        );
+        assert!(
+            sink.writes.len() > 1,
+            "streaming must write in more than one piece, got {} write(s)",
+            sink.writes.len()
+        );
+        assert_eq!(
+            sink.writes.iter().sum::<usize>(),
+            DECODED,
+            "every decoded byte reached the sink"
+        );
+        let largest = sink.writes.iter().copied().max().unwrap_or(0);
+        assert!(
+            largest < DECODED,
+            "no single write may be the whole body (a buffering regression)"
+        );
+    }
+
     /// A payload that decodes to the wrong bytes is caught by the digest: the
     /// streaming path hashes what it wrote, so the comparison is the same one
     /// the buffered path made — and it is the digest, not the length, that
