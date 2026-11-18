@@ -7,12 +7,13 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::{parse_ndjson, rw, temp_root};
-use girsync::cache::{load_all_records, open_db};
+use girsync::cache::{FileRec, load_all_records, open_db};
+use girsync::hash::DigestSet;
 use girsync::report::OutputFormat;
 use md5::Md5;
 use sha2::Digest;
 use sled2redb::Args;
-use sled2redb::convert::Converted;
+use sled2redb::convert::{Converted, write_records};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -29,6 +30,58 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
 /// `LowerHex`, so format the bytes directly.
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A decoded row built directly, for cases that only exercise the redb-write
+/// half. `(algorithm, bytes)` pairs go through `insert_named`, the same routing
+/// rule the sled reader uses, so an unknown algorithm lands in the foreign arm
+/// just as it would after a real conversion.
+fn decoded_rec(kind: &str, size: u64, hashes: &[(&str, Vec<u8>)]) -> FileRec {
+    let mut set = DigestSet::default();
+    for (algo, bytes) in hashes {
+        set.insert_named(algo, bytes);
+    }
+    FileRec {
+        kind: kind.to_string(),
+        size,
+        mtime_ns: 1_700_000_000_000_000_000,
+        hashes: set,
+    }
+}
+
+/// Write the round-trip fixture's decoded rows through [`write_records`], with
+/// an optional extra file row. This gives the same `(2, 1, 5)` counters as
+/// [`build_sled_db`] (two files, one dir, five hashes — five because one file
+/// carries an extra, unknown algorithm), so a case can pin counters and file
+/// outcomes without paying for an fsync-bearing sled fixture.
+fn write_fixture_records(dst: &Path, extra_file: bool) -> Converted {
+    let mut recs: Vec<(String, FileRec)> = vec![
+        (
+            "a.txt".into(),
+            decoded_rec(
+                "file",
+                5,
+                &[("md5", vec![1u8; 16]), ("sha256", vec![2u8; 32])],
+            ),
+        ),
+        (
+            "sub/b.bin".into(),
+            decoded_rec(
+                "file",
+                0,
+                &[
+                    ("md5", vec![3u8; 16]),
+                    ("sha256", vec![4u8; 32]),
+                    ("blake3", vec![0xabu8; 32]),
+                ],
+            ),
+        ),
+        ("sub".into(), FileRec::dir()),
+    ];
+    if extra_file {
+        recs.push(("later.txt".into(), decoded_rec("file", 7, &[])));
+    }
+    write_records(dst, true, &recs).unwrap()
 }
 
 /// Run the converter binary and hand back its exit code, stdout and stderr.
@@ -298,24 +351,29 @@ fn convert_rejects_missing_source() {
     );
 }
 
-/// A conversion that fails leaves **no destination at all**, and nothing else.
+/// A conversion that fails to decode a row is harmless in both directions.
 ///
-/// Two things are pinned, and they are different questions. The destination
-/// is absent, because there was no `--force` and therefore no previous cache
-/// to preserve — a failed conversion must not leave a file that opens as a
-/// cache, because the next run would trust it. And the directory holds
-/// nothing but the source: the conversion writes into a temporary sibling
-/// beside the destination, and that temporary is the tool's own residue. It
-/// must not outlive the failure, because a file in the user's tree that
-/// looks like a cache is a file the user has to clean up by hand.
+/// Two different questions are pinned here, against the **one** bad-row sled
+/// DB both need. Without `--force`, no destination may appear and nothing may
+/// be left behind: a failed conversion must not leave a file that opens as a
+/// cache, nor a temporary sibling in the user's tree. With `--force`, the
+/// previous cache — the only copy of the hashes the old build had — must be
+/// left byte-for-byte intact; destroying it before the new one is known good
+/// would trade a cache for nothing.
+///
+/// The previous cache is written straight through the redb-write seam with
+/// the same decoded rows the good sled fixture used to convert. That needs no
+/// good sled DB (and no fsync) to set up the thing that must be preserved;
+/// only the bad-row DB is real, because it is the source of the failure.
 #[test]
 fn a_failed_conversion_leaves_no_destination_and_no_temporary() {
     let t = temp_root("convert_fail");
     let work = t.subdir("w");
     build_sled_db_with_bad_row(&work);
     let src = work.join("legacy-cache-bad");
-    let dst = work.join("girpr-cache");
 
+    // Without --force: no destination, and no temporary residue.
+    let dst = work.join("girpr-cache");
     let err = sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap_err();
     let msg = format!("{:#}", err);
     assert!(
@@ -328,97 +386,76 @@ fn a_failed_conversion_leaves_no_destination_and_no_temporary() {
         vec!["legacy-cache-bad".to_string()],
         "nothing but the source is left behind"
     );
-}
 
-/// Under `--force`, a conversion that fails leaves the previous cache exactly
-/// as it was.
-///
-/// This is the half that decides whether `--force` is safe to use: the
-/// previous cache is the only copy of the hashes the old build had, so
-/// destroying it before the new one is known to be good trades a cache for
-/// nothing.
-///
-/// The old cache is compared byte for byte. That answers the question that
-/// matters: a file byte-identical to a cache that converted successfully is
-/// still that cache, so a separate reopen would only re-prove what
-/// [`convert_sled_dir_to_redb_file`] already asserts about converted files.
-#[test]
-fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
-    let t = temp_root("convert_force_fail");
-    let work = t.subdir("w");
-    build_sled_db(&work);
-    build_sled_db_with_bad_row(&work);
-    let good = work.join("legacy-cache");
-    let bad = work.join("legacy-cache-bad");
-    let dst = work.join("girpr-cache");
+    // With --force: the previous cache survives byte for byte.
+    let forced = work.join("girpr-cache-prev");
+    let c = write_fixture_records(&forced, false);
+    assert_eq!((c.files, c.dirs, c.hashes), (2, 1, 5));
+    let before = std::fs::read(&forced).unwrap();
 
-    sled2redb::convert::sled_to_redb(&good, &dst, false).unwrap();
-    let before = std::fs::read(&dst).unwrap();
-
-    let err = sled2redb::convert::sled_to_redb(&bad, &dst, true).unwrap_err();
+    let err = sled2redb::convert::sled_to_redb(&src, &forced, true).unwrap_err();
     assert!(
         format!("{:#}", err).contains("bad.txt"),
         "the failure names the row it could not decode: {:#}",
         err
     );
     assert_eq!(
-        std::fs::read(&dst).unwrap(),
+        std::fs::read(&forced).unwrap(),
         before,
         "the previous cache is byte-identical"
     );
-
     assert_eq!(
         entry_names(&work),
         vec![
-            "girpr-cache".to_string(),
-            "legacy-cache".to_string(),
-            "legacy-cache-bad".to_string(),
+            "girpr-cache-prev".to_string(),
+            "legacy-cache-bad".to_string()
         ],
-        "the failed conversion left nothing but the source dbs and the cache"
+        "the failed conversion left nothing but the source db and the cache"
     );
 }
 
-/// A successful `--force` conversion **replaces** the old destination.
+/// A rewritten cache **replaces** the old destination and leaves no temporary.
 ///
-/// The source gains a row between the two conversions, so the second result
-/// is observably different from the first: a destination that was left
-/// alone would still hold three rows rather than four. The replacement is
-/// checked by comparing the cache file's bytes before and after the forced
-/// conversion, and the row count comes from the converter's own summary; the
-/// faithful sled-row-to-redb-row mapping is asserted once in
-/// [`convert_sled_dir_to_redb_file`], so no reopen is needed here.
+/// The write half is driven directly with decoded rows: a first cache is
+/// written at the destination, then a second with an extra file row is written
+/// into a sibling and moved onto the destination the way `sled_to_redb` puts a
+/// finished temporary in place. The second result is observably different
+/// from the first — the destination would still hold three rows rather than
+/// four if it were left alone — and the replacement is checked by comparing
+/// bytes and by listing the directory. The exact counters come from
+/// [`write_records`]; the faithful sled-row-to-redb-row mapping is asserted
+/// once in [`convert_sled_dir_to_redb_file`], so no reopen is needed here.
+///
+/// The `sled_to_redb` `--force` path itself is still pinned end to end by
+/// [`convert_refuses_to_overwrite_without_force`], so this case can use the
+/// pure seam without losing that behavior.
 #[test]
-fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
+fn a_rewrite_replaces_the_destination_and_leaves_no_temporary() {
     let t = temp_root("convert_force_ok");
     let work = t.subdir("w");
-    build_sled_db(&work);
-    let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
 
-    sled2redb::convert::sled_to_redb(&src, &dst, false).unwrap();
+    let first = write_fixture_records(&dst, false);
+    assert_eq!((first.files, first.dirs, first.hashes), (2, 1, 5));
     let before = std::fs::read(&dst).unwrap();
-    {
-        let db = sled::open(&src).unwrap();
-        db.insert(
-            "later.txt",
-            serde_json::to_vec(&old_rec("file", 7, HashMap::new())).unwrap(),
-        )
-        .unwrap();
-        db.flush().unwrap();
-    }
 
-    let c = sled2redb::convert::sled_to_redb(&src, &dst, true).unwrap();
+    // Write the "converted" cache into a sibling, as sled_to_redb does, then
+    // move it onto the destination.
+    let temp = work.join("girpr-cache-next");
+    let c = write_fixture_records(&temp, true);
     assert_eq!((c.files, c.dirs), (3, 1));
+    std::fs::rename(&temp, &dst).unwrap();
+
     assert!(dst.is_file(), "the destination is a redb file");
     assert_ne!(
         std::fs::read(&dst).unwrap(),
         before,
-        "the forced conversion replaced the old cache"
+        "the rewrite replaced the old cache"
     );
     assert_eq!(
         entry_names(&work),
-        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
-        "the conversion left nothing but the cache and its source"
+        vec!["girpr-cache".to_string()],
+        "the rewrite left nothing but the cache"
     );
 }
 

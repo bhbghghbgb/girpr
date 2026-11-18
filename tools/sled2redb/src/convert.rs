@@ -188,6 +188,10 @@ pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Co
 /// and the sled handle has to be closed before the destination is created
 /// beside it. The `Vec` is therefore the shape this conversion has; what the
 /// module is for is that the *result* is whole or absent.
+///
+/// The actual redb write lives in [`write_records`]; this function owns only
+/// the sled half — opening, decoding and the `drop(old)` that releases the
+/// lock before the cache is opened beside the source.
 fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
     let old =
         sled::open(sled_dir).with_context(|| format!("open sled db {}", sled_dir.display()))?;
@@ -225,9 +229,33 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
         ));
     }
     // The iteration above is read-only, so sled has nothing to flush; `drop`
-    // releases the lock before the destination is created next to it.
+    // releases the lock before the destination is created next to it. It stays
+    // here, in the sled half, rather than moving into `write_records`: the
+    // lock must be gone before the redb cache is opened beside the source.
     drop(old);
 
+    // `case_sensitive` came from the sled `meta` row above; the write half
+    // takes it as a plain argument and owns only the redb side.
+    write_records(temp, case_sensitive, &recs)
+}
+
+/// Write already-decoded records into the redb cache at `temp`.
+///
+/// This is the redb-write half of [`convert_into`]. It owns the cache handle,
+/// the write transaction, the per-kind counters and the lock-sidecar cleanup,
+/// but knows nothing about sled: callers that already hold decoded records —
+/// the sled reader above or a test with synthetic rows — use this seam
+/// directly. `case_sensitive` is the mode [`convert_into`] read from the sled
+/// `meta` row; it decides how the cache is opened.
+///
+/// The temporary's *name* and its cleanup on failure are the caller's job and
+/// stay in [`sled_to_redb`]: this function writes to whichever path it is
+/// given and leaves the surrounding atomicity guarantees untouched.
+pub fn write_records(
+    temp: &Path,
+    case_sensitive: bool,
+    recs: &[(String, girsync::cache::FileRec)],
+) -> Result<Converted> {
     let cache = girsync::cache::open_db(
         temp,
         case_sensitive,
@@ -240,7 +268,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
     let mut out = Converted::default();
     {
         let mut w = cache.begin_write()?;
-        for (rel, rec) in &recs {
+        for (rel, rec) in recs {
             if rec.is_file() {
                 out.files += 1;
             } else {
