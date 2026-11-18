@@ -12,9 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T18 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP7 `done`; T17 `pending_review`, T18 `todo` (CP8).
+* Next action: wait for the T18 implementing session to finish, then apply its
+  result. T18 completes CP8's tasks, so after recording it, run the CP8 review
+  phase (`ORCHESTRATION.md` §4).
+* Active phase: implementation. CP1–CP7 `done`; T17 `pending_review`, T18 `in_progress` (last CP8 task).
 * Active checkpoint: none yet (CP8 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -51,7 +52,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T15 | Parameterize the sync heartbeat period | E4 | completed | P1 | CP6 | CP6 review: completed; guardrail did not bind. |
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | pending_review | P2 | CP8 | Implemented in 6f488b0b; 8 spawns downshifted, 3 smokes remain. WorkerGuard tuple deviation + 2 fallbacks (see context). |
-| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | todo | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
+| T18 | Sync injected `TestHooks` for ambient env hooks | E5 | in_progress | P2 | CP8 | Sequence after T16; keep env fallback for `.config/nextest-test-env`. |
 | T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
