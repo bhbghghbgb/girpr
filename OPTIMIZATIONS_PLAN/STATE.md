@@ -12,11 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: run the CP8 review phase (`ORCHESTRATION.md` §4) — both CP8 tasks
-  are terminal (`pending_review`). Set CP8 `in_progress` and spawn one
-  review-and-fix session with the two commit ranges.
-* Active phase: review. All CP8 tasks are `pending_review`; CP8 is ready for review.
-* Active checkpoint: none yet (CP8 `open`). Active batch: none.
+* Next action: wait for the CP8 review-and-fix session to finish, then apply its
+  verdicts and follow-up recommendations and mark CP8 `done` (`ORCHESTRATION.md` §4).
+* Active phase: review. CP8 `in_progress`; both CP8 tasks are `pending_review`.
+* Active checkpoint: CP8 (in review). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
   any follow-up batching/implementation — is a user-directed flaky-test
@@ -73,7 +72,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | CP5 | T13–T14 | done | capture mock merge + `repair_purge` merges — T13 completed, T14 skipped (confirmed), no fixes/reverts |
 | CP6 | T15 | done | sync heartbeat parameterization — completed, no fixes/reverts |
 | CP7 | T16 | done | sync record sink + `run_captured` (largest single change) — completed, no fixes/reverts |
-| CP8 | T17–T18 | open | sync logging + `TestHooks` seams |
+| CP8 | T17–T18 | in_progress | sync logging + `TestHooks` seams |
 | CP9 | T19 | open | sync `CompareOutcome` pipeline dedup |
 | CP10 | T20–T21 | open | `repair_scan` downshift + `peak_heap` invariant |
 | CP11 | T22–T23 | open | sled2redb production seams |
