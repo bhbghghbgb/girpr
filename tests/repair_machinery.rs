@@ -1543,7 +1543,7 @@ async fn the_live_and_the_settled_figures_agree_on_a_clean_run() {
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
     let run = rig
-        .run(&[
+        .run_lib(&[
             "--max-download-bytes",
             "1048576",
             "--max-write-bytes",
@@ -1580,7 +1580,7 @@ async fn the_local_manifest_key_says_ok_and_unavailable() {
         .with_old(vec![FileSpec::new("game/one.dat", old.clone())]);
     let ok = Rig::start(&with_local).await;
     ok.at_local_version();
-    let run = ok.run(&[]).await;
+    let run = ok.run_lib(&[]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.word("summary", "local_manifest"), "ok");
 
@@ -1589,7 +1589,7 @@ async fn the_local_manifest_key_says_ok_and_unavailable() {
     let without_local = FixtureSpec::new(vec![FileSpec::new("game/one.dat", new)]);
     let unavailable = Rig::start(&without_local).await;
     unavailable.at_local_version();
-    let run = unavailable.run(&[]).await;
+    let run = unavailable.run_lib(&[]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.word("summary", "local_manifest"), "unavailable");
 }
@@ -1617,7 +1617,7 @@ async fn the_scope_contains_the_run() {
     rig.write("game/orphan.dat", &vec![0x5Bu8; size]);
     let before = snapshot(&rig.game());
 
-    let run = rig.run(&["--include", "game/one.dat"]).await;
+    let run = rig.run_lib(&["--include", "game/one.dat"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "scoped"), 1);
     assert_eq!(
@@ -1656,7 +1656,7 @@ async fn a_path_with_a_space_survives_the_include_glob() {
     let rig = Rig::start(&spec).await;
     rig.write("game/with space.dat", &vec![0x5Au8; size]);
 
-    let run = rig.run(&["--include", "game/with space.dat"]).await;
+    let run = rig.run_lib(&["--include", "game/with space.dat"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(run.num("summary", "total"), 1, "the glob matched the path");
     assert_eq!(
