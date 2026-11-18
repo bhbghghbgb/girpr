@@ -12,10 +12,10 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: pick the next `todo` task in seeded order — T19 — and spawn its
-  implementing session (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1–CP8 `done`; T17, T18 `completed`; T19 is the
-  next task (CP9).
+* Next action: wait for the T19 implementing session to finish, then apply its
+  result. T19 is the sole CP9 task, so after recording it, run the CP9 review
+  phase (`ORCHESTRATION.md` §4).
+* Active phase: implementation. CP1–CP8 `done`; T19 `in_progress` (sole CP9 task).
 * Active checkpoint: none yet (CP9 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 * Scheduled after all tasks are terminal and all checkpoints `done` — and BEFORE
@@ -56,7 +56,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 | T16 | Sync injectable record sink + `run_captured` | E1 | completed | P2 | CP7 | CP7 review: completed. |
 | T17 | Sync scoped subscriber + injectable console writer | E2 | completed | P2 | CP8 | CP8 review: completed; tuple deviation and both fallbacks confirmed. |
 | T18 | Sync injected `TestHooks` for ambient env hooks | E5 | completed | P2 | CP8 | CP8 review: completed; env fallback + heartbeat fold confirmed. |
-| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | todo | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
+| T19 | Richer `CompareOutcome`, delete duplicated pipelines | E3 | in_progress | P2 | CP9 | Merge harnesses, not cases — grouped suites test different mechanisms. |
 | T20 | `repair_scan.rs` estimate/mode downshift + merge | A2 | todo | P2 | CP10 | Keep stdout/stderr process pins on the binary. |
 | T21 | `peak_heap.rs` measurement → scale-free invariant | A5 | todo | P2 | CP10 | Invariant must not pass vacuously; may drop workspace `unsafe` exemption. |
 | T22 | Expose `Args` + conversion record from sled2redb lib | D1 | todo | P2 | CP11 | Unblocks D8 (follow-up F02). Keep one spawn for the flag→record→exit-0 path. |
