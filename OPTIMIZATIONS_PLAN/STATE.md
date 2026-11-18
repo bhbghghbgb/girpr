@@ -12,8 +12,9 @@ implementers always validate against current code before editing.
 
 ## Current position
 
-* Next action: start the implementation phase at **T01** (`ORCHESTRATION.md` §3).
-* Active phase: implementation. CP1 is the first checkpoint. No task started.
+* Next action: wait for the T01 implementing session to finish, then apply its
+  result (`ORCHESTRATION.md` §3).
+* Active phase: implementation. T01 is `in_progress`; CP1 is the first checkpoint.
 * Active checkpoint: none yet (CP1 `open`). Active batch: none.
 * Blocked on user: no. (The user supplies the session-spawning mechanism.)
 
@@ -33,7 +34,7 @@ first, then P1 narrow production seams, then P2 wide high-payoff seams.
 
 | ID | Title | Findings | Status | Priority | CP | Notes |
 |---|---|---|---|---|---|---|
-| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | todo | P0 | CP1 | |
+| T01 | `retry.rs` injectivity sampling → coprimality proof | C1 | in_progress | P0 | CP1 | |
 | T02 | Root-unit low-risk merges: `plan.rs` layout + `clock_support` | C3, C4 | todo | P0 | CP1 | |
 | T03 | sled2redb low-risk merges: stale-file fixture + destination/temp case | D3, D4 | todo | P0 | CP1 | |
 | T04 | Small-crates table folds: `crates/log` + `crates/tempdir` | D5, D6, D7 | todo | P0 | CP1 | |
