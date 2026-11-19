@@ -36,8 +36,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T22 | Status error + URL join → `reqwest` | completed | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
 | T23 | gircap HTTP mock servers | completed | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
 | T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
-| T25 | Hardlink identity → `same-file` | pending_review | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
-| T26 | girsync gate/concurrency simplification | pending_review | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
+| T25 | Hardlink identity → `same-file` | completed | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
+| T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
 | T27 | Cache wire codec → `postcard`/`bincode` | todo | | |
 | T28 | `cache/open.rs` publish protocol restructure | todo | | |
 | T29 | girpr INI parse/merge/render | todo | | |
@@ -59,7 +59,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | E | T18, T20, T21, T22 (T19 skipped) | done | All four completed; no fixes; DO-NOT-TOUCH resume artifacts preserved; 6 follow-ups recorded |
 | X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
 | F | T23, T24 | done | Both completed; no fixes; all 9 malformed-Length tests retained; bridge/domain servers untouched; 5 follow-ups recorded |
-| G | T25, T26 | pending | |
+| G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
 
 ## Follow-ups
 
@@ -94,6 +94,11 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F27 | Track added test-build weight from wiremock dev-dependency in girpr and gircap | open | Batch F; dev-only, no shipped-artifact impact |
 | F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | open | Batch F; all 9 malformed tests consume exact scripted counts |
 | F29 | Note serve_status now takes u16; custom reason phrases would need responder customization | open | Batch F; current tests assert numeric status only |
+| F30 | Windows share-mode assurance test for identity_of opening a second handle per claim | open | Batch G; DuplicateHandle inherits share flags; extra assurance only |
+| F31 | Note ReFS identity uniqueness caveat of same-file 1.0.6 on Windows | open | Batch G; identical to old behavior, link-count guard is primary |
+| F32 | Note transient in_flight() under-report window under tokio wait queues | open | Batch G; diagnostics-only, 30x stress showed no return |
+| F33 | Strengthen T26 deadlock test with asymmetric split(1,2)/split(2,1) barrier case | open | Batch G; invariant structurally covered |
+| F34 | Note blocking_acquire() panics inside a tokio runtime if async is ever introduced | open | Batch G; crate fully synchronous today |
 
 ## Persistent context
 
