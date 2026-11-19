@@ -637,6 +637,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "walkdir",
  "winapi-util",

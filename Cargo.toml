@@ -65,6 +65,9 @@ hex = "0.4.3"
 zstd = "0.14.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# The file layer's writer: a non-blocking queue drained by a worker thread, so
+# logging never blocks the run and the worker guard flushes the tail on exit.
+tracing-appender = "0.2.5"
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 glob = "0.3.4"

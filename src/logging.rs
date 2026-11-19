@@ -26,83 +26,43 @@
 //! A log file that cannot be opened degrades to a warning on stderr rather than
 //! failing the run, so [`init_tracing`] is infallible. [`flush_log`] is the
 //! explicit last write: the binary calls it on every exit path after logging is
-//! installed, so a buffered sink cannot lose the tail of the run.
+//! installed, so the queued tail is drained before the process ends.
 //!
-//! The file sink is buffered for the run and explicitly flushed at exit and on
-//! the fatal paths. That is the durability promise: a normal exit keeps the
-//! whole log, and a failure that reaches a flush path keeps it too; an exit
-//! that skips the flush, such as `kill -9`, can lose the tail. The console
-//! layer is not buffered, because its ordering and broken-pipe behavior are
-//! separate contracts.
+//! The file layer writes through a non-blocking appender: events are handed to
+//! a worker thread, which writes them to the file. [`flush_log`] drops that
+//! appender's worker guard on the way out, which drains the queue. That is the
+//! durability promise: a normal exit keeps the whole log, and a failure that
+//! reaches a flush path keeps it too; an exit that skips the flush, such as
+//! `kill -9`, can lose the tail. The console layer is not buffered, because its
+//! ordering and broken-pipe behavior are separate contracts.
 //!
-//! Because the file sink holds up to [`FILE_BUFFER_CAPACITY`] bytes before a
-//! write, an external reader such as `tail -f` sees a record only when that
-//! buffer fills or when [`flush_log`] runs. Log streaming is therefore not
-//! real time: the file can lag by up to the buffer size, and the file is the
+//! Because the worker writes off-thread, an external reader such as `tail -f`
+//! sees a record only after the worker writes it. Log streaming is therefore
+//! not real time: the file can lag by the queued records, and the file is the
 //! durable record of the run rather than a live feed.
 
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Mutex;
 
 use girpr_log::{Level, LogOptions, LogPlan};
-use tracing_subscriber::fmt::MakeWriter;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
 
 /// This project's name: the default log file's stem, and the prefix of the
 /// environment variables that answer for the flags.
 pub const PROJECT: &str = "girpr";
 
-/// How much of the file log is held in memory between writes.
+/// The guard that keeps the non-blocking file writer alive for the run.
 ///
-/// One buffer per run, not per event: the file layer renders many small
-/// records, and batching them cuts both the write syscalls and the time the
-/// shared sink's mutex is held under load.
-const FILE_BUFFER_CAPACITY: usize = 64 * 1024;
-
-/// The file layer's writer, shared between the subscriber and [`flush_log`].
-///
-/// The box holds a `BufWriter<File>` when a file was opened, and
-/// [`std::io::sink`] when the plan has no file; the sink stays unbuffered
-/// because buffering nothing buys nothing.
-type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
-
-/// The sink [`flush_log`] reaches, registered by a successful
-/// [`init_tracing`].
-///
-/// `None` until logging is installed, which is what makes [`flush_log`] safe
-/// on a path that never got that far. The slot holds the one sink the
-/// installed subscriber writes through: the global subscriber can be installed
-/// only once, so a later [`init_tracing`] is rejected and its file is dropped
-/// rather than retained as a handle that could never be written to.
-static FILE_SINK: Mutex<Option<FileSink>> = Mutex::new(None);
-
-/// A `MakeWriter` that hands `tracing` the shared file sink.
-struct SharedWriter(FileSink);
-
-/// One event's exclusive use of the sink.
-struct SharedWriterGuard<'a>(MutexGuard<'a, Box<dyn Write + Send + Sync>>);
-
-impl Write for SharedWriterGuard<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
-    }
-}
-
-impl<'a> MakeWriter<'a> for SharedWriter {
-    type Writer = SharedWriterGuard<'a>;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        // A panic while holding the lock must not silence the log's tail: the
-        // writer is an append-only file, whose state is still usable.
-        SharedWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
-    }
-}
+/// Dropping it drains the worker's queue and flushes the file. A static slot is
+/// used rather than a local in `main` because the explicit flush seam
+/// ([`flush_log`]) is what every exit path calls: a worker guard held in a local
+/// would be dropped by `main`'s destructor on a normal return, but not on a
+/// `process::exit`, and the seam has to cover both. `None` until logging is
+/// installed, which is what makes [`flush_log`] safe on a path that never got
+/// that far.
+static WORKER_GUARD: Mutex<Option<WorkerGuard>> = Mutex::new(None);
 
 /// Install the global tracing subscriber and return the resolved plan.
 ///
@@ -167,46 +127,51 @@ fn init_tracing_with(
         .with_filter(girpr_log::filter(&plan.console_filter(), &console_fallback));
 
     // A plan with no file has no file sink: a debug build that was not asked
-    // for a file, or any build that was told `--no-log-file`. The sink then
-    // writes nowhere, so the run leaves nothing behind and nothing has to be
-    // cleaned up afterwards.
-    let file_writer: FileSink = Arc::new(Mutex::new(match plan.file_path() {
-        None => Box::new(std::io::sink()) as Box<dyn Write + Send + Sync>,
+    // for a file, or any build that was told `--no-log-file`. A file that
+    // cannot be opened is a warning and no sink, so the run leaves nothing
+    // behind. The appender hands each event to a worker thread, which writes
+    // the file; the guard is held separately and registered only if the
+    // subscriber accepts the layer.
+    let mut guard = None;
+    let file_layer = match plan.file_path() {
+        None => None,
         Some(path) => match open_log_file(path) {
-            Ok(f) => Box::new(f),
+            Ok(f) => {
+                let (writer, worker_guard) = tracing_appender::non_blocking(f);
+                guard = Some(worker_guard);
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_ansi(false)
+                        .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter())),
+                )
+            }
             Err(e) => {
                 let _ = writeln!(
                     warnings,
                     "WARN disabling file logging ({}): {e}",
                     path.display()
                 );
-                Box::new(std::io::sink())
+                None
             }
         },
-    }));
-    // The subscriber owns one handle; `flush_log` gets the other once the
-    // subscriber accepts it, so the tail can still be written after the
-    // subscriber has no more events to render.
-    let flush_sink = Arc::clone(&file_writer);
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(SharedWriter(file_writer))
-        .with_ansi(false)
-        .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()));
+    };
 
     // A subscriber that is already installed would swallow the file layer
     // whole: the events would go to somebody else's subscriber and the log file
     // would stay empty, with nothing to say so. It cannot happen in this
     // binary's own `main`, and if it ever does, the run says so rather than
-    // pretending to have logged. Only an accepted sink is registered: a
-    // rejected layer never receives an event, so retaining its file would keep
-    // a handle that has nothing to flush.
+    // pretending to have logged. Only an accepted layer's guard is registered:
+    // a rejected layer never receives an event, so retaining its guard would
+    // keep a worker alive for a file that has nothing to write.
     match tracing_subscriber::registry()
         .with(stderr_layer)
         .with(file_layer)
         .try_init()
     {
-        Ok(()) => install_sink(flush_sink),
+        Ok(()) => install_guard(guard),
         Err(e) => {
+            // `guard` is dropped here, draining the empty rejected file.
             let _ = writeln!(warnings, "WARN cannot install the tracing subscriber: {e}");
         }
     }
@@ -218,85 +183,69 @@ fn init_tracing_with(
     plan
 }
 
-/// Register the sink the accepted subscriber writes through.
+/// Register the guard the accepted subscriber's appender writes through.
 ///
-/// Setting the slot replaces any previous registration. Only the first
-/// subscriber install can succeed, so a second accepted sink cannot exist;
-/// replacing is what keeps a later registration from pinning an unreachable
-/// file handle for the rest of the process's life.
-fn install_sink(sink: FileSink) {
-    *FILE_SINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+/// Setting the slot replaces any previous registration: a replaced guard is
+/// dropped, draining that appender's queue. Only the first subscriber install
+/// can succeed, so a second accepted guard cannot exist in practice; replacing
+/// is what keeps a stale guard from pinning a worker for the rest of the
+/// process's life.
+fn install_guard(guard: Option<WorkerGuard>) {
+    *WORKER_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = guard;
 }
 
 /// Flush the log file on the way out.
 ///
-/// The file is the record of the run, so the caller flushes it explicitly on
+/// The file is the record of the run, so the caller drains it explicitly on
 /// every path after [`init_tracing`] rather than trusting a `Drop` that an
-/// abrupt exit would skip. For a buffered file this is what pushes the last
-/// records out of the buffer; for the sink it is a no-op. It is safe when no
-/// file was opened and when logging was never installed, in which case there is
-/// nothing to flush.
-///
-/// A flush failure is reported once on stderr and never changes the exit code:
-/// the run already earned its code before the log was written down. The
-/// registry holds at most one sink, so the report is that sink's failure.
+/// abrupt exit would skip. Taking the guard out of the slot drops it, which
+/// drains the worker's queue and flushes the file; a second call finds nothing
+/// and is a no-op. Dropping the guard outside the lock keeps the drain (which
+/// waits for the worker) from holding the slot. It is safe when no file was
+/// opened and when logging was never installed.
 pub fn flush_log() {
-    let sink = FILE_SINK.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Some(sink) = sink
-        && let Err(e) = flush_sink(&sink)
-    {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_flush_failure(&e, &REPORTED, &mut std::io::stderr());
-    }
-}
-
-fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
-    sink.lock().unwrap_or_else(|e| e.into_inner()).flush()
-}
-
-/// Report a flush failure at most once, without letting the report itself fail
-/// the run.
-fn report_flush_failure(error: &std::io::Error, reported: &AtomicBool, stderr: &mut dyn Write) {
-    if !reported.swap(true, Ordering::Relaxed) {
-        let _ = writeln!(stderr, "WARN cannot flush the log file: {error}");
-    }
+    let guard = WORKER_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    drop(guard);
 }
 
 /// Open the log file for appending, creating the parent directory if needed.
 ///
-/// The file is buffered so the file layer's many small records become few
-/// writes. [`flush_log`] is what empties the buffer at exit; a dropped
-/// [`BufWriter`] would flush on its own, but the process exits through paths
-/// that skip destructors, which is why the explicit flush exists.
-fn open_log_file(path: &Path) -> std::io::Result<BufWriter<std::fs::File>> {
+/// The non-blocking appender owns the file and writes each record from its
+/// worker thread; [`flush_log`] is what drains the queue at exit. An ordinary
+/// dropped file would flush on its own, but the process exits through paths
+/// that skip destructors, which is why the explicit guard drop exists.
+fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
     let dir = path
         .parent()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
     std::fs::create_dir_all(dir)?;
-    let file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)?;
-    Ok(BufWriter::with_capacity(FILE_BUFFER_CAPACITY, file))
+        .open(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use girpr_tempdir::TempDir;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Serializes tests that touch the process-wide sink registry.
+    /// Serializes tests that touch the process-wide guard slot.
     ///
-    /// The registry and the global subscriber are both process-wide, and the
+    /// The slot and the global subscriber are both process-wide, and the
     /// subscriber can only be installed once. The lock keeps the subscriber
-    /// installs, sink installs, and flushes in these tests from interleaving.
+    /// installs, guard installs, and flushes in these tests from interleaving.
     /// It is sufficient even when the test binary runs threaded, because the
     /// binary contains exactly one `try_init` (in the subscriber test), so no
     /// other test can install a subscriber ahead of it. Any future unit test
     /// that installs a subscriber must take this lock or install through a
     /// shared once-per-binary helper, or that guarantee is lost.
-    static SINK_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static GUARD_SLOT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// A writer that records everything it is given and counts its flushes.
     struct RecordingWriter {
@@ -319,117 +268,121 @@ mod tests {
         }
     }
 
-    /// A writer whose only observable act is the flush.
-    struct FlushRecorder {
-        flushes: Arc<AtomicUsize>,
-    }
-
-    impl Write for FlushRecorder {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.flushes.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    fn recording_sink(flushes: &Arc<AtomicUsize>) -> FileSink {
-        Arc::new(Mutex::new(Box::new(FlushRecorder {
-            flushes: Arc::clone(flushes),
-        }) as Box<dyn Write + Send + Sync>))
-    }
-
+    /// Dropping the guard is what guarantees the queued tail reaches the file.
+    ///
+    /// The worker writes off-thread, so there is no deterministic point before
+    /// the drop at which the file can be asserted empty. What is deterministic
+    /// is that the drop drains the queue and flushes the writer.
     #[test]
-    fn the_file_sink_keeps_records_in_the_buffer_until_the_flush() {
-        let dir = TempDir::new("girpr_logging", "buffered_file");
-        let path = dir.join("run.log");
-        let sink: FileSink = Arc::new(Mutex::new(Box::new(
-            open_log_file(&path).expect("open the log file"),
-        ) as Box<dyn Write + Send + Sync>));
+    fn dropping_the_guard_flushes_the_queued_tail() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let flushes = Arc::new(AtomicUsize::new(0));
+        let (mut writer, guard) = tracing_appender::non_blocking(RecordingWriter {
+            bytes: Arc::clone(&bytes),
+            flushes: Arc::clone(&flushes),
+        });
 
-        sink.lock()
-            .unwrap_or_else(|e| e.into_inner())
+        writer
             .write_all(b"the run's tail\n")
-            .expect("write into the buffer");
+            .expect("queue the record");
+        drop(guard);
 
         assert_eq!(
-            std::fs::read(&path).expect("the file exists"),
-            b"",
-            "a buffered record has not reached the file yet"
-        );
-
-        // `flush_log` is the exit seam and reaches exactly this call.
-        flush_sink(&sink).expect("flush the sink");
-
-        assert_eq!(
-            std::fs::read(&path).expect("read the flushed file"),
+            &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
             b"the run's tail\n",
-            "the flush writes the buffered tail"
+            "the guard's drop writes the queued tail"
+        );
+        assert!(
+            flushes.load(Ordering::Relaxed) >= 1,
+            "the guard's drop flushes the writer"
         );
     }
 
+    /// `flush_log` takes the guard out of the slot so a second call cannot
+    /// flush anything, even if more bytes are queued in the meantime.
     #[test]
-    fn flush_log_writes_the_buffered_output_of_an_installed_sink() {
-        let _guard = SINK_REGISTRY_TEST_LOCK
+    fn flush_log_takes_the_guard_and_is_idempotent() {
+        let _guard = GUARD_SLOT_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let flushes = Arc::new(AtomicUsize::new(0));
-        let writer = RecordingWriter {
+        let (mut writer, worker_guard) = tracing_appender::non_blocking(RecordingWriter {
             bytes: Arc::clone(&bytes),
             flushes: Arc::clone(&flushes),
-        };
-        let sink: FileSink = Arc::new(Mutex::new(
-            Box::new(BufWriter::with_capacity(64, writer)) as Box<dyn Write + Send + Sync>
-        ));
+        });
 
-        install_sink(Arc::clone(&sink));
-        sink.lock()
-            .unwrap_or_else(|e| e.into_inner())
+        install_guard(Some(worker_guard));
+        writer
             .write_all(b"the run's tail\n")
-            .expect("write into the buffer");
-        assert_eq!(
-            &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
-            b"",
-            "the record is still in the buffer before the exit flush"
-        );
+            .expect("queue the record");
 
         flush_log();
 
         assert_eq!(
             &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
             b"the run's tail\n",
-            "the installed sink receives the buffered tail"
+            "the installed guard is drained by the exit flush"
         );
-        assert_eq!(flushes.load(Ordering::Relaxed), 1);
+
+        // No guard is registered any more: further bytes stay queued and a
+        // second flush has nothing to drain.
+        writer
+            .write_all(b"after the flush\n")
+            .expect("the appender still accepts bytes");
+        flush_log();
+        assert_eq!(
+            &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
+            b"the run's tail\n",
+            "a second flush has no guard left to drain"
+        );
     }
 
+    /// Replacing the guard drops the old one (draining its appender) and leaves
+    /// the new one as the target of the next flush.
     #[test]
-    fn reinstalling_replaces_the_sink_instead_of_retaining_it() {
-        let _guard = SINK_REGISTRY_TEST_LOCK
+    fn reinstalling_the_guard_flushes_the_old_and_keeps_the_new() {
+        let _guard = GUARD_SLOT_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let first = Arc::new(AtomicUsize::new(0));
-        let second = Arc::new(AtomicUsize::new(0));
-        let first_sink = recording_sink(&first);
+        let first_bytes = Arc::new(Mutex::new(Vec::new()));
+        let second_bytes = Arc::new(Mutex::new(Vec::new()));
+        let (mut first_writer, first_guard) = tracing_appender::non_blocking(RecordingWriter {
+            bytes: Arc::clone(&first_bytes),
+            flushes: Arc::new(AtomicUsize::new(0)),
+        });
+        let (mut second_writer, second_guard) = tracing_appender::non_blocking(RecordingWriter {
+            bytes: Arc::clone(&second_bytes),
+            flushes: Arc::new(AtomicUsize::new(0)),
+        });
 
-        install_sink(Arc::clone(&first_sink));
-        install_sink(recording_sink(&second));
+        install_guard(Some(first_guard));
+        first_writer.write_all(b"first\n").expect("queue the first");
+        // Replacing drops the first guard, which drains its queue.
+        install_guard(Some(second_guard));
+        second_writer
+            .write_all(b"second\n")
+            .expect("queue the second");
+
         flush_log();
 
         assert_eq!(
-            first.load(Ordering::Relaxed),
-            0,
-            "the replaced sink is no longer registered"
+            &*first_bytes.lock().unwrap_or_else(|e| e.into_inner()),
+            b"first\n",
+            "the replaced guard is drained when it is dropped"
         );
-        assert_eq!(second.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            &*second_bytes.lock().unwrap_or_else(|e| e.into_inner()),
+            b"second\n",
+            "the new guard is the one the exit flush drains"
+        );
     }
 
+    /// A rejected install keeps the first install's guard, so the surviving
+    /// subscriber keeps writing and its file keeps the run's tail.
     #[test]
-    fn a_rejected_install_does_not_replace_the_registered_sink() {
-        let _guard = SINK_REGISTRY_TEST_LOCK
+    fn a_rejected_install_does_not_replace_the_registered_guard() {
+        let _guard = GUARD_SLOT_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let first_dir = TempDir::new("girpr_logging", "first_install");
@@ -439,14 +392,16 @@ mod tests {
 
         let first_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&first_path), false);
         assert_eq!(first_plan.file_path(), Some(first_path.as_path()));
-        let registered = FILE_SINK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("the accepted install registers its sink");
+        assert!(
+            WORKER_GUARD
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some(),
+            "the accepted install registers its guard"
+        );
 
         // The global subscriber is already installed, so this second call is
-        // rejected: it still returns the plan it was asked for, but its sink is
+        // rejected: it still returns the plan it was asked for, but its guard is
         // never registered.
         let mut warnings = Vec::new();
         let second_plan = init_tracing_with(
@@ -473,14 +428,12 @@ mod tests {
             "{warnings:?}"
         );
 
-        let after = FILE_SINK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("the rejected install leaves the first sink registered");
         assert!(
-            Arc::ptr_eq(&registered, &after),
-            "the rejected install does not replace the first sink"
+            WORKER_GUARD
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some(),
+            "the rejected install leaves the first guard registered"
         );
 
         // The surviving subscriber is still the one that renders records into
@@ -493,30 +446,12 @@ mod tests {
             first
                 .lines()
                 .any(|line| line.contains("WARN") && line.contains("after the rejected install")),
-            "the first sink still receives the WARN record: {first:?}"
+            "the first appender still receives the WARN record: {first:?}"
         );
         assert_eq!(
             std::fs::read(&second_path).expect("the rejected file was opened"),
             b"",
-            "the rejected sink receives no events and is not flushed"
+            "the rejected appender receives no events"
         );
-    }
-
-    #[test]
-    fn a_flush_failure_is_reported_once() {
-        let reported = AtomicBool::new(false);
-        let error = std::io::Error::other("disk full");
-        let mut stderr = Vec::new();
-
-        report_flush_failure(&error, &reported, &mut stderr);
-        report_flush_failure(&error, &reported, &mut stderr);
-
-        let message = String::from_utf8(stderr).expect("the report is utf-8");
-        assert_eq!(
-            message.matches("WARN cannot flush the log file").count(),
-            1,
-            "{message}"
-        );
-        assert!(message.contains("disk full"), "{message}");
     }
 }

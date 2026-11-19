@@ -140,7 +140,11 @@ async fn run(ctx: RunCtx) -> RunExit {
 /// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with
 /// [`RunExit::Metadata`]; only `--help` / `--version` keep the conventional
 /// `0`. clap prints the message (and the usage block) either way.
-/// This runs before `init_tracing`, so a usage error creates no log file.
+/// This runs before `init_tracing`, so a usage error creates no log file and
+/// there is no non-blocking worker to drain: `process::exit` skipping
+/// destructors is harmless here. Every path that does install logging flushes
+/// the worker through `flush_log` before returning (see below), so the explicit
+/// seam covers all exits that have a log tail to lose.
 fn parse_args() -> Args {
     match Args::try_parse() {
         Ok(a) => a,

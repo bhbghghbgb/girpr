@@ -416,12 +416,12 @@ share that ships.
   the tool typed.
 - **A log file that cannot be opened is a warning, never a failure.** A run
   must not end differently because of where it was asked to log.
-- **The file is buffered, not streamed in real time.** Its writer holds up to
-  64 KiB before a write, and `flush_log` empties it on every exit path the
-  binary controls (the normal exit and the handled fatal/usage paths). An
-  external `tail -f` can therefore lag by up to that buffer; the file is the
-  durable record of the run, not a live feed, and an exit that skips the flush
-  (such as `kill -9`) can lose the tail.
+- **The file is written by a background worker, not streamed in real time.**
+  Its writer queues records for a worker thread, and `flush_log` drains that
+  queue on every exit path the binary controls (the normal exit and the handled
+  fatal/usage paths). An external `tail -f` can therefore lag by the queued
+  records; the file is the durable record of the run, not a live feed, and an
+  exit that skips the flush (such as `kill -9`) can lose the tail.
 - The **format** is not shared: this binary writes a human-readable text log,
   meant to be read with `grep 'path=<file>'`; the three dev tools write JSON
   lines, meant to be parsed.
