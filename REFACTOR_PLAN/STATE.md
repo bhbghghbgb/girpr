@@ -12,12 +12,12 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Delete the stale zstd `Decoder` workaround | pending_review | 27aa9041 | Passed HashingWriter by value to write::Decoder::new; finish() yields owned writer (§I.10); behavior identical |
-| T02 | One shared timestamp helper | pending_review | 382f992f | girpr_log::timestamp is single source; girsync ts_now shim kept for cache/open.rs. Stale pointer: hard-coded stamp not at plan/tests.rs:439, now in cache/open.rs tests; all pass. capture uses caller-supplied DateTime, left out of scope; unused chrono dep removed |
-| T03 | Hex encode/decode sweep | pending_review | 9f6ce80d | All six sites use hex 0.4.3; Md5 Display kept allocation-free via encode_to_slice + stack buffer; sled2redb param renamed hex→text to avoid crate shadowing; Cargo.lock updated minimally (no unrelated downgrades) |
+| T01 | Delete the stale zstd `Decoder` workaround | completed | 27aa9041 | Passed HashingWriter by value to write::Decoder::new; finish() yields owned writer (§I.10); behavior identical |
+| T02 | One shared timestamp helper | completed | 382f992f | girpr_log::timestamp is single source; girsync ts_now shim kept for cache/open.rs. Stale pointer: hard-coded stamp not at plan/tests.rs:439, now in cache/open.rs tests; all pass. capture uses caller-supplied DateTime, left out of scope; unused chrono dep removed |
+| T03 | Hex encode/decode sweep | completed | 9f6ce80d | All six sites use hex 0.4.3; Md5 Display kept allocation-free via encode_to_slice + stack buffer; sled2redb param renamed hex→text to avoid crate shadowing; Cargo.lock updated minimally (no unrelated downgrades) |
 | T04 | FNV literals → named constants | skipped | | Premise false: pinned fnv 1.0.7 exposes no named constants; goal already met by existing FNV_OFFSET/FNV_PRIME named constants in repair/lock.rs; do not add hashkit |
 | T05 | `jobs` range validation in clap | skipped | | Clap-level validation changes error timing/format; --jobs 0 is a pinned post-parse test trigger; semantics cannot be preserved cleanly (stale main.rs:94-96 pointer, real code at 34-44 and 144-157) |
-| T06 | `AtomicU64::fetch_update` + simplify test gate | pending_review | 8141d6fa | Used try_update (fetch_update deprecated in rustc 1.100, identical method); custom Gate harness removed, race coverage retained via Barrier; downstream ledger race test rewritten with Barrier |
+| T06 | `AtomicU64::fetch_update` + simplify test gate | completed | 8141d6fa | Used try_update (fetch_update deprecated in rustc 1.100, identical method); custom Gate harness removed, race coverage retained via Barrier; downstream ledger race test rewritten with Barrier |
 | T07 | `girpr-tempdir` `TempDir` → `tempfile` | todo | | |
 | T08 | `tracing-appender` as single file-log writer | todo | | |
 | T09 | EnvFilter spec via `add_directive` | todo | | |
@@ -52,15 +52,21 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| A | T01, T02, T03, T06 (T04, T05 skipped) | pending | |
+| A | T01, T02, T03, T06 (T04, T05 skipped) | done | All four completed; no fixes/reverts; 4 follow-ups recorded |
 
 ## Follow-ups
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| _none yet_ | | | |
+| F01 | Collapse girsync ts_now shim; call girpr_log::timestamp directly in cache/open.rs | open | Low-payoff cleanup (from T02) |
+| F02 | Optional second hex sweep of non-digest u8::from_str_radix / format sites | open | Not digest-hex; out of T03 scope |
+| F03 | Restore deterministic interleaving test only if saturating logic returns in-house | open | Barrier contention suffices today (from T06) |
+| F04 | Make gircap spawn tests locate the binary robustly via a runner-provided env var | open | Harness-only; task-relevant tests pass |
 
 ## Persistent context
 
-None yet. Record validation results and decisions here (as pointers to report
-sections where possible). No dates, session/tool IDs or change history.
+- gircap spawn-based integration tests (bundle_consistency, capture_layout,
+  cli_contract) fail in this harness with "cannot find gircap.exe": test binaries
+  live in build-script OUT_DIR so the bin() helper looks in the wrong place.
+  Not attributable to task code; copying the executable beside the test binaries
+  makes them pass. Relevant to gircap test work (report §F, tasks T23-T24).
