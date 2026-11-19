@@ -54,12 +54,14 @@ itself, so `--output json` means the same thing in both tools.
 ## Conversion behaviour (unchanged by the move)
 
 **The finished cache is moved into place once it is whole.** The new cache is
-written into a temporary beside the destination and moved onto it with a single
-no-clobber rename, so the move cannot leave a half-written file and cannot
-overwrite a destination that appeared after the initial check. A conversion
-that fails leaves the previous cache exactly as it was under `--force`, and
-leaves no destination at all without it; the temporary is removed either way,
-so nothing of the tool's own is left in the folder.
+written into a temporary beside the destination and moved onto it in a single
+rename, so the move cannot leave a half-written file. Replacing an existing
+cache under `--force` is an atomic replace: a conversion that fails leaves the
+previous cache exactly as it was, while creating a fresh one uses a no-clobber
+rename that will not overwrite a destination that appeared after the initial
+check. A conversion that fails leaves no destination at all without `--force`;
+the temporary is removed either way, so nothing of the tool's own is left in
+the folder.
 
 The temporary is named inside the tool's own namespace —
 `girpr-cache-convert-<random>.redb` — because it is written into the folder the
@@ -81,13 +83,13 @@ sweep that could not tell a live one from a dead one would take the copy a
 running conversion is making. The random name says nothing about which run left
 it, so there is nothing to interpret — a leftover is simply yours to remove.
 
-An existing destination is removed before the rename can put the new file
-there: a **legacy sled directory** has to go before a file can take its name,
-and a stale file is removed under `--force`. That removal is the one step that
-is not atomic — a failure in that window leaves no cache at all, and the error
-says so when it happens. A conversion that fails before that point never
-touches the previous cache. The source directory is left alone either way — the
-conversion never writes to it, so deleting it is your call.
+A **legacy sled directory** has to be removed before the new file can take its
+name. That removal is the one step that is not atomic — a failure in that
+window leaves no cache at all, and the error says so when it happens. A stale
+file under `--force` is replaced by an atomic rename instead, with no such
+window. A conversion that fails before that point never touches the previous
+cache. The source directory is left alone either way — the conversion never
+writes to it, so deleting it is your call.
 
 Unknown hash algorithms survive conversion untouched as raw bytes, and hex
 digests in the legacy JSON rows are decoded to raw bytes on the way in.

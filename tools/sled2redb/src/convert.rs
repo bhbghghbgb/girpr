@@ -6,12 +6,14 @@
 //! bytes; unknown algorithms pass through untouched.
 //!
 //! **The finished cache is moved into place once it is whole.** The new cache
-//! is written into a temporary sibling and moved onto the destination with a
-//! single no-clobber rename, so the move cannot leave a half-written file and
-//! cannot overwrite a destination that appeared after the initial check. An
-//! existing destination is removed first when replacing it — a legacy sled
-//! directory, or a file under `--force` — and that removal is the one step
-//! that is not atomic.
+//! is written into a temporary sibling and moved onto the destination in a
+//! single rename, so the move cannot leave a half-written file and a failure
+//! before it leaves the previous destination intact. Replacing an existing
+//! file (under `--force`) is an atomic replace; a fresh destination is claimed
+//! with a no-clobber rename, so a destination that appears after the initial
+//! check is never overwritten. A legacy sled directory has to be removed
+//! before a file can take its name, and that removal is the one step that is
+//! not atomic.
 //!
 //! The temporary is claimed next to the destination with [`tempfile`], in the
 //! tool's own namespace — see [`CONVERT_TEMP_PREFIX`]. It is owned by a
@@ -102,12 +104,13 @@ fn hex_to_bytes(text: &str, rel: &str, algo: &str) -> Result<Vec<u8>> {
 /// Returns per-kind counts. The source directory is left untouched.
 ///
 /// **The finished cache is moved into place once it is whole.** The new cache
-/// is written into a temporary sibling and moved onto the destination with a
-/// no-clobber rename, so a conversion that fails anywhere before that move
-/// leaves the previous destination untouched — under `force` — and leaves no
-/// destination at all without it. An existing destination is removed just
-/// before the move — a *legacy sled directory*, or a file under `force` — and
-/// that removal is the one step that is not atomic.
+/// is written into a temporary sibling and moved onto the destination in a
+/// single rename, so a conversion that fails anywhere before that move leaves
+/// the previous destination untouched — under `force` — and leaves no
+/// destination at all without it. Replacing an existing file under `force` is
+/// an atomic replace; a fresh destination is claimed with a no-clobber rename.
+/// A *legacy sled directory* has to be removed before a file can take its
+/// name, and that removal is the one step that is not atomic.
 pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Converted> {
     if !sled_dir.is_dir() {
         anyhow::bail!("sled source {} is not a directory", sled_dir.display());
@@ -260,11 +263,11 @@ pub fn write_records(
 
 /// Move the finished temporary onto the destination.
 ///
-/// A **file** destination is replaced by removing it and then moving the
-/// finished temporary into its place with a no-clobber rename. The rename is a
-/// single operation, so it cannot leave a half-written file, and its
-/// no-clobber guarantee refuses to overwrite a destination that appeared
-/// after the initial check.
+/// An existing **file** destination is replaced by a single rename, so the
+/// destination is either the old cache or the new one — never a half-written
+/// mixture — and a failed rename leaves the old cache in place. A fresh
+/// destination is created with a no-clobber rename, which refuses to overwrite
+/// a file that appeared after the initial check.
 ///
 /// A **directory** destination is a legacy sled cache. The directory has to
 /// be removed before the new file can take its name, and that step is *not*
@@ -272,18 +275,27 @@ pub fn write_records(
 /// where a failure leaves no cache at all.
 fn replace_destination(temp: NamedTempFile, dst: &Path) -> Result<()> {
     let legacy_dir = dst.is_dir();
-    if legacy_dir || dst.is_file() {
-        // A legacy sled directory, or an existing file being replaced under
-        // `--force`, has to go before the no-clobber rename can put the new
-        // file there. A conversion that failed before this point never got
-        // here, so the previous cache is still intact on that path.
+    if legacy_dir {
+        // A legacy sled directory has to go before a file can take its name.
+        // A conversion that failed before this point never got here, so the
+        // previous cache is still intact on that path.
         girsync::cache::remove_cache_path(dst)?;
     }
-    // Capture the name before `persist_noclobber` consumes the handle. On
-    // error the returned `PersistError` still owns the NamedTempFile, so
-    // dropping the error in `cleanup_temp` removes the temporary.
+    // Capture the name before the persist consumes the handle. On error the
+    // returned `PersistError` still owns the NamedTempFile, so dropping the
+    // error in `cleanup_temp` removes the temporary.
     let temp_display = temp.path().display().to_string();
-    temp.persist_noclobber(dst).with_context(|| {
+    let result = if !legacy_dir && dst.is_file() {
+        // `--force` over an existing file: replace it atomically so a failure
+        // here still leaves the previous cache in place.
+        temp.persist(dst).map(|_| ())
+    } else {
+        // Fresh destination, or a removed legacy directory: an atomic
+        // no-clobber create that refuses a destination that raced in after
+        // the initial check.
+        temp.persist_noclobber(dst).map(|_| ())
+    };
+    result.with_context(|| {
         if legacy_dir {
             format!(
                 "move the converted cache {temp_display} onto {} (the previous destination was already removed)",
