@@ -37,6 +37,20 @@ fn text_and_json_are_two_renderings_of_one_record() {
     assert_eq!(OutputFormat::Json.as_str(), "json");
 }
 
+/// Backslash escaping is pinned byte-for-byte. The old fast path wrote
+/// backslashes raw (invalid JSON for a Windows path); `serde_json` now emits
+/// `\\` for them plus its own spelling for control characters.
+#[test]
+fn json_backslash_and_control_escaping_is_byte_stable() {
+    let rec = Record::keyed("SUMMARY")
+        .put("artifact", r"C:\tmp\x")
+        .put("note", "a\u{1}b\tc");
+    assert_eq!(
+        rec.json(),
+        r#"{"event":"summary","artifact":"C:\\tmp\\x","note":"a\u0001b\tc"}"#
+    );
+}
+
 #[test]
 fn a_saturated_estimate_renders_as_an_unsigned_number_not_a_negative_one() {
     // The plan's aggregates saturate at `u64::MAX`. Rendering that through
