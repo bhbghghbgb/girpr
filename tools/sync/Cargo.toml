@@ -40,6 +40,11 @@ clap = { version = "4.6.8", features = ["derive"] }
 girpr-log = { path = "../../crates/log" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
+# Unique, atomically-created working names for cache copies. The publish
+# protocol still owns the copy/flush/publish steps and the record protocol;
+# `tempfile` only replaces the hand-rolled `create_new` retry loop that made
+# a working name, and its "keep" hands the finished path back to the publisher.
+tempfile = "3.27.0"
 # File identity for the hard-link guard. Already in the graph through `walkdir`,
 # so this adds nothing to the dependency tree; its `Handle` keeps an open handle
 # to the file it names, which the cache's publish claim relies on.

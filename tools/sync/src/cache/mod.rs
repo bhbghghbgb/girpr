@@ -36,8 +36,10 @@
 //!   `backend`, `cachedb` and `handle` leaves |
 //! | `write` | [`CacheWrite`]: batched mutations and when they commit |
 //! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
+//! | `backup` | the partial-write/link/claim mechanics behind the backups and snapshots |
 //! | `lock` | the sidecar lock that marks a run in progress for a folder |
 
+mod backup;
 mod db;
 mod lock;
 mod open;
