@@ -31,7 +31,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T17 | gircap retry/backoff → `ExponentialBackoff` | completed | bc6940c3 | Used ExponentialBackoff with randomization_factor 0.0 (jitter None, diffable artifact preserved); kept retry loop + Sleep injection + seq/bytes_in/restart; no async driver/middleware; base_delay/max_delay folded into private constants |
 | T18 | girsync path canonicalization → `dunce` | pending_review | 97bb62dd | Scope broadened to all canonicalize sites in tools/sync (no std/dunce mixing); 3 strippers removed; UNC test body retargeted to absolute_alias; DIRECT_QUESTIONS seam updated; I.1 validated - girpr/T19 untouched; paths render without \\\\?\\ |
 | T19 | girpr `resolve_existing_prefix` validation | skipped | | No library method preserves symlink-escape detection + fail-closed behavior; path-absolutize methods are purely lexical and its canonicalize() does not exist; §I.1 open assumption confirmed |
-| T20 | Glob filtering → `globset` / shared crate | todo | | |
+| T20 | Glob filtering → `globset` / shared crate | in_progress | | |
 | T21 | Atomic publish helpers → library | todo | | |
 | T22 | Status error + URL join → `reqwest` | todo | | |
 | T23 | gircap HTTP mock servers | todo | | |
