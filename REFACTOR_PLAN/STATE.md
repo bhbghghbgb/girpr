@@ -41,7 +41,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T27 | Cache wire codec → `postcard`/`bincode` | completed | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
 | T28 | `cache/open.rs` publish protocol restructure | completed | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
 | T29 | girpr INI parse/merge/render | skipped | | Byte-level config.ini contract matters; configparser/ini regress comment/dup-section/case-key/headerless/quote/sort/blank-line parity; parser-only saves no net LOC. Keep hand-rolled core. §I.2 validated |
-| T30 | gircap `parse_game_version` | pending_review | ce97c9a6 | Used ini_core streaming parser (not configparser/ini, which are last-wins and would break first-match); thin adapter keeps lenient [General] header tolerance; byte-exact config_ini renderer untouched; first-match-in-[General] pinned + 33k-input differential check 0 mismatches |
+| T30 | gircap `parse_game_version` | completed | ce97c9a6 | Used ini_core streaming parser (not configparser/ini, which are last-wins and would break first-match); thin adapter keeps lenient [General] header tolerance; byte-exact config_ini renderer untouched; first-match-in-[General] pinned + 33k-input differential check 0 mismatches |
 | T31 | `JoinSet` window → `buffer_unordered` | todo | | |
 | T32 | Chunk-range tiling → interval crate | todo | | |
 | T33 | Error `Display` impls → `thiserror` | todo | | |
@@ -62,7 +62,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
 | solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
 | solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
-| H | T30 (T29 skipped) | pending | |
+| H | T30 (T29 skipped) | done | Completed; no fixes; byte-exact renderer untouched, first-match-in-[General] preserved; 3 follow-ups recorded |
 
 ## Follow-ups
 
@@ -109,6 +109,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F39 | Add production-path working-name collision test for tempfile-based working_name | open | Solo T28; tempfile guarantees uniqueness upstream |
 | F40 | Consolidate duplicated remove_cache_path in open.rs and publish.rs | open | Solo T28; duplication intentional and behaviorally inert |
 | F41 | Re-evaluate Publisher trait if no second implementation appears | open | Solo T28; harmless abstraction with testability value today |
+| F42 | Document incidental #-line tolerance in ini_core version reader | open | Batch H; # lines ignored as non-matching keys, behavior identical |
+| F43 | Note widened (not narrowed) leniency for indented header-like lines with = | open | Batch H; malformed line never produced by config_ini |
+| F44 | Check in compact golden corpus from the 33k-input differential check | open | Batch H; curated tests already pin the relevant shapes |
 
 ## Persistent context
 
