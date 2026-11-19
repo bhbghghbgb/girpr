@@ -58,6 +58,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
 | E | T18, T20, T21, T22 (T19 skipped) | done | All four completed; no fixes; DO-NOT-TOUCH resume artifacts preserved; 6 follow-ups recorded |
 | X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
+| F | T23, T24 | pending | |
 
 ## Follow-ups
 
