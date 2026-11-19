@@ -16,7 +16,7 @@ use tracing::warn;
 
 use crate::diff::Diff;
 use crate::effective::EffRec;
-use crate::hardlink::{Identity, LinkInfo, info};
+use crate::hardlink::{FileId, LinkInfo, info};
 use crate::link::link_ancestor_above;
 use crate::util::path_key;
 
@@ -604,7 +604,7 @@ pub(crate) fn ensure_hard_linked_targets_safe(
     let copy_free = plan.copy.is_empty();
     // Ordinary-file names this run removes before copying, by the inode they
     // name. A link is skipped: its removal leaves the target's count unchanged.
-    let mut removed: HashMap<Identity, u64> = HashMap::new();
+    let mut removed: HashMap<FileId, u64> = HashMap::new();
     for rel in plan.delete_files.iter().chain(plan.fix_dirs.iter()) {
         if dm
             .get(rel)

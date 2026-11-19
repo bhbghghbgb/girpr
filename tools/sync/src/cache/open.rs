@@ -132,7 +132,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::{info, trace, warn};
 
-use crate::hardlink::{self, Identity};
+use crate::hardlink::{self, FileId};
 use crate::util::{copy_dir_all, ts_now};
 
 use super::codec::decode_meta;
@@ -1132,7 +1132,7 @@ fn claim_name(path: &Path) -> std::io::Result<File> {
 /// another run can take the name and publish there.
 struct NameClaim {
     /// The identity of the object the claim created.
-    id: Identity,
+    id: FileId,
     /// Whether the claim is a directory.
     ///
     /// A file copy is claimed with an empty file and a directory copy with
@@ -1149,7 +1149,7 @@ struct NameClaim {
 }
 
 /// The identity of the object at `path`, if the platform can name it.
-fn identity_at(path: &Path) -> Option<Identity> {
+fn identity_at(path: &Path) -> Option<FileId> {
     hardlink::info(path).ok().map(|info| info.id)
 }
 

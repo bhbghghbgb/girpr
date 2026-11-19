@@ -40,6 +40,10 @@ clap = { version = "4.6.8", features = ["derive"] }
 girpr-log = { path = "../../crates/log" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
+# File identity for the hard-link guard. Already in the graph through `walkdir`,
+# so this adds nothing to the dependency tree; its `Handle` keeps an open handle
+# to the file it names, which the cache's publish claim relies on.
+same-file = "1.0.6"
 # Path canonicalization for identity and link-target checks. It resolves links
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.
@@ -66,13 +70,11 @@ redb = "=4.6.0"
 # Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
 # `MetadataExt::number_of_links` is still unstable (`windows_by_handle`) on the
 # toolchain this crate builds with, so the count comes from
-# `GetFileInformationByHandle`. The dependency is Windows-only, where it is used.
+# `GetFileInformationByHandle`. `winapi-util` wraps that call and opens
+# directories with backup semantics, so no FFI is written here. It is already
+# in the graph through `same-file`, and is Windows-only where it is used.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Storage_FileSystem",
-] }
+winapi-util = "0.1.11"
 
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.

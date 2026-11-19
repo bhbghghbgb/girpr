@@ -766,6 +766,7 @@ dependencies = [
  "md-5",
  "rayon",
  "redb",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",
@@ -773,7 +774,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "walkdir",
- "windows-sys 0.61.2",
+ "winapi-util",
 ]
 
 [[package]]

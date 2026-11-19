@@ -9,10 +9,11 @@
 //! so it can tell a refused destination from one whose other name the run
 //! removes first.
 //!
-//! Unix exposes both answers as `MetadataExt::{nlink,dev,ino}`. Windows does not
-//! — `number_of_links` is still behind `windows_by_handle` on rustc 1.98.1 — so
-//! it calls `GetFileInformationByHandle`, which is also the API those accessors
-//! are derived from there.
+//! The count comes from the platform's own metadata: `MetadataExt::nlink` on
+//! Unix, `winapi_util::file::information` on Windows. Identity is delegated to
+//! `same-file`, whose `Handle` keeps an open handle to the file it names, so an
+//! identity stays exact even after the name has been taken away — the property
+//! the cache's publish claim relies on. Neither path writes any FFI here.
 
 use std::fs::File;
 use std::io;
@@ -20,7 +21,7 @@ use std::path::Path;
 
 /// What the copy guard needs to know about one path: how many names share its
 /// file, and which file that is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct LinkInfo {
     /// The number of names the file at the path has, following links.
     ///
@@ -30,7 +31,17 @@ pub struct LinkInfo {
     /// asking whether a copy would truncate another name must not read it.
     pub links: u64,
     /// The file those names share.
-    pub id: Identity,
+    ///
+    /// A `same-file` `Handle` owns the file it names, so the identity cannot be
+    /// freed and reused while it is held. Equality is the platform's own pair —
+    /// device and inode on Unix, volume serial number and file index on Windows
+    /// — and is never interpreted here.
+    #[cfg(any(unix, windows))]
+    pub id: same_file::Handle,
+    /// On a platform without file identity the guard is inert: every file is
+    /// the same one, and [`count`](fn@count) never exceeds one.
+    #[cfg(not(any(unix, windows)))]
+    pub id: FileId,
     /// Whether the path names a regular file, following links.
     ///
     /// A copy truncates only a regular file. A directory at the destination is
@@ -41,19 +52,58 @@ pub struct LinkInfo {
 
 /// The identity of a file, for comparing two paths, or a path with a handle.
 ///
-/// Only equality is meaningful; the two words are the platform's own pair — the
-/// device and inode on Unix, the volume serial number and file index on Windows
-/// — and are never interpreted here.
+/// On the platforms the tool runs on this is `same-file`'s `Handle`. Elsewhere
+/// identities are inert and all compare equal; the link-count guard is disabled
+/// there because no count can be read.
+#[cfg(not(any(unix, windows)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Identity {
-    a: u64,
-    b: u64,
+pub struct FileId;
+
+#[cfg(any(unix, windows))]
+pub use same_file::Handle as FileId;
+
+/// The number of names the file at `path` has, following links.
+///
+/// This is the one definition of the link count: the runtime guard
+/// ([`count`]) and the plan-time preflight ([`info`]) both read it here, so
+/// they cannot disagree about what a name's count means.
+#[cfg(unix)]
+fn link_count(path: &Path) -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(std::fs::metadata(path)?.nlink())
 }
 
-impl Identity {
-    fn new(a: u64, b: u64) -> Self {
-        Self { a, b }
-    }
+/// The number of names the file at `path` has, following links.
+///
+/// `GetFileInformationByHandle` is the only stable way to read `nNumberOfLinks`
+/// on this toolchain (`MetadataExt::number_of_links` is still unstable). It is
+/// reached through `winapi_util`, which also opens directories with backup
+/// semantics, rather than through FFI in this crate.
+#[cfg(windows)]
+fn link_count(path: &Path) -> io::Result<u64> {
+    use winapi_util::Handle;
+
+    let handle = Handle::from_path_any(path)?;
+    Ok(winapi_util::file::information(&handle)?.number_of_links())
+}
+
+/// No portable link metadata exists on this platform, so the count is inert.
+#[cfg(not(any(unix, windows)))]
+fn link_count(_path: &Path) -> io::Result<u64> {
+    Ok(1)
+}
+
+/// The identity of the file at `path`, following links.
+#[cfg(any(unix, windows))]
+fn identity_from_path(path: &Path) -> io::Result<FileId> {
+    FileId::from_path(path)
+}
+
+/// No portable file identity exists on this platform.
+#[cfg(not(any(unix, windows)))]
+fn identity_from_path(_path: &Path) -> io::Result<FileId> {
+    Ok(FileId)
 }
 
 /// The link count and identity of the file at `path`, following links.
@@ -65,148 +115,43 @@ impl Identity {
 /// The result covers a directory too, but callers that are about to truncate
 /// must test [`LinkInfo::regular_file`] first: a directory's `nlink` counts
 /// subdirectories, not additional names for one file.
-#[cfg(unix)]
 pub fn info(path: &Path) -> io::Result<LinkInfo> {
-    use std::os::unix::fs::MetadataExt;
-
-    let md = std::fs::metadata(path)?;
     Ok(LinkInfo {
-        links: md.nlink(),
-        id: Identity::new(md.dev(), md.ino()),
-        regular_file: md.is_file(),
-    })
-}
-
-/// The link count and identity of the file at `path`, following links.
-///
-/// `CreateFileW` asks only for `FILE_READ_ATTRIBUTES`, so a destination the
-/// process may write but not read is still measurable, and the share mode lets
-/// another process keep it open. The handle is closed on every path after the
-/// information call, including failure.
-#[cfg(windows)]
-#[allow(unsafe_code)] // the one FFI surface in the tools; each block below has its SAFETY note
-pub fn info(path: &Path) -> io::Result<LinkInfo> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
-    };
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call, the
-    // security and template arguments are the documented null defaults, and the
-    // returned handle is closed below on both the success and the failure path.
-    let handle = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: the handle is valid and `info` is a live, correctly typed out
-    // parameter for the duration of the call.
-    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
-    let err = (ok == 0).then(io::Error::last_os_error);
-    // SAFETY: `handle` came from `CreateFileW` and is closed exactly once.
-    unsafe {
-        CloseHandle(handle);
-    }
-    match err {
-        Some(e) => Err(e),
-        None => Ok(LinkInfo {
-            links: info.nNumberOfLinks as u64,
-            // The two halves are one 64-bit file index, paired with the volume
-            // that owns it: the stable Windows spelling of (dev, ino).
-            id: Identity::new(
-                info.dwVolumeSerialNumber as u64,
-                ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
-            ),
-            // `FILE_FLAG_BACKUP_SEMANTICS` lets the handle name a directory,
-            // so ask the attributes rather than assuming a file.
-            regular_file: info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0,
-        }),
-    }
-}
-
-/// No portable link metadata exists on this platform, so the guard is inert.
-#[cfg(not(any(unix, windows)))]
-pub fn info(_path: &Path) -> io::Result<LinkInfo> {
-    Ok(LinkInfo {
-        links: 1,
-        id: Identity::new(0, 0),
-        regular_file: true,
+        links: link_count(path)?,
+        regular_file: std::fs::metadata(path)?.is_file(),
+        id: identity_from_path(path)?,
     })
 }
 
 /// The number of names the file at `path` has, following links.
 ///
-/// One definition for every caller: [`info`] is the only place the platform's
-/// metadata is read, so the runtime guard and the plan-time preflight cannot
-/// disagree about a count.
+/// One definition for every caller: [`info`] and this function both go through
+/// [`link_count`], so the runtime guard and the plan-time preflight cannot
+/// disagree about a count. A missing path is `NotFound`.
 pub fn count(path: &Path) -> io::Result<u64> {
-    info(path).map(|i| i.links)
+    link_count(path)
 }
 
 /// The identity of the file a handle names.
 ///
-/// The same pair [`info`] reads from a path, read from the handle instead: a
-/// handle names the file it was opened on even after the name has gone, so
+/// The same identity [`info`] reads from a path, read from the handle instead:
+/// a handle names the file it was opened on even after the name has gone, so
 /// this is what lets a caller ask "is the thing at this path still the file
 /// this handle was opened on?".
 ///
-/// The handle is what makes that answer exact. Reading the identity from the
-/// name instead leaves a window in which the name can be taken away and
-/// another file put in its place, and the two then answer the same question
-/// with two different files.
-#[cfg(unix)]
-pub fn identity_of(file: &File) -> io::Result<Identity> {
-    use std::os::unix::fs::MetadataExt;
-
-    let md = file.metadata()?;
-    Ok(Identity::new(md.dev(), md.ino()))
-}
-
-/// The identity of the file a handle names.
-///
-/// `GetFileInformationByHandle` on the handle itself, so the answer is the
-/// same pair [`info`] reads from a path — and the same on a volume whose
-/// directory entries the std accessors cannot name.
-#[cfg(windows)]
-#[allow(unsafe_code)] // the one FFI surface in the tools; each block below has its SAFETY note
-pub fn identity_of(file: &File) -> io::Result<Identity> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: the handle comes from an open `File` and is valid for the call,
-    // and `info` is a live, correctly typed out parameter for its duration.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(Identity::new(
-        info.dwVolumeSerialNumber as u64,
-        ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
-    ))
+/// `same-file` takes ownership of the `File` it is given, so the caller's own
+/// handle is duplicated and kept; the returned identity holds a handle of its
+/// own, keeping the file alive for as long as it is held.
+#[cfg(any(unix, windows))]
+pub fn identity_of(file: &File) -> io::Result<FileId> {
+    FileId::from_file(file.try_clone()?)
 }
 
 /// No portable file metadata exists on this platform, so every file has the
 /// same identity.
 #[cfg(not(any(unix, windows)))]
-pub fn identity_of(_file: &File) -> io::Result<Identity> {
-    Ok(Identity::new(0, 0))
+pub fn identity_of(_file: &File) -> io::Result<FileId> {
+    Ok(FileId)
 }
 
 #[cfg(test)]
@@ -281,6 +226,22 @@ mod tests {
         std::fs::write(&b, b"b").unwrap();
 
         assert_ne!(info(&a).unwrap().id, info(&b).unwrap().id);
+    }
+
+    /// `identity_of` reads the same identity from an open handle as `info` does
+    /// from the name, and does not consume the caller's handle.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_handle_names_the_same_identity_as_the_path() {
+        let t = girpr_tempdir::TempDir::new("girsync_hardlink", "handle_id");
+        let a = t.join("a.txt");
+        std::fs::write(&a, b"x").unwrap();
+
+        let file = std::fs::File::open(&a).unwrap();
+        let from_handle = identity_of(&file).unwrap();
+        // The caller's handle is still usable after the identity was read.
+        assert!(file.metadata().is_ok());
+        assert_eq!(from_handle, info(&a).unwrap().id);
     }
 
     #[test]
