@@ -52,6 +52,10 @@ dunce = "1.0.5"
 # `tools/sled2redb` crate, so this package's graph is sled-free.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The cache's positional wire codec. Only the serde-based `to_extend` /
+# `take_from_bytes` helpers are used, so the default heapless/cobs surface is
+# not needed; serde's own `std` feature (already on above) supplies String/Vec.
+postcard = { version = "1.1.3", default-features = false }
 md-5 = "0.11.0"
 sha2 = "0.11.1"
 # The shared --include/--exclude glob rules, used by this crate and by girpr.

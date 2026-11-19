@@ -12,7 +12,7 @@
 /// **It is not what a cache row stores.** A row may carry a digest under a name
 /// this build has never heard of — a cache written by a newer binary with
 /// `--hash-all-of blake3` has to stay readable here — so the persistence layer cannot be
-/// an enum without giving that up. See `crate::cache::codec`, which keeps names
+/// an enum without giving that up. See `crate::cache::wire`, which keeps names
 /// inline for exactly that reason, and [`super::DigestSet`]'s `foreign` arm for the
 /// in-memory end of the same guarantee. A closed enum here and an open set there
 /// is the whole design; the two are deliberately not reconciled.

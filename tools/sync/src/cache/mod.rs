@@ -3,7 +3,7 @@
 //! A cache is `<root>/girpr-cache`, a redb **file** (backups and `old-*`
 //! snapshots are files too). Keys are `/`-separated relative paths (UTF-8,
 //! casing as stored) in the `entries` table; values are [`FileRec`] encoded
-//! with the binary codec in `codec`. The `meta` table holds a single `meta` key
+//! with the binary codec in `wire`. The `meta` table holds a single `meta` key
 //! with the schema [`Meta`].
 //!
 //! ## Durability / resumability contract
@@ -31,24 +31,24 @@
 //! | module | what it owns |
 //! | --- | --- |
 //! | `schema` | [`Meta`] and [`FileRec`]: what a row *is* |
-//! | `codec` | the binary encoding of both, and its tests |
+//! | `wire` | the binary encoding of both, and its tests |
 //! | `db` | [`CacheDb`]: the read/write-or-read-only handle; `db/` now holds the
 //!   `backend`, `cachedb` and `handle` leaves |
 //! | `write` | [`CacheWrite`]: batched mutations and when they commit |
 //! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
 //! | `lock` | the sidecar lock that marks a run in progress for a folder |
 
-mod codec;
 mod db;
 mod lock;
 mod open;
 mod schema;
+mod wire;
 mod write;
 
 use redb::TableDefinition;
 use std::path::Path;
 
-/// Keys are `/`-separated relative paths; values are the [`codec`]'d
+/// Keys are `/`-separated relative paths; values are the [`wire`]'d
 /// [`FileRec`]. Both tables are touched on create so a fresh file has both.
 const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");

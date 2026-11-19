@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use tracing::trace;
 
 use super::ENTRIES;
-use super::codec::{decode_rec, encode_rec};
 use super::schema::FileRec;
+use super::wire::{decode_rec, encode_rec};
 
 /// How many mutations a [`CacheWrite`] batches before committing, so
 /// interrupted runs keep their progress without an fsync per file.

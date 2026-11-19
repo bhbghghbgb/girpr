@@ -14,11 +14,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Handle, SharedCache, memory_registry, redb_builder};
-use crate::cache::codec::{decode_meta, decode_rec, encode_meta};
 use crate::cache::open::{
     is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
 };
 use crate::cache::schema::{CACHE_VERSION, FileRec, Meta};
+use crate::cache::wire::{decode_meta, decode_rec, encode_meta};
 use crate::cache::write::{CacheWrite, CommitLimits, CommitPolicy};
 use crate::cache::{ENTRIES, META_KEY, META_TBL};
 
@@ -803,9 +803,9 @@ impl CacheDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::codec::encode_meta;
     use crate::cache::open::{CacheOpen, open_db, read_meta};
     use crate::cache::schema::CACHE_PREFIX;
+    use crate::cache::wire::encode_meta;
     use crate::cache::write::CommitLimits;
     use crate::cache::{CACHE_VERSION, ENTRIES, FileRec, META_KEY, META_TBL, Meta};
     use redb::TableHandle;

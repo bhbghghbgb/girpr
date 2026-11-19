@@ -135,10 +135,10 @@ use tracing::{info, trace, warn};
 use crate::hardlink::{self, FileId};
 use crate::util::{copy_dir_all, ts_now};
 
-use super::codec::decode_meta;
 use super::db::{CacheDb, redb_builder};
 use super::lock::{TryLock, acquire as acquire_lock};
 use super::schema::{CACHE_VERSION, FileRec, Meta};
+use super::wire::decode_meta;
 use super::{META_KEY, META_TBL};
 
 /// The prefix of the copies the tool keeps beside a cache.

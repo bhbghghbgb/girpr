@@ -16,6 +16,7 @@
 //! rule rather than borrowing one of theirs.
 
 use super::algo::HashAlg;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
 
 /// Whether two names are the same name.
 ///
@@ -67,7 +68,7 @@ fn same_spelling(a: &str, b: &str) -> bool {
 ///
 /// `HashAlg` is a closed enum, and this is where that stops being the whole truth. A
 /// cache written by a newer build may carry a digest under a name this one has never
-/// heard of, and `crate::cache::codec` keeps names inline precisely so that row stays
+/// heard of, and `crate::cache::wire` keeps names inline precisely so that row stays
 /// readable. `foreign` is where such a name lives in memory, and it is **carried,
 /// merged and written back** rather than merely decoded — a scan that dropped it would
 /// lose the row's contents on the next write.
@@ -280,7 +281,7 @@ impl DigestSet {
     ///
     /// **The routing rule, in one place.** A name this build knows *and* a digest of
     /// that algorithm's length goes to its slot; anything else becomes foreign. The
-    /// codec decodes through this and nothing else, so "a known name with a wrong
+    /// wire deserializes through this and nothing else, so "a known name with a wrong
     /// length is still a digest, not an error" cannot be spelled two ways.
     ///
     /// The name is resolved the same way the lookups resolve one, so a name that
@@ -387,5 +388,56 @@ impl std::fmt::Debug for DigestSet {
         m.entries(self.iter());
         m.entries(self.foreign_iter());
         m.finish()
+    }
+}
+
+/// The wire shape is a sequence of `(name, digest)` pairs: known algorithms
+/// first in canonical order, then foreign names sorted by name. Both halves
+/// are deterministic, so a row's bytes are reproducible for the same content.
+///
+/// This is deliberately **not** a derive. A derive would make the closed set of
+/// known slots the whole schema and would drop an unrecognised name on decode;
+/// the forward-compatibility rule says such a name is carried verbatim, and the
+/// only place that rule is written is [`DigestSet::insert_named`]. Serialize and
+/// deserialize both go through the set's own iterators and router so the rule
+/// cannot be spelled a second way.
+impl Serialize for DigestSet {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Foreign names are sorted so two rows carrying the same entries encode
+        // to the same bytes regardless of the order they were inserted in — the
+        // same determinism the old wire format had.
+        let mut foreign: Vec<(&str, &[u8])> = self.foreign_iter().collect();
+        foreign.sort_by_key(|(name, _)| *name);
+
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for (algo, digest) in self.iter() {
+            seq.serialize_element(&(algo.as_str(), digest))?;
+        }
+        for (name, digest) in foreign {
+            seq.serialize_element(&(name, digest))?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DigestSet {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let pairs = Vec::<(String, Vec<u8>)>::deserialize(deserializer)?;
+        let mut set = DigestSet::default();
+        for (name, digest) in pairs {
+            // **Never reject an algorithm name.** This is the whole forward-compat
+            // guarantee: a row written by a build that knows `blake3` has to stay
+            // readable here, so an unrecognised name is carried under the exact
+            // spelling it was written with. `insert_named` also routes a known
+            // name with an unexpected digest length into `foreign`, which is what
+            // a map did and what keeps a corrupt row a reported difference rather
+            // than a hard failure.
+            set.insert_named(&name, &digest);
+        }
+        // The row is finished here, so the arm gives back the room it grew into:
+        // a vector grows in steps, and a row that carries one unknown name would
+        // otherwise hold room for four.
+        set.shrink_to_fit();
+        Ok(set)
     }
 }

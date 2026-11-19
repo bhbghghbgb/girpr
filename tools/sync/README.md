@@ -40,7 +40,7 @@ module tree holds only in a test build (`#[cfg(test)]`).
 | `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
 | `cache/mod.rs` | redb schema (`Meta`, `FileRec`), open/rebuild, backup/snapshot helpers — the facade and the table definitions |
 | `cache/schema.rs` | `Meta` + `FileRec`: what a row *is*, with no encoding |
-| `cache/codec.rs` | the binary entry/meta codec and its roundtrip/rejection tests |
+| `cache/wire.rs` | the `postcard` entry/meta wire codec and its roundtrip/rejection tests |
 | `cache/db/` | `mod.rs` (the facade), `cachedb.rs` (`CacheDb`: the read/write-or-read-only handle), `handle.rs` (`Handle`: the type that says whether a handle can write), `backend.rs` (the page-cache size, the redb builder and the in-memory registry) |
 | `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
 | `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |

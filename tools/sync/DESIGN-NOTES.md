@@ -192,9 +192,9 @@ for the two sites that share the mapping, compared with each other.
 `HashAlg` is a closed two-variant enum and the parser refuses everything else, so
 what a run may **ask for** is settled at compile time. What a cache row **holds**
 is not: a cache written by a newer build may carry a digest under a name this one
-has never heard of, and that row has to stay readable. `cache/codec.rs` therefore
-keeps algorithm names inline rather than behind an id registry, and `decode_rec`
-never `bail!`s on one.
+has never heard of, and that row has to stay readable. `cache/wire.rs` therefore
+keeps algorithm names inline rather than behind an id registry, and `DigestSet`'s
+custom deserializer never refuses one.
 
 The in-memory end of the same guarantee is `DigestSet`'s `foreign` arm, and it has
 to be more than decode-and-ignore. An unknown name is **carried**: phase A hands it
@@ -210,9 +210,10 @@ difference into a hard failure, which is not what this format has ever done with
 one. `DigestSet::insert_named` is where the routing lives, so the rule cannot be
 spelled two ways.
 
-**Why `kind` is the opposite.** `FileRec.kind` *is* a closed registry in the codec
-and `kind_from_byte` refuses an unknown byte on purpose: a third kind would break
-older binaries that cannot represent it, so failing loudly is the right answer.
+**Why `kind` is the opposite.** `FileRec.kind` *is* a closed registry in the wire
+format and its deserializer refuses an unknown spelling on purpose: a third kind
+would break older binaries that cannot represent it, so failing loudly is the
+right answer.
 The two look inconsistent and are not. Do not "fix" the asymmetry, and do not
 convert `kind` to an enum on the strength of `HashAlg` being one — the enum is what
 makes the *request* cheap to hold; inline names are what make the *cache* survive.
@@ -839,8 +840,8 @@ the lock-ordering section above. The tests are good (`rw/gate.rs`'s unit tests
 plus `tests/rw_threads/limiter.rs`); leave them alone.
 
 **Do not convert `FileRec.kind` to an enum.** It is the obvious companion to
-`HashAlg`, and it is the wrong direction: `kind` is a closed registry *in the
-codec* by design, so that a third kind breaks old binaries loudly instead of
+`HashAlg`, and it is the wrong direction: `kind` is a closed registry *on the
+wire* by design, so that a third kind breaks old binaries loudly instead of
 quietly. See the sixth invariant for why algorithms are not the same case.
 
 **Do not inline `same_spelling`.** It is a one-line wrapper over an equality

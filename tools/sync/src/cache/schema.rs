@@ -1,7 +1,9 @@
 //! What a cache row *is*: [`Meta`] and [`FileRec`].
 //!
-//! The types, with no encoding and no redb. [`super::codec`] turns them into
+//! The types, with no encoding and no redb. [`super::wire`] turns them into
 //! bytes and this module says what the bytes mean.
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::hash::DigestSet;
 
@@ -11,10 +13,16 @@ pub const CACHE_PREFIX: &str = "girpr-cache";
 
 /// Cache schema version. Old sled directories (and any unknown version) are
 /// rejected; rebuild with `--ignore-cache` or convert with `sled2redb`.
-pub const CACHE_VERSION: u32 = 2;
+///
+/// Bumped when the wire encoding changes: the schema is positional (`postcard`
+/// writes fields in declaration order, with no field names), so a row written
+/// under an older layout can no longer be read field by field. The version gate
+/// is what refuses such a cache cleanly and points at the rebuild instead of
+/// letting a decoder misread its rows.
+pub const CACHE_VERSION: u32 = 3;
 
 /// The `meta` row: the schema, and the case mode the cache was written under.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub version: u32,
     /// Informational only: the same record works in both case modes.
@@ -24,16 +32,34 @@ pub struct Meta {
 /// One cached path. `hashes` holds the **raw** digest bytes (16 for md5, 32 for
 /// sha256 — never hex), under an algorithm this build may or may not recognise.
 ///
-/// `PartialEq` is what lets a codec round-trip be asserted as a whole, and what
+/// `PartialEq` is what lets a wire round-trip be asserted as a whole, and what
 /// `crate::effective::merge_row`'s rule is checked against.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileRec {
-    /// "file" or "dir"
+    /// "file" or "dir". A closed registry on the wire: an unknown value is an
+    /// error, the opposite of an algorithm name (see `DigestSet`'s serde impl).
+    #[serde(deserialize_with = "deserialize_kind")]
     pub kind: String,
     pub size: u64,
     /// Nanoseconds since the epoch.
     pub mtime_ns: i64,
     pub hashes: DigestSet,
+}
+
+/// The `kind` field is deliberately closed: a third spelling would break an
+/// older binary that cannot represent it, so refuse it loudly. This is the
+/// deserialization half of that rule; serialization writes the string as it is.
+fn deserialize_kind<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let kind = String::deserialize(deserializer)?;
+    match kind.as_str() {
+        "file" | "dir" => Ok(kind),
+        other => Err(serde::de::Error::custom(format!(
+            "invalid record kind {other:?}"
+        ))),
+    }
 }
 
 impl FileRec {
