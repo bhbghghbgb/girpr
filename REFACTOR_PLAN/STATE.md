@@ -23,7 +23,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T09 | EnvFilter spec via `add_directive` | pending_review | fb76d39e | console_filter now returns EnvFilter via try_new + add_directive (not builder().with_env_var, which ignores captured RUST_LOG); all 3 consumers updated; sync redb=warn now appended after RUST_LOG (obscure conflict behavior changes to hard-floor intent); warn/fallback preserved; no with_default_directive/parse_lossy |
 | T10 | Directory walkers → `walkdir` | pending_review | 392d5cbb8f5242ff2074b69561d396cd8fffb0e7 | Premise stale: walkdir only in root/sync, added to gircap; fault-injection seam reshaped to pre-descent access check, child_dirs removed, 5 error tests rewritten; loop/dangling-link errors skipped to match old behavior; MANIFEST boundary + sorted order preserved |
 | T11 | Percent encoding → `percent-encoding` | pending_review | bfdb5122 | Literal AsciiSet plan impossible in 2.3.2 (escapes all non-ASCII); used percent_encode_byte primitive; kept minimal 5-char escape set; old decoder accepted %+A sign edge now passed through; added explicit non-ASCII pinning test |
-| T12 | Windows device-name / path-shape rule | in_progress | | |
+| T12 | Windows device-name / path-shape rule | skipped | | Share-one-rule premise already met (config calls paths::is_windows_device_name); no library predicate matches current reserved set - sanitize-filename adds COM0/LPT0 and omits CONIN$/CONOUT$, changing artifact layout |
 | T13 | girpr JSON renderer → `Serialize` | todo | | |
 | T14 | girsync JSON renderer → `Serialize` | todo | | |
 | T15 | gircap JSON renderer → `Serialize` | todo | | |
