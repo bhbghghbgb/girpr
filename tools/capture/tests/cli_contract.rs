@@ -25,16 +25,12 @@ use std::process::Command;
 
 use girpr_tempdir::TempDir;
 
-/// The binary under test, beside this test's own executable.
+/// The binary under test. Cargo points this at the built `gircap` executable
+/// for this package's integration tests, under both `cargo test` and
+/// `cargo nextest` (whose test binaries live in a build-script OUT_DIR, not in
+/// `deps/`, so locating the binary relative to `current_exe()` is unreliable).
 fn bin() -> std::path::PathBuf {
-    // `target/debug/deps/<test>.exe` -> `target/debug/gircap.exe`
-    let mut p = std::env::current_exe().expect("the test binary has a path");
-    p.pop(); // deps/
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.push(format!("gircap{}", std::env::consts::EXE_SUFFIX));
-    p
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_gircap"))
 }
 
 /// Flags that point `capture` at a loopback port that cannot be connected to.

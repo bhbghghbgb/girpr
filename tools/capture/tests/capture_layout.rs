@@ -23,16 +23,15 @@ use common::{
 use gircap::report::{Record, Val};
 use girpr_tempdir::TempDir;
 
-/// The binary under test, beside this test's own executable. Only the one retry
-/// case that needs a child-process env var and the zero-backoff stderr marker
-/// still spawns; everything else calls the public `run::*` APIs in-process.
+/// The binary under test. Cargo points this at the built `gircap` executable
+/// for this package's integration tests, under both `cargo test` and
+/// `cargo nextest` (whose test binaries live in a build-script OUT_DIR, not in
+/// `deps/`, so locating the binary relative to `current_exe()` is unreliable).
+/// Only the one retry case that needs a child-process env var and the
+/// zero-backoff stderr marker still spawns; everything else calls the public
+/// `run::*` APIs in-process.
 fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().expect("the test binary has a path");
-    p.pop(); // deps/
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join("gircap.exe")
+    PathBuf::from(env!("CARGO_BIN_EXE_gircap"))
 }
 
 /// A scratch root that is removed when the test ends, whatever happens.
