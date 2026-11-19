@@ -29,7 +29,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T15 | gircap JSON renderer → `Serialize` | completed | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
 | T16 | girpr retry/backoff → `backoff` | completed | acb8d6c4 | Adopted backoff 0.4.0 (latest stable); kept Retry/RetryState with Transient/Permanent mapping in adapter; exact attempt count enforced; default SystemClock; sleep.rs deleted, BackoffPolicy exported; determinism loss accepted per §I.3; gircap untouched |
 | T17 | gircap retry/backoff → `ExponentialBackoff` | completed | bc6940c3 | Used ExponentialBackoff with randomization_factor 0.0 (jitter None, diffable artifact preserved); kept retry loop + Sleep injection + seq/bytes_in/restart; no async driver/middleware; base_delay/max_delay folded into private constants |
-| T18 | girsync path canonicalization → `dunce` | in_progress | | |
+| T18 | girsync path canonicalization → `dunce` | pending_review | 97bb62dd | Scope broadened to all canonicalize sites in tools/sync (no std/dunce mixing); 3 strippers removed; UNC test body retargeted to absolute_alias; DIRECT_QUESTIONS seam updated; I.1 validated - girpr/T19 untouched; paths render without \\\\?\\ |
 | T19 | girpr `resolve_existing_prefix` validation | todo | | |
 | T20 | Glob filtering → `globset` / shared crate | todo | | |
 | T21 | Atomic publish helpers → library | todo | | |
