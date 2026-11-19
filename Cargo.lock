@@ -606,6 +606,7 @@ dependencies = [
  "girpr-tempdir",
  "hex",
  "md-5",
+ "percent-encoding",
  "prost",
  "reqwest",
  "serde",

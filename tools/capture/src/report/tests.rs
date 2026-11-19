@@ -308,6 +308,12 @@ fn percent_encoding_round_trips_and_leaves_ordinary_values_alone() {
     // come back full of percent signs.
     assert_eq!(percent_encode("hk4e_global"), "hk4e_global");
     assert_eq!(percent_decode("hk4e_global"), "hk4e_global");
+    // Round-tripping alone would also pass if the encoder escaped every UTF-8
+    // byte, so pin the distinction: whitespace is escaped, non-ASCII is not.
+    assert_eq!(
+        percent_encode("unicode ✓ and ünïcödé"),
+        "unicode%20✓%20and%20ünïcödé"
+    );
 }
 
 /// A malformed escape is data, not a decode failure: `%` followed by

@@ -68,6 +68,9 @@ zstd = "0.14.4"
 md-5 = "0.11.0"
 # Hex spelling of digests, shared with the repair binary and the converter.
 hex = "0.4.3"
+# Percent-escape spelling for query values and the stdout text form. Already in
+# the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
+percent-encoding = "2.3.2"
 sha2 = "0.11.1"
 flate2 = "1.1.11"
 # Directory walks in the index and inventory passes. Already in the shared
