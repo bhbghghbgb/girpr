@@ -39,7 +39,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T25 | Hardlink identity → `same-file` | completed | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
 | T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
 | T27 | Cache wire codec → `postcard`/`bincode` | completed | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
-| T28 | `cache/open.rs` publish protocol restructure | pending_review | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
+| T28 | `cache/open.rs` publish protocol restructure | completed | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
 | T29 | girpr INI parse/merge/render | todo | | |
 | T30 | gircap `parse_game_version` | todo | | |
 | T31 | `JoinSet` window → `buffer_unordered` | todo | | |
@@ -61,7 +61,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F | T23, T24 | done | Both completed; no fixes; all 9 malformed-Length tests retained; bridge/domain servers untouched; 5 follow-ups recorded |
 | G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
 | solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
-| solo | T28 | pending | |
+| solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
 
 ## Follow-ups
 
@@ -104,6 +104,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F35 | Reword or acknowledge cobs in postcard manifest comment (non-optional dep) | open | Solo T27; tiny crate, zero behavior impact |
 | F36 | Optional streaming Deserialize visitor to cut per-record decode allocations | open | Solo T27; rows small, not on hot path |
 | F37 | Add multi-foreign-name determinism coverage to cache codec tests | open | Solo T27; hardens already-correct sorted-output behavior |
+| F38 | Point open.rs one-syscall-gap module docs at backup::publish submodule | open | Solo T28; documentation clarity only |
+| F39 | Add production-path working-name collision test for tempfile-based working_name | open | Solo T28; tempfile guarantees uniqueness upstream |
+| F40 | Consolidate duplicated remove_cache_path in open.rs and publish.rs | open | Solo T28; duplication intentional and behaviorally inert |
+| F41 | Re-evaluate Publisher trait if no second implementation appears | open | Solo T28; harmless abstraction with testability value today |
 
 ## Persistent context
 
