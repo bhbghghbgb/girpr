@@ -481,59 +481,52 @@ where
     B: AsRef<[u8]>,
     E: std::fmt::Display,
 {
-    let mut hashing = HashingWriter::new(&mut *sink, expected);
+    let hashing = HashingWriter::new(&mut *sink, expected);
     let mut compressed = 0u64;
-    {
-        // The write-side decoder, built on the zio writer rather than
-        // `stream::write::Decoder`: the zio writer's `finish` is what tells a
-        // complete frame from a truncated one, and the wrapper does not expose
-        // it. (`write::Decoder` has `with_writer`, `get_ref`, `into_inner`,
-        // `auto_flush` — and no `finish`: `zstd-0.13.3/src/stream/write/mod.rs`
-        // puts `do_finish` on the *encoder*.)
-        let raw = zstd::stream::raw::Decoder::new().map_err(|e| StreamFailure {
-            error: StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")),
-            compressed_bytes: compressed,
-        })?;
-        let mut dec = zstd::stream::zio::Writer::new(&mut hashing, raw);
-        while let Some(piece) = body.next().await {
-            let bytes = match piece {
-                Ok(b) => b,
-                Err(e) => {
-                    return Err(StreamFailure {
-                        error: StreamError::Transport(anyhow::anyhow!("read body: {e}")),
-                        compressed_bytes: compressed,
-                    });
-                }
-            };
-            compressed = compressed.saturating_add(bytes.as_ref().len() as u64);
-            // The reservation is a ceiling: a body that crosses it is refused
-            // at the piece that crossed, not decoded and written in full. The
-            // piece has already crossed the wire, so it is in `compressed`.
-            if let Some(cap) = max_compressed
-                && compressed > cap
-            {
+    let mut dec = zstd::stream::write::Decoder::new(hashing).map_err(|e| StreamFailure {
+        error: StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")),
+        compressed_bytes: compressed,
+    })?;
+    while let Some(piece) = body.next().await {
+        let bytes = match piece {
+            Ok(b) => b,
+            Err(e) => {
                 return Err(StreamFailure {
-                    error: StreamError::Content(anyhow::anyhow!(
-                        "compressed body exceeded the {cap} bytes reserved for it"
-                    )),
+                    error: StreamError::Transport(anyhow::anyhow!("read body: {e}")),
                     compressed_bytes: compressed,
                 });
             }
-            if let Err(e) = dec.write_all(bytes.as_ref()) {
-                return Err(StreamFailure {
-                    error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
-                    compressed_bytes: compressed,
-                });
-            }
+        };
+        compressed = compressed.saturating_add(bytes.as_ref().len() as u64);
+        // The reservation is a ceiling: a body that crosses it is refused
+        // at the piece that crossed, not decoded and written in full. The
+        // piece has already crossed the wire, so it is in `compressed`.
+        if let Some(cap) = max_compressed
+            && compressed > cap
+        {
+            return Err(StreamFailure {
+                error: StreamError::Content(anyhow::anyhow!(
+                    "compressed body exceeded the {cap} bytes reserved for it"
+                )),
+                compressed_bytes: compressed,
+            });
         }
-        // The frame has to be *complete*: a truncated body decodes to a short
-        // result without an error of its own, and a short result must not
-        // pass for a successful download.
-        dec.finish().map_err(|e| StreamFailure {
-            error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
-            compressed_bytes: compressed,
-        })?;
+        if let Err(e) = dec.write_all(bytes.as_ref()) {
+            return Err(StreamFailure {
+                error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
+                compressed_bytes: compressed,
+            });
+        }
     }
+    // The frame has to be *complete*: a truncated body decodes to a short
+    // result without an error of its own, and a short result must not
+    // pass for a successful download. `finish` reports that as UnexpectedEof
+    // and hands the inner writer back so the digest and byte count remain
+    // readable.
+    let hashing = dec.finish().map_err(|e| StreamFailure {
+        error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
+        compressed_bytes: compressed,
+    })?;
     Ok(ChunkDigest {
         compressed_bytes: compressed,
         bytes: hashing.written(),
