@@ -5,8 +5,7 @@ use prost::Message;
 use std::io::Write;
 
 use crate::hyp::ChunkManifestMeta;
-use crate::retry::{Retry, RetryState, retry_state};
-use crate::sleep::Sleep;
+use crate::retry::{BackoffPolicy, Retry, RetryState, retry_state};
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
 use crate::util::Md5;
 
@@ -25,7 +24,7 @@ use crate::util::Md5;
 /// per run.
 pub async fn fetch_manifest(
     client: &reqwest::Client,
-    sleep: &dyn Sleep,
+    backoff: &BackoffPolicy,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
@@ -37,7 +36,7 @@ pub async fn fetch_manifest(
     let url = url.as_str();
     retry_state(
         ATTEMPTS,
-        sleep,
+        backoff,
         decoded,
         |mut decoded, attempt| async move {
             match try_fetch_manifest(client, url, meta, attempt, &mut decoded).await {
@@ -293,8 +292,8 @@ enum StreamError {
 pub struct ChunkFetch<'a, S: ChunkSink> {
     /// The HTTP client.
     pub client: &'a reqwest::Client,
-    /// The wait between attempts.
-    pub sleep: &'a dyn Sleep,
+    /// The retry wait policy.
+    pub backoff: &'a BackoffPolicy,
     /// The chunk's URL prefix.
     pub url_prefix: &'a str,
     /// The chunk id appended to the prefix.
@@ -337,7 +336,7 @@ pub struct ChunkFetch<'a, S: ChunkSink> {
 pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<ChunkDigest> {
     let ChunkFetch {
         client,
-        sleep,
+        backoff,
         url_prefix,
         id,
         expected,
@@ -347,13 +346,13 @@ pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<C
     } = fetch;
     retry_state(
         ATTEMPTS,
-        sleep,
+        backoff,
         (consumed, sink),
         |(consumed, sink), attempt| async move {
             let result = {
                 let mut fetch = ChunkFetch {
                     client,
-                    sleep,
+                    backoff,
                     url_prefix,
                     id,
                     expected,
@@ -589,7 +588,6 @@ pub fn join_url(prefix: &str, id: &str) -> String {
 mod tests {
     use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
-    use crate::sleep::NoSleep;
     use crate::test_http::serve_status;
     use std::sync::atomic::Ordering;
 
@@ -1011,7 +1009,7 @@ mod tests {
         let (base, hits) = serve_status("500 Internal Server Error").await;
         let meta = manifest_meta(&base);
         let client = reqwest::Client::new();
-        let err = fetch_manifest(&client, &NoSleep, &meta)
+        let err = fetch_manifest(&client, &BackoffPolicy::none(), &meta)
             .await
             .expect_err("the origin never recovers");
         assert_eq!(
@@ -1028,7 +1026,7 @@ mod tests {
         let (base, hits) = serve_status("404 Not Found").await;
         let meta = manifest_meta(&base);
         let client = reqwest::Client::new();
-        let err = fetch_manifest(&client, &NoSleep, &meta)
+        let err = fetch_manifest(&client, &BackoffPolicy::none(), &meta)
             .await
             .expect_err("the build has no such manifest");
         assert_eq!(

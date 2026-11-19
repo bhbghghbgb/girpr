@@ -299,10 +299,10 @@ async fn load_manifests_and_reuse(
     RunFailure,
 > {
     let timer = PhaseTimer::start("manifest");
-    let sleep = ctx.sleep.as_ref();
+    let backoff = &ctx.backoff;
     let per_manifest = manifest::fetch_latest(
         http,
-        sleep,
+        backoff,
         &meta.latest_build,
         &meta.audio,
         &meta.ignore,
@@ -312,7 +312,7 @@ async fn load_manifests_and_reuse(
     let local_map = Arc::new(
         manifest::local_reuse_map(
             http,
-            sleep,
+            backoff,
             meta.local_build.as_ref(),
             &meta.audio,
             &meta.ignore,
@@ -848,7 +848,7 @@ async fn execute_phase(
             dry_run: ctx.dry_run,
             output: ctx.output,
             repair_mode: ctx.repair_mode,
-            sleep: ctx.sleep.clone(),
+            backoff: ctx.backoff.clone(),
         },
     )
     .await;
@@ -1276,8 +1276,7 @@ mod tests {
     };
     use crate::Biz;
     use crate::hyp::HypClient;
-    use crate::sleep::NoSleep;
-    use std::sync::Arc;
+    use crate::retry::BackoffPolicy;
 
     /// A blocking task still reaches the caller's scoped subscriber: the pool
     /// thread has no thread-local dispatcher, and the cleanup passes log the
@@ -1400,7 +1399,7 @@ mod tests {
             Biz::Hk4eGlobal,
             base,
             "http://sophon.test/api".into(),
-            Arc::new(NoSleep),
+            BackoffPolicy::none(),
         )
         .expect("build the stub client");
 

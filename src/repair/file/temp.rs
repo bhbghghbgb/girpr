@@ -602,7 +602,7 @@ pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
     let mut consumed = 0u64;
     let digest = match sophon::stream_chunk_to(sophon::ChunkFetch {
         client: &ctx.http,
-        sleep: ctx.sleep.as_ref(),
+        backoff: &ctx.backoff,
         url_prefix: prefix,
         id: &c.id,
         expected,
@@ -768,7 +768,7 @@ mod tests {
     use crate::repair::phases::manifest::LocalChunkMap;
     use crate::repair::phases::plan::RepairPlan;
     use crate::report::Summary;
-    use crate::sleep::NoSleep;
+    use crate::retry::BackoffPolicy;
     use crate::sophon::{ChunkSink, ReuseEntry};
     use crate::util::Md5;
 
@@ -785,7 +785,7 @@ mod tests {
             summary: Arc::new(Summary::new()),
             dry_run: false,
             repair_mode: RepairMode::Temp,
-            sleep: Arc::new(NoSleep),
+            backoff: BackoffPolicy::none(),
         }
     }
 

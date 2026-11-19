@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::Biz;
-use crate::retry::{Retry, retry};
-use crate::sleep::{RealSleep, Sleep};
+use crate::retry::{BackoffPolicy, Retry, retry};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
@@ -23,9 +21,9 @@ pub struct HypClient {
     /// [`Biz::channel_tuple`]. Only `getGameDeprecatedFileConfigs` uses them.
     channel: &'static str,
     sub_channel: &'static str,
-    /// Injectable sleep: production waits for real, tests use [`crate::sleep::NoSleep`]
-    /// so retry backoff is instant.
-    sleep: Arc<dyn Sleep>,
+    /// Retry wait policy: production uses exponential backoff with jitter,
+    /// tests use [`BackoffPolicy::none`] so retries are instant.
+    backoff: BackoffPolicy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,7 +280,7 @@ impl HypClient {
     pub fn new(biz: Biz) -> Result<Self> {
         let (host, _, _) = biz.endpoints();
         let (hyp_base, sophon_base) = production_bases(host);
-        Self::new_with_bases(biz, hyp_base, sophon_base, Arc::new(RealSleep))
+        Self::new_with_bases(biz, hyp_base, sophon_base, BackoffPolicy::real())
     }
 
     /// Test/offline constructor: point the HoYoPlay + Sophon APIs at a mock
@@ -292,7 +290,7 @@ impl HypClient {
         biz: Biz,
         hyp_base: String,
         sophon_base: String,
-        sleep: Arc<dyn Sleep>,
+        backoff: BackoffPolicy,
     ) -> Result<Self> {
         let (_, launcher_id, game_id) = biz.endpoints();
         let (channel, sub_channel, _) = biz.channel_tuple();
@@ -309,7 +307,7 @@ impl HypClient {
             game_id,
             channel,
             sub_channel,
-            sleep,
+            backoff,
         })
     }
 
@@ -349,7 +347,7 @@ impl HypClient {
 
     async fn get_node<T: DeserializeOwned>(&self, url: &str, node: &str) -> Result<T> {
         tracing::debug!(api = "hyp", url = %url, "GET");
-        retry(5, self.sleep.as_ref(), |attempt| async move {
+        retry(5, &self.backoff, |attempt| async move {
             match self.client.get(url).send().await {
                 Ok(resp) => {
                     let status = resp.status();
@@ -409,7 +407,7 @@ impl HypClient {
         // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
         // Returns retcode -202 when tag unknown -> caller maps to None.
         tracing::debug!(api = "sophon", url = %url, "GET");
-        retry(5, self.sleep.as_ref(), |attempt| async move {
+        retry(5, &self.backoff, |attempt| async move {
             match self.client.get(url).send().await {
                 Ok(r) => {
                     let status = r.status();
@@ -647,7 +645,7 @@ mod tests {
             biz,
             "http://hyp.test/api".into(),
             "http://sophon.test/api".into(),
-            Arc::new(crate::sleep::NoSleep),
+            BackoffPolicy::none(),
         )
         .unwrap()
     }

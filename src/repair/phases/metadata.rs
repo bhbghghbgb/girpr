@@ -55,12 +55,12 @@ pub struct Meta {
 fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     let (hyp, sophon) = ctx.api_bases();
     let (default_hyp, default_sophon) = production_bases(ctx.biz.endpoints().0);
-    let sleep = ctx.sleep.clone();
+    let backoff = ctx.backoff.clone();
     match (hyp, sophon) {
-        (Some(h), Some(s)) => HypClient::new_with_bases(ctx.biz, h, s, sleep.clone()),
-        (Some(h), None) => HypClient::new_with_bases(ctx.biz, h, default_sophon, sleep.clone()),
-        (None, Some(s)) => HypClient::new_with_bases(ctx.biz, default_hyp, s, sleep.clone()),
-        (None, None) => HypClient::new_with_bases(ctx.biz, default_hyp, default_sophon, sleep),
+        (Some(h), Some(s)) => HypClient::new_with_bases(ctx.biz, h, s, backoff.clone()),
+        (Some(h), None) => HypClient::new_with_bases(ctx.biz, h, default_sophon, backoff.clone()),
+        (None, Some(s)) => HypClient::new_with_bases(ctx.biz, default_hyp, s, backoff.clone()),
+        (None, None) => HypClient::new_with_bases(ctx.biz, default_hyp, default_sophon, backoff),
     }
 }
 
@@ -498,10 +498,9 @@ mod tests {
     use crate::config::RepairMode;
     use crate::repair::scope::{Limits, PathScope};
     use crate::report::OutputFormat;
-    use crate::sleep::{NoSleep, Sleep};
+    use crate::retry::BackoffPolicy;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -530,7 +529,7 @@ mod tests {
             output: OutputFormat::Text,
             hyp_base_override: Some(base.clone()),
             sophon_base_override: Some(base),
-            sleep: Arc::new(NoSleep),
+            backoff: BackoffPolicy::none(),
         }
     }
 
@@ -744,7 +743,7 @@ mod tests {
                 let _mark = mark;
                 // The first retry's wait is instant, but the attempt after it
                 // never settles. Awaiting this sibling would hang the phase.
-                NoSleep.sleep(Duration::from_secs(1)).await;
+                tokio::task::yield_now().await;
                 attempts.fetch_add(1, Ordering::SeqCst);
                 std::future::pending::<()>().await;
             }

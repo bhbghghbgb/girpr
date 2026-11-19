@@ -26,8 +26,8 @@ use std::sync::{
 };
 
 use girpr::test_support::{
-    Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
-    terminal_retcode,
+    BackoffPolicy, Limits, PathScope, RepairMode, SophonChunk, SophonChunkFile,
+    SophonChunkManifest, terminal_retcode,
 };
 // Host-relative fixture timestamps. The implementation lives behind the
 // crate's test seam so the unit tests and the integration tests share one
@@ -82,7 +82,7 @@ pub fn ctx_for_biz(
         hyp_base_override: Some(mock.hyp_base.clone()),
         sophon_base_override: Some(mock.sophon_base.clone()),
         // Tests skip retry backoff: a failed fetch is retried immediately.
-        sleep: Arc::new(NoSleep),
+        backoff: BackoffPolicy::none(),
     }
 }
 

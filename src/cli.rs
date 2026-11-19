@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -18,7 +17,7 @@ use crate::Biz;
 use crate::config::{RepairMode, RunCtx};
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
-use crate::sleep::RealSleep;
+use crate::retry::BackoffPolicy;
 
 /// Concurrent file window used when `--jobs` is omitted.
 pub const DEFAULT_JOBS: usize = 4;
@@ -348,7 +347,7 @@ impl Args {
             // every offline test already uses is untouched.
             hyp_base_override: self.hyp_base,
             sophon_base_override: self.sophon_base,
-            sleep: Arc::new(RealSleep),
+            backoff: BackoffPolicy::real(),
         })
     }
 }

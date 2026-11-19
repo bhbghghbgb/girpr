@@ -1428,7 +1428,7 @@ mod tests {
             output: crate::report::OutputFormat::Text,
             hyp_base_override: None,
             sophon_base_override: None,
-            sleep: Arc::new(crate::sleep::NoSleep),
+            backoff: crate::retry::BackoffPolicy::none(),
         }
     }
 

@@ -1081,7 +1081,7 @@ mod tests {
     use crate::repair::phases::plan::RepairPlan;
     use crate::repair::scan::ScanReport;
     use crate::report::Summary;
-    use crate::sleep::NoSleep;
+    use crate::retry::BackoffPolicy;
     use crate::test_support::stamp_ago;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
@@ -2169,7 +2169,7 @@ mod tests {
             summary: Arc::new(Summary::new()),
             dry_run: true,
             repair_mode: RepairMode::Inplace,
-            sleep: Arc::new(NoSleep),
+            backoff: BackoffPolicy::none(),
         }
     }
 

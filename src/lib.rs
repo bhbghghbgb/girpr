@@ -36,8 +36,8 @@
 //! APIs), `sophon` (chunk-manifest protobuf, fetch/verify/parse, manifest
 //! filter, local chunk-reuse map), `biz` (biz → launcher id / game id /
 //! channel tuple), `report` (run counters, the record data plane and every
-//! stdout line), `retry` (the shared attempt/backoff loop), `sleep` (the
-//! injectable wait), `phase` (the monotonic phase timer) and `util` (MD5, `config.ini`,
+//! stdout line), `retry` (the shared attempt loop and its backoff policy),
+//! `phase` (the monotonic phase timer) and `util` (MD5, `config.ini`,
 //! ignore/blacklist files, server-path containment).
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
@@ -53,7 +53,6 @@ mod phase;
 mod repair;
 mod report;
 mod retry;
-mod sleep;
 mod sophon;
 // The canned-reply loopback origin the unit tests share.
 #[cfg(test)]
@@ -87,8 +86,8 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 /// - `RepairMode`, `Lock`, `lock_path`, `takes_lock`, `Limits` and `PathScope`
 ///   let a test build a [`RunCtx`], drive the real pipeline, and inspect the
 ///   lock policy and the file a run leaves behind;
-/// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
-///   for real;
+/// - `BackoffPolicy` chooses the retry wait (real or immediate) without a test
+///   sleeping for real;
 /// - `SophonChunk`, `SophonChunkFile` and `SophonChunkManifest` build the
 ///   offline mock's manifests; `ChunkFetch`, `ChunkSink` and `stream_chunk_to`
 ///   are what the peak-heap probe measures;
@@ -118,7 +117,7 @@ pub mod test_support {
     pub use crate::repair::lock::{Lock, lock_path, takes_lock};
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
-    pub use crate::sleep::{NoSleep, RealSleep};
+    pub use crate::retry::BackoffPolicy;
     pub use crate::sophon::stream::join_url;
     pub use crate::sophon::{
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,

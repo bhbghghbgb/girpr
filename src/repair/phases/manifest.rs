@@ -28,7 +28,7 @@ use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
 use crate::hyp::ChunkManifestMeta;
-use crate::sleep::Sleep;
+use crate::retry::BackoffPolicy;
 use crate::sophon::{self, FileReuse, SophonChunkFile, WantedManifest};
 
 use crate::config::RunFailure;
@@ -137,7 +137,7 @@ impl<'a> ManifestFetches<'a> {
     /// [`MAX_MANIFEST_CONCURRENCY`] at once.
     fn start(
         http: &'a Client,
-        sleep: &'a dyn Sleep,
+        backoff: &'a BackoffPolicy,
         build: &'a ChunkBuild,
         audio_langs: &'a std::collections::HashSet<String>,
         ignore: &'a std::collections::HashSet<String>,
@@ -151,7 +151,7 @@ impl<'a> ManifestFetches<'a> {
         // does not borrow the vector the struct keeps for lookups.
         let results = futures_util::stream::iter(manifests.clone().into_iter().enumerate())
             .map(move |(index, m)| async move {
-                let files = sophon::fetch_manifest(http, sleep, m).await;
+                let files = sophon::fetch_manifest(http, backoff, m).await;
                 (index, files)
             })
             .buffer_unordered(limit);
@@ -209,7 +209,7 @@ impl<'a> ManifestFetches<'a> {
 /// awaited.
 pub async fn fetch_latest(
     http: &Client,
-    sleep: &dyn Sleep,
+    backoff: &BackoffPolicy,
     latest_build: &ChunkBuild,
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
@@ -217,7 +217,7 @@ pub async fn fetch_latest(
 ) -> Result<Vec<(String, Vec<SophonChunkFile>)>, RunFailure> {
     let mut fetches = ManifestFetches::start(
         http,
-        sleep,
+        backoff,
         latest_build,
         audio_langs,
         ignore,
@@ -249,7 +249,7 @@ pub async fn fetch_latest(
 /// not settle the fan-out: every reachable manifest still contributes.
 pub async fn local_reuse_map(
     http: &Client,
-    sleep: &dyn Sleep,
+    backoff: &BackoffPolicy,
     local_build: Option<&ChunkBuild>,
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
@@ -260,7 +260,7 @@ pub async fn local_reuse_map(
     };
     let mut fetches = ManifestFetches::start(
         http,
-        sleep,
+        backoff,
         local_build,
         audio_langs,
         ignore,
@@ -285,7 +285,6 @@ pub async fn local_reuse_map(
 mod tests {
     use super::*;
     use crate::hyp::{ChunkManifestMeta, ManifestFile, ManifestUrl};
-    use crate::sleep::NoSleep;
     use crate::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use crate::util::md5::md5_digest;
     use prost::Message;
@@ -741,7 +740,7 @@ mod tests {
             Duration::from_secs(5),
             fetch_latest(
                 &client,
-                &NoSleep,
+                &BackoffPolicy::none(),
                 &build,
                 &HashSet::new(),
                 &HashSet::new(),
@@ -764,8 +763,8 @@ mod tests {
     /// The first manifest fails through a retryable 500 (retried to the cap)
     /// while a later one fails at once with a 404. The returned error must name
     /// the first manifest in selection order, not the first to finish. Backoff
-    /// is skipped with `NoSleep`; the attempt count is asserted from the error
-    /// chain instead of from time spent sleeping.
+    /// is skipped with `BackoffPolicy::none()`; the attempt count is asserted
+    /// from the error chain instead of from time spent sleeping.
     #[tokio::test]
     async fn fetch_latest_reports_the_first_failure_in_selection_order() {
         let (ok_body, ok_checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
@@ -786,7 +785,7 @@ mod tests {
         let client = Client::new();
         let failure = fetch_latest(
             &client,
-            &NoSleep,
+            &BackoffPolicy::none(),
             &build,
             &HashSet::new(),
             &HashSet::new(),
@@ -837,8 +836,9 @@ mod tests {
             let client = Client::new();
             let audio_langs = HashSet::new();
             let ignore = HashSet::new();
+            let backoff = BackoffPolicy::none();
 
-            let fetched = fetch_latest(&client, &NoSleep, &build, &audio_langs, &ignore, jobs);
+            let fetched = fetch_latest(&client, &backoff, &build, &audio_langs, &ignore, jobs);
             let observed = async {
                 tokio::time::timeout(Duration::from_secs(5), gate.wait_for(bound))
                     .await
@@ -883,10 +883,11 @@ mod tests {
         let client = Client::new();
         let audio_langs = HashSet::new();
         let ignore = HashSet::new();
+        let backoff = BackoffPolicy::none();
 
         let mut fetched = Box::pin(fetch_latest(
             &client,
-            &NoSleep,
+            &backoff,
             &build,
             &audio_langs,
             &ignore,
@@ -924,7 +925,7 @@ mod tests {
         let client = Client::new();
         let manifests = fetch_latest(
             &client,
-            &NoSleep,
+            &BackoffPolicy::none(),
             &build,
             &HashSet::new(),
             &HashSet::new(),
@@ -962,7 +963,7 @@ mod tests {
         let client = Client::new();
         let map = local_reuse_map(
             &client,
-            &NoSleep,
+            &BackoffPolicy::none(),
             Some(&build),
             &HashSet::new(),
             &HashSet::new(),

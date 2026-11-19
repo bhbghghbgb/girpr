@@ -69,6 +69,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # logging never blocks the run and the worker guard flushes the tail on exit.
 tracing-appender = "0.2.5"
 anyhow = "1.0.104"
+# The shared retry driver uses backoff's exponential policy and its tokio
+# sleeper. 0.4 is the maintained release line (the latest published stable);
+# its RNG jitter replaces girpr's old deterministic salt spread.
+backoff = { version = "0.4", features = ["tokio"] }
 walkdir = "2.5.0"
 glob = "0.3.4"
 # Only the `Stream`/`StreamExt` traits and `stream::iter` are used, never the

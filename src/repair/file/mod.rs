@@ -75,8 +75,7 @@ use tracing::Instrument;
 use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
-use crate::retry::{RetryState, retry_state};
-use crate::sleep::Sleep;
+use crate::retry::{BackoffPolicy, RetryState, retry_state};
 #[cfg(test)]
 use crate::sophon::SophonChunk;
 use crate::util;
@@ -201,7 +200,7 @@ pub(super) struct RepairInputs {
     pub(super) dry_run: bool,
     pub(super) output: crate::report::OutputFormat,
     pub(super) repair_mode: RepairMode,
-    pub(super) sleep: Arc<dyn Sleep>,
+    pub(super) backoff: BackoffPolicy,
 }
 
 /// Run the repair loop over the whole plan, bounded to `jobs` concurrent files.
@@ -225,7 +224,7 @@ pub async fn repair_all(inputs: RepairInputs) -> Summary {
         dry_run,
         output,
         repair_mode,
-        sleep,
+        backoff,
     } = inputs;
     let summary = Arc::new(summary);
     let total_files = plan.len();
@@ -242,7 +241,7 @@ pub async fn repair_all(inputs: RepairInputs) -> Summary {
         summary: summary.clone(),
         dry_run,
         repair_mode,
-        sleep,
+        backoff,
     });
     let progress = crate::report::ProgressGuard::start(Arc::clone(&summary), output);
 
@@ -464,9 +463,9 @@ struct FileCtx {
     dry_run: bool,
     /// How each file is repaired.
     repair_mode: RepairMode,
-    /// Injectable sleep: production waits for real, tests use [`crate::sleep::NoSleep`]
-    /// so retry backoff is instant.
-    sleep: Arc<dyn Sleep>,
+    /// Retry wait policy: production uses exponential backoff with jitter,
+    /// tests use [`BackoffPolicy::none`] so retries are instant.
+    backoff: BackoffPolicy,
 }
 
 /// The manifest-relative path whose file task panics in tests.
@@ -476,7 +475,7 @@ struct FileCtx {
 #[cfg(test)]
 const TEST_PANIC_REL: &str = "__girpr_test_panic__";
 
-/// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
+/// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // A runtime hard stop already fired: drop out without touching the file.
     // The work already done for it is kept — under `--repair-mode temp` the
@@ -536,12 +535,12 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     let mode = resolve_mode(ctx.repair_mode, &final_path);
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
-    // mean that while the *first* file alone spends 5 × 10 s of chunk-fetch
-    // backoff plus 10 s of file-level backoff ≈ 60 s of pure sleeping before
-    // anyone else is spared (one failing chunk per attempt). The flag is an
-    // explicit "tell me fast"; a user who wants the
-    // full budget does not pass it. Counter semantics are unchanged: a file that
-    // fails on its first attempt is still just `files_failed`.
+    // mean that while the *first* file alone spends a whole budget of chunk-fetch
+    // backoff plus file-level backoff in pure sleeping before anyone else is
+    // spared (one failing chunk per attempt). The flag is an explicit "tell me
+    // fast"; a user who wants the full budget does not pass it. Counter semantics
+    // are unchanged: a file that fails on its first attempt is still just
+    // `files_failed`.
     let max_attempts = if ctx.summary.fail_fast() {
         1
     } else {
@@ -559,7 +558,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     let tmp_path = tmp_path.as_path();
     retry_state(
         max_attempts,
-        ctx.sleep.as_ref(),
+        &ctx.backoff,
         state,
         |mut state, attempt| async move {
             loop {
@@ -611,7 +610,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                     Err(e) => {
                         tracing::warn!(attempt, "attempt failed: {e:#}");
                         // `--fail-fast` cuts the backoff short. Without it, one bad
-                        // file spends 5 × linear sleep (and each of those attempts has
+                        // file spends its whole backoff budget (and each attempt has
                         // its own 5× chunk retry inside `stream_chunk_to`) before the
                         // run even starts on the next file.
                         if ctx.summary.aborted() {
@@ -996,7 +995,7 @@ mod tests {
             dry_run: false,
             output: crate::report::OutputFormat::Text,
             repair_mode: RepairMode::Inplace,
-            sleep: Arc::new(crate::sleep::NoSleep),
+            backoff: BackoffPolicy::none(),
         })
         .await;
         assert_eq!(
