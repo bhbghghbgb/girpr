@@ -38,7 +38,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
 | T25 | Hardlink identity → `same-file` | completed | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
 | T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
-| T27 | Cache wire codec → `postcard`/`bincode` | todo | | |
+| T27 | Cache wire codec → `postcard`/`bincode` | in_progress | | |
 | T28 | `cache/open.rs` publish protocol restructure | todo | | |
 | T29 | girpr INI parse/merge/render | todo | | |
 | T30 | gircap `parse_game_version` | todo | | |
