@@ -40,7 +40,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
 | T27 | Cache wire codec → `postcard`/`bincode` | completed | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
 | T28 | `cache/open.rs` publish protocol restructure | completed | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
-| T29 | girpr INI parse/merge/render | todo | | |
+| T29 | girpr INI parse/merge/render | in_progress | | |
 | T30 | gircap `parse_game_version` | todo | | |
 | T31 | `JoinSet` window → `buffer_unordered` | todo | | |
 | T32 | Chunk-range tiling → interval crate | todo | | |
