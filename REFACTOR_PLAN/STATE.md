@@ -27,8 +27,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | girpr JSON renderer → `Serialize` | completed | 69414ccb, 9177fde1 | Hand-written Serialize for local Record/Val; json() = serde_json::to_string with {} fallback. Intentional byte change in untested edge: backslash-only string values now escaped to \\ (control-char escaping unchanged); declaration order kept, no preserve_order |
 | T14 | girsync JSON renderer → `Serialize` | completed | 8607fac2 | Kept alphabetical key order (event in sorted slot) - pinned by byte-level oracle; stale pointer: hand-rolled renderer was write_json, json() is public -> Value, so routed through to_value; no byte changes; no preserve_order |
 | T15 | gircap JSON renderer → `Serialize` | completed | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
-| T16 | girpr retry/backoff → `backoff` | pending_review | acb8d6c4 | Adopted backoff 0.4.0 (latest stable); kept Retry/RetryState with Transient/Permanent mapping in adapter; exact attempt count enforced; default SystemClock; sleep.rs deleted, BackoffPolicy exported; determinism loss accepted per §I.3; gircap untouched |
-| T17 | gircap retry/backoff → `ExponentialBackoff` | pending_review | bc6940c3 | Used ExponentialBackoff with randomization_factor 0.0 (jitter None, diffable artifact preserved); kept retry loop + Sleep injection + seq/bytes_in/restart; no async driver/middleware; base_delay/max_delay folded into private constants |
+| T16 | girpr retry/backoff → `backoff` | completed | acb8d6c4 | Adopted backoff 0.4.0 (latest stable); kept Retry/RetryState with Transient/Permanent mapping in adapter; exact attempt count enforced; default SystemClock; sleep.rs deleted, BackoffPolicy exported; determinism loss accepted per §I.3; gircap untouched |
+| T17 | gircap retry/backoff → `ExponentialBackoff` | completed | bc6940c3 | Used ExponentialBackoff with randomization_factor 0.0 (jitter None, diffable artifact preserved); kept retry loop + Sleep injection + seq/bytes_in/restart; no async driver/middleware; base_delay/max_delay folded into private constants |
 | T18 | girsync path canonicalization → `dunce` | todo | | |
 | T19 | girpr `resolve_existing_prefix` validation | todo | | |
 | T20 | Glob filtering → `globset` / shared crate | todo | | |
@@ -55,7 +55,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | A | T01, T02, T03, T06 (T04, T05 skipped) | done | All four completed; no fixes/reverts; 4 follow-ups recorded |
 | B | T07, T08, T09, T10, T11 (T12 skipped) | done | All five completed; lockfile fix 4636a691; 5 follow-ups recorded |
 | C | T13, T14, T15 | done | All three completed; cross-tool consistency PASS; fix 9177fde1 pins backslash escaping; 2 follow-ups recorded |
-| D | T16, T17 | pending | |
+| D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
 
 ## Follow-ups
 
@@ -72,6 +72,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | open | T09; affects only rare RUST_LOG naming redb |
 | F10 | Document/test one shared escaping-consistency invariant across the three JSON renderers | open | Batch C; each crate already pins its own bytes |
 | F11 | Reconsider silent {} / empty-Value serialization fallbacks in the three renderers | open | Batch C; fallback unreachable for current primitive fields |
+| F12 | Note that default 5-attempt girpr retry wait grew from ~10s to up to ~22.5s | open | T16; explicit goal, only slows failing runs; fail-fast unaffected |
+| F13 | Restore 'after 0 attempts' error context for retry(0, ...) in girpr | open | T16; no call site passes 0 |
+| F14 | Document why backoff 0.4 RNG draw at factor 0.0 cannot affect gircap artifacts | open | T17; use custom policy only if strict zero-RNG ever required |
+| F15 | Consider public API impact of RetryPolicy base_delay/max_delay becoming private constants | open | T17; no in-tree external users |
 
 ## Persistent context
 
