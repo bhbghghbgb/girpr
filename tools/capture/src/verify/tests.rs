@@ -253,6 +253,31 @@ fn a_walk_that_cannot_stat_one_entry_names_it() {
     assert!(e.contains("vanished"), "the path is named: {e}");
 }
 
+/// A **genuine** `WalkDir` failure stops the walk, with no seam injected at
+/// all. The tests above exercise the pre-descent check, which production always
+/// passes; this one drives the real traversal error path instead. `list` builds
+/// `WalkDir` with `follow_links(true)`, so a symlink whose target is gone makes
+/// the link-follow fail with an I/O error before `filter_entry` sees the entry.
+/// The walk loop must surface that as a failed inventory naming the path — not
+/// return the good bundles it happened to see before the error.
+///
+/// A real bundle sits next to the bad link so a walk that swallowed the error
+/// would answer with a short inventory rather than nothing.
+#[test]
+fn a_real_walkdir_error_stops_the_walk_without_an_injected_check() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-walkdir-error", "walkdir_error");
+    write_minimal_bundle(&d.join("good"), "good_capture");
+    let dangling = d.join("dangling");
+    if !link_file(&d.join("missing_target"), &dangling) {
+        eprintln!("skipping real WalkDir error test: file symlinks unavailable on this host");
+        return;
+    }
+
+    let e = list(&d).expect_err("a real WalkDir error is not a shorter inventory");
+    assert!(e.contains("cannot read"), "{e}");
+    assert!(e.contains("dangling"), "the path is named: {e}");
+}
+
 /// A link back up the tree closes a cycle. `outer` has no manifest so the walk
 /// descends into it; without a visited set `outer/back` would send the walk
 /// back to the root forever. The one real bundle is still listed, once.

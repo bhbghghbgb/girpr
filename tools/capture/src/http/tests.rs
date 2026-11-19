@@ -825,6 +825,14 @@ mod malformed {
                 h.fetch_add(1, Ordering::SeqCst);
                 serve_one(stream, a.status, a.body, a.claim, a.omit_length);
             }
+            // The script is exhausted. A well-behaved client stops here, but a
+            // regression that makes one more request must fail fast rather than
+            // hang until the client's timeout: keep accepting and close any
+            // extra connection immediately so the caller sees EOF at once
+            // instead of an unanswered socket sitting in the listen backlog.
+            while let Ok((stream, _)) = listener.accept() {
+                drop(stream);
+            }
         });
         Mock { port, hits }
     }
