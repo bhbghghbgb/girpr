@@ -589,8 +589,6 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
 
-    use crate::util::counter::test_support::pause_before_cas_of;
-
     /// The meter's two numbers, and the rule that tells them apart.
     ///
     /// The live figure is the **spend**: the bytes the run caused, whatever
@@ -748,26 +746,26 @@ mod tests {
     }
 
     /// A charge within `n` of the top is decided by the same atomic step that
-    /// performs it, so two threads that both see room cannot both take it and
-    /// wrap the counter. A load followed by `fetch_add` loses exactly this
-    /// race: every thread sees `MAX - 1` as room for one more byte.
+    /// performs it, so threads that both see room cannot both take it and wrap
+    /// the counter. A load followed by `fetch_add` loses exactly this race:
+    /// every thread sees `MAX - 1` as room for one more byte.
     ///
-    /// The test installs a pause after the load, so every thread is guaranteed
-    /// to have read `MAX - 1` before any of them commits. That is the exact
-    /// interleaving the compare-exchange loop has to survive, without a
-    /// probabilistic loop of thousands of spawned threads.
+    /// A barrier releases every charging thread at once, so they contend on the
+    /// same cell. In whatever order they commit, the saturating add keeps the
+    /// figure at `u64::MAX` rather than wrapping to a small number that would
+    /// switch the ceiling off.
     #[test]
     fn concurrent_charges_cannot_wrap_a_meter_near_the_top() {
         const THREADS: usize = 8;
         let s = Arc::new(Summary::default());
         assert!(s.reserve_download_bytes(u64::MAX - 1));
-        let paused = Arc::new(Barrier::new(THREADS));
+        let start = Arc::new(Barrier::new(THREADS));
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 let s = s.clone();
-                let paused = paused.clone();
+                let start = start.clone();
                 std::thread::spawn(move || {
-                    let _pause = pause_before_cas_of(&s.download.live, paused);
+                    start.wait();
                     assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
                 })
             })

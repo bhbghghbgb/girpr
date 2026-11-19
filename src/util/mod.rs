@@ -9,7 +9,7 @@
 //!   lexical + filesystem checks and `/`-form rel spellings.
 //! - [`atomic`] — `write_atomic`: temp-sibling-then-rename publishing for every
 //!   artifact girpr writes.
-//! - [`counter`] — `add_saturating`: the compare-and-swap loop shared by the
+//! - [`counter`] — `add_saturating`: the saturating `try_update` shared by the
 //!   atomic byte counters, so a charge cannot wrap.
 //! - [`ini`] — `read_game_version`, `read_ignore_categories`,
 //!   `read_blacklist`, `write_config_ini`: the launcher's config.ini files.
