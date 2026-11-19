@@ -67,6 +67,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | PLAN | Follow-up planning review | done | 48 reviewed: 44 dropped, F04 already done, 3 kept in batches FB1 (F08,F28) and FB2 (F46); all KEEP items test-only |
 | FB1 | F08, F28 | done | Both done at 4ca326a3; no fixes; production untouched, 3 non-blocking suggestions recorded |
 | FB2 | F46 | done | Done at 17b075e1; independent pre-fix verification confirms test is a valid guard; 3 non-blocking suggestions recorded |
+| PRUNE | Final F49-F54 pruning | done | All 6 dropped (extra assurance / cosmetic / hypothetical-future guards); no KEEP batch, no new follow-ups; Phase 4 unblocked |
 
 ## Follow-ups
 
@@ -120,12 +121,12 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F46 | Regression test that induced persist failure under --force leaves previous cache intact | done | FB2 commit 17b075e1; independently verified to FAIL on pre-fix 5547555c and pass now; test-only |
 | F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | dropped | Batch I; fragment tests pass, guards thiserror upgrades  Dropped at Phase 3 planning: extra assurance; fragment tests pass, low-probability upgrade guard |
 | F48 | Document/cover whole-run cancellation for T31 detach-on-drop | dropped | Batch I; driver always awaited, runtime drop aborts tasks  Dropped at Phase 3 planning: documentation note; driver always awaited, runtime drop aborts tasks |
-| F49 | Test that drives F28's new fail-fast branch (extra request -> immediate EOF under short timeout) | open | FB1 review; no existing test exercises the added branch |
-| F50 | Give F28 post-exhaustion accept loop a deadline/nonblocking close to avoid detached thread + bound port | open | FB1 review; harmless today, resource hygiene |
-| F51 | Shared skip-reporting mechanism for F08's eprintln! self-skip so CI visibility is clearer | open | FB1 review; visibility only |
-| F52 | Use production claim_temp_sibling in F46 regression test instead of duplicating temp-naming convention | open | FB2 review; prevents drift if naming changes |
-| F53 | Drop the tautological !temp_path.exists() assertion in F46 test | open | FB2 review; load-bearing assertions are dst.is_file + byte read |
-| F54 | Optional end-to-end force=true sled_to_redb final-persist failure coverage | open | FB2 review; extra assurance beyond replace_destination seam |
+| F49 | Test that drives F28's new fail-fast branch (extra request -> immediate EOF under short timeout) | dropped | FB1 review; no existing test exercises the added branch  Dropped at final Phase 3 pruning: extra-assurance test of F28 guard; no defect, nothing drives the branch |
+| F50 | Give F28 post-exhaustion accept loop a deadline/nonblocking close to avoid detached thread + bound port | dropped | FB1 review; harmless today, resource hygiene  Dropped at final Phase 3 pruning: speculative resource hygiene for detached test thread; zero shipped impact |
+| F51 | Shared skip-reporting mechanism for F08's eprintln! self-skip so CI visibility is clearer | dropped | FB1 review; visibility only  Dropped at final Phase 3 pruning: cosmetic CI skip-visibility polish; no defect |
+| F52 | Use production claim_temp_sibling in F46 regression test instead of duplicating temp-naming convention | dropped | FB2 review; prevents drift if naming changes  Dropped at final Phase 3 pruning: test maintainability to prevent hypothetical drift; test already verified |
+| F53 | Drop the tautological !temp_path.exists() assertion in F46 test | dropped | FB2 review; load-bearing assertions are dst.is_file + byte read  Dropped at final Phase 3 pruning: cosmetic cleanup of a tautological assertion; behavior already pinned |
+| F54 | Optional end-to-end force=true sled_to_redb final-persist failure coverage | dropped | FB2 review; extra assurance beyond replace_destination seam  Dropped at final Phase 3 pruning: explicitly optional extra assurance beyond the already-pinned seam |
 
 ## Persistent context
 
@@ -135,7 +136,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
   (sled2redb --force persist-failure regression test, must fail on pre-a992600e
   code). F04 was already done; all others dropped as documentation notes,
   hypothetical-future guards, or extra-assurance hardening of already-correct
-  behavior with no concrete defect. Batches FB1/FB2 are independent.
+  behavior with no concrete defect. Batches FB1/FB2 are independent. Their batch
+  reviews produced F49-F54; the final pruning dropped all six on the same
+  standard, so every follow-up is now settled and Phase 4 is unblocked.
 - gircap spawn-based integration tests: the os error 2 "cannot find gircap.exe"
   failures PREDATE the orchestration (reproduced at baseline 36d2a030). Root cause
   was nextest placing test binaries in build-script OUT_DIR, invalidating the
