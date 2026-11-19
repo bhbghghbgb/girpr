@@ -351,7 +351,7 @@ fn cleanup_temp(primary: anyhow::Error, temp: &Path) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{CONVERT_TEMP_PREFIX, claim_temp_sibling};
+    use super::{CONVERT_TEMP_PREFIX, claim_temp_sibling, replace_destination};
 
     /// **The claimed temporary is tool state, and dropping it leaves nothing.**
     ///
@@ -383,6 +383,61 @@ mod tests {
         assert!(
             !claimed.exists(),
             "dropping the claim removes the temporary"
+        );
+    }
+
+    /// **A failed final persist under `--force` leaves the previous cache intact.**
+    ///
+    /// [`replace_destination`] is the seam `sled_to_redb` uses to overwrite an
+    /// existing cache under `--force`: the old cache is a file at `dst`, and the
+    /// finished conversion is a sibling temporary that has to be moved onto it.
+    /// That move is the one step that can fail after the source has been read and
+    /// the new cache is whole, so the old cache — often the only copy of hashes
+    /// the legacy build had — must still be there if the move fails.
+    ///
+    /// The failure is induced deterministically at that final step by taking the
+    /// temporary's file away just before the move: `persist` then fails because
+    /// its source is gone. That is the same shape a temporary-file cleaner or a
+    /// stale handle produces, and it lands exactly on the persist rather than on
+    /// the source read or the cache write. The old cache holds distinctive bytes
+    /// so a removal, a truncation or a half-written replacement is visible.
+    #[test]
+    fn a_failed_forced_persist_leaves_the_previous_cache_intact() {
+        let parent = tempfile::tempdir().unwrap();
+        let dst = parent.path().join("girpr-cache");
+        std::fs::write(&dst, b"the previous cache, byte for byte").unwrap();
+        let before = std::fs::read(&dst).unwrap();
+
+        // The "converted" temporary, claimed in the destination's folder just
+        // as a real run claims it. The handle stays alive so the move is handed
+        // a genuine NamedTempFile; only the file it names is taken away.
+        let temp = tempfile::Builder::new()
+            .prefix(CONVERT_TEMP_PREFIX)
+            .suffix(".redb")
+            .tempfile_in(parent.path())
+            .unwrap();
+        let temp_path = temp.path().to_path_buf();
+        std::fs::remove_file(&temp_path).unwrap();
+
+        // This is the `--force` overwrite path: an existing file destination.
+        // The persist must fail, and it must not have cost us the old cache.
+        let err = replace_destination(temp, &dst).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("move the converted cache"),
+            "the failure comes from the final move: {err:#}"
+        );
+        assert!(
+            dst.is_file(),
+            "the previous destination still exists after the failed move"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            before,
+            "the previous cache is byte-identical after the failed --force move"
+        );
+        assert!(
+            !temp_path.exists(),
+            "the failed move left no temporary behind"
         );
     }
 }
