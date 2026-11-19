@@ -45,7 +45,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T31 | `JoinSet` window → `buffer_unordered` | pending_review | e1da9861 | JoinSet window replaced with buffer_unordered over tokio::spawn handles (keeps parallelism + JoinError panic capture); from_fn iterator preserves fail-fast no-new-file rule; accepted detach-on-drop (driver always awaited to completion, runtime drop aborts anyway); no futures-concurrency needed |
 | T32 | Chunk-range tiling → interval crate | skipped | | Weakest crate case confirmed: measured rangemap rewrite +30/-15 net +15 lines; overlaps need chunk-offset identity crates discard; i64 validation un delegatable; is_tiled fast path must stay allocation-free; §I.5 |
 | T33 | Error `Display` impls → `thiserror` | pending_review | 69384691 | Derived thiserror::Error for ApiError/UsageError/Failure with verbatim format strings; exit_code/url/summary kept hand-written; messages byte-identical; Failure gains std::error::Error impl (additive, required by task) |
-| T34 | sled2redb temp claim → `NamedTempFile` | todo | | |
+| T34 | sled2redb temp claim → `NamedTempFile` | in_progress | | |
 | T35 | `IntOrStr` → `serde_with` (optional) | todo | | |
 
 ## Reviews
