@@ -28,7 +28,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | girsync JSON renderer → `Serialize` | completed | 8607fac2 | Kept alphabetical key order (event in sorted slot) - pinned by byte-level oracle; stale pointer: hand-rolled renderer was write_json, json() is public -> Value, so routed through to_value; no byte changes; no preserve_order |
 | T15 | gircap JSON renderer → `Serialize` | completed | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
 | T16 | girpr retry/backoff → `backoff` | pending_review | acb8d6c4 | Adopted backoff 0.4.0 (latest stable); kept Retry/RetryState with Transient/Permanent mapping in adapter; exact attempt count enforced; default SystemClock; sleep.rs deleted, BackoffPolicy exported; determinism loss accepted per §I.3; gircap untouched |
-| T17 | gircap retry/backoff → `ExponentialBackoff` | todo | | |
+| T17 | gircap retry/backoff → `ExponentialBackoff` | in_progress | | |
 | T18 | girsync path canonicalization → `dunce` | todo | | |
 | T19 | girpr `resolve_existing_prefix` validation | todo | | |
 | T20 | Glob filtering → `globset` / shared crate | todo | | |
