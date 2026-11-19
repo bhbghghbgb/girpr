@@ -644,9 +644,9 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "girpr-filter",
  "girpr-log",
  "girpr-tempdir",
- "glob",
  "hex",
  "md-5",
  "prost",
@@ -660,6 +660,14 @@ dependencies = [
  "walkdir",
  "winapi-util",
  "zstd",
+]
+
+[[package]]
+name = "girpr-filter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glob",
 ]
 
 [[package]]
@@ -687,9 +695,9 @@ dependencies = [
  "anyhow",
  "clap",
  "dunce",
+ "girpr-filter",
  "girpr-log",
  "girpr-tempdir",
- "glob",
  "md-5",
  "rayon",
  "redb",

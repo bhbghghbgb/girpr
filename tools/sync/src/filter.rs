@@ -22,15 +22,14 @@
 //! directory a subtree), and a caller that reached for it would drop the
 //! subtree rule without being told.
 
-use anyhow::{Context, Result};
-use glob::{MatchOptions, Pattern};
+use anyhow::Result;
+use girpr_filter::glob::{MatchOptions, Pattern};
+use girpr_filter::{Backslash, any_matches_or_ancestor, compile, match_options, matches_any};
 use std::collections::HashMap;
 
 /// Compile glob strings, reporting the offending pattern on failure.
 pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>> {
-    list.iter()
-        .map(|s| Pattern::new(s).with_context(|| format!("bad glob '{}'", s)))
-        .collect()
+    compile(list, Backslash::Escape)
 }
 
 /// The run's include and exclude rules, compiled once.
@@ -60,11 +59,7 @@ impl Filter {
         Self {
             includes,
             excludes,
-            opts: MatchOptions {
-                case_sensitive,
-                require_literal_separator: false,
-                require_literal_leading_dot: false,
-            },
+            opts: match_options(case_sensitive),
         }
     }
 
@@ -92,7 +87,7 @@ impl Filter {
     /// An include pattern is a filter on the path itself, so this is a
     /// question about `rel` alone: nothing above it is consulted.
     fn hidden_by_include(&self, rel: &str) -> bool {
-        !self.includes.is_empty() && !self.includes.iter().any(|p| p.matches_with(rel, self.opts))
+        !self.includes.is_empty() && !matches_any(&self.includes, rel, self.opts)
     }
 
     /// True when an exclude pattern matches `rel` itself.
@@ -101,7 +96,7 @@ impl Filter {
     /// a directory covers the whole subtree below it, and that is the other
     /// half of the rule — see [`Filter::excluded_by_pattern_or_ancestor`].
     fn excluded_by_pattern(&self, rel: &str) -> bool {
-        self.excludes.iter().any(|p| p.matches_with(rel, self.opts))
+        matches_any(&self.excludes, rel, self.opts)
     }
 
     /// True when an exclude pattern matches `rel` or one of its ancestor
@@ -110,9 +105,7 @@ impl Filter {
     /// The ancestor test is what makes an excluded directory cover its
     /// subtree.
     fn excluded_by_pattern_or_ancestor(&self, rel: &str) -> bool {
-        self.excludes
-            .iter()
-            .any(|p| matches_or_ancestor(p, rel, self.opts))
+        any_matches_or_ancestor(&self.excludes, rel, self.opts)
     }
 
     /// The `--include` patterns, as compiled.
@@ -124,26 +117,6 @@ impl Filter {
     pub fn excludes(&self) -> &[Pattern] {
         &self.excludes
     }
-}
-
-/// `pattern` matches `rel`, or matches one of `rel`'s ancestor directories.
-///
-/// The ancestor test is what makes an excluded directory cover its subtree. It
-/// walks prefixes on `/` boundaries, so `link` covers `link/x.txt` but not
-/// `linkage/x.txt`.
-fn matches_or_ancestor(pattern: &Pattern, rel: &str, opts: MatchOptions) -> bool {
-    if pattern.matches_with(rel, opts) {
-        return true;
-    }
-    let mut end = 0;
-    while let Some(i) = rel[end..].find('/') {
-        let prefix = &rel[..end + i];
-        if pattern.matches_with(prefix, opts) {
-            return true;
-        }
-        end += i + 1;
-    }
-    false
 }
 
 /// The directory `rel` sits in, or `None` when `rel` is at the root.
@@ -217,6 +190,7 @@ impl<'a> ExcludeMemo<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use girpr_filter::matches_or_ancestor;
 
     /// Compiled patterns, from `&str`s.
     fn patterns(list: &[&str]) -> Vec<Pattern> {

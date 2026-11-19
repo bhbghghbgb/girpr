@@ -68,8 +68,10 @@ pub use girpr_log;
 // [`Filter::excludes`] hand back `glob::Pattern`, so the type is part of this
 // crate's public surface, and a caller that wants to hold a compiled pattern
 // needs no dependency of its own. A caller that wants to build one rather than
-// read it reaches [`glob::Pattern::new`] here too.
-pub use glob;
+// read it reaches [`glob::Pattern::new`] here too. It comes through
+// `girpr-filter`, the single place that pins the glob version both filters
+// compile against.
+pub use girpr_filter::glob;
 
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{

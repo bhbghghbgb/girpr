@@ -1,11 +1,10 @@
 //! `--include` / `--exclude` glob filtering.
 //!
 //! **Filtered-out paths are treated as nonexistent on both sides**: skipped in
-//! walks, dropped from the plan, left untouched by the cleanup. Ported from
-//! `tools/sync/src/filter.rs` (girsync's semantics) — deliberately, because
-//! this repo already made that decision once and `girpr` has no business
-//! growing a second spelling of it. No code is shared: the crates are
-//! independent by design (`tools/sync` is a sibling tool, not a dependency).
+//! walks, dropped from the plan, left untouched by the cleanup. The matching
+//! rules are girsync's, and live in the shared `girpr-filter` crate so the two
+//! filters cannot drift. This module keeps only girpr's own policy: a
+//! `PathScope` that admits a path when an include matches and no exclude does.
 //!
 //! Matched against the `/`-separated, game-dir-rooted rel path — the same
 //! string `plan::build_plan` stores and `util::path::contained_rel` validates at
@@ -33,18 +32,15 @@
 //!   alternative; exclusion wins so a narrow `--include` can always be widened
 //!   down without reordering anything.
 
-use anyhow::{Context, Result};
-use glob::{MatchOptions, Pattern};
+use anyhow::Result;
+use girpr_filter::glob::{MatchOptions, Pattern};
+use girpr_filter::{Backslash, compile, match_options, matches_any};
 
 /// girsync's matching options, hardcoded (see the module docs).
 ///
 /// A fixed value: keeping it `const` avoids rebuilding it for every walked
 /// path in the hottest predicate.
-const MATCH_OPTIONS: MatchOptions = MatchOptions {
-    case_sensitive: false,
-    require_literal_separator: false,
-    require_literal_leading_dot: false,
-};
+const MATCH_OPTIONS: MatchOptions = match_options(false);
 
 /// The set of globs narrowing one run, compiled once at startup.
 ///
@@ -86,18 +82,10 @@ impl PathScope {
 
     /// `true` when `rel` is inside the scope. `--exclude` beats `--include`.
     pub fn is_visible(&self, rel: &str) -> bool {
-        if !self.includes.is_empty()
-            && !self
-                .includes
-                .iter()
-                .any(|p| p.matches_with(rel, MATCH_OPTIONS))
-        {
+        if !self.includes.is_empty() && !matches_any(&self.includes, rel, MATCH_OPTIONS) {
             return false;
         }
-        !self
-            .excludes
-            .iter()
-            .any(|p| p.matches_with(rel, MATCH_OPTIONS))
+        !matches_any(&self.excludes, rel, MATCH_OPTIONS)
     }
 
     /// The `--include` globs as written, for the "matched nothing" usage
@@ -128,9 +116,7 @@ fn join_patterns(patterns: &[Pattern]) -> String {
 /// is that `\` cannot escape a metacharacter, which is not a thing anyone types
 /// at a game install.
 pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>> {
-    list.iter()
-        .map(|s| Pattern::new(&s.replace('\\', "/")).with_context(|| format!("bad glob '{s}'")))
-        .collect()
+    compile(list, Backslash::Separator)
 }
 
 #[cfg(test)]

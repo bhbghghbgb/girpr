@@ -1,0 +1,20 @@
+[package]
+name = "girpr-filter"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared --include/--exclude glob-filtering rules used by girpr and girsync"
+
+[lib]
+name = "girpr_filter"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# One glob version for both filters. Re-exported so a filter (and a caller of
+# girsync's public surface) names the exact type this crate compiled.
+glob = "0.3.4"
+# Compile-time reporting of the offending user-written glob.
+anyhow = "1.0.104"

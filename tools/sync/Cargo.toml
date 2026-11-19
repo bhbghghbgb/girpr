@@ -50,7 +50,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 md-5 = "0.11.0"
 sha2 = "0.11.1"
-glob = "0.3.4"
+# The shared --include/--exclude glob rules, used by this crate and by girpr.
+# Re-exported at the crate root so callers name the same `glob::Pattern` type.
+girpr-filter = { path = "../../crates/filter" }
 rayon = "1.12.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
