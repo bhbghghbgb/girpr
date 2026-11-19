@@ -24,7 +24,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T10 | Directory walkers → `walkdir` | completed | 392d5cbb8f5242ff2074b69561d396cd8fffb0e7 | Premise stale: walkdir only in root/sync, added to gircap; fault-injection seam reshaped to pre-descent access check, child_dirs removed, 5 error tests rewritten; loop/dangling-link errors skipped to match old behavior; MANIFEST boundary + sorted order preserved |
 | T11 | Percent encoding → `percent-encoding` | completed | bfdb5122 | Literal AsciiSet plan impossible in 2.3.2 (escapes all non-ASCII); used percent_encode_byte primitive; kept minimal 5-char escape set; old decoder accepted %+A sign edge now passed through; added explicit non-ASCII pinning test |
 | T12 | Windows device-name / path-shape rule | skipped | | Share-one-rule premise already met (config calls paths::is_windows_device_name); no library predicate matches current reserved set - sanitize-filename adds COM0/LPT0 and omits CONIN$/CONOUT$, changing artifact layout |
-| T13 | girpr JSON renderer → `Serialize` | in_progress | | |
+| T13 | girpr JSON renderer → `Serialize` | pending_review | 69414ccb | Hand-written Serialize for local Record/Val; json() = serde_json::to_string with {} fallback. Intentional byte change in untested edge: backslash-only string values now escaped to \\ (control-char escaping unchanged); declaration order kept, no preserve_order |
 | T14 | girsync JSON renderer → `Serialize` | todo | | |
 | T15 | gircap JSON renderer → `Serialize` | todo | | |
 | T16 | girpr retry/backoff → `backoff` | todo | | |
@@ -76,3 +76,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
   live in build-script OUT_DIR so the bin() helper looks in the wrong place.
   Not attributable to task code; copying the executable beside the test binaries
   makes them pass. Relevant to gircap test work (report §F, tasks T23-T24).
+- JSON-renderer decision (§A1, from T13 commit 69414ccb), reuse for T14/T15:
+  hand-write Serialize per crate on its own local Record/Val with
+  serialize_map(Some(n)) + serialize_entry in THAT tool's own order; json() =
+  serde_json::to_string(self). Do NOT enable serde_json preserve_order (emission
+  order is preserved regardless of workspace feature unification). Each tool
+  keeps its own field order (girpr: event-first then declaration; gircap:
+  Str|Int|Bool event-first; girsync: alphabetical) - do not copy a sibling's.
