@@ -552,11 +552,11 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `HypClient::new_with_bases` in `src/hyp.rs`).
 - **One scratch-directory policy, three projects.** A test that needs a tree of
   its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,
-  `gircap` and `girsync` alike. The name carries the pid, a timestamp and a
-  per-process counter, so two runs — or two `cargo nextest run` invocations —
-  never share a tree, and the guard removes the tree when the test ends
-  however it ends. One policy, one implementation, shared by all three
-  projects.
+  `gircap` and `girsync` alike. Each tree gets a fresh random name (with a
+  readable prefix and tag), so two runs — or two `cargo nextest run`
+  invocations — never share a tree, and the guard removes the tree when the
+  test ends however it ends. One policy, one implementation, shared by all
+  three projects.
   Every one of those trees lives under **one** directory in the system temp
   directory: `<temp>/girpr-test/`. So a directory left behind by a killed run
   is recognisable as this project's — "whose leftover is this?" has an answer —

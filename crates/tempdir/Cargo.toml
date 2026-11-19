@@ -13,6 +13,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# Random names and best-effort cleanup for the scratch trees this crate hands
+# out. tempfile owns the created directories; this crate stays a thin policy
+# wrapper around the shared root and the recognizable name prefix.
+tempfile = "3.27.0"
 # Shared test fixtures (the `test_support` module) build the option types the
 # dev tools' tests hand to girsync. This is a test-support surface only: the
 # crate itself is a dev-dependency of every project that uses it, so nothing
