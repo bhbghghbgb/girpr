@@ -36,7 +36,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T22 | Status error + URL join → `reqwest` | completed | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
 | T23 | gircap HTTP mock servers | completed | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
 | T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
-| T25 | Hardlink identity → `same-file` | todo | | |
+| T25 | Hardlink identity → `same-file` | in_progress | | |
 | T26 | girsync gate/concurrency simplification | todo | | |
 | T27 | Cache wire codec → `postcard`/`bincode` | todo | | |
 | T28 | `cache/open.rs` publish protocol restructure | todo | | |
