@@ -66,6 +66,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | I | T31, T33, T34 (T32, T35 skipped) | done | T31/T33 completed; T34 completed after fix a992600e restoring atomic --force overwrite; 4 follow-ups recorded |
 | PLAN | Follow-up planning review | done | 48 reviewed: 44 dropped, F04 already done, 3 kept in batches FB1 (F08,F28) and FB2 (F46); all KEEP items test-only |
 | FB1 | F08, F28 | done | Both done at 4ca326a3; no fixes; production untouched, 3 non-blocking suggestions recorded |
+| FB2 | F46 | done | Done at 17b075e1; independent pre-fix verification confirms test is a valid guard; 3 non-blocking suggestions recorded |
 
 ## Follow-ups
 
@@ -116,12 +117,15 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F43 | Note widened (not narrowed) leniency for indented header-like lines with = | dropped | Batch H; malformed line never produced by config_ini  Dropped at Phase 3 planning: documentation note; malformed line never produced by config_ini |
 | F44 | Check in compact golden corpus from the 33k-input differential check | dropped | Batch H; curated tests already pin the relevant shapes  Dropped at Phase 3 planning: extra-assurance golden corpus; curated tests already pin the shapes |
 | F45 | Pin T31 panic-path fail-fast window (total_files > jobs, mid-plan panic) | dropped | Batch I; panic still counted and in-flight tasks drained  Dropped at Phase 3 planning: extra assurance; panic still counted and in-flight tasks drained |
-| F46 | Regression test that induced persist failure under --force leaves previous cache intact | batched | Batch I; fixed path is single atomic rename  Batched into FB2 at Phase 3 planning |
+| F46 | Regression test that induced persist failure under --force leaves previous cache intact | done | FB2 commit 17b075e1; independently verified to FAIL on pre-fix 5547555c and pass now; test-only |
 | F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | dropped | Batch I; fragment tests pass, guards thiserror upgrades  Dropped at Phase 3 planning: extra assurance; fragment tests pass, low-probability upgrade guard |
 | F48 | Document/cover whole-run cancellation for T31 detach-on-drop | dropped | Batch I; driver always awaited, runtime drop aborts tasks  Dropped at Phase 3 planning: documentation note; driver always awaited, runtime drop aborts tasks |
 | F49 | Test that drives F28's new fail-fast branch (extra request -> immediate EOF under short timeout) | open | FB1 review; no existing test exercises the added branch |
 | F50 | Give F28 post-exhaustion accept loop a deadline/nonblocking close to avoid detached thread + bound port | open | FB1 review; harmless today, resource hygiene |
 | F51 | Shared skip-reporting mechanism for F08's eprintln! self-skip so CI visibility is clearer | open | FB1 review; visibility only |
+| F52 | Use production claim_temp_sibling in F46 regression test instead of duplicating temp-naming convention | open | FB2 review; prevents drift if naming changes |
+| F53 | Drop the tautological !temp_path.exists() assertion in F46 test | open | FB2 review; load-bearing assertions are dst.is_file + byte read |
+| F54 | Optional end-to-end force=true sled_to_redb final-persist failure coverage | open | FB2 review; extra assurance beyond replace_destination seam |
 
 ## Persistent context
 
