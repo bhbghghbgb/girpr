@@ -56,11 +56,11 @@
 //! Files run in parallel, bounded to `jobs` in flight; chunks inside a file
 //! are strictly sequential.
 //!
-//! The bound is a `JoinSet` owned by the driver. Dropping that driver — a
-//! cancelled run, or the future itself being dropped — drops the set and
-//! **aborts every file task still in flight**. That is the one observable
-//! difference from the old semaphore shape, where dropping the handles
-//! detached the tasks and let them finish on their own.
+//! The bound is a `buffer_unordered` over spawned file tasks, owned by the
+//! driver, as in the scan/check/manifest phases. Dropping that driver drops
+//! the `JoinHandle`s, which **detaches any file task still in flight** and
+//! lets it finish on its own. `repair_all` is always awaited to completion
+//! here, so in practice no task is left in flight at drop.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -69,7 +69,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
-use tokio::task::JoinSet;
+use futures_util::StreamExt;
 use tracing::Instrument;
 
 use crate::config::RepairMode;
@@ -380,7 +380,7 @@ fn arm_file_panic_gate() -> tokio::sync::oneshot::Receiver<()> {
     rx
 }
 
-/// Start and join the file tasks, keeping at most `jobs` of them alive.
+/// Spawn and join the file tasks, keeping at most `jobs` of them alive.
 ///
 /// `spawn` is called with a file index only when the in-flight window has
 /// room, so a plan of 100k files does not allocate 100k tasks and
@@ -400,28 +400,37 @@ where
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let limit = jobs.max(1);
-    let mut set = JoinSet::new();
+    // `buffer_unordered` owns the bounded window: it pulls a new `spawn`'d
+    // task only when a slot frees up, so a large plan never allocates a task
+    // per file up front. The iterator keeps the `--fail-fast` rule — once a
+    // file has failed, no further file is started; the unstarted ones are
+    // simply not counted (`done < total` in `PROGRESS`, `failed > 0` in
+    // `SUMMARY`). Tasks already in flight are drained in completion order.
     let mut next = 0;
-    let mut starting = true;
-    loop {
-        // `--fail-fast`: once a file has exhausted its retries, no further file
-        // is started. The unstarted ones are simply not counted — the caller
-        // sees `done < total` in `PROGRESS` and `failed > 0` in `SUMMARY`.
-        while starting && set.len() < limit && next < total_files {
-            if summary.aborted() {
+    let mut warned = false;
+    let indices = std::iter::from_fn(|| {
+        if summary.aborted() {
+            if !warned && next < total_files {
+                warned = true;
                 tracing::warn!(
                     remaining = total_files - next,
                     "fail-fast: not starting the remaining files"
                 );
-                starting = false;
-                break;
             }
-            set.spawn(spawn(next));
-            next += 1;
+            return None;
         }
-        let Some(result) = set.join_next().await else {
-            return;
-        };
+        if next >= total_files {
+            return None;
+        }
+        let idx = next;
+        next += 1;
+        Some(idx)
+    });
+    let mut tasks = futures_util::stream::iter(indices)
+        .map(|idx| tokio::spawn(spawn(idx)))
+        .buffer_unordered(limit);
+
+    while let Some(result) = tasks.next().await {
         if let Err(e) = result {
             summary.files_failed.fetch_add(1, Ordering::Relaxed);
             tracing::error!(error = %e, "repair task failed");
