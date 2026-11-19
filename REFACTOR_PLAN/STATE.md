@@ -32,7 +32,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T18 | girsync path canonicalization → `dunce` | pending_review | 97bb62dd | Scope broadened to all canonicalize sites in tools/sync (no std/dunce mixing); 3 strippers removed; UNC test body retargeted to absolute_alias; DIRECT_QUESTIONS seam updated; I.1 validated - girpr/T19 untouched; paths render without \\\\?\\ |
 | T19 | girpr `resolve_existing_prefix` validation | skipped | | No library method preserves symlink-escape detection + fail-closed behavior; path-absolutize methods are purely lexical and its canonicalize() does not exist; §I.1 open assumption confirmed |
 | T20 | Glob filtering → `globset` / shared crate | pending_review | aaa7659a | Chose shared leaf crate girpr-filter (semantics-preserving); globset rejected due to dotfile/**/backslash/case-mode drift risk; both filters delegate but keep their own policies; girsync::glob::Pattern public type unchanged, public_surface test passes |
-| T21 | Atomic publish helpers → library | todo | | |
+| T21 | Atomic publish helpers → library | in_progress | | |
 | T22 | Status error + URL join → `reqwest` | todo | | |
 | T23 | gircap HTTP mock servers | todo | | |
 | T24 | girpr canned HTTP reply server | todo | | |
