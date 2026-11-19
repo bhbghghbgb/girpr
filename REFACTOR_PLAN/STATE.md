@@ -24,9 +24,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T10 | Directory walkers → `walkdir` | completed | 392d5cbb8f5242ff2074b69561d396cd8fffb0e7 | Premise stale: walkdir only in root/sync, added to gircap; fault-injection seam reshaped to pre-descent access check, child_dirs removed, 5 error tests rewritten; loop/dangling-link errors skipped to match old behavior; MANIFEST boundary + sorted order preserved |
 | T11 | Percent encoding → `percent-encoding` | completed | bfdb5122 | Literal AsciiSet plan impossible in 2.3.2 (escapes all non-ASCII); used percent_encode_byte primitive; kept minimal 5-char escape set; old decoder accepted %+A sign edge now passed through; added explicit non-ASCII pinning test |
 | T12 | Windows device-name / path-shape rule | skipped | | Share-one-rule premise already met (config calls paths::is_windows_device_name); no library predicate matches current reserved set - sanitize-filename adds COM0/LPT0 and omits CONIN$/CONOUT$, changing artifact layout |
-| T13 | girpr JSON renderer → `Serialize` | pending_review | 69414ccb | Hand-written Serialize for local Record/Val; json() = serde_json::to_string with {} fallback. Intentional byte change in untested edge: backslash-only string values now escaped to \\ (control-char escaping unchanged); declaration order kept, no preserve_order |
-| T14 | girsync JSON renderer → `Serialize` | pending_review | 8607fac2 | Kept alphabetical key order (event in sorted slot) - pinned by byte-level oracle; stale pointer: hand-rolled renderer was write_json, json() is public -> Value, so routed through to_value; no byte changes; no preserve_order |
-| T15 | gircap JSON renderer → `Serialize` | pending_review | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
+| T13 | girpr JSON renderer → `Serialize` | completed | 69414ccb, 9177fde1 | Hand-written Serialize for local Record/Val; json() = serde_json::to_string with {} fallback. Intentional byte change in untested edge: backslash-only string values now escaped to \\ (control-char escaping unchanged); declaration order kept, no preserve_order |
+| T14 | girsync JSON renderer → `Serialize` | completed | 8607fac2 | Kept alphabetical key order (event in sorted slot) - pinned by byte-level oracle; stale pointer: hand-rolled renderer was write_json, json() is public -> Value, so routed through to_value; no byte changes; no preserve_order |
+| T15 | gircap JSON renderer → `Serialize` | completed | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
 | T16 | girpr retry/backoff → `backoff` | todo | | |
 | T17 | gircap retry/backoff → `ExponentialBackoff` | todo | | |
 | T18 | girsync path canonicalization → `dunce` | todo | | |
@@ -54,7 +54,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01, T02, T03, T06 (T04, T05 skipped) | done | All four completed; no fixes/reverts; 4 follow-ups recorded |
 | B | T07, T08, T09, T10, T11 (T12 skipped) | done | All five completed; lockfile fix 4636a691; 5 follow-ups recorded |
-| C | T13, T14, T15 | pending | |
+| C | T13, T14, T15 | done | All three completed; cross-tool consistency PASS; fix 9177fde1 pins backslash escaping; 2 follow-ups recorded |
 
 ## Follow-ups
 
@@ -69,6 +69,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F07 | Pin the strict percent-decoder %+A pass-through with a regression test | open | T11; encoder never emits a plus escape |
 | F08 | Restore real WalkDir directory-read failure coverage in walk tests | open | T10; production path covered indirectly by passing tests |
 | F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | open | T09; affects only rare RUST_LOG naming redb |
+| F10 | Document/test one shared escaping-consistency invariant across the three JSON renderers | open | Batch C; each crate already pins its own bytes |
+| F11 | Reconsider silent {} / empty-Value serialization fallbacks in the three renderers | open | Batch C; fallback unreachable for current primitive fields |
 
 ## Persistent context
 
