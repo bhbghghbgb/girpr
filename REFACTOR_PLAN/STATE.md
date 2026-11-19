@@ -42,10 +42,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T28 | `cache/open.rs` publish protocol restructure | completed | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
 | T29 | girpr INI parse/merge/render | skipped | | Byte-level config.ini contract matters; configparser/ini regress comment/dup-section/case-key/headerless/quote/sort/blank-line parity; parser-only saves no net LOC. Keep hand-rolled core. §I.2 validated |
 | T30 | gircap `parse_game_version` | completed | ce97c9a6 | Used ini_core streaming parser (not configparser/ini, which are last-wins and would break first-match); thin adapter keeps lenient [General] header tolerance; byte-exact config_ini renderer untouched; first-match-in-[General] pinned + 33k-input differential check 0 mismatches |
-| T31 | `JoinSet` window → `buffer_unordered` | pending_review | e1da9861 | JoinSet window replaced with buffer_unordered over tokio::spawn handles (keeps parallelism + JoinError panic capture); from_fn iterator preserves fail-fast no-new-file rule; accepted detach-on-drop (driver always awaited to completion, runtime drop aborts anyway); no futures-concurrency needed |
+| T31 | `JoinSet` window → `buffer_unordered` | completed | e1da9861 | JoinSet window replaced with buffer_unordered over tokio::spawn handles (keeps parallelism + JoinError panic capture); from_fn iterator preserves fail-fast no-new-file rule; accepted detach-on-drop (driver always awaited to completion, runtime drop aborts anyway); no futures-concurrency needed |
 | T32 | Chunk-range tiling → interval crate | skipped | | Weakest crate case confirmed: measured rangemap rewrite +30/-15 net +15 lines; overlaps need chunk-offset identity crates discard; i64 validation un delegatable; is_tiled fast path must stay allocation-free; §I.5 |
-| T33 | Error `Display` impls → `thiserror` | pending_review | 69384691 | Derived thiserror::Error for ApiError/UsageError/Failure with verbatim format strings; exit_code/url/summary kept hand-written; messages byte-identical; Failure gains std::error::Error impl (additive, required by task) |
-| T34 | sled2redb temp claim → `NamedTempFile` | pending_review | 5547555c | Replaced stat-then-create_new loop with NamedTempFile + persist_noclobber; lock sidecar removed before persist; cleanup_temp shrank; DEVIATION: --force file overwrite now explicitly removes dst before rename (brief no-dst window, not single atomic rename) for stronger no-clobber; docs rewritten; dropped unused girpr-log dep |
+| T33 | Error `Display` impls → `thiserror` | completed | 69384691 | Derived thiserror::Error for ApiError/UsageError/Failure with verbatim format strings; exit_code/url/summary kept hand-written; messages byte-identical; Failure gains std::error::Error impl (additive, required by task) |
+| T34 | sled2redb temp claim → `NamedTempFile` | completed | 5547555c, a992600e | Replaced stat-then-create_new loop with NamedTempFile + persist_noclobber; lock sidecar removed before persist; cleanup_temp shrank; DEVIATION: --force file overwrite now explicitly removes dst before rename (brief no-dst window, not single atomic rename) for stronger no-clobber; docs rewritten; dropped unused girpr-log dep |
 | T35 | `IntOrStr` → `serde_with` (optional) | skipped | | Premise holds in production but five tests pin the write variant (byte-stable re-serialization); PickFirst would break them; keep hand-rolled type; §F9 |
 
 ## Reviews
@@ -63,7 +63,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
 | solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
 | H | T30 (T29 skipped) | done | Completed; no fixes; byte-exact renderer untouched, first-match-in-[General] preserved; 3 follow-ups recorded |
-| I | T31, T33, T34 (T32, T35 skipped) | pending | |
+| I | T31, T33, T34 (T32, T35 skipped) | done | T31/T33 completed; T34 completed after fix a992600e restoring atomic --force overwrite; 4 follow-ups recorded |
 
 ## Follow-ups
 
@@ -113,6 +113,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F42 | Document incidental #-line tolerance in ini_core version reader | open | Batch H; # lines ignored as non-matching keys, behavior identical |
 | F43 | Note widened (not narrowed) leniency for indented header-like lines with = | open | Batch H; malformed line never produced by config_ini |
 | F44 | Check in compact golden corpus from the 33k-input differential check | open | Batch H; curated tests already pin the relevant shapes |
+| F45 | Pin T31 panic-path fail-fast window (total_files > jobs, mid-plan panic) | open | Batch I; panic still counted and in-flight tasks drained |
+| F46 | Regression test that induced persist failure under --force leaves previous cache intact | open | Batch I; fixed path is single atomic rename |
+| F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | open | Batch I; fragment tests pass, guards thiserror upgrades |
+| F48 | Document/cover whole-run cancellation for T31 detach-on-drop | open | Batch I; driver always awaited, runtime drop aborts tasks |
 
 ## Persistent context
 
