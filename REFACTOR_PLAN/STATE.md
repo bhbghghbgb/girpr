@@ -34,7 +34,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T20 | Glob filtering → `globset` / shared crate | completed | aaa7659a | Chose shared leaf crate girpr-filter (semantics-preserving); globset rejected due to dotfile/**/backslash/case-mode drift risk; both filters delegate but keep their own policies; girsync::glob::Pattern public type unchanged, public_surface test passes |
 | T21 | Atomic publish helpers → library | completed | 8e3ee9be | NamedTempFile::persist for write_atomic + pure copy_publish_with; lexical guards/create_dir_all/durable decision kept; promote_tmp + audio cache move untouched; temp_sibling kept behind cfg(test) as legacy fixture; sync-counting seam test replaced with observable behavior |
 | T22 | Status error + URL join → `reqwest` | completed | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
-| T23 | gircap HTTP mock servers | in_progress | | |
+| T23 | gircap HTTP mock servers | pending_review | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
 | T24 | girpr canned HTTP reply server | todo | | |
 | T25 | Hardlink identity → `same-file` | todo | | |
 | T26 | girsync gate/concurrency simplification | todo | | |
