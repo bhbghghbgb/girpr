@@ -6,6 +6,7 @@
 
 use std::fmt::Write as _;
 
+use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Map, Value};
 
 use super::{OutputFormat, Report};
@@ -139,18 +140,6 @@ impl Record {
         }
     }
 
-    /// Append the JSON `event` name as a quoted string.
-    ///
-    /// The same fold the text form uses — the label's, ASCII case only — with
-    /// the JSON quoting on top.
-    fn push_json_event(&self, out: &mut String) {
-        out.push('"');
-        for c in self.label.chars() {
-            push_json_char(out, c.to_ascii_lowercase());
-        }
-        out.push('"');
-    }
-
     /// The fields, in report order, without the `event` name.
     pub fn fields(&self) -> &[(&'static str, Value)] {
         &self.fields
@@ -162,40 +151,24 @@ impl Record {
     /// contract — it is the order the plan applies in — while the keys within one
     /// object are names, and a JSON consumer must not depend on where they land.
     pub fn json(&self) -> Value {
-        let mut m = Map::new();
-        m.insert("event".into(), Value::String(self.event()));
-        for (k, v) in &self.fields {
-            m.insert((*k).to_string(), v.clone());
-        }
-        Value::Object(m)
+        // The `Serialize` impl is the single definition of the object's shape
+        // and key order. Building the `Value` through it (rather than inserting
+        // into a `Map` here) keeps this form and the text-line writer from
+        // drifting apart. Serialising this type is infallible; the fallback only
+        // keeps the signature panic-free.
+        serde_json::to_value(self).unwrap_or_else(|_| Value::Object(Map::new()))
     }
 
     /// Write the JSON object for this record into `out`, with no trailing
     /// newline.
     ///
     /// Keys are sorted alphabetically, `event` among them, so the bytes match
-    /// the object [`Record::json`] builds. Values are written straight into
-    /// `out` instead of being cloned into a map first.
+    /// the object [`Record::json`] builds. Both forms go through the one
+    /// [`Serialize`] impl; no sorting or escaping is done here.
     pub fn write_json(&self, out: &mut String) {
-        // A record has a handful of fields, so sorting a small vector of
-        // borrows beats anything that allocates per key.
-        let mut fields: Vec<(&str, &Value)> = self.fields.iter().map(|(k, v)| (*k, v)).collect();
-        fields.sort_unstable_by_key(|(k, _)| *k);
-        let event_at = fields.partition_point(|(k, _)| *k < "event");
-
-        out.push('{');
-        let mut first = true;
-        for (k, v) in &fields[..event_at] {
-            push_json_member(out, &mut first, k);
-            push_json_value(out, v);
-        }
-        push_json_member(out, &mut first, "event");
-        self.push_json_event(out);
-        for (k, v) in &fields[event_at..] {
-            push_json_member(out, &mut first, k);
-            push_json_value(out, v);
-        }
-        out.push('}');
+        // Serialising this type is infallible; the fallback only keeps the
+        // method panic-free, as the old hand-rolled writer was.
+        out.push_str(&serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string()));
     }
 
     /// The JSON object for this record's fields alone, as compact JSON — the
@@ -263,6 +236,33 @@ impl Record {
     }
 }
 
+impl Serialize for Record {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Emit girsync's alphabetical key order, with `event` in its sorted
+        // place, so the bytes match what the old writer and the `Map`-backed
+        // object form produced. `serialize_entry` yields entries in exactly
+        // this order; the `preserve_order` feature is deliberately NOT enabled
+        // because emission order is preserved by `serialize_map` regardless of
+        // how the workspace unifies that feature.
+        let mut fields: Vec<(&str, &Value)> = self.fields.iter().map(|(k, v)| (*k, v)).collect();
+        fields.sort_unstable_by_key(|(k, _)| *k);
+        let event_at = fields.partition_point(|(k, _)| *k < "event");
+
+        let mut map = serializer.serialize_map(Some(1 + fields.len()))?;
+        for (k, v) in &fields[..event_at] {
+            map.serialize_entry(k, v)?;
+        }
+        map.serialize_entry("event", &self.label.to_ascii_lowercase())?;
+        for (k, v) in &fields[event_at..] {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+
 /// Append a value as it appears inside a text line: bare, never quoted, arrays
 /// joined with `,` inside `[]`.
 fn push_bare(out: &mut String, v: &Value) {
@@ -281,56 +281,6 @@ fn push_bare(out: &mut String, v: &Value) {
         other => {
             let _ = write!(out, "{other}");
         }
-    }
-}
-
-/// Append one `"key":` member prefix, with a separating comma when it is not
-/// the first.
-fn push_json_member(out: &mut String, first: &mut bool, key: &str) {
-    if !*first {
-        out.push(',');
-    }
-    *first = false;
-    push_json_string(out, key);
-    out.push(':');
-}
-
-/// Append a value as JSON.
-fn push_json_value(out: &mut String, v: &Value) {
-    match v {
-        Value::String(s) => push_json_string(out, s),
-        // Numbers, booleans, null and nested containers are already rendered
-        // exactly this way by the value's own formatter.
-        other => {
-            let _ = write!(out, "{other}");
-        }
-    }
-}
-
-/// Append `value` as a quoted JSON string, escaped the way `serde_json`
-/// escapes it.
-fn push_json_string(out: &mut String, value: &str) {
-    out.push('"');
-    for c in value.chars() {
-        push_json_char(out, c);
-    }
-    out.push('"');
-}
-
-/// Append one character of a JSON string, escaped if it needs to be.
-fn push_json_char(out: &mut String, c: char) {
-    match c {
-        '"' => out.push_str("\\\""),
-        '\\' => out.push_str("\\\\"),
-        '\u{08}' => out.push_str("\\b"),
-        '\u{0c}' => out.push_str("\\f"),
-        '\n' => out.push_str("\\n"),
-        '\r' => out.push_str("\\r"),
-        '\t' => out.push_str("\\t"),
-        c if c < ' ' => {
-            let _ = write!(out, "\\u{:04x}", u32::from(c));
-        }
-        c => out.push(c),
     }
 }
 
