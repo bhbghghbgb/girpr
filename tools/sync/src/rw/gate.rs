@@ -1,80 +1,63 @@
-//! [`RwLimiter`] and the counting gate behind it.
+//! [`RwLimiter`] and the semaphores behind it.
 //!
-//! One gate under [`RwLimits::Shared`], two under [`RwLimits::Split`]. This is
+//! One semaphore under [`RwLimits::Shared`], two under [`RwLimits::Split`]. This is
 //! where the deadlock-freedom argument in the module docs is actually enforced —
 //! the ordering inside [`RwLimiter::acquire_copy`] is the invariant.
 
-use std::sync::{Condvar, Mutex};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::RwLimits;
 use super::limits::RwSide;
 
-/// A counting gate: at most `limit` holders at once, released on drop.
+/// A counting permit pool: at most `limit` holders at once, released on drop.
 ///
-/// `Mutex<usize> + Condvar` rather than `std::sync::Semaphore`, which is still
-/// unstable. The critical section holds no user code and no other lock, so it is a
-/// leaf in the same sense the copy phase's emit mutex is.
+/// Backed by [`tokio::sync::Semaphore`] rather than a hand-rolled
+/// `Mutex<usize> + Condvar`: `std::sync::Semaphore` is still unstable, and tokio's
+/// is the maintained, fair implementation of exactly this primitive. This crate
+/// has no async runtime, so every acquire uses the blocking form; a permit is
+/// returned to the semaphore when its [`SemaphorePermit`] is dropped, including
+/// during unwinding.
 struct Gate {
-    in_flight: Mutex<usize>,
-    freed: Condvar,
+    sem: Semaphore,
     limit: usize,
 }
 
 impl Gate {
     fn new(limit: usize) -> Self {
+        let limit = limit.max(1);
         Self {
-            in_flight: Mutex::new(0),
-            freed: Condvar::new(),
-            limit: limit.max(1),
+            sem: Semaphore::new(limit),
+            limit,
         }
     }
 
-    fn acquire(&self) {
-        let mut n = self.lock();
-        while *n >= self.limit {
-            // The critical section holds no user code, so a poisoned guard still
-            // contains a valid count; recover it rather than fail the run.
-            n = self.freed.wait(n).unwrap_or_else(|e| e.into_inner());
-        }
-        *n += 1;
+    fn acquire(&self) -> SemaphorePermit<'_> {
+        // No tokio runtime exists in this crate, so `blocking_acquire` cannot
+        // panic for being in an async context. The only other error is a closed
+        // semaphore, and these are never closed.
+        self.sem
+            .blocking_acquire()
+            .expect("an rw semaphore is never closed")
     }
 
-    fn try_acquire(&self) -> bool {
-        let mut n = self.lock();
-        if *n >= self.limit {
-            return false;
-        }
-        *n += 1;
-        true
-    }
-
-    fn release(&self) {
-        {
-            let mut n = self.lock();
-            *n = n.saturating_sub(1);
-        }
-        // `notify_all`, not `notify_one`: a woken thread may be a copy that
-        // already holds src and now needs dst, so the single wakeup it was given
-        // would have to be spent waiting again. Waking everyone costs one pass
-        // over the waiters and removes the whole failure mode.
-        self.freed.notify_all();
+    fn try_acquire(&self) -> Option<SemaphorePermit<'_>> {
+        // Non-blocking, so a limit can be *asserted*: the answer `false` must be
+        // available without waiting for a blocking acquire to return.
+        self.sem.try_acquire().ok()
     }
 
     fn in_flight(&self) -> usize {
-        *self.lock()
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
-        // The counter is the whole critical section: no user code can run while
-        // it is held, so a poisoned guard is still a valid count.
-        self.in_flight.lock().unwrap_or_else(|e| e.into_inner())
+        // Permits are only ever taken by `acquire`/`try_acquire` and given back by
+        // `SemaphorePermit::drop`; none are added or forgotten, so the outstanding
+        // count is exactly the difference between the pool size and what is free.
+        self.limit - self.sem.available_permits()
     }
 }
 
 /// The counters a [`RwRuntime`](super::RwRuntime) runs on.
 ///
-/// One gate under [`RwLimits::Shared`] and two under [`RwLimits::Split`]; all three
-/// exist at once because the shared counter's limit is then read by nobody, and a
+/// One semaphore under [`RwLimits::Shared`] and two under [`RwLimits::Split`]; all
+/// three exist at once because the shared counter's limit is then read by nobody, and a
 /// struct whose shape changes with the mode would have to be rebuilt per run for
 /// no reason.
 pub struct RwLimiter {
@@ -102,8 +85,8 @@ impl RwLimiter {
         self.limits
     }
 
-    /// The gate a single-sided operation draws on. Under [`RwLimits::Shared`] both
-    /// sides draw on the one counter, which is what "shared" means.
+    /// The semaphore a single-sided operation draws on. Under [`RwLimits::Shared`]
+    /// both sides draw on the one counter, which is what "shared" means.
     fn gate_for(&self, side: RwSide) -> &Gate {
         match self.limits {
             RwLimits::Shared(_) => &self.shared,
@@ -117,9 +100,8 @@ impl RwLimiter {
     /// One permit for one side's read or write.
     pub fn acquire(&self, side: RwSide) -> RwPermit<'_> {
         let gate = self.gate_for(side);
-        gate.acquire();
         RwPermit {
-            held: [Some(gate), None],
+            held: [Some(gate.acquire()), None],
         }
     }
 
@@ -136,10 +118,13 @@ impl RwLimiter {
             RwLimits::Shared(_) => self.acquire(RwSide::Src),
             RwLimits::Split { .. } => {
                 let (src, dst) = (self.gate_for(RwSide::Src), self.gate_for(RwSide::Dst));
-                src.acquire();
-                dst.acquire();
+                // src first, then dst: see the invariant above. Holding src while
+                // waiting for dst is safe precisely because a dst holder never
+                // waits for another permit.
+                let src_permit = src.acquire();
+                let dst_permit = dst.acquire();
                 RwPermit {
-                    held: [Some(src), Some(dst)],
+                    held: [Some(src_permit), Some(dst_permit)],
                 }
             }
         }
@@ -150,16 +135,9 @@ impl RwLimiter {
     /// `false` without arranging for the blocking form to return.
     pub fn try_acquire(&self, side: RwSide) -> Option<RwPermit<'_>> {
         let gate = self.gate_for(side);
-        // `then_some` would build the permit *before* knowing whether it was
-        // earned, and dropping that unearned value would release a permit nobody
-        // took — so the branch is spelled out rather than closed.
-        if gate.try_acquire() {
-            Some(RwPermit {
-                held: [Some(gate), None],
-            })
-        } else {
-            None
-        }
+        gate.try_acquire().map(|permit| RwPermit {
+            held: [Some(permit), None],
+        })
     }
 
     /// Permits held on one side right now. Diagnostics and tests only: a run has no
@@ -175,16 +153,20 @@ impl RwLimiter {
 /// The drop is what makes the gate correct under an early `?`: every caller in this
 /// crate returns from inside a scope that owns the permit, so a hash that fails,
 /// a copy that fails to verify and a worker that panics all give the permit back
-/// on the way out. Nothing has to remember to release it.
+/// on the way out. Nothing has to remember to release it. [`SemaphorePermit`]
+/// performs the release, including while unwinding.
 pub struct RwPermit<'a> {
-    /// At most two gates. Order is acquisition order; drop walks it backwards.
-    held: [Option<&'a Gate>; 2],
+    /// At most two permits. Order is acquisition order; drop walks it backwards.
+    held: [Option<SemaphorePermit<'a>>; 2],
 }
 
 impl Drop for RwPermit<'_> {
     fn drop(&mut self) {
-        for gate in self.held.iter().rev().flatten() {
-            gate.release();
+        // dst before src, mirroring `acquire_copy`. Releases never block, so this
+        // is not itself a deadlock requirement — but keeping the reverse order
+        // means the teardown is the exact mirror of the setup it undoes.
+        for permit in self.held.iter_mut().rev() {
+            drop(permit.take());
         }
     }
 }

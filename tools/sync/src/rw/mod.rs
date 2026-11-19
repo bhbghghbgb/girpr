@@ -1,8 +1,8 @@
 //! Side-independent read/write concurrency limits.
 //!
-//! One gate, applied everywhere, with a per-side variant. The gate governs **file
-//! content reads and writes**, which is why the flag family is called *rw* and not
-//! *io*:
+//! One limiter, applied everywhere, with a per-side variant. The limiter governs
+//! **file content reads and writes**, which is why the flag family is called *rw*
+//! and not *io*:
 //!
 //! - **gated** — phase C's `hash_file`, and everything `copy_one` does between
 //!   opening src and returning its record (the stream copy, which digests src as
@@ -60,7 +60,7 @@
 //! | module | what it owns |
 //! | --- | --- |
 //! | `limits` | [`RwLimits`] and [`RwSide`]: **the shape** the flags resolve to |
-//! | `gate` | [`RwLimiter`], [`RwPermit`] and the counting gate: **the counters** |
+//! | `gate` | [`RwLimiter`], [`RwPermit`] and the semaphores behind them: **the counters** |
 //! | this file | [`RwRuntime`]: the limits, the counters and the worker pool, as one run's resource |
 
 mod gate;

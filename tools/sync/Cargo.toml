@@ -58,6 +58,10 @@ sha2 = "0.11.1"
 # Re-exported at the crate root so callers name the same `glob::Pattern` type.
 girpr-filter = { path = "../../crates/filter" }
 rayon = "1.12.0"
+# The rw counters use tokio's semaphore: std::sync::Semaphore is still unstable,
+# and this is a maintained, fair primitive. Only the `sync` feature is needed —
+# there is no async runtime here, every acquire uses the blocking form.
+tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2.5"
