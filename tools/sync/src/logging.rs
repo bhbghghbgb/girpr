@@ -171,9 +171,9 @@ where
         .with_writer(console_writer)
         .with_ansi(true)
         .with_target(true)
-        .with_filter(girpr_log::filter(
-            &console_filter(plan),
-            &console_fallback(plan),
+        .with_filter(girpr_log::console_filter(
+            plan.rust_log_directives(),
+            &["redb=warn", &plan.own_console_directive()],
         ));
 
     // The file is opened append-only, so two runs against one path do not
@@ -212,34 +212,6 @@ where
             .with(file_layer),
         worker,
     )
-}
-
-/// The console's filter spec: `redb=warn`, then `RUST_LOG`, then this
-/// project's own directive.
-///
-/// The shared policy keeps third-party crates off the console, and `redb` is
-/// the one exception: it is this tool's cache, and a cache that complains is
-/// worth saying out loud.
-///
-/// The order matters, because `EnvFilter` gives the most specific matching
-/// directive the last word, and a tie on the same target to the *last* one:
-/// this project's own directive is last, so `--log-level` decides it; `RUST_LOG`
-/// sits in front of it, so it adds visibility for other crates without being
-/// able to take the project's own away.
-fn console_filter(plan: &girpr_log::LogPlan) -> String {
-    let own = plan.own_console_directive();
-    match plan.rust_log_directives() {
-        Some(spec) => format!("redb=warn,{spec},{own}"),
-        None => format!("redb=warn,{own}"),
-    }
-}
-
-/// The filter to fall back to when the console's spec does not parse.
-///
-/// The same spec, without the environment's contribution: a broken `RUST_LOG`
-/// must not be able to widen the console past what the flag asked for.
-fn console_fallback(plan: &girpr_log::LogPlan) -> String {
-    format!("redb=warn,{}", plan.own_console_directive())
 }
 
 /// Open the log file for appending, creating the parent directory if needed.

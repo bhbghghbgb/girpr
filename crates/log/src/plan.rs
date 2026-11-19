@@ -94,6 +94,8 @@
 
 use std::path::{Path, PathBuf};
 
+use tracing_subscriber::EnvFilter;
+
 use crate::level::Level;
 
 /// What the command line asked for, before the environment is consulted.
@@ -222,22 +224,20 @@ impl LogPlan {
         }
     }
 
-    /// The `tracing` filter spec for the **console** sink.
+    /// The `tracing` filter for the **console** sink.
     ///
-    /// This project's own directive — `girpr=info` — with `RUST_LOG`'s
-    /// directives in front of it. See the module docs for why the order is
-    /// that way round: the project's directive is last because a tie on the
-    /// same target goes to the last directive, and `--log-level` is what the
-    /// person running the tool typed.
+    /// `RUST_LOG`'s directives, then this project's own directive —
+    /// `girpr=info` — appended last. See the module docs for why the order is
+    /// that way round: a tie on the same target goes to the last directive,
+    /// and `--log-level` is what the person running the tool typed. The filter
+    /// is built from directives rather than a joined spec, so there is no
+    /// intermediate `"{RUST_LOG},{project}={level}"` string to parse.
     ///
     /// The project scoping is what keeps third-party crates quiet: a filter
     /// that names no target applies to every target there is, and `reqwest`'s
     /// idea of `info` is not this program's idea of `info`.
-    pub fn console_filter(&self) -> String {
-        match self.rust_log_directives() {
-            Some(spec) => format!("{spec},{}", self.own_console_directive()),
-            None => self.own_console_directive(),
-        }
+    pub fn console_filter(&self) -> EnvFilter {
+        crate::filter::console_filter(self.rust_log_directives(), &[&self.own_console_directive()])
     }
 
     /// This project's own console directive: `girpr=info`.
@@ -672,9 +672,10 @@ mod tests {
                 level: None,
                 own: None,
             },
-            // The project's own directive is the one the flag decides: the
-            // spec carries both, the flag's is last, and a tie on the same
-            // target goes to the last directive.
+            // The project's own directive is the one the flag decides: it is
+            // appended last, and a tie on the same target goes to the last
+            // directive, so `RUST_LOG=girpr=error` cannot take it away. The
+            // tie collapses to the winning directive in the built filter.
             Case {
                 name: "the flag owns the project's directive",
                 project: "girpr",
@@ -686,7 +687,7 @@ mod tests {
                     rust_log: Some("girpr=error".to_string()),
                     ..Default::default()
                 },
-                console: Some("girpr=error,girpr=trace"),
+                console: Some("girpr=trace"),
                 file: None,
                 level: None,
                 own: Some("girpr=trace"),
@@ -723,7 +724,12 @@ mod tests {
         for case in cases {
             let plan = LogPlan::resolve(case.project, case.options, case.env);
             if let Some(want) = case.console {
-                assert_eq!(plan.console_filter(), want, "{}: console", case.name);
+                assert_eq!(
+                    plan.console_filter().to_string(),
+                    want,
+                    "{}: console",
+                    case.name
+                );
             }
             if let Some(want) = case.file {
                 assert_eq!(plan.file_filter(), want, "{}: file", case.name);

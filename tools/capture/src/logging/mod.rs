@@ -133,8 +133,10 @@ pub fn init(
         env,
     );
 
-    let console_spec = plan.console_filter();
-    let console_fallback = format!("{PROJECT}={}", console_level.as_str());
+    let console_filter = plan.console_filter();
+    // Kept as text for the start-up event below; the filter itself is moved
+    // into the subscriber layer.
+    let console_filter_text = console_filter.to_string();
     let stderr_layer = layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
@@ -180,7 +182,7 @@ pub fn init(
     // binary's own `main`, and if it ever does, the run says so rather than
     // pretending to have logged.
     if let Err(e) = tracing_subscriber::registry()
-        .with(stderr_layer.with_filter(girpr_log::filter(&console_spec, &console_fallback)))
+        .with(stderr_layer.with_filter(console_filter))
         .with(file_layer)
         .try_init()
     {
@@ -204,7 +206,7 @@ pub fn init(
     tracing::info!(
         version = crate::VERSION,
         log_level = %console_level,
-        console_filter = %console_spec,
+        console_filter = %console_filter_text,
         file_level = %plan.file_level,
         log_file = %plan.file_path().map(|p| p.display().to_string()).unwrap_or_else(|| "none".into()),
         "gircap start"

@@ -4,7 +4,10 @@
 //! way: it is a warning, and the run continues at the level the flag asked
 //! for.
 
+use std::str::FromStr;
+
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Directive;
 
 /// Build a filter from `spec`, falling back to `fallback` when it does not
 /// parse.
@@ -22,6 +25,44 @@ pub fn filter(spec: &str, fallback: &str) -> EnvFilter {
             EnvFilter::new(fallback)
         }
     }
+}
+
+/// Build a **console** filter from `RUST_LOG` and the directives that must
+/// always be present.
+///
+/// `rust_log` is the environment's contribution, read once into the plan. It
+/// is parsed on its own — never joined into a comma-separated spec with the
+/// fixed directives — and each fixed directive is then appended with
+/// [`EnvFilter::add_directive`]. Appending them last is what keeps "last wins":
+/// `EnvFilter` gives a tie on the same target to the last directive, so the
+/// project's own level (the one the flag chose) decides it even when `RUST_LOG`
+/// names that target. Callers put the project's own directive last in `fixed`.
+///
+/// A broken `RUST_LOG` is warned about and dropped, leaving the fixed
+/// directives in charge: a typo never leaves the console blind or widens it
+/// past what was asked for. Unlike `parse_lossy`, a bad directive is never
+/// silently ignored — the whole spec is rejected and reported.
+pub fn console_filter(rust_log: Option<&str>, fixed: &[&str]) -> EnvFilter {
+    let mut filter = match rust_log {
+        None => EnvFilter::default(),
+        Some(spec) => match EnvFilter::try_new(spec) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "WARN ignoring the log filter {spec:?}: {e}; using {:?}",
+                    fixed.join(",")
+                );
+                EnvFilter::default()
+            }
+        },
+    };
+    for directive in fixed {
+        match Directive::from_str(directive) {
+            Ok(d) => filter = filter.add_directive(d),
+            Err(e) => eprintln!("WARN ignoring the fixed log directive {directive:?}: {e}"),
+        }
+    }
+    filter
 }
 
 #[cfg(test)]
@@ -55,16 +96,20 @@ mod tests {
         }
     }
 
-    /// The targets of the events that `spec` lets through.
-    fn targets_of(spec: &str) -> Vec<&'static str> {
+    /// The targets of the events that `filter` lets through.
+    fn targets_of_filter(filter: EnvFilter) -> Vec<&'static str> {
         let targets = Targets::default();
-        let subscriber =
-            tracing_subscriber::registry().with(targets.clone().with_filter(EnvFilter::new(spec)));
+        let subscriber = tracing_subscriber::registry().with(targets.clone().with_filter(filter));
         tracing::subscriber::with_default(subscriber, || {
             tracing::event!(target: "girpr::x", tracing::Level::DEBUG, "own");
             tracing::event!(target: "reqwest::x", tracing::Level::DEBUG, "other");
         });
         targets.seen()
+    }
+
+    /// The targets of the events that `spec` lets through.
+    fn targets_of(spec: &str) -> Vec<&'static str> {
+        targets_of_filter(EnvFilter::new(spec))
     }
 
     #[test]
@@ -109,5 +154,42 @@ mod tests {
         // why the policy puts the flag's own directive last.
         assert_eq!(targets_of("girpr=info,girpr=trace"), vec!["girpr::x"]);
         assert_eq!(targets_of("girpr=trace,girpr=info"), Vec::<&str>::new());
+    }
+
+    /// `console_filter` appends the project's own directive after `RUST_LOG`,
+    /// so the flag wins a tie, and a broken spec falls back to just those
+    /// fixed directives.
+    #[test]
+    fn console_filter_appends_the_own_directive_last() {
+        // `RUST_LOG` names the project, but the appended directive wins the tie.
+        assert_eq!(
+            console_filter(Some("girpr=error"), &["girpr=trace"]).to_string(),
+            "girpr=trace"
+        );
+        // A broken spec and an unset one both leave just the fixed directives.
+        assert_eq!(
+            console_filter(Some("girpr=bogus"), &["girpr=info"]).to_string(),
+            "girpr=info"
+        );
+        assert_eq!(
+            console_filter(None, &["girpr=info"]).to_string(),
+            "girpr=info"
+        );
+        // A spec naming another crate is kept alongside the project's own.
+        assert_eq!(
+            console_filter(Some("reqwest=debug"), &["girpr=info"]).to_string(),
+            "reqwest=debug,girpr=info"
+        );
+        // A bare global `debug` still cannot widen the project: a more
+        // specific target directive wins, so only the other crate shows up.
+        assert_eq!(
+            targets_of_filter(console_filter(Some("debug"), &["girpr=info"])),
+            vec!["reqwest::x"]
+        );
+        // The appended directive wins a tie on the same target ("last wins").
+        assert_eq!(
+            targets_of_filter(console_filter(Some("girpr=error"), &["girpr=trace"])),
+            vec!["girpr::x"]
+        );
     }
 }

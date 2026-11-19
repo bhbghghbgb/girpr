@@ -13,8 +13,8 @@
 //!   never a failed run.
 //!
 //! The rules, and the reasoning behind them, are in [`plan`]; the level names
-//! are in [`level`]; the one place a broken filter spec is turned into a
-//! warning is in [`filter()`].
+//! are in [`level`]; the places a broken filter spec is turned into a
+//! warning are in [`filter()`] and [`console_filter()`].
 //!
 //! # What this crate is not
 //!
@@ -59,7 +59,7 @@ pub mod filter;
 pub mod level;
 pub mod plan;
 
-pub use filter::filter;
+pub use filter::{console_filter, filter};
 pub use level::Level;
 pub use plan::{
     EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,
@@ -113,12 +113,9 @@ mod tests {
         );
         assert_eq!(plan.project, "girpr");
         assert_eq!(plan.console_level, Level::Info);
-        // The console's spec always names the project, whatever `RUST_LOG` said.
-        assert!(
-            plan.console_filter().ends_with("girpr=info"),
-            "{}",
-            plan.console_filter()
-        );
+        // The console's filter always names the project, whatever `RUST_LOG` said.
+        let console = plan.console_filter();
+        assert!(console.to_string().ends_with("girpr=info"), "{console}");
         // A file, or the absence of one: both are states the plan can be in,
         // and the example handles both.
         if let Some(path) = plan.file_path() {

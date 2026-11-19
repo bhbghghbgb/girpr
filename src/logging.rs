@@ -121,10 +121,9 @@ fn init_tracing_with(
         env,
     );
 
-    let console_fallback = format!("{PROJECT}={}", console_level.as_str());
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
-        .with_filter(girpr_log::filter(&plan.console_filter(), &console_fallback));
+        .with_filter(plan.console_filter());
 
     // A plan with no file has no file sink: a debug build that was not asked
     // for a file, or any build that was told `--no-log-file`. A file that
