@@ -52,7 +52,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| _none yet_ | | | |
+| A | T01, T02, T03, T06 (T04, T05 skipped) | pending | |
 
 ## Follow-ups
 
