@@ -129,10 +129,12 @@ Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fix
   `#[ignore]`d, and it drives the real binary over a captured bundle — each
   capture twice, once per write mode, asserting that the two produce the same
   file and that the in-place one writes less.
-- **The measurement** (`tests/peak_heap.rs`): `#[ignore]`d, and it prints the
-  chunk path's **peak live heap** — the streamed write against the buffered
-  decode — so the RAM claim is re-derivable in a minute instead of asserted in
-  a document.
+- **The streaming invariant** (`src/sophon/stream.rs`): an always-on unit test
+  (`the_streamed_decode_writes_in_pieces_not_one_buffer`) asserts that a decoded
+  chunk reaches the sink in more than one write, every byte arrives, and no single
+  write holds the whole body. It fails if streaming is replaced by a buffered
+  decode. It replaces a former `#[ignore]`d peak-heap measurement that printed a
+  peak-live-heap ratio but asserted nothing.
 
 ## 5. Logging & correlation
 
@@ -180,8 +182,9 @@ the same whole-file MD5, and `config.ini` advances only when every planned file 
 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
 decoded as it arrives and the decoded bytes are written into the target as they are
-produced, so the peak per active chunk is one read window plus the decoder's buffer
-(**33 684 B measured** on the 2 162 302 B chunk — `tests/peak_heap.rs`), not the chunk. The
+produced, so the peak per active chunk is one read window plus the decoder's buffer,
+not the chunk — a scale-free invariant in `src/sophon/stream.rs` fails if a buffered
+decode ever writes the whole body in one piece. The
 only RAM that scales with the file is the in-place tier's staging, and that is what
 `--max-ram-bytes` bounds. A manifest is streamed too, into a buffer the API's
 `uncompressed_size` sizes; its *decoded* bytes have to be resident for `prost` to parse

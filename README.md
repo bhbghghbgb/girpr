@@ -475,9 +475,8 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - **One lint policy for the product and its shared policy crates.** The root
   `Cargo.toml` holds `[workspace.lints]`; `girpr`, `girpr-log` and
   `girpr-tempdir` opt in with `[lints] workspace = true`. `clippy::all` and the
-  `unwrap_used`/`expect_used` pair warn; `unsafe_code` is denied, with the
-  counting allocator in `tests/peak_heap.rs` the one explicit test-only
-  exception. Test code may `unwrap`/`expect` — those are assertions, and the
+  `unwrap_used`/`expect_used` pair warn; `unsafe_code` is denied with no
+  exceptions. Test code may `unwrap`/`expect` — those are assertions, and the
   lint is about the paths a user runs. Nothing denies warnings at the crate
   level: CI, or the command above, is free to add `-D warnings`.
 

@@ -116,12 +116,6 @@ impl Run {
             .as_u64()
             .unwrap_or_else(|| panic!("{event}.{key} is not a number in {:?}", self.record(event)))
     }
-    fn word(&self, event: &str, key: &str) -> String {
-        self.record(event)[key]
-            .as_str()
-            .unwrap_or_else(|| panic!("{event}.{key} is not a string in {:?}", self.record(event)))
-            .to_string()
-    }
 }
 
 /// The data-plane result of a case that only reads counters.

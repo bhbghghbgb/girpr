@@ -684,8 +684,8 @@ mod tests {
         }
     }
 
-    /// Scale-free structural invariant replacing the `#[ignore]`d,
-    /// non-asserting peak-heap measurement in `tests/peak_heap.rs`.
+    /// Scale-free structural invariant replacing a former `#[ignore]`d,
+    /// non-asserting peak-heap measurement.
     ///
     /// The streaming path exists because it never holds a whole chunk: decoded
     /// bytes leave for the sink as they are produced. This asserts that shape
