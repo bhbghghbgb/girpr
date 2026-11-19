@@ -462,6 +462,17 @@ mod tests {
     };
     use std::sync::Arc;
 
+    /// The names left in a directory, so a test can assert that no temp file
+    /// outlives a publish without knowing the temp name the crate picked.
+    fn entries(path: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     fn chunk(id: &str, size: i64) -> crate::sophon::SophonChunk {
         crate::sophon::SophonChunk {
             id: id.into(),
@@ -960,65 +971,60 @@ mod tests {
         assert_eq!(v["repair"][0]["rel"], "game/foo.dat");
         assert!(v["repair"][0].get("est_download_bytes").is_some());
         assert_eq!(v["purge"][0]["rel"], "stray/orphan.dat");
-        assert!(
-            !dir.join("plan.json.girpr_tmp").exists(),
+        assert_eq!(
+            entries(&dir),
+            ["plan.json"],
             "the temp is renamed away, not left beside the plan"
         );
     }
 
     #[test]
-    fn a_failed_publish_leaves_no_temp_sibling() {
+    fn a_failed_publish_leaves_no_temp() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "failed_publish");
         let path = dir.join("plan.json");
-        // A directory in place of the target makes the publish rename fail.
+        // A directory in place of the target makes the publish fail.
         std::fs::create_dir(&path).unwrap();
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let err = doc.write_to(&path).unwrap_err();
         assert!(format!("{err:#}").contains("publish"), "{err:#}");
-        assert!(
-            !dir.join("plan.json.girpr_tmp").exists(),
-            "a failed write must not leave the temp behind"
+        assert_eq!(
+            entries(&dir),
+            ["plan.json"],
+            "a failed publish must not leave the temp behind"
         );
     }
 
     #[test]
-    fn a_failed_write_leaves_an_existing_plan_intact() {
+    fn an_alias_shaped_plan_target_is_refused_without_touching_the_plan() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "keeps_target");
-        let path = dir.join("plan.json");
+        let kept = dir.join("plan.json");
         let previous = b"{\"previous\":true}\n";
-        std::fs::write(&path, previous).unwrap();
-        // A directory where the temp would go makes the write fail before the
-        // target is touched.
-        let tmp = crate::util::path::temp_sibling(&path);
-        std::fs::create_dir(&tmp).unwrap();
+        std::fs::write(&kept, previous).unwrap();
+        // A trailing dot aliases `plan.json` on Windows, so the shared name
+        // guard refuses it before any temp is created or byte is written.
+        let target = dir.join("plan.json.");
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
-        let mut failed = None;
-        let logs = crate::repair::test_support::logs_of(|| {
-            failed = Some(doc.write_to(&path).unwrap_err());
-        });
-        failed.expect("the write must fail");
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            previous.as_slice(),
-            "the target keeps its old contents when the write fails"
-        );
+        let err = doc.write_to(&target).unwrap_err();
         assert!(
-            logs.contains("could not remove the temp file after a failed publish"),
-            "a directory at the temp path cannot be removed; the cleanup is warned: {logs}"
+            format!("{err:#}").contains("Windows-trailing dot or space"),
+            "{err:#}"
+        );
+        assert_eq!(
+            std::fs::read(&kept).unwrap(),
+            previous.as_slice(),
+            "the plan keeps its old contents when the target is refused"
         );
     }
 
-    /// A target with no file name is refused before the publish names its temp:
-    /// there is no name to publish under, and the fallback temp would land in a
-    /// different directory. Nothing is published and no temp is left there.
+    /// A target with no file name is refused before the publish names a temp:
+    /// there is no name to publish under. Nothing is written anywhere.
     #[test]
     fn a_target_without_a_file_name_publishes_nothing_and_leaves_no_temp() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "no_file_name");
         let path = dir.join("..");
         assert!(path.file_name().is_none(), "the fixture names no file");
-        let tmp = crate::util::path::temp_sibling(&path);
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let err = doc.write_to(&path).unwrap_err();
@@ -1027,7 +1033,7 @@ mod tests {
             "{err:#}"
         );
         assert!(path.is_dir(), "the directory target is untouched");
-        assert!(!tmp.exists(), "the fallback temp is never written");
+        assert!(entries(&dir).is_empty(), "no temp is written anywhere");
     }
 
     /// The documented publish trade, pinned: a symlink at the plan path is

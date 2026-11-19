@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
 use crate::config::{RunCtx, RunFailure};
@@ -462,8 +463,9 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 ///
 /// Both writers that relocate a cache file apply this rule — the copy fallback
 /// and the rename the move tries first — so a spelling one refuses is refused
-/// by the other. A `target` with no file name has no name to publish under, and
-/// the temp helper's no-file-name fallback would put the bytes somewhere else.
+/// by the other. A `target` with no file name has no name to publish under: the
+/// temp would be created in the parent and then persisted to a path that names
+/// no file, so there is nothing this writer can publish to.
 ///
 /// The same refusal covers a target with a Windows-trailing dot or space in any
 /// component. Windows strips the character when it resolves a name, so `foo.`
@@ -473,9 +475,10 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 /// [`any_component_has_windows_trailing_dot_or_space`], shared with the atomic
 /// publisher.
 fn check_publish_target(target: &Path) -> std::io::Result<()> {
-    // `temp_sibling` still names a path with no file name (see its contract:
-    // the suffix is pushed under the path's directories, keeping a trailing
-    // `..`), so refuse rather than publish under a different name.
+    // A target with no file name cannot be the destination of a publish: the
+    // temp would be created under the target's directory and persisted to a
+    // spelling that names no file. Refuse before creating a temp or copying a
+    // byte.
     //
     // No audio-cache walk change makes this production-reachable. `WalkDir`
     // does not follow links by default and `is_file()` admits only regular
@@ -509,12 +512,13 @@ fn check_publish_target(target: &Path) -> std::io::Result<()> {
 
 /// Copy `src` to `target` without ever publishing a partial file.
 ///
-/// The bytes go to a temp sibling in the destination directory (same volume, so
-/// the publish is a rename, not another copy), and only a complete temp file is
-/// renamed over `target`. `util::path::temp_sibling` names that sibling, so
-/// this writer and the other atomic publishes agree on the whole-name rule. On
-/// any failure the temp sibling is removed, `target` is left exactly as it was,
-/// and the caller keeps `src`.
+/// The bytes go to a [`NamedTempFile`] in the destination directory (same
+/// volume, so the publish is a rename, not another copy), and only a complete
+/// temp file is persisted over `target`. The crate owns the temp name and its
+/// cleanup: dropping the temp on any failure removes it, so a truncated copy
+/// can never be mistaken for a complete one. On Windows `persist` is
+/// `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`, so an existing `target` is
+/// replaced; the crate does not create the parent, so the caller does.
 ///
 /// `target` must pass [`check_publish_target`], so a name with no file name or
 /// with a Windows-trailing dot or space in any component is refused before any
@@ -529,15 +533,15 @@ fn copy_publish_with(
     copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
 ) -> std::io::Result<()> {
     check_publish_target(target)?;
-    let tmp = util::path::temp_sibling(target);
-    if let Err(e) = copy(src, &tmp) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    if let Err(e) = std::fs::rename(&tmp, target) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let tmp = NamedTempFile::new_in(parent)?;
+    copy(src, tmp.path())?;
+    // Dropping the temporary file on failure (including the `PersistError`)
+    // removes the temp, leaving `target` and `src` untouched.
+    tmp.persist(target).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -741,6 +745,17 @@ mod tests {
     use crate::hyp::GameConfig;
     use crate::repair::test_support::logs_of;
 
+    /// The names left in a directory, so a test can assert that no temp file
+    /// outlives a publish without knowing the temp name the crate picked.
+    fn entries(path: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     fn config(cache: &str, res: &str) -> GameConfig {
         serde_json::from_value(serde_json::json!({
             "audio_pkg_cache_dir": cache,
@@ -793,7 +808,7 @@ mod tests {
     }
 
     /// A copy that fails partway must not publish its truncated bytes: the temp
-    /// sibling is removed, the destination stays absent, and the source stays.
+    /// is removed, the destination stays absent, and the source stays.
     #[test]
     fn a_partial_copy_publishes_nothing() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "partial_copy");
@@ -802,7 +817,6 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let err = copy_publish_with(&src, &target, |_, dst| {
@@ -813,7 +827,10 @@ mod tests {
 
         assert_eq!(err.to_string(), "injected copy failure");
         assert!(!target.exists(), "a partial copy is never published");
-        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert!(
+            entries(&base.join("Audio/res")).is_empty(),
+            "the temp is cleaned up on failure"
+        );
         assert_eq!(
             std::fs::read(&src).unwrap(),
             b"cache bytes",
@@ -822,7 +839,7 @@ mod tests {
     }
 
     /// The same failure with a destination already in place: the original file
-    /// keeps its bytes, since only a complete temp file is renamed over it.
+    /// keeps its bytes, since only a complete temp file is persisted over it.
     #[test]
     fn a_partial_copy_leaves_an_existing_target_alone() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "partial_keeps_target");
@@ -831,7 +848,6 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
         std::fs::write(&target, b"old bytes").unwrap();
 
@@ -846,7 +862,11 @@ mod tests {
             b"old bytes",
             "the previous target is untouched"
         );
-        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert_eq!(
+            entries(&base.join("Audio/res")),
+            ["a.pck"],
+            "the temp is cleaned up on failure"
+        );
         assert_eq!(std::fs::read(&src).unwrap(), b"cache bytes");
     }
 
@@ -861,7 +881,6 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let logs = logs_of(|| {
@@ -884,7 +903,10 @@ mod tests {
             "a partial copy must not remove its source"
         );
         assert!(!target.exists(), "a partial copy is never published");
-        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert!(
+            entries(&base.join("Audio/res")).is_empty(),
+            "the temp is cleaned up on failure"
+        );
         assert!(
             logs.contains("audio cache -> res")
                 && logs.contains("moved=0")
@@ -903,7 +925,6 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         copy_publish_with(&src, &target, |from, to| std::fs::copy(from, to)).unwrap();
@@ -913,12 +934,15 @@ mod tests {
             b"cache bytes",
             "the published file is the complete source"
         );
-        assert!(!tmp.exists(), "no temp sibling outlives the publish");
+        assert_eq!(
+            entries(&base.join("Audio/res")),
+            ["a.pck"],
+            "no temp outlives the publish"
+        );
     }
 
-    /// A target that has no file name is refused before a temp sibling is
-    /// named: `util::path::temp_sibling` would otherwise invent a name and
-    /// publish under something the caller never asked for.
+    /// A target that has no file name is refused before a temp is named: there
+    /// is no name to persist the temp under, so nothing may be created.
     #[test]
     fn a_target_without_a_file_name_is_refused() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "no_file_name");
@@ -926,11 +950,9 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
-        // A trailing `..` is the portable path with no file name, and its temp
-        // sibling would land beside `Audio/res`, where it can be seen.
+        // A trailing `..` is the portable path with no file name.
         let target = base.join("Audio/res").join("..");
         assert!(target.file_name().is_none(), "the test needs no file name");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let copied = std::cell::Cell::new(false);
@@ -946,7 +968,10 @@ mod tests {
             !copied.get(),
             "the refusal happens before any copy is attempted"
         );
-        assert!(!tmp.exists(), "the refusal leaves no temp sibling");
+        assert!(
+            entries(&base.join("Audio/res")).is_empty(),
+            "the refusal leaves no temp"
+        );
         assert_eq!(
             std::fs::read(&src).unwrap(),
             b"cache bytes",
@@ -958,7 +983,7 @@ mod tests {
     /// destination named `foo.` or `foo ` would publish under the aliased
     /// `foo`. The install tree is a Windows tree even on a Unix host, so the
     /// rule is lexical; the refusal comes before the copy closure runs and
-    /// before a temp sibling is named.
+    /// before a temp is named.
     #[test]
     fn a_windows_trailing_dot_or_space_target_is_refused() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "windows_alias");
@@ -971,7 +996,6 @@ mod tests {
             // Lexical: such a destination never exists on any host, and the
             // test never needs to create one.
             let target = base.join("Audio/res").join(name);
-            let tmp = util::path::temp_sibling(&target);
             assert!(
                 target.file_name().is_some(),
                 "the fixture has a file name; only the alias rule refuses it"
@@ -997,7 +1021,6 @@ mod tests {
                 !base.join("Audio/res").exists(),
                 "no destination directory is created for {name:?}"
             );
-            assert!(!tmp.exists(), "the refusal leaves no temp sibling");
             assert_eq!(
                 std::fs::read(&src).unwrap(),
                 b"cache bytes",
@@ -1201,7 +1224,6 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let logs = logs_of(|| {
@@ -1220,7 +1242,10 @@ mod tests {
                         !target.exists(),
                         "the fallback copies before the target is published"
                     );
-                    assert!(!to.exists(), "the temp sibling starts absent");
+                    assert!(
+                        to.exists(),
+                        "the crate has already created the temp to copy into"
+                    );
                     std::fs::copy(from, to)
                 },
             )
@@ -1231,7 +1256,11 @@ mod tests {
             b"cache bytes",
             "the fallback publishes the complete file"
         );
-        assert!(!tmp.exists(), "the fallback leaves no temp sibling");
+        assert_eq!(
+            entries(&base.join("Audio/res")),
+            ["a.pck"],
+            "the fallback leaves no temp"
+        );
         assert!(
             !src.exists(),
             "the source is removed only after the copy is published"

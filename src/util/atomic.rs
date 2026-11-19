@@ -1,40 +1,45 @@
 //! One atomic-publish path for the files girpr writes.
 //!
-//! A writer creates a temp sibling in the target's directory, writes the whole
-//! artifact there, and renames it over the target. A crash or a full disk can
-//! therefore leave the temp or the old target, never a truncated artifact.
-//! `temp_sibling` owns the temp name, so every writer and any leftover sweep
-//! share one rule.
+//! A writer creates a temp file in the target's directory through
+//! [`tempfile::NamedTempFile`], writes the whole artifact there, and publishes
+//! it with `persist`, which atomically renames the temp over the target
+//! (`MoveFileEx` + `MOVEFILE_REPLACE_EXISTING` on Windows). A crash or a full
+//! disk can therefore leave the temp or the old target, never a truncated
+//! artifact. The crate owns the temp name and its cleanup; writers never name
+//! or sweep a temp themselves.
 //!
 //! The helper takes bytes or a caller-supplied writer; serialization stays at
 //! the call site, because each artifact has its own format and error context.
 //! `durable` selects the flush policy explicitly: the config writer syncs the
 //! file before publishing (its version bump must survive a power loss), while
 //! the scan and plan artifacts only need the rename's all-or-nothing shape.
+//! `persist` does not create the parent and does not sync, so both the
+//! `create_dir_all` and the sync remain here.
 
-use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tempfile::NamedTempFile;
 
-use super::path::{any_component_has_windows_trailing_dot_or_space, temp_sibling};
+use super::path::any_component_has_windows_trailing_dot_or_space;
 
-/// Publish `bytes` to `path` through a temp sibling.
+/// Publish `bytes` to `path` through a temp file in the target's directory.
 ///
-/// `durable` syncs the temp file before the rename; see [`write_atomic_with`].
+/// `durable` syncs the temp file before the publish; see [`write_atomic_with`].
 pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
     write_atomic_with(path, durable, |writer| {
         writer.write_all(bytes).map_err(Into::into)
     })
 }
 
-/// Publish whatever `write` produces to `path` through a temp sibling.
+/// Publish whatever `write` produces to `path` through a temp file in the
+/// target's directory.
 ///
 /// The parent directory is created when the path names one. The temp is written
-/// and flushed beside the target, then renamed over it. Any failure before the
-/// rename removes the temp and returns the original error with the temp path in
-/// its context; a rename failure removes the temp too.
+/// and flushed beside the target, then `persist`ed over it. Any failure before
+/// the publish drops the temp, which removes it, and returns the original error
+/// with the target path in its context; a publish failure does the same.
 ///
 /// A `path` that does not end in a usable file name is refused before the parent
 /// is created or a temp is named: a spelling like `dir/.` or `dir/` names the
@@ -43,12 +48,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 /// Windows strips the character when it resolves each component, so a target
 /// whose directory was spelled `dir.` publishes under the aliased `dir` while
 /// the caller asked for something else. There is no location a file can be
-/// published to under those spellings, and the temp helper's fallback would put
-/// the temp under the path's directories instead. The rule is
+/// published to under those spellings. The rule is
 /// [`any_component_has_windows_trailing_dot_or_space`], built on the predicate
 /// shared with [`super::path::contained_rel`] and applied on every host.
 ///
-/// With `durable`, the temp file is `sync_all`ed before the rename and the
+/// With `durable`, the temp file is `sync_all`ed before the publish and the
 /// parent directory is synced best-effort afterwards: a directory sync failure
 /// is logged, not returned, because the publish itself already succeeded.
 ///
@@ -60,21 +64,60 @@ pub(crate) fn write_atomic_with(
     durable: bool,
     write: impl FnOnce(&mut dyn Write) -> Result<()>,
 ) -> Result<()> {
-    publish(path, durable, |p| File::create(p), write)
-}
-
-/// The extra operation publishing needs from the temp file handle.
-///
-/// Split out so the durable decision can be pinned with a counting wrapper
-/// instead of by inspecting the filesystem.
-trait DurableFile: Write {
-    fn sync(&mut self) -> io::Result<()>;
-}
-
-impl DurableFile for File {
-    fn sync(&mut self) -> io::Result<()> {
-        self.sync_all()
+    // A target that does not end in a file name cannot be replaced by one.
+    // `file_name()` alone is not enough: it ignores a trailing `.`, so `dir/.`
+    // reports `Some("dir")` even though the spelling names the directory.
+    // Refuse up front, before the parent is created or a temp is written.
+    if !ends_in_a_file_name(path) {
+        anyhow::bail!("publish target has no file name: {}", path.display());
     }
+    // Windows strips a trailing dot or space when it resolves a name, so
+    // `config.` and `config ` would publish over `config`. The same holds for
+    // every directory component. The rule is shared with `contained_rel` and
+    // lexical, so it applies on every host. Prefixes, roots and `..` parents
+    // are not checked: none of them names a file.
+    if any_component_has_windows_trailing_dot_or_space(path) {
+        anyhow::bail!(
+            "publish target has a Windows-trailing dot or space: {}",
+            path.display()
+        );
+    }
+    // `persist` does not create the parent. A bare name has no directory
+    // component, so the temp is created in the current directory instead.
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
+    }
+    let mut tmp = match parent {
+        Some(parent) => NamedTempFile::new_in(parent),
+        None => NamedTempFile::new_in("."),
+    }
+    .with_context(|| format!("create temp file for {}", path.display()))?;
+
+    {
+        let mut writer = io::BufWriter::new(&mut tmp);
+        write(&mut writer).with_context(|| format!("write temp file for {}", path.display()))?;
+        writer
+            .flush()
+            .with_context(|| format!("flush temp file for {}", path.display()))?;
+    }
+    if durable {
+        // Publishing a value whose write-back is still only in the page cache
+        // is the failure this sync exists to prevent, so its error is fatal.
+        tmp.as_file()
+            .sync_all()
+            .with_context(|| format!("sync temp file for {}", path.display()))?;
+    }
+    // Dropping the `PersistError` drops the temp with it, so a failed publish
+    // removes the temp just like a failed write does.
+    tmp.persist(path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("publish {}", path.display()))?;
+    if durable {
+        sync_parent(path);
+    }
+    Ok(())
 }
 
 /// Does `path` end in a file name rather than a directory spelling?
@@ -84,7 +127,7 @@ impl DurableFile for File {
 /// the raw spelling instead: an empty tail (a trailing separator, a root or an
 /// empty path) or a `.` tail names no file, while a real name does. A name that
 /// ends in a dot or space is a name here; the separate Windows alias rule in
-/// [`publish`] refuses it.
+/// [`write_atomic_with`] refuses it.
 fn ends_in_a_file_name(path: &Path) -> bool {
     if path.file_name().is_none() {
         return false;
@@ -95,86 +138,6 @@ fn ends_in_a_file_name(path: &Path) -> bool {
         .next()
         .unwrap_or_default();
     !tail.is_empty() && tail != "."
-}
-
-/// The publish body, with creation and writing left to the caller.
-fn publish<F>(
-    path: &Path,
-    durable: bool,
-    create: impl FnOnce(&Path) -> io::Result<F>,
-    write: impl FnOnce(&mut dyn Write) -> Result<()>,
-) -> Result<()>
-where
-    F: DurableFile,
-{
-    // A target that does not end in a file name cannot be replaced by one.
-    // `file_name()` alone is not enough: it ignores a trailing `.`, so `dir/.`
-    // reports `Some("dir")` even though the spelling names the directory. The
-    // temp helper still names a fallback under the target's directories (a
-    // trailing `..` survives), so the write would only fail at the rename,
-    // after the parent was created and the temp was written there. Refuse up
-    // front so the caller gets the reason instead of a rename error from
-    // another directory.
-    if !ends_in_a_file_name(path) {
-        anyhow::bail!("publish target has no file name: {}", path.display());
-    }
-    // Windows strips a trailing dot or space when it resolves a name, so
-    // `config.` and `config ` would publish over `config`. The same holds for
-    // every directory component: `dir./config.ini` publishes under the
-    // aliased `dir`. The rule is shared with `contained_rel` and lexical, so
-    // it applies on every host: the install is a Windows tree even when girpr
-    // runs elsewhere. A prefix and a root name a filesystem, not a file, and
-    // neither they nor a `..` parent are checked: none of them names a file.
-    if any_component_has_windows_trailing_dot_or_space(path) {
-        anyhow::bail!(
-            "publish target has a Windows-trailing dot or space: {}",
-            path.display()
-        );
-    }
-    // A bare file name has no directory component; there is nothing to create.
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
-    }
-    let tmp = temp_sibling(path);
-    let published = (|| -> Result<()> {
-        let mut file =
-            create(&tmp).with_context(|| format!("create temp file {}", tmp.display()))?;
-        {
-            let mut writer = io::BufWriter::new(&mut file);
-            write(&mut writer).with_context(|| format!("write temp file {}", tmp.display()))?;
-            writer
-                .flush()
-                .with_context(|| format!("flush temp file {}", tmp.display()))?;
-        }
-        if durable {
-            // Publishing a value whose write-back is still only in the page
-            // cache is the failure this sync exists to prevent, so its error is
-            // fatal and the temp is cleaned up like any other write failure.
-            file.sync()
-                .with_context(|| format!("sync temp file {}", tmp.display()))?;
-        }
-        // Close before the rename: Windows cannot replace a file that is open.
-        drop(file);
-        std::fs::rename(&tmp, path).with_context(|| format!("publish {}", path.display()))?;
-        Ok(())
-    })();
-    if let Err(e) = published {
-        if let Err(cleanup) = std::fs::remove_file(&tmp)
-            && cleanup.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %tmp.display(),
-                error = %cleanup,
-                "could not remove the temp file after a failed publish"
-            );
-        }
-        return Err(e);
-    }
-    if durable {
-        sync_parent(path);
-    }
-    Ok(())
 }
 
 /// Sync the published file's directory, best-effort.
@@ -188,7 +151,7 @@ fn sync_parent(path: &Path) {
         Some(parent) => parent,
         None => Path::new("."),
     };
-    match File::open(dir).and_then(|d| d.sync_all()) {
+    match std::fs::File::open(dir).and_then(|d| d.sync_all()) {
         Ok(()) => {}
         Err(e) => tracing::warn!(
             path = %dir.display(),
@@ -207,43 +170,35 @@ fn sync_parent(_path: &Path) {}
 mod tests {
     use super::*;
     use girpr_tempdir::TempDir;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn dir(name: &str) -> TempDir {
         TempDir::new("girpr_test_atomic", name)
     }
 
-    /// A successful publish creates its parent, writes the bytes, and renames
-    /// the temp away instead of leaving it beside the artifact.
+    /// The names left in a directory, so a test can assert that no temp file
+    /// outlives a publish without knowing the temp name the crate picked.
+    fn entries(path: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A successful publish creates its parent, writes the bytes, and leaves
+    /// nothing but the artifact in the parent directory.
     #[test]
     fn publishes_bytes_creates_the_parent_and_leaves_no_temp() {
         let d = dir("publish");
         let path = d.join("nested").join("plan.json");
         write_atomic(&path, b"{\"ok\":true}\n", false).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"{\"ok\":true}\n");
-        assert!(
-            !temp_sibling(&path).exists(),
+        assert_eq!(
+            entries(&d.join("nested")),
+            ["plan.json"],
             "the temp is renamed away, not left beside the target"
         );
-    }
-
-    /// The temp name comes from the whole file name, so a multi-dot target
-    /// gets `name.ext.girpr_tmp` rather than having an extension replaced.
-    #[test]
-    fn a_multi_dot_target_names_its_temp_after_the_whole_file() {
-        let d = dir("multi_dot");
-        let path = d.join("plan.v1.json");
-        // A directory where the temp would go makes creation fail and names the
-        // temp in the error, without a second naming rule in the test.
-        let tmp = d.join("plan.v1.json.girpr_tmp");
-        std::fs::create_dir(&tmp).unwrap();
-        let err = write_atomic(&path, b"{}", false).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("plan.v1.json.girpr_tmp"),
-            "{err:#}"
-        );
-        assert!(!path.exists(), "no artifact is published on a failed write");
     }
 
     /// A failure while the bytes are being written removes the temp and leaves
@@ -268,15 +223,15 @@ mod tests {
             previous,
             "the target keeps its old bytes"
         );
-        assert!(
-            !temp_sibling(&path).exists(),
+        assert_eq!(
+            entries(&d),
+            ["config.ini"],
             "a failed write must not leave the temp behind"
         );
     }
 
     /// A target that names no file has nothing to publish under. The refusal
-    /// comes before the parent is created or a temp is named, rather than after
-    /// writing at the helper's fallback location and failing at the rename.
+    /// comes before the parent is created or a temp is named.
     #[test]
     fn a_target_with_no_file_name_is_refused_before_anything_is_written() {
         let d = dir("no_file_name");
@@ -293,13 +248,7 @@ mod tests {
             !d.join("missing").exists(),
             "the refusal happens before the parent directory is created"
         );
-        // The helper's fallback resolves here once `missing` exists, so the
-        // unresolved `missing/../.girpr_tmp` cannot be probed: it is absent
-        // whether or not a temp was written. Assert the resolved location.
-        assert!(
-            !d.join(".girpr_tmp").exists(),
-            "no temp is written at the fallback location"
-        );
+        assert!(entries(&d).is_empty(), "no temp is written anywhere");
     }
 
     /// `Path::file_name()` ignores a trailing `.`, so `dir/.` reports
@@ -334,10 +283,7 @@ mod tests {
                 !target.exists(),
                 "the directory spelling is not published as a file"
             );
-            assert!(
-                !parent.join(".girpr_tmp").exists(),
-                "no temp is written at the resolved fallback location"
-            );
+            assert!(entries(&d).is_empty(), "no temp is written anywhere");
         }
     }
 
@@ -410,72 +356,33 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"{}");
     }
 
-    /// A failing rename (a directory sits where the file should be) removes the
-    /// temp and returns the rename error.
+    /// A failing publish (a directory sits where the file should be) removes
+    /// the temp and returns the error.
     #[test]
-    fn a_rename_failure_removes_the_temp_and_returns_the_error() {
-        let d = dir("rename_failure");
+    fn a_publish_failure_removes_the_temp_and_returns_the_error() {
+        let d = dir("publish_failure");
         let path = d.join("plan.json");
         std::fs::create_dir(&path).unwrap();
         let err = write_atomic(&path, b"{}", false).unwrap_err();
         assert!(format!("{err:#}").contains("publish"), "{err:#}");
         assert!(path.is_dir(), "the directory target is untouched");
-        assert!(
-            !temp_sibling(&path).exists(),
-            "a failed rename must not leave the temp behind"
+        assert_eq!(
+            entries(&d),
+            ["plan.json"],
+            "a failed publish must not leave the temp behind"
         );
     }
 
-    /// The durable decision is explicit and observable: `true` syncs the temp
-    /// before publishing, `false` never does.
+    /// The durable decision stays an explicit caller choice: either way the
+    /// same whole bytes land at the target through the crate-owned temp.
     #[test]
-    fn durable_publishing_syncs_the_temp_and_non_durable_does_not() {
+    fn both_durable_settings_publish_the_whole_file() {
         for durable in [false, true] {
             let d = dir("durable");
             let path = d.join("config.ini");
-            let syncs = Arc::new(AtomicUsize::new(0));
-            let counter = Arc::clone(&syncs);
-            publish(
-                &path,
-                durable,
-                |tmp| {
-                    File::create(tmp).map(|file| CountingFile {
-                        file,
-                        syncs: Arc::clone(&counter),
-                    })
-                },
-                |writer| writer.write_all(b"[General]\n").map_err(Into::into),
-            )
-            .unwrap();
-            assert_eq!(
-                syncs.load(Ordering::SeqCst),
-                if durable { 1 } else { 0 },
-                "durable={durable}"
-            );
+            write_atomic(&path, b"[General]\n", durable).unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), b"[General]\n");
-        }
-    }
-
-    /// A real file handle that counts the syncs publishing asks for.
-    struct CountingFile {
-        file: File,
-        syncs: Arc<AtomicUsize>,
-    }
-
-    impl Write for CountingFile {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.file.write(buf)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.file.flush()
-        }
-    }
-
-    impl DurableFile for CountingFile {
-        fn sync(&mut self) -> io::Result<()> {
-            self.syncs.fetch_add(1, Ordering::SeqCst);
-            self.file.sync_all()
+            assert_eq!(entries(&d), ["config.ini"], "durable={durable}");
         }
     }
 }

@@ -555,11 +555,21 @@ mod tests {
     use crate::util::junction_support::{
         junction_fixture_decision, require_junction, try_junction_dir,
     };
-    use crate::util::path::temp_sibling;
     use crate::util::symlink_support::{
         require_symlink, symlink_fixture_decision, try_symlink_dir,
     };
     use std::collections::HashSet;
+
+    /// The names left in a directory, so a test can assert that no temp file
+    /// outlives a config write without knowing the temp name the crate picked.
+    fn entries(path: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
 
     #[test]
     fn version_last_match_wins() {
@@ -1303,24 +1313,23 @@ mod tests {
         );
     }
 
-    /// An accepted config write and a failed one both leave no temp sibling:
-    /// the shared temp name is the only place this writer creates one, and
-    /// publishing always renames it away or removes it.
+    /// An accepted config write and a failed one both leave no temp behind:
+    /// the crate owns the temp name and removes it on either outcome.
     #[test]
-    fn config_writes_leave_no_temp_sibling() {
+    fn config_writes_leave_no_temp() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "no_temp_sibling");
         let path = dir.join("config.ini");
-        let tmp = temp_sibling(&path);
 
         write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
         assert!(path.is_file(), "the accepted write publishes config.ini");
-        assert!(
-            !tmp.exists(),
-            "an accepted write renames the temp away instead of leaving it"
+        assert_eq!(
+            entries(&dir),
+            ["config.ini"],
+            "an accepted write leaves no temp behind"
         );
 
-        // A directory at the target makes the publish rename fail after the
-        // temp was written; the failure cleanup removes it.
+        // A directory at the target makes the publish fail after the temp was
+        // written; the crate removes the temp when the publish fails.
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         let err = publish_ini(&path, b"[General]\n").unwrap_err();
@@ -1329,9 +1338,10 @@ mod tests {
             path.is_dir(),
             "the failed publish leaves the target untouched"
         );
-        assert!(
-            !tmp.exists(),
-            "a failed write removes the temp instead of leaving it"
+        assert_eq!(
+            entries(&dir),
+            ["config.ini"],
+            "a failed publish leaves no temp behind"
         );
     }
 

@@ -82,6 +82,11 @@ girpr-filter = { path = "crates/filter" }
 # (and its `futures-macro` proc-macro) is not compiled. `std` is still needed:
 # it carries the `StreamExt` combinators, and it pulls `slab` along with it.
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+# Atomic publish for the clean artifacts (config, scan, plan, and the audio
+# copy fallback): a temp file in the target's directory whose `persist()` is an
+# atomic rename (MoveFileEx + MOVEFILE_REPLACE_EXISTING on Windows). The resume
+# `_tmp` files are deliberately not built on this - see the file writer.
+tempfile = "3.27"
 
 [target.'cfg(windows)'.dependencies]
 # A safe wrapper over the Windows call that reports a file's link count and

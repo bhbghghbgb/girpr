@@ -396,8 +396,14 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
     PathRoot::new(base)?.join_rel(rel)
 }
 
-/// The sibling an atomic writer publishes through: `path` with
-/// [`TEMP_SUFFIX`] appended to the whole file name.
+/// The legacy `.girpr_tmp` sibling name, kept only as a test fixture.
+///
+/// Production publishing no longer names a temp itself: `tempfile` owns the
+/// name and the cleanup for the config/scan/plan writers and the audio copy
+/// fallback. This helper remains under `cfg(test)` because a few tests still
+/// build the old spelling as a fixture (a purge-classification row, and the
+/// "no temp sibling" assertions). It is **not** a description of any temp the
+/// product creates — a fresh temp has a crate-chosen, random name.
 ///
 /// `with_extension` replaces the real extension (`scan.txt` ->
 /// `scan.girpr_tmp`) and has its own surprises on multi-dot names; appending to
@@ -405,24 +411,14 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 /// `config.ini.girpr_tmp` and `plan.v1.json` becomes
 /// `plan.v1.json.girpr_tmp`. It also stays lossless for a non-UTF-8 name.
 ///
-/// The result is beside `path`, which is what makes the rename that publishes
-/// it atomic.
-///
 /// A path with **no file name** still gets a name, but it is not a sibling of a
 /// file. The fallback prefix is empty, and `with_file_name` only removes a real
 /// file name before pushing the suffix; the path's directories stay as the
 /// prefix. So `Audio/res/..` becomes `Audio/res/../.girpr_tmp`, which still
 /// contains the `..` before resolution and resolves to `Audio/.girpr_tmp` —
 /// beside `res`, not inside it — and the empty path becomes `.girpr_tmp` in the
-/// current directory. A caller that must publish under the name it was given
-/// therefore refuses a target that names no file before calling this helper:
-/// `copy_publish_with` in the post-phase and `atomic::publish` both do.
-/// Both also refuse a target with a component that ends in a Windows-trailing
-/// dot or space ([`any_component_has_windows_trailing_dot_or_space`]), and
-/// `atomic::publish` additionally refuses a target that spells a directory
-/// (`dir/.`, `dir/`), because none of those is a name a file can be published
-/// under. This helper keeps the simple shape instead of inventing a directory
-/// for the temp.
+/// current directory.
+#[cfg(test)]
 pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
@@ -433,6 +429,7 @@ pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
 }
 
 /// The suffix [`temp_sibling`] appends.
+#[cfg(test)]
 const TEMP_SUFFIX: &str = ".girpr_tmp";
 
 /// Canonicalize `path` as far as it exists, then append the missing tail.
