@@ -56,6 +56,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | B | T07, T08, T09, T10, T11 (T12 skipped) | done | All five completed; lockfile fix 4636a691; 5 follow-ups recorded |
 | C | T13, T14, T15 | done | All three completed; cross-tool consistency PASS; fix 9177fde1 pins backslash escaping; 2 follow-ups recorded |
 | D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
+| E | T18, T20, T21, T22 (T19 skipped) | pending | |
 
 ## Follow-ups
 
