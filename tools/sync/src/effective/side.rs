@@ -307,7 +307,7 @@ pub fn ensure_distinct_sides(src: &Side, dst: &Side) -> Result<()> {
     let a = cache_identity(src);
     let b = cache_identity(dst);
     if same_path(&a, &b) {
-        bail!("src and dst resolve to the same cache {}", display_path(&a));
+        bail!("src and dst resolve to the same cache {}", a.display());
     }
     Ok(())
 }
@@ -324,14 +324,6 @@ fn cache_identity(side: &Side) -> PathBuf {
         Side::Record(p) => canonical_or_raw(p),
         Side::Folder(root) => canonical_or_raw(root).join(CACHE_PREFIX),
     }
-}
-
-/// Render a path for humans, dropping the `\\?\` verbatim prefix that
-/// `canonicalize` adds on Windows — a user never types it, so echoing it back
-/// only makes the message harder to match against a flag.
-fn display_path(p: &Path) -> String {
-    let s = p.display().to_string();
-    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 /// Resolve both sides of a pair at once, and report src's failure in preference

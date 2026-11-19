@@ -40,6 +40,10 @@ clap = { version = "4.6.8", features = ["derive"] }
 girpr-log = { path = "../../crates/log" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
+# Path canonicalization for identity and link-target checks. It resolves links
+# like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
+# canonical path can be compared with a link's own spelling without stripping.
+dunce = "1.0.5"
 # No `sled`: the legacy-format converter moved out to the standalone
 # `tools/sled2redb` crate, so this package's graph is sled-free.
 serde = { version = "1.0.229", features = ["derive"] }

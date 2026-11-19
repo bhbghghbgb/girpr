@@ -686,6 +686,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dunce",
  "girpr-log",
  "girpr-tempdir",
  "glob",

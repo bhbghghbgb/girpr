@@ -1,10 +1,10 @@
 use super::super::rename::DiskSpelling;
-use super::link::{
-    LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
-    spare_link_components, target_rel,
-};
 #[cfg(windows)]
-use super::link::{on_disk_name, without_verbatim};
+use super::link::on_disk_name;
+use super::link::{
+    LinkStorage, absolute_alias, alias_target, folded_keys, keep_ancestors, plan_rel,
+    spare_alias_chain, spare_link_components, target_rel,
+};
 use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
@@ -113,7 +113,7 @@ impl TestProbes {
 impl Probes for TestProbes {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         self.record(path)?;
-        std::fs::canonicalize(path)
+        dunce::canonicalize(path)
     }
 
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
@@ -599,7 +599,7 @@ fn a_link_target_is_named_relative_to_the_dst_root() {
     std::fs::create_dir_all(dst.join("d")).unwrap();
     std::fs::write(dst.join("d/t.bin"), b"x").unwrap();
     std::fs::write(outside.join("x.bin"), b"x").unwrap();
-    let root = std::fs::canonicalize(&dst).unwrap();
+    let root = dunce::canonicalize(&dst).unwrap();
 
     assert_eq!(
         target_rel(&dst.join("d").join("..").join("d").join("t.bin"), &root).unwrap(),
@@ -634,22 +634,20 @@ fn a_relative_target_keeps_its_alias_spelling() {
     );
 }
 
-/// `canonicalize` returns a verbatim path while a junction's `read_link` keeps
-/// the spelling the junction was created with, so the two are compared without
-/// the prefix. Dropping it must still leave a path the other spelling matches:
-/// a UNC path needs **two** leading backslashes, not one.
+/// Both canonicalization (`dunce`) and a junction's `read_link` spell a UNC
+/// root with its **two** leading backslashes — `\\server\share\dir` — and no
+/// verbatim prefix, so the alias comparison strips the root directly. The
+/// hand-rolled prefix rebuild is gone; this pins the UNC behaviour it existed
+/// to protect at the call site that relies on it.
 #[cfg(windows)]
 #[test]
 fn without_verbatim_rebuilds_the_prefix_the_path_needs() {
+    let root = Path::new(r"\\server\share\dir");
+    let target = Path::new(r"\\server\share\dir\sub\x.bin");
     assert_eq!(
-        without_verbatim(Path::new(r"\\?\UNC\server\share\dir")).as_ref(),
-        Path::new(r"\\server\share\dir"),
-        "the UNC prefix is two backslashes, so the share stays a share"
-    );
-    assert_eq!(
-        without_verbatim(Path::new(r"\\?\C:\dir")).as_ref(),
-        Path::new(r"C:\dir"),
-        "a local drive path only drops the prefix"
+        absolute_alias(target, root, None).as_deref(),
+        Some("sub/x.bin"),
+        "the share keeps its two backslashes and the target strips under the root"
     );
 }
 
@@ -667,7 +665,7 @@ fn a_kept_link_through_a_directory_link_spares_the_alias_and_the_target() {
         eprintln!("skip: this platform refused a directory link: {e}");
         return;
     }
-    let root = std::fs::canonicalize(&dst).unwrap();
+    let root = dunce::canonicalize(&dst).unwrap();
     let target = dst.join("link/x.bin");
 
     let mut storage = LinkStorage::default();
@@ -921,7 +919,7 @@ fn a_case_differing_final_component_names_the_walk_entry() {
     let dst = t.subdir("dst");
     std::fs::create_dir_all(dst.join("real")).unwrap();
     std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
-    let root = std::fs::canonicalize(&dst).unwrap();
+    let root = dunce::canonicalize(&dst).unwrap();
     if std::fs::metadata(dst.join("REAL/X.BIN")).is_err() {
         eprintln!("skip: case-sensitive filesystem; `REAL/X.BIN` is another entry");
         return;
@@ -1002,7 +1000,7 @@ fn a_case_only_rename_of_the_target_is_one_spare_in_both_modes() {
     let dst = t.subdir("dst");
     std::fs::create_dir_all(dst.join("real")).unwrap();
     std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
-    let root = std::fs::canonicalize(&dst).unwrap();
+    let root = dunce::canonicalize(&dst).unwrap();
     if std::fs::metadata(dst.join("real/X.BIN")).is_err() {
         eprintln!("skip: case-sensitive filesystem; the rename is not a pair");
         return;
@@ -1046,7 +1044,7 @@ fn a_case_differing_link_component_is_spared_under_the_walk_spelling() {
         eprintln!("skip: case-sensitive filesystem; `LINK` is another entry");
         return;
     }
-    let root = std::fs::canonicalize(&dst).unwrap();
+    let root = dunce::canonicalize(&dst).unwrap();
     let target = dst.join("LINK/x.bin");
 
     let mut storage = LinkStorage::default();

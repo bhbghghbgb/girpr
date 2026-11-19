@@ -73,7 +73,7 @@ pub(crate) struct SystemProbes;
 
 impl Probes for SystemProbes {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        std::fs::canonicalize(path)
+        dunce::canonicalize(path)
     }
 
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
@@ -138,7 +138,7 @@ pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     },
     DirectQuestion {
         file: "safety.rs",
-        call: "std::fs::canonicalize",
+        call: "dunce::canonicalize",
         asks: "where a target outside dst resolves",
     },
     DirectQuestion {
@@ -158,7 +158,7 @@ pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     },
     DirectQuestion {
         file: "link.rs",
-        call: "Path::canonicalize",
+        call: "dunce::canonicalize",
         asks: "the parent a link target resolves through",
     },
     DirectQuestion {
@@ -352,7 +352,7 @@ pub(crate) fn spare_link_storage(
                     }
                     // Record the external file too: two links to one outside
                     // inode are the same shared-storage hazard as two inside.
-                    match std::fs::canonicalize(&target) {
+                    match dunce::canonicalize(&target) {
                         Ok(p) => terminals.push((
                             rel.clone(),
                             format!("external:{}", p.display()),
@@ -818,8 +818,15 @@ mod tests {
 
     use super::DIRECT_QUESTIONS;
 
-    /// The modules whose functions reach the disk.
-    const DISK_MODULES: [&str; 3] = ["std::fs", "crate::link", "crate::hardlink"];
+    /// The modules whose functions reach the disk. `dunce::canonicalize` is a
+    /// path canonicalizer like `std::fs`'s, so its calls are direct disk
+    /// questions too.
+    const DISK_MODULES: [&str; 4] = [
+        "std::fs",
+        "dunce::canonicalize",
+        "crate::link",
+        "crate::hardlink",
+    ];
 
     /// The `Path` methods that reach the disk.
     const DISK_METHODS: [&str; 7] = [

@@ -128,8 +128,7 @@ fn refuse_link_ancestor(dst_root: &Path, rel: &str) -> Result<()> {
 /// through.
 fn refuse_final_link_into_src(d: &Path, rel: &str, src_canonical: &Path) -> Result<()> {
     if crate::link::try_is_link(d).with_context(|| format!("check link {}", d.display()))? {
-        let target =
-            std::fs::canonicalize(d).with_context(|| format!("resolve dst link `{rel}`"))?;
+        let target = dunce::canonicalize(d).with_context(|| format!("resolve dst link `{rel}`"))?;
         if path_within(&target, src_canonical) {
             bail!(
                 "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
@@ -570,7 +569,7 @@ mod tests {
 
     /// The canonical form of a root, which is what the guards are handed.
     fn canonical(root: &Path) -> PathBuf {
-        std::fs::canonicalize(root).unwrap()
+        dunce::canonicalize(root).unwrap()
     }
 
     /// The digest `copy_and_digest` returns has to be **the file's**, not the

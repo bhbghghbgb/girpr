@@ -133,25 +133,6 @@ pub(super) fn keep_ancestors(rel: &str, keep_dirs: &mut HashSet<String>) {
     }
 }
 
-#[cfg(windows)]
-pub(super) fn without_verbatim(path: &Path) -> Cow<'_, Path> {
-    let Some(text) = path.to_str() else {
-        return Cow::Borrowed(path);
-    };
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        Cow::Owned(PathBuf::from(format!(r"\\{rest}")))
-    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
-        Cow::Owned(PathBuf::from(rest))
-    } else {
-        Cow::Borrowed(path)
-    }
-}
-
-#[cfg(not(windows))]
-pub(super) fn without_verbatim(path: &Path) -> Cow<'_, Path> {
-    Cow::Borrowed(path)
-}
-
 /// The plan-relative spelling of an absolute link target under `canonical_dst`.
 ///
 /// A junction's `read_link` target is absolute and keeps the spelling the
@@ -164,11 +145,10 @@ pub(super) fn absolute_alias(
     canonical_dst: &Path,
     on_disk: Option<&DiskSpelling>,
 ) -> Option<String> {
-    // `canonicalize` and a junction's `read_link` need not agree on the
-    // verbatim prefix (`\\?\C:\...` vs `C:\...`); compare without it.
-    let target = without_verbatim(target);
-    let root = without_verbatim(canonical_dst);
-    let rel = target.strip_prefix(root.as_ref()).ok()?;
+    // Canonicalization goes through `dunce`, which — like a junction's
+    // `read_link` — spells a UNC root with two backslashes and a local drive
+    // path without a verbatim prefix, so the two compare directly.
+    let rel = target.strip_prefix(canonical_dst).ok()?;
     let mut parts: Vec<&str> = Vec::new();
     for comp in rel.components() {
         match comp {
@@ -277,7 +257,7 @@ pub(super) fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<S
     let Some(parent) = target.parent() else {
         return Ok(None);
     };
-    let parent = match parent.canonicalize() {
+    let parent = match dunce::canonicalize(parent) {
         Ok(parent) => parent,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {

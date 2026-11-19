@@ -712,7 +712,7 @@ fn guard_removal_outside_src(src_canonical: &Path, dst: &Path, rel: &str) -> Res
     let Some(parent) = target.parent() else {
         return Ok(());
     };
-    match parent.canonicalize() {
+    match dunce::canonicalize(parent) {
         Ok(resolved) if path_within(&resolved, src_canonical) => bail!(
             "refusing to remove `{rel}`: its directory resolves to `{}`, which is \
              inside src `{}`; a mirror may not delete the files it is copying",
@@ -935,7 +935,7 @@ mod tests {
         let src = t.subdir("src");
         std::fs::create_dir_all(src.join("sub")).unwrap();
         let dst = t.subdir("dst");
-        let src_canonical = std::fs::canonicalize(&src).unwrap();
+        let src_canonical = dunce::canonicalize(&src).unwrap();
 
         let err = guard_removal_outside_src(&src_canonical, &dst, "../src/sub/x")
             .expect_err("a delete whose directory is inside src must be refused");
