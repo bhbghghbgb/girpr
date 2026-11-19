@@ -3,6 +3,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
+use backoff::backoff::Backoff;
+
 use super::{
     ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, HttpRequest, HttpResponse,
     HttpTransport, Kind, RealSleep, RequestLog, RequestRecord, ReqwestTransport, RetryPolicy,
@@ -793,13 +795,20 @@ impl Fetcher {
         mut dest: Destination<'_>,
     ) -> Result<Run, FetchFailure> {
         let started = Instant::now();
+        let mut backoff = self.policy.backoff();
         let mut attempts: u32 = 0;
         let mut last: Option<FetchFailure> = None;
 
         while attempts < self.policy.attempts {
             attempts += 1;
-            let waiting = self.policy.delay_before(attempts);
-            if !waiting.is_zero() {
+            // The first attempt goes out immediately. Every later one waits on
+            // the next slice of the no-jitter exponential schedule; the sleep
+            // itself stays injected so tests count delays instead of spending
+            // them, and a `--jobs` worker yields instead of blocking.
+            if attempts > 1 {
+                let waiting = backoff
+                    .next_backoff()
+                    .expect("no max_elapsed_time: every retry has a delay");
                 tracing::debug!(url, ?waiting, attempts, "retry backoff");
                 self.sleeper.sleep(waiting).await;
             }

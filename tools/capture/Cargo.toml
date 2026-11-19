@@ -35,6 +35,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.8", features = ["derive"] }
+# The clamped exponential retry schedule is delegated to `backoff`'s
+# `ExponentialBackoff`; only its policy and `Backoff` trait are used, not the
+# async retry driver, so the `tokio` feature is not needed here. 0.4 is the
+# latest published line, already in the workspace lockfile. Jitter is disabled
+# (randomization_factor 0.0) so capture artifacts stay byte-stable and diffable.
+backoff = "0.4"
 # The log-file and log-level policy, shared with the repair binary and with
 # `girsync`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters (see docs/00-spec.md

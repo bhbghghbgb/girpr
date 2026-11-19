@@ -5,42 +5,54 @@ use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+
 /// When to retry, and how long to wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     /// Attempts in total, including the first. `1` means never retry.
     pub attempts: u32,
-    /// Delay before the second attempt; doubles each time after that.
-    pub base_delay: Duration,
-    /// Ceiling on the doubling, so `--retries 10` cannot sleep for an hour.
-    pub max_delay: Duration,
 }
 
 impl RetryPolicy {
+    /// Delay before the second attempt; doubles each time after that.
+    const BASE_DELAY: Duration = Duration::from_millis(500);
+    /// Ceiling on the doubling, so `--retries 10` cannot sleep for an hour.
+    const MAX_DELAY: Duration = Duration::from_secs(10);
+
     /// The default for a `--retries` value.
     pub fn new(attempts: u32) -> Self {
         RetryPolicy {
             attempts: attempts.max(1),
-            base_delay: Duration::from_millis(500),
-            max_delay: Duration::from_secs(10),
         }
     }
 
-    /// The delay before attempt number `attempt` (1-based; `1` never waits).
+    /// A fresh, no-jitter exponential schedule for one request's retry loop.
     ///
-    /// Pure and off by construction: `base * 2^(attempt - 2)` is the delay
-    /// *before* attempt 2, and the exponent is clamped before it can overflow a
-    /// shift, which `--retries 10` would otherwise do at attempt 34.
-    pub fn delay_before(&self, attempt: u32) -> Duration {
-        if attempt <= 1 || self.base_delay.is_zero() {
-            return Duration::ZERO;
-        }
-        let shift = (attempt - 2).min(16);
-        let scaled = self
-            .base_delay
-            .checked_mul(1u32 << shift)
-            .unwrap_or(self.max_delay);
-        scaled.min(self.max_delay)
+    /// `backoff`'s `ExponentialBackoff` owns the doubling and the clamp: the
+    /// delay before retry *k* is `BASE_DELAY * 2^(k-1)` capped at `MAX_DELAY`,
+    /// with the overflow-safe clamp coming from the crate rather than a
+    /// hand-rolled shift. A fresh instance is needed per request because a
+    /// `Fetcher` is cloned into every `--jobs` worker and the backoff is stateful.
+    ///
+    /// `randomization_factor = 0.0` is **jitter: None**. `next_backoff` still
+    /// draws an internal random number, but with a zero-width range the drawn
+    /// value cannot change the returned duration, so the schedule — and every
+    /// artifact derived from a capture — stays deterministic and diffable. This
+    /// is the opposite of girpr, which deliberately wants RNG de-synchronization.
+    ///
+    /// `max_elapsed_time(None)` removes the wall-clock cutoff: the loop already
+    /// bounds attempts with `attempts`, and an injected sleeper need not advance
+    /// real time at all, so an elapsed-time cap would be redundant and a source
+    /// of nondeterminism.
+    pub fn backoff(&self) -> ExponentialBackoff {
+        ExponentialBackoffBuilder::new()
+            .with_initial_interval(Self::BASE_DELAY)
+            .with_multiplier(2.0)
+            .with_max_interval(Self::MAX_DELAY)
+            .with_randomization_factor(0.0)
+            .with_max_elapsed_time(None)
+            .build()
     }
 
     /// Whether a status is worth another attempt.

@@ -1,6 +1,7 @@
 use super::*;
 use crate::biz::{Biz, BranchParams};
 use crate::cli::Biz as BizId;
+use backoff::backoff::Backoff;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -134,20 +135,20 @@ fn the_measured_global_urls_are_reproduced_exactly() {
 
 #[test]
 fn the_backoff_is_exponential_from_the_second_attempt_and_capped() {
-    let p = RetryPolicy {
-        attempts: 10,
-        base_delay: Duration::from_millis(500),
-        max_delay: Duration::from_secs(10),
-    };
-    assert_eq!(p.delay_before(1), Duration::ZERO);
-    assert_eq!(p.delay_before(2), Duration::from_millis(500));
-    assert_eq!(p.delay_before(3), Duration::from_millis(1000));
-    assert_eq!(p.delay_before(4), Duration::from_millis(2000));
-    assert_eq!(p.delay_before(5), Duration::from_millis(4000));
-    assert_eq!(p.delay_before(6), Duration::from_millis(8000));
-    assert_eq!(p.delay_before(7), Duration::from_secs(10), "capped");
-    // A shift overflow would panic or wrap; it must clamp instead.
-    assert_eq!(p.delay_before(64), Duration::from_secs(10));
+    // The schedule is `backoff`'s ExponentialBackoff with jitter disabled, so
+    // the delays are exact, not a range. The first call is the delay *before*
+    // attempt 2; attempt 1 never waits (the loop does not call next_backoff).
+    let mut b = RetryPolicy::new(10).backoff();
+    assert_eq!(b.next_backoff(), Some(Duration::from_millis(500)));
+    assert_eq!(b.next_backoff(), Some(Duration::from_millis(1000)));
+    assert_eq!(b.next_backoff(), Some(Duration::from_millis(2000)));
+    assert_eq!(b.next_backoff(), Some(Duration::from_millis(4000)));
+    assert_eq!(b.next_backoff(), Some(Duration::from_millis(8000)));
+    assert_eq!(b.next_backoff(), Some(Duration::from_secs(10)), "capped");
+    // Doubling past the cap must stay clamped, not overflow or grow past 10 s.
+    for _ in 0..57 {
+        assert_eq!(b.next_backoff(), Some(Duration::from_secs(10)));
+    }
 }
 
 #[test]
@@ -1020,10 +1021,7 @@ async fn a_server_fault_is_retried_and_the_recovered_record_says_so() {
     assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
     assert_eq!(
         sleeper.delays(),
-        vec![
-            RetryPolicy::new(3).delay_before(2),
-            RetryPolicy::new(3).delay_before(3),
-        ],
+        vec![Duration::from_millis(500), Duration::from_millis(1000)],
         "exactly one wait between attempts, exponential, none before the first"
     );
 
