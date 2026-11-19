@@ -18,11 +18,11 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T04 | FNV literals → named constants | skipped | | Premise false: pinned fnv 1.0.7 exposes no named constants; goal already met by existing FNV_OFFSET/FNV_PRIME named constants in repair/lock.rs; do not add hashkit |
 | T05 | `jobs` range validation in clap | skipped | | Clap-level validation changes error timing/format; --jobs 0 is a pinned post-parse test trigger; semantics cannot be preserved cleanly (stale main.rs:94-96 pointer, real code at 34-44 and 144-157) |
 | T06 | `AtomicU64::fetch_update` + simplify test gate | completed | 8141d6fa | Used try_update (fetch_update deprecated in rustc 1.100, identical method); custom Gate harness removed, race coverage retained via Barrier; downstream ledger race test rewritten with Barrier |
-| T07 | `girpr-tempdir` `TempDir` → `tempfile` | pending_review | 4847a15a | Delegated to tempfile::Builder::tempdir_in; kept custom Drop for at()/absent() (TempPath only removes files); name-shape test replaced with recognizability check. Cargo.lock re-resolution downgraded unrelated transitive deps (originals uncached). Proposed follow-up §I.14: drop girsync dep from tempdir |
-| T08 | `tracing-appender` as single file-log writer | pending_review | f11f7ac7 | Stale premise: only one process::exit (parse_args, pre-init_tracing); logging paths already flush. Flush-failure warning + its test removed (WorkerGuard::drop has no error channel); lossy 128k-line queue replaces backpressured BufWriter; README buffer bullet updated |
-| T09 | EnvFilter spec via `add_directive` | pending_review | fb76d39e | console_filter now returns EnvFilter via try_new + add_directive (not builder().with_env_var, which ignores captured RUST_LOG); all 3 consumers updated; sync redb=warn now appended after RUST_LOG (obscure conflict behavior changes to hard-floor intent); warn/fallback preserved; no with_default_directive/parse_lossy |
-| T10 | Directory walkers → `walkdir` | pending_review | 392d5cbb8f5242ff2074b69561d396cd8fffb0e7 | Premise stale: walkdir only in root/sync, added to gircap; fault-injection seam reshaped to pre-descent access check, child_dirs removed, 5 error tests rewritten; loop/dangling-link errors skipped to match old behavior; MANIFEST boundary + sorted order preserved |
-| T11 | Percent encoding → `percent-encoding` | pending_review | bfdb5122 | Literal AsciiSet plan impossible in 2.3.2 (escapes all non-ASCII); used percent_encode_byte primitive; kept minimal 5-char escape set; old decoder accepted %+A sign edge now passed through; added explicit non-ASCII pinning test |
+| T07 | `girpr-tempdir` `TempDir` → `tempfile` | completed | 4847a15a, 4636a691 | Delegated to tempfile::Builder::tempdir_in; kept custom Drop for at()/absent() (TempPath only removes files); name-shape test replaced with recognizability check. Cargo.lock re-resolution downgraded unrelated transitive deps (originals uncached). Proposed follow-up §I.14: drop girsync dep from tempdir |
+| T08 | `tracing-appender` as single file-log writer | completed | f11f7ac7 | Stale premise: only one process::exit (parse_args, pre-init_tracing); logging paths already flush. Flush-failure warning + its test removed (WorkerGuard::drop has no error channel); lossy 128k-line queue replaces backpressured BufWriter; README buffer bullet updated |
+| T09 | EnvFilter spec via `add_directive` | completed | fb76d39e | console_filter now returns EnvFilter via try_new + add_directive (not builder().with_env_var, which ignores captured RUST_LOG); all 3 consumers updated; sync redb=warn now appended after RUST_LOG (obscure conflict behavior changes to hard-floor intent); warn/fallback preserved; no with_default_directive/parse_lossy |
+| T10 | Directory walkers → `walkdir` | completed | 392d5cbb8f5242ff2074b69561d396cd8fffb0e7 | Premise stale: walkdir only in root/sync, added to gircap; fault-injection seam reshaped to pre-descent access check, child_dirs removed, 5 error tests rewritten; loop/dangling-link errors skipped to match old behavior; MANIFEST boundary + sorted order preserved |
+| T11 | Percent encoding → `percent-encoding` | completed | bfdb5122 | Literal AsciiSet plan impossible in 2.3.2 (escapes all non-ASCII); used percent_encode_byte primitive; kept minimal 5-char escape set; old decoder accepted %+A sign edge now passed through; added explicit non-ASCII pinning test |
 | T12 | Windows device-name / path-shape rule | skipped | | Share-one-rule premise already met (config calls paths::is_windows_device_name); no library predicate matches current reserved set - sanitize-filename adds COM0/LPT0 and omits CONIN$/CONOUT$, changing artifact layout |
 | T13 | girpr JSON renderer → `Serialize` | todo | | |
 | T14 | girsync JSON renderer → `Serialize` | todo | | |
@@ -53,7 +53,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01, T02, T03, T06 (T04, T05 skipped) | done | All four completed; no fixes/reverts; 4 follow-ups recorded |
-| B | T07, T08, T09, T10, T11 (T12 skipped) | pending | |
+| B | T07, T08, T09, T10, T11 (T12 skipped) | done | All five completed; lockfile fix 4636a691; 5 follow-ups recorded |
 
 ## Follow-ups
 
@@ -63,6 +63,11 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F02 | Optional second hex sweep of non-digest u8::from_str_radix / format sites | open | Not digest-hex; out of T03 scope |
 | F03 | Restore deterministic interleaving test only if saturating logic returns in-house | open | Barrier contention suffices today (from T06) |
 | F04 | Make gircap spawn tests locate the binary robustly via a runner-provided env var | open | Harness-only; task-relevant tests pass |
+| F05 | Consider file-log backpressure via lossy(false) or surface dropped_lines at exit | open | T08; normal runs never approach 128k queue limit |
+| F06 | Drop girsync dev-dependency from crates/tempdir behind a test-support feature | open | T07; build-weight only; proposed by implementer |
+| F07 | Pin the strict percent-decoder %+A pass-through with a regression test | open | T11; encoder never emits a plus escape |
+| F08 | Restore real WalkDir directory-read failure coverage in walk tests | open | T10; production path covered indirectly by passing tests |
+| F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | open | T09; affects only rare RUST_LOG naming redb |
 
 ## Persistent context
 
