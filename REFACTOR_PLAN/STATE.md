@@ -60,6 +60,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
 | F | T23, T24 | done | Both completed; no fixes; all 9 malformed-Length tests retained; bridge/domain servers untouched; 5 follow-ups recorded |
 | G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
+| solo | T27 | pending | |
 
 ## Follow-ups
 
