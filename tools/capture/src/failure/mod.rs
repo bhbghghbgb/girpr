@@ -33,11 +33,17 @@ pub type Outcome = (Record, ExitCode);
 /// wrong" and the operator needs to know what — so the cause rides out on stdout
 /// as a `detail=` field instead of living only in the stderr narration that a
 /// `--output json` pipeline is not reading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{detail}")]
 pub struct Failure {
     /// What to exit with.
     pub code: ExitCode,
-    /// The one-line cause.
+    /// The one-line cause, and the whole of this type's `Display` output.
+    ///
+    /// The code is deliberately *not* printed: `detail` is a field of a
+    /// `SUMMARY` line and is consumed there, so printing a `Failure` in a log
+    /// or an assertion message should not invent a second, differently-shaped
+    /// spelling of the same thing.
     pub detail: String,
     /// A record to print **before** this failure's own summary.
     ///
@@ -57,18 +63,6 @@ pub struct Failure {
     /// the command does not know the output format - `--output` is resolved in
     /// the shim, above every command.
     pub preceded_by: Option<crate::report::Record>,
-}
-
-impl std::fmt::Display for Failure {
-    /// The one-line cause, on its own.
-    ///
-    /// The code is deliberately *not* in the output: `detail` is a field of a
-    /// `SUMMARY` line and is consumed there, so printing a `Failure` in a log or
-    /// an assertion message should not invent a second, differently-shaped
-    /// spelling of the same thing.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.detail)
-    }
 }
 
 impl Failure {

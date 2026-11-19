@@ -7,9 +7,10 @@ use crate::exit::ExitCode;
 /// One type rather than four, because there is one answer to give for all of
 /// them: the capture did not get a usable response. The distinction survives in
 /// the message and in the logged record, which is where a reader needs it.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// The request never completed: DNS, TLS, connect, or timeout.
+    #[error("{url}: transport failed after {attempts} attempt(s): {detail}")]
     Transport {
         /// The URL that failed.
         url: String,
@@ -19,6 +20,7 @@ pub enum ApiError {
         detail: String,
     },
     /// The server answered with a status this fetcher will not accept.
+    #[error("{url}: HTTP {status} after {attempts} attempt(s)")]
     Status {
         /// The URL that failed.
         url: String,
@@ -28,6 +30,7 @@ pub enum ApiError {
         attempts: u32,
     },
     /// A `200` whose body is not a usable API answer.
+    #[error("{subject}: {detail}")]
     Shape {
         /// Which endpoint, or what was being built.
         subject: String,
@@ -80,28 +83,3 @@ impl ApiError {
         }
     }
 }
-
-impl fmt::Display for ApiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ApiError::Transport {
-                url,
-                attempts,
-                detail,
-            } => write!(
-                f,
-                "{url}: transport failed after {attempts} attempt(s): {detail}"
-            ),
-            ApiError::Status {
-                url,
-                status,
-                attempts,
-            } => {
-                write!(f, "{url}: HTTP {status} after {attempts} attempt(s)")
-            }
-            ApiError::Shape { subject, detail } => write!(f, "{subject}: {detail}"),
-        }
-    }
-}
-
-impl std::error::Error for ApiError {}

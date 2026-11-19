@@ -325,7 +325,8 @@ pub enum ManifestDetail {
 /// Every constructor here is `ExitCode::Usage`. The type exists so that a
 /// validation failure cannot be reported under a different code by accident:
 /// there is exactly one way to make one.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct UsageError {
     message: String,
 }
@@ -348,14 +349,6 @@ impl UsageError {
         ExitCode::Usage
     }
 }
-
-impl std::fmt::Display for UsageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for UsageError {}
 
 /// Shorthand for this module's own parse step.
 pub type Result<T> = std::result::Result<T, UsageError>;
