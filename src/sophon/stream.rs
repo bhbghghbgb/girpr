@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream::Stream};
 use md5::Digest;
 use prost::Message;
@@ -27,7 +27,11 @@ pub async fn fetch_manifest(
     backoff: &BackoffPolicy,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
-    let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
+    // Resolve the prefix once, at the manifest boundary. The API's prefixes end
+    // in the build id, not in `/`, and `Url::join` replaces a base's last path
+    // segment; a trailing slash makes it append the blob below the prefix.
+    let base = url_base(&meta.manifest_download.url_prefix)?;
+    let url = base.join(&meta.manifest.id)?;
     // The reported size *sizes* the buffer; it does not promise the length, and
     // it is not trusted enough to allocate on. A blob bigger than the clamp
     // grows the buffer; a bogus number cannot ask for an impossible allocation.
@@ -95,8 +99,11 @@ async fn try_fetch_manifest(
         }
     };
     let status = resp.status();
-    if let Some(e) = status_failure(status, url) {
-        return verdict(e, retryable(status.as_u16()));
+    // reqwest's canonical status error, carrying the status and the URL. The
+    // `_ref` form leaves the body usable, which the streaming path needs once
+    // the status is known to be good.
+    if let Err(e) = resp.error_for_status_ref() {
+        return verdict(anyhow::Error::new(e), retryable(status.as_u16()));
     }
     // A retry starts the manifest over: the decoded bytes of the failed
     // attempt are in the buffer, and they are about to be replaced.
@@ -344,33 +351,39 @@ pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<C
         consumed,
         sink,
     } = fetch;
+    // Resolve the prefix once here, at the chunk-fetch boundary; the retry
+    // closure only appends ids to this base.
+    let base = url_base(url_prefix)?;
     retry_state(
         ATTEMPTS,
         backoff,
         (consumed, sink),
-        |(consumed, sink), attempt| async move {
-            let result = {
-                let mut fetch = ChunkFetch {
-                    client,
-                    backoff,
-                    url_prefix,
-                    id,
-                    expected,
-                    max_compressed,
-                    consumed: &mut *consumed,
-                    sink: &mut *sink,
+        |(consumed, sink), attempt| {
+            let base = base.clone();
+            async move {
+                let result = {
+                    let mut fetch = ChunkFetch {
+                        client,
+                        backoff,
+                        url_prefix,
+                        id,
+                        expected,
+                        max_compressed,
+                        consumed: &mut *consumed,
+                        sink: &mut *sink,
+                    };
+                    try_stream_chunk(&mut fetch, &base, attempt).await
                 };
-                try_stream_chunk(&mut fetch, attempt).await
-            };
-            match result {
-                Retry::Done(d) => RetryState::Done(d),
-                Retry::Fatal(e) => {
-                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
-                    RetryState::Fatal(e)
-                }
-                Retry::Retry(e) => {
-                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
-                    RetryState::Retry((consumed, sink), e)
+                match result {
+                    Retry::Done(d) => RetryState::Done(d),
+                    Retry::Fatal(e) => {
+                        tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
+                        RetryState::Fatal(e)
+                    }
+                    Retry::Retry(e) => {
+                        tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
+                        RetryState::Retry((consumed, sink), e)
+                    }
                 }
             }
         },
@@ -390,18 +403,22 @@ pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<C
 /// of an attempt that did not finish.
 async fn try_stream_chunk<S: ChunkSink>(
     fetch: &mut ChunkFetch<'_, S>,
+    base: &reqwest::Url,
     attempt: u32,
 ) -> Retry<ChunkDigest> {
     let id = fetch.id;
-    let url = join_url(fetch.url_prefix, fetch.id);
+    let url = match base.join(id) {
+        Ok(url) => url,
+        Err(e) => return Retry::Fatal(anyhow::Error::new(e).context("build chunk url")),
+    };
     let url = url.as_str();
     let resp = match fetch.client.get(url).send().await {
         Ok(r) => r,
         Err(e) => return Retry::Retry(anyhow::anyhow!("GET chunk: {}", e)),
     };
     let status = resp.status();
-    if let Some(e) = status_failure(status, url) {
-        return verdict(e, retryable(status.as_u16()));
+    if let Err(e) = resp.error_for_status_ref() {
+        return verdict(anyhow::Error::new(e), retryable(status.as_u16()));
     }
     // NOTE: the bridge parses this line to work out what was *downloaded*
     // rather than reused, so it has to say which chunk it was about.
@@ -548,15 +565,29 @@ fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Retry<T> {
     }
 }
 
-/// `Some` when `status` is a failure, carrying a message in the shape `reqwest`
-/// would have produced for `error_for_status()`.
-fn status_failure(status: reqwest::StatusCode, url: &str) -> Option<anyhow::Error> {
-    if status.is_success() {
-        return None;
+/// Resolve a manifest's URL prefix into a directory-style base URL.
+///
+/// The API's prefixes end in the build id (`…/chunks/<build>`), so joining an
+/// id straight onto them would replace that last segment. Give the base a
+/// trailing slash once, here, so every `base.join(id)` appends the blob below
+/// the prefix — the same URL the old `{prefix}/{id}` join produced.
+fn url_base(prefix: &str) -> Result<reqwest::Url> {
+    let mut base =
+        reqwest::Url::parse(prefix).with_context(|| format!("parse blob url prefix {prefix:?}"))?;
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
     }
-    Some(anyhow::anyhow!(
-        "HTTP status client error ({status}) for url ({url})"
-    ))
+    Ok(base)
+}
+
+/// One-shot URL join for the test seam: resolve `prefix`, then append `id`.
+///
+/// The fetch paths resolve the prefix once at their boundary and use
+/// `reqwest::Url::join` per blob; this is the same result in a single call, so
+/// a test can advertise exactly the URL production fetches.
+pub fn join_url(prefix: &str, id: &str) -> Result<reqwest::Url> {
+    Ok(url_base(prefix)?.join(id)?)
 }
 
 /// Whether a blob status is worth another attempt.
@@ -577,11 +608,8 @@ fn status_failure(status: reqwest::StatusCode, url: &str) -> Option<anyhow::Erro
 /// Same rule as `gircap`'s `RetryPolicy::should_retry_status`. Two tools in one
 /// repository disagreeing about the same status code is itself a defect.
 pub fn retryable(status: u16) -> bool {
-    matches!(status, 408 | 429) || (500..=599).contains(&status)
-}
-
-pub fn join_url(prefix: &str, id: &str) -> String {
-    format!("{}/{}", prefix.trim_end_matches('/'), id)
+    matches!(status, 408 | 429)
+        || reqwest::StatusCode::from_u16(status).is_ok_and(|s| s.is_server_error())
 }
 
 #[cfg(test)]
@@ -985,6 +1013,22 @@ mod tests {
                 "{status} must stop the fetch"
             );
         }
+    }
+
+    /// Production `url_prefix` values from `getBuild` end in the build id, not
+    /// in a `/`. Appending a blob must keep that segment and add the id below
+    /// it — joining straight onto a slashless base would drop the build id.
+    #[test]
+    fn a_production_prefix_keeps_its_build_segment_when_an_id_is_joined() {
+        let prefix =
+            "https://autopatchhk.yuanshen.com/client_app/sophon/chunks/cxhpq4g4rgg0/sMXGW2ll3Fuu";
+        let id = "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d";
+        let url = join_url(prefix, id).expect("the production prefix resolves");
+        assert_eq!(
+            url.as_str(),
+            format!("{prefix}/{id}"),
+            "the build id stays in the path and the blob id is appended below it"
+        );
     }
 
     fn manifest_meta(base: &str) -> ChunkManifestMeta {

@@ -91,9 +91,9 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 /// - `SophonChunk`, `SophonChunkFile` and `SophonChunkManifest` build the
 ///   offline mock's manifests; `ChunkFetch`, `ChunkSink` and `stream_chunk_to`
 ///   are what the peak-heap probe measures;
-/// - `join_url` is the one URL join the fetches use, so `tests/repair_offline.rs`
-///   builds an advertised manifest's URL through it rather than restating the
-///   formula;
+/// - `join_url` resolves a prefix into a `reqwest::Url` and appends an id, the
+///   way the fetches do, so `tests/repair_offline.rs` builds an advertised
+///   manifest's URL through it rather than restating the join;
 /// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk;
 /// - `terminal_retcode` is the retcode classifier the fixture builds its
 ///   terminal failures with, so a test cannot disagree with the client about

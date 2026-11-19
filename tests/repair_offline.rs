@@ -1238,7 +1238,7 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         let id = manifest["manifest"]["id"]
             .as_str()
             .expect("an id per manifest");
-        join_url(prefix, id)
+        join_url(prefix, id).expect("manifest blob url")
     };
     let kept_body = client
         .get(body_url("kept"))
