@@ -57,6 +57,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | C | T13, T14, T15 | done | All three completed; cross-tool consistency PASS; fix 9177fde1 pins backslash escaping; 2 follow-ups recorded |
 | D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
 | E | T18, T20, T21, T22 (T19 skipped) | done | All four completed; no fixes; DO-NOT-TOUCH resume artifacts preserved; 6 follow-ups recorded |
+| X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
 
 ## Follow-ups
 
@@ -65,7 +66,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F01 | Collapse girsync ts_now shim; call girpr_log::timestamp directly in cache/open.rs | open | Low-payoff cleanup (from T02) |
 | F02 | Optional second hex sweep of non-digest u8::from_str_radix / format sites | open | Not digest-hex; out of T03 scope |
 | F03 | Restore deterministic interleaving test only if saturating logic returns in-house | open | Barrier contention suffices today (from T06) |
-| F04 | Make gircap spawn tests locate the binary robustly via a runner-provided env var | open | Harness-only; task-relevant tests pass |
+| F04 | Make gircap spawn tests locate the binary robustly via a runner-provided env var | done | Fixed by c7e34ba4 using CARGO_BIN_EXE_gircap; predates orchestration; full suite green |
 | F05 | Consider file-log backpressure via lossy(false) or surface dropped_lines at exit | open | T08; normal runs never approach 128k queue limit |
 | F06 | Drop girsync dev-dependency from crates/tempdir behind a test-support feature | open | T07; build-weight only; proposed by implementer |
 | F07 | Pin the strict percent-decoder %+A pass-through with a regression test | open | T11; encoder never emits a plus escape |
@@ -83,14 +84,18 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F19 | Restore an observable durability assertion for write_atomic_with durable=true | open | T21; seam loss allowed, durable branch remains |
 | F20 | Add successful Windows overwrite test for NamedTempFile::persist | open | T21; extra assurance only |
 | F21 | Note 3xx no longer treated as failure and join_url signature String to Result<Url> | open | T22; in-tree callers updated, redirects followed by default |
+| F22 | Correct M0/M10 commit hash citations for the bin() helper for traceability | open | Ad-hoc review X; active branch has d48a485d/7fd70570 |
+| F23 | Add a guard comment/test that CARGO_BIN_EXE_gircap is set to prevent regression to current_exe() | open | Ad-hoc review X; non-blocking |
+| F24 | Review the CARGO_BIN_EXE_* pattern for any future spawn-based integration tests in other tool crates | open | Ad-hoc review X; non-blocking |
 
 ## Persistent context
 
-- gircap spawn-based integration tests (bundle_consistency, capture_layout,
-  cli_contract) fail in this harness with "cannot find gircap.exe": test binaries
-  live in build-script OUT_DIR so the bin() helper looks in the wrong place.
-  Not attributable to task code; copying the executable beside the test binaries
-  makes them pass. Relevant to gircap test work (report §F, tasks T23-T24).
+- gircap spawn-based integration tests: the os error 2 "cannot find gircap.exe"
+  failures PREDATE the orchestration (reproduced at baseline 36d2a030). Root cause
+  was nextest placing test binaries in build-script OUT_DIR, invalidating the
+  current_exe()-relative bin() lookup. Fixed in c7e34ba4 by using
+  env!("CARGO_BIN_EXE_gircap"); all 2114 workspace tests pass under both cargo
+  test and cargo nextest with no manual binary copying (report §F, T23-T24).
 - JSON-renderer decision (§A1, from T13 commit 69414ccb), reuse for T14/T15:
   hand-write Serialize per crate on its own local Record/Val with
   serialize_map(Some(n)) + serialize_entry in THAT tool's own order; json() =
