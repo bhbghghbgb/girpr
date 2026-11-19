@@ -136,24 +136,45 @@ fn a_quote_or_backslash_in_a_value_survives_the_json_encoding() {
     );
 }
 
-/// A plain ASCII key is written straight into the buffer between one pair of
-/// quotes; a key that needs escaping is quoted exactly once, so the bytes
-/// match what `serde_json` would emit and the surrounding object still parses
-/// with the key intact. A double-quoted key (`""a\"b""`) would corrupt the line.
+/// The backslash decision, pinned byte-for-byte. `serde_json` now owns all
+/// escaping, and it emits `\\` for backslashes plus its own spelling for
+/// control characters — exactly what the old hand-rolled renderer's fallback
+/// path already produced for these values, so moving to `Serialize` changes no
+/// bytes. A Windows artifact path is the common case that exercises this.
 #[test]
-fn push_json_key_writes_plain_and_escaped_keys_correctly() {
-    let mut out = String::new();
-    push_json_key(&mut out, "exit_code");
-    assert_eq!(out, "\"exit_code\"");
+fn json_backslash_and_control_escaping_is_byte_stable() {
+    let line = Record::summary("verify")
+        .set("artifact", r"C:\tmp\x")
+        .set("note", "a\u{1}b\tc")
+        .to_json_line();
+    assert_eq!(
+        line,
+        r#"{"event":"verify","tool":"gircap","version":"0.1.0","artifact":"C:\\tmp\\x","note":"a\u0001b\tc"}"#
+    );
+}
+
+/// A plain ASCII key needs no escaping; a key that needs it is escaped exactly
+/// once, so its bytes match what `serde_json` would emit and the surrounding
+/// object still parses with the key intact. A double-quoted key (`""a\"b""`)
+/// would corrupt the line. Keys now go through `serde_json` via `Serialize`.
+#[test]
+fn plain_and_escaped_keys_are_emitted_correctly() {
+    let plain = "exit_code";
+    let plain_line = Record::summary("x").set(plain, 1_i32).to_json_line();
+    assert!(
+        plain_line.contains("\"exit_code\":1"),
+        "plain key must be emitted verbatim: {plain_line}"
+    );
 
     let key = "a\"b\\c\u{1}\t"; // quote, backslash, control, tab
-    let mut quoted = String::new();
-    push_json_key(&mut quoted, key);
-    assert_eq!(quoted, serde_json::to_string(key).unwrap());
+    let quoted = serde_json::to_string(key).unwrap();
+    let line = Record::summary("x").set(key, 1_i32).to_json_line();
+    assert!(
+        line.contains(&format!("{quoted}:1")),
+        "escaped key bytes must match serde_json: {line}"
+    );
 
-    let obj = format!("{{{quoted}:1}}");
-    let v: Json = serde_json::from_str(&obj).expect("one valid object");
-    assert_eq!(v.as_object().unwrap().len(), 1);
+    let v: Json = serde_json::from_str(&line).expect("one valid object");
     assert_eq!(v[key], Json::from(1));
 }
 

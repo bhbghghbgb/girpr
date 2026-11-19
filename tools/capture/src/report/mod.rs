@@ -23,6 +23,8 @@
 use std::io::Write as _;
 use std::sync::Mutex;
 
+use serde::ser::{Serialize, SerializeMap, Serializer};
+
 use crate::VERSION;
 use crate::encoding;
 
@@ -169,6 +171,23 @@ impl From<bool> for Val {
     }
 }
 
+impl Serialize for Val {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // One JSON value per variant, in declaration order: `Str` is a string,
+        // `Int` a signed integer, `Bool` a flag. `serde_json` owns all escaping,
+        // so backslashes and control characters keep the exact bytes it has
+        // always emitted for them.
+        match self {
+            Val::Str(s) => serializer.serialize_str(s),
+            Val::Int(i) => serializer.serialize_i64(*i),
+            Val::Bool(b) => serializer.serialize_bool(*b),
+        }
+    }
+}
+
 /// One record on the stdout data plane: a label plus ordered fields.
 ///
 /// Field order is report order, so a line reads in the order a reader wants it
@@ -280,12 +299,13 @@ impl Record {
 
     /// The rendered JSON object, one line, keys in the same order.
     ///
-    /// Written pair by pair rather than through a `serde_json::Map` because that
-    /// map is a `BTreeMap` unless the `preserve_order` feature is on, and turning
-    /// it on is not this crate's call: cargo unifies features across the whole
-    /// workspace build, so enabling it here would silently reorder the JSON
-    /// another tool in this repository emits. The fields are few and all
-    /// primitives, so the encoding cost is a `to_string` per key and per value.
+    /// Rendered through [`serde::Serialize`]. The [`Serialize`] impl emits an
+    /// ordered map with `event` first, so keys keep report order without
+    /// `serde_json`'s `preserve_order` feature — enabling that feature here
+    /// would silently reorder the JSON another tool in this workspace emits.
+    /// `serde_json` also owns escaping: it already emitted `\\` for backslashes
+    /// and its own spelling for control characters on the old fallback path, so
+    /// those bytes are unchanged.
     ///
     /// **`event` always comes first**, so a consumer can dispatch on it while
     /// still streaming rather than after the line is parsed. Its value is the
@@ -294,30 +314,10 @@ impl Record {
     /// label lowercased, so a non-terminal record (`BUNDLE` → `bundle`) is still
     /// self-identifying. The field is not written twice.
     pub fn to_json_line(&self) -> String {
-        // Borrowed, not cloned. A `Val::Str` is a `String`, and there is no
-        // reason to copy one to render a field of a record already held by
-        // reference.
-        let fallback;
-        let event = match self.fields.iter().find(|(k, _)| *k == "event") {
-            Some((_, v)) => v,
-            None => {
-                fallback = Val::Str(self.json_event());
-                &fallback
-            }
-        };
-        let mut s = String::with_capacity(64 + 24 * self.fields.len());
-        s.push('{');
-        push_json_key(&mut s, "event");
-        s.push(':');
-        push_json_value(&mut s, event);
-        for (k, v) in self.fields.iter().filter(|(k, _)| *k != "event") {
-            s.push(',');
-            push_json_key(&mut s, k);
-            s.push(':');
-            push_json_value(&mut s, v);
-        }
-        s.push('}');
-        s
+        // Serializing a record of primitives to a `String` is infallible; the
+        // fallback only keeps the signature panic-free, as the old renderer's
+        // hand-built string could not fail either.
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
     }
 
     /// The label lowercased: the `event` a record without one of its own carries.
@@ -334,69 +334,35 @@ impl Record {
     }
 }
 
-/// Push `"key"` onto `out`.
-///
-/// **Written straight into the buffer**, because a key is a `&'static str` of
-/// this crate's own choosing — `event`, `exit_code`, `result` — and every one
-/// of them is plain ASCII. `json_string` allocated a `String` per key, twice
-/// over for `event`, purely to be appended and dropped. The escape path is
-/// still there for the one case that needs it: a key that is *not* from this
-/// crate.
-fn push_json_key(out: &mut String, k: &str) {
-    if is_plain_ascii_json(k) {
-        out.push('"');
-        out.push_str(k);
-        out.push('"');
-    } else {
-        // `json_string` already returns a quoted literal; adding quotes here
-        // would double-quote the key and corrupt the line.
-        out.push_str(&json_string(k));
-    }
-}
-
-/// Whether `s` can go into a JSON string literal unescaped.
-///
-/// `serde_json` would escape `"` and `\`; both are excluded here so the two
-/// paths agree.
-fn is_plain_ascii_json(s: &str) -> bool {
-    s.bytes()
-        .all(|b| b >= 0x20 && b != b'"' && b != b'\\' && b.is_ascii())
-}
-
-/// A JSON string literal, with the escapes a raw quote would need.
-///
-/// Only reached by a key or a [`Val::Str`] carrying a `"` or a control
-/// character — a Windows artifact path has backslashes, which JSON allows
-/// unescaped, so the common case is a memcpy.
-fn json_string(s: &str) -> String {
-    if s.bytes().all(|b| b >= 0x20 && b != b'"' && b != b'\\') {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('"');
-        out.push_str(s);
-        out.push('"');
-        return out;
-    }
-    // `serde_json` is the authority on escaping; it cannot fail on a `str`.
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
-}
-
-/// A [`Val`] as a JSON literal, preserving its type.
-fn push_json_value(out: &mut String, v: &Val) {
-    use std::fmt::Write as _;
-    match v {
-        // The common case, written in place. A Windows artifact path is full of
-        // backslashes but JSON allows those unescaped, so most values take
-        // this branch and allocate nothing.
-        Val::Str(s) if is_plain_ascii_json(s) => {
-            out.push('"');
-            out.push_str(s);
-            out.push('"');
+impl Serialize for Record {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Emit an ordered map: `event` first, then the fields in report
+        // (declaration) order, skipping the one `event` field so it is not
+        // written twice. `serialize_entry` yields entries in exactly this
+        // order, so no `preserve_order` feature is needed — that feature only
+        // affects `serde_json::Map`/`Value`, which this renderer never builds.
+        //
+        // `event`'s value is the record's own `event` field when it has one
+        // (the command for a summary), else the label lowercased (so a `BUNDLE`
+        // record is still self-identifying).
+        let fallback;
+        let event = match self.fields.iter().find(|(k, _)| *k == "event") {
+            Some((_, v)) => v,
+            None => {
+                fallback = Val::Str(self.json_event());
+                &fallback
+            }
+        };
+        let count = 1 + self.fields.iter().filter(|(k, _)| *k != "event").count();
+        let mut map = serializer.serialize_map(Some(count))?;
+        map.serialize_entry("event", event)?;
+        for (key, value) in self.fields.iter().filter(|(k, _)| *k != "event") {
+            map.serialize_entry(key, value)?;
         }
-        Val::Str(s) => out.push_str(&json_string(s)),
-        Val::Int(i) => {
-            let _ = write!(out, "{i}");
-        }
-        Val::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        map.end()
     }
 }
 
