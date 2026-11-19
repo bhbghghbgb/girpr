@@ -14,7 +14,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Delete the stale zstd `Decoder` workaround | pending_review | 27aa9041 | Passed HashingWriter by value to write::Decoder::new; finish() yields owned writer (§I.10); behavior identical |
 | T02 | One shared timestamp helper | pending_review | 382f992f | girpr_log::timestamp is single source; girsync ts_now shim kept for cache/open.rs. Stale pointer: hard-coded stamp not at plan/tests.rs:439, now in cache/open.rs tests; all pass. capture uses caller-supplied DateTime, left out of scope; unused chrono dep removed |
-| T03 | Hex encode/decode sweep | todo | | |
+| T03 | Hex encode/decode sweep | in_progress | | |
 | T04 | FNV literals → named constants | todo | | |
 | T05 | `jobs` range validation in clap | todo | | |
 | T06 | `AtomicU64::fetch_update` + simplify test gate | todo | | |
