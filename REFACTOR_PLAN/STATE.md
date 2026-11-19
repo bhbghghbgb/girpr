@@ -65,6 +65,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | H | T30 (T29 skipped) | done | Completed; no fixes; byte-exact renderer untouched, first-match-in-[General] preserved; 3 follow-ups recorded |
 | I | T31, T33, T34 (T32, T35 skipped) | done | T31/T33 completed; T34 completed after fix a992600e restoring atomic --force overwrite; 4 follow-ups recorded |
 | PLAN | Follow-up planning review | done | 48 reviewed: 44 dropped, F04 already done, 3 kept in batches FB1 (F08,F28) and FB2 (F46); all KEEP items test-only |
+| FB1 | F08, F28 | done | Both done at 4ca326a3; no fixes; production untouched, 3 non-blocking suggestions recorded |
 
 ## Follow-ups
 
@@ -77,7 +78,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F05 | Consider file-log backpressure via lossy(false) or surface dropped_lines at exit | dropped | T08; normal runs never approach 128k queue limit  Dropped at Phase 3 planning: consider note; 128k queue never approached in normal runs |
 | F06 | Drop girsync dev-dependency from crates/tempdir behind a test-support feature | dropped | T07; build-weight only; proposed by implementer  Dropped at Phase 3 planning: dev-only build-weight; no correctness or shipped impact |
 | F07 | Pin the strict percent-decoder %+A pass-through with a regression test | dropped | T11; encoder never emits a plus escape  Dropped at Phase 3 planning: extra assurance for an edge the encoder never emits |
-| F08 | Restore real WalkDir directory-read failure coverage in walk tests | batched | T10; production path covered indirectly by passing tests  Batched into FB1 at Phase 3 planning |
+| F08 | Restore real WalkDir directory-read failure coverage in walk tests | done | FB1 commit 4ca326a3; real WalkDir error via dangling symlink, self-skips on unprivileged Windows host, runs on symlink-capable hosts |
 | F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | dropped | T09; affects only rare RUST_LOG naming redb  Dropped at Phase 3 planning: confirm-intent question; behavior change already recorded in T09 |
 | F10 | Document/test one shared escaping-consistency invariant across the three JSON renderers | dropped | Batch C; each crate already pins its own bytes  Dropped at Phase 3 planning: conflicts with deliberate per-crate renderer independence |
 | F11 | Reconsider silent {} / empty-Value serialization fallbacks in the three renderers | dropped | Batch C; fallback unreachable for current primitive fields  Dropped at Phase 3 planning: reconsider note; fallback unreachable for current fields |
@@ -97,7 +98,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F25 | Replace T23 Drop-time expect(n) with explicit verify()/hits() assertion for cleaner failure diagnostics | dropped | Batch F; counts already pinned; failure-diagnostics only  Dropped at Phase 3 planning: failure-diagnostics only; counts already pinned |
 | F26 | Re-evaluate deleting HttpTransport/MemoryTransport seam contingent on a fast real-server 610-chunk test | dropped | Batch F; seam intentionally retained, ports pinned by fixtures  Dropped at Phase 3 planning: speculative re-evaluation; seam intentionally retained |
 | F27 | Track added test-build weight from wiremock dev-dependency in girpr and gircap | dropped | Batch F; dev-only, no shipped-artifact impact  Dropped at Phase 3 planning: build-weight tracking; dev-only, no shipped impact |
-| F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | batched | Batch F; all 9 malformed tests consume exact scripted counts  Batched into FB1 at Phase 3 planning |
+| F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | done | FB1 commit 4ca326a3; post-exhaustion accept closes extra connections for immediate EOF; all 9 malformed-Length tests still use helper |
 | F29 | Note serve_status now takes u16; custom reason phrases would need responder customization | dropped | Batch F; current tests assert numeric status only  Dropped at Phase 3 planning: documentation note; tests assert numeric status only |
 | F30 | Windows share-mode assurance test for identity_of opening a second handle per claim | dropped | Batch G; DuplicateHandle inherits share flags; extra assurance only  Dropped at Phase 3 planning: explicitly extra assurance only |
 | F31 | Note ReFS identity uniqueness caveat of same-file 1.0.6 on Windows | dropped | Batch G; identical to old behavior, link-count guard is primary  Dropped at Phase 3 planning: documentation note; identical to old behavior |
@@ -118,6 +119,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F46 | Regression test that induced persist failure under --force leaves previous cache intact | batched | Batch I; fixed path is single atomic rename  Batched into FB2 at Phase 3 planning |
 | F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | dropped | Batch I; fragment tests pass, guards thiserror upgrades  Dropped at Phase 3 planning: extra assurance; fragment tests pass, low-probability upgrade guard |
 | F48 | Document/cover whole-run cancellation for T31 detach-on-drop | dropped | Batch I; driver always awaited, runtime drop aborts tasks  Dropped at Phase 3 planning: documentation note; driver always awaited, runtime drop aborts tasks |
+| F49 | Test that drives F28's new fail-fast branch (extra request -> immediate EOF under short timeout) | open | FB1 review; no existing test exercises the added branch |
+| F50 | Give F28 post-exhaustion accept loop a deadline/nonblocking close to avoid detached thread + bound port | open | FB1 review; harmless today, resource hygiene |
+| F51 | Shared skip-reporting mechanism for F08's eprintln! self-skip so CI visibility is clearer | open | FB1 review; visibility only |
 
 ## Persistent context
 
