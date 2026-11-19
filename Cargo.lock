@@ -657,7 +657,6 @@ name = "girsync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
  "girpr-log",
  "girpr-tempdir",
@@ -1783,6 +1782,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "girpr-log",
  "girpr-tempdir",
  "girsync",
  "md-5",

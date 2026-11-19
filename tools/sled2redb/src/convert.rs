@@ -341,7 +341,7 @@ fn replace_destination(temp: &Path, dst: &Path) -> Result<()> {
 /// any of them is tool state rather than content.
 fn claim_temp_sibling(dst: &Path) -> Result<PathBuf> {
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
-    let stamp = format!("{}-{}", std::process::id(), girsync::util::ts_now());
+    let stamp = format!("{}-{}", std::process::id(), girpr_log::timestamp());
     for n in 1..=MAX_CLAIM_ATTEMPTS {
         let cand = parent.join(temp_candidate_name(&stamp, n));
         // Ask first whether the name is taken: `create_new` on an existing

@@ -39,8 +39,11 @@ pub fn elapsed_s(t0: std::time::Instant) -> f64 {
 }
 
 /// UTC stamp in the shared ISO format, used to name backups and snapshots.
+///
+/// The format itself lives in `girpr_log::timestamp`; this shim keeps girsync's
+/// internal call sites short while leaving one definition of the stamp.
 pub fn ts_now() -> String {
-    chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
+    girpr_log::timestamp()
 }
 
 /// Recursive plain-file copy, used only for legacy sled-directory cache

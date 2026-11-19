@@ -317,11 +317,13 @@ pub fn default_log_path(project: &str) -> PathBuf {
         .join(format!("{project}_{}.log", timestamp()))
 }
 
-/// The timestamp in a default log file name: `20261014T101500.000000Z`.
+/// The shared UTC timestamp: `20261014T101500.000000Z`.
 ///
-/// UTC time in the shared ISO format, and sortable as text: the files in a
-/// `logs/` directory read oldest-first when they are listed by name.
-fn timestamp() -> String {
+/// The one definition of the format every tool in the workspace uses to stamp
+/// a name — default log files, cache backups and snapshots, converter leftovers.
+/// UTC in ISO form and sortable as text, so a `logs/` directory reads
+/// oldest-first when listed by name.
+pub fn timestamp() -> String {
     chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
 }
 

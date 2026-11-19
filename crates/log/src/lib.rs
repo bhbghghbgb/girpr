@@ -63,6 +63,7 @@ pub use filter::filter;
 pub use level::Level;
 pub use plan::{
     EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,
+    timestamp,
 };
 
 /// Parse a level name, for use as a `clap` value parser.
@@ -73,6 +74,16 @@ pub fn parse_level(s: &str) -> Result<Level, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exported helper carries the one shared stamp format.
+    #[test]
+    fn the_shared_timestamp_has_the_iso_shape() {
+        let stamp = timestamp();
+        assert_eq!(stamp.len(), 23, "{stamp}");
+        assert_eq!(stamp.as_bytes()[8], b'T');
+        assert_eq!(stamp.as_bytes()[15], b'.');
+        assert_eq!(stamp.as_bytes()[22], b'Z');
+    }
 
     /// The example in the module docs, **run**.
     ///
