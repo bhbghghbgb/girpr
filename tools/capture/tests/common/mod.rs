@@ -2135,8 +2135,5 @@ fn write_response(
 
 fn md5_hex(bytes: &[u8]) -> String {
     use md5::{Digest as _, Md5};
-    Md5::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex::encode(Md5::digest(bytes))
 }

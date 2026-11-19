@@ -118,18 +118,8 @@ pub struct Converted {
     pub hashes: usize,
 }
 
-fn hex_to_bytes(hex: &str, rel: &str, algo: &str) -> Result<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        anyhow::bail!("bad hex for {algo} of {rel}");
-    }
-    hex.as_bytes()
-        .chunks(2)
-        .map(|c| {
-            let s = std::str::from_utf8(c).map_err(|e| anyhow::anyhow!("{e:#}"))?;
-            u8::from_str_radix(s, 16).map_err(|e| anyhow::anyhow!("{e:#}"))
-        })
-        .collect::<Result<Vec<u8>>>()
-        .with_context(|| format!("decode {algo} hex of {rel}"))
+fn hex_to_bytes(text: &str, rel: &str, algo: &str) -> Result<Vec<u8>> {
+    hex::decode(text).with_context(|| format!("decode {algo} hex of {rel}"))
 }
 
 /// Convert sled DB at `sled_dir` into a new redb file at `redb_path`.

@@ -59,6 +59,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 prost = "0.14.6"
 md-5 = "0.11.0"
+# Hex at the digest/text boundary: one tiny, ubiquitous crate instead of a
+# hand-rolled table and per-byte formatting at every such site.
+hex = "0.4.3"
 zstd = "0.14.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

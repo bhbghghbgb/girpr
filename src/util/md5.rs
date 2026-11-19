@@ -37,30 +37,17 @@ impl Md5 {
     /// Either case is accepted. Anything that is not exactly 32 hex digits is
     /// an error, so a caller that wants "unknown" can turn it into `None`.
     pub fn parse_hex(s: &str) -> Result<Self> {
-        let bytes = s.as_bytes();
-        if bytes.len() != 32 {
-            anyhow::bail!("an MD5 is 32 hex digits, not {} bytes", bytes.len());
+        if s.len() != 32 {
+            anyhow::bail!("an MD5 is 32 hex digits, not {} bytes", s.len());
         }
         let mut out = [0u8; 16];
-        for (i, byte) in out.iter_mut().enumerate() {
-            let hi =
-                hex_digit(bytes[2 * i]).ok_or_else(|| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
-            let lo = hex_digit(bytes[2 * i + 1])
-                .ok_or_else(|| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
-            *byte = (hi << 4) | lo;
-        }
+        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
         Ok(Self(out))
     }
 
     /// The digest as lowercase hex.
     pub fn to_hex(self) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(32);
-        for byte in self.0 {
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        out
+        hex::encode(self.0)
     }
 
     /// The digest bytes, for a key or a byte comparison.
@@ -80,10 +67,9 @@ impl Md5 {
 impl fmt::Display for Md5 {
     /// Lowercase hex, without allocating an intermediate `String`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        let mut buf = [0u8; 32];
+        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
+        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
     }
 }
 
@@ -321,16 +307,6 @@ fn intern(
     });
     index.insert(key, i);
     i
-}
-
-/// The value of one ASCII hex digit, in either case.
-fn hex_digit(b: u8) -> Option<u8> {
-    Some(match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => return None,
-    })
 }
 
 /// Read `len` bytes at `offset` into a buffer.

@@ -32,6 +32,8 @@ girsync = { path = "../sync" }
 girpr-log = { path = "../../crates/log" }
 sled = "0.34"
 anyhow = "1.0.104"
+# Hex decoding of legacy digest strings, with the bad-row context preserved.
+hex = "0.4.3"
 clap = { version = "4.6.8", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

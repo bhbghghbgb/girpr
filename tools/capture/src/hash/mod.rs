@@ -215,32 +215,18 @@ impl std::io::Write for HashingFile {
     }
 }
 
-const HEX_LOWER: [u8; 16] = *b"0123456789abcdef";
-const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
-
 /// Lowercase hex, two characters per byte.
 ///
-/// **Table-driven, and `with_capacity`.** The hand-rolled versions this
-/// replaced each called `format!` once per byte, so a 32-byte MD5 allocated 32
-/// `String`s to build one — and `emit::index` ran it over every file in the
-/// bundle on every digest pass. Two pushes into a pre-sized buffer is the same
-/// answer for none of the cost.
+/// A thin shim over the `hex` crate so call sites keep one name for "spell these
+/// bytes as hex"; the crate does the table-driven, single-allocation work. The
+/// hand-rolled versions this replaced called `format!` once per byte.
 pub fn hex_bytes(bytes: &[u8]) -> String {
-    hex_with(bytes, &HEX_LOWER)
+    hex::encode(bytes)
 }
 
 /// Uppercase hex, two characters per byte — the form percent-encoding requires.
 pub fn hex_bytes_upper(bytes: &[u8]) -> String {
-    hex_with(bytes, &HEX_UPPER)
-}
-
-fn hex_with(bytes: &[u8], table: &[u8; 16]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(table[(b >> 4) as usize] as char);
-        s.push(table[(b & 0x0F) as usize] as char);
-    }
-    s
+    hex::encode_upper(bytes)
 }
 
 /// How a stored document is encoded on disk.

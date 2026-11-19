@@ -598,6 +598,7 @@ dependencies = [
  "fs2",
  "girpr-log",
  "girpr-tempdir",
+ "hex",
  "md-5",
  "prost",
  "reqwest",
@@ -622,6 +623,7 @@ dependencies = [
  "girpr-log",
  "girpr-tempdir",
  "glob",
+ "hex",
  "md-5",
  "prost",
  "reqwest",
@@ -710,6 +712,12 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "http"
@@ -1785,6 +1793,7 @@ dependencies = [
  "girpr-log",
  "girpr-tempdir",
  "girsync",
+ "hex",
  "md-5",
  "serde",
  "serde_json",

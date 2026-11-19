@@ -26,10 +26,9 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
-/// Render a digest as lowercase hex. Digest 0.11's `Output` no longer implements
-/// `LowerHex`, so format the bytes directly.
+/// Render a digest as lowercase hex.
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    ::hex::encode(bytes)
 }
 
 /// A decoded row built directly, for cases that only exercise the redb-write

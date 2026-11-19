@@ -66,6 +66,8 @@ serde_json = "1.0.154"
 prost = "0.14.6"
 zstd = "0.14.4"
 md-5 = "0.11.0"
+# Hex spelling of digests, shared with the repair binary and the converter.
+hex = "0.4.3"
 sha2 = "0.11.1"
 flate2 = "1.1.11"
 tracing = "0.1.44"
