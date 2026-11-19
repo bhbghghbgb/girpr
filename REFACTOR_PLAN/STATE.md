@@ -37,7 +37,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T23 | gircap HTTP mock servers | completed | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
 | T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
 | T25 | Hardlink identity → `same-file` | pending_review | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
-| T26 | girsync gate/concurrency simplification | in_progress | | |
+| T26 | girsync gate/concurrency simplification | pending_review | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
 | T27 | Cache wire codec → `postcard`/`bincode` | todo | | |
 | T28 | `cache/open.rs` publish protocol restructure | todo | | |
 | T29 | girpr INI parse/merge/render | todo | | |
