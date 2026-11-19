@@ -83,7 +83,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use common::{Mock, World, dispatch};
+use common::{Mock, World, dispatch_with};
 use girpr_tempdir::TempDir;
 
 /// A scratch root that is removed when the test ends, whatever happens.
@@ -110,7 +110,7 @@ fn capture_into(mock: &Mock, scratch: &Scratch, slot: &str) -> PathBuf {
         "--jobs",
         "1",
     ];
-    let d = dispatch(&args);
+    let d = dispatch_with(&args, Some(mock.transport()));
     assert_eq!(
         d.code,
         0,
@@ -567,7 +567,7 @@ fn differences(a: &[u8], b: &[u8]) -> String {
 /// very hard to see, because `cargo nextest run` is still green.
 #[test]
 fn two_captures_of_the_same_fixture_agree() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = TempDir::new("gircap-diff", "pair");
 
     let a = capture_into(&mock, &scratch, "a");

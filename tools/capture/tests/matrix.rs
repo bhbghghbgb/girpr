@@ -12,7 +12,9 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{BundleVariant, DEGENERATE_PATH, Dispatch, Mock, World, dispatch, shared_bundle};
+use common::{
+    BundleVariant, DEGENERATE_PATH, Dispatch, Mock, World, dispatch, dispatch_with, shared_bundle,
+};
 use gircap::report::{Record, Val};
 use girpr_tempdir::TempDir;
 
@@ -85,7 +87,7 @@ impl Captured {
 }
 
 fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
-    let mock = Mock::start(world);
+    let mock = Mock::in_memory(world);
     let scratch = Scratch::new(name);
     let mut args: Vec<String> = vec![
         "capture".into(),
@@ -98,7 +100,7 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let d: Dispatch = dispatch(&borrowed);
+    let d: Dispatch = dispatch_with(&borrowed, Some(mock.transport()));
     // A failing capture carries two records: the run's own numbers (in
     // `preceded_by`) and the failure's. They disagree about `exit_code` by
     // design: the run finished (`0` on its own record) and the bundle did not
@@ -438,7 +440,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // Run in-process, because the requirement is checked **before** the bundle
     // is written: a run that refuses a class the caller named has nothing to
     // write, and there is no bundle to read.
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("budget-required");
     let args: Vec<String> = vec![
         "capture".into(),
@@ -454,7 +456,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         refused.clone(),
     ];
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let d: Dispatch = dispatch(&borrowed);
+    let d: Dispatch = dispatch_with(&borrowed, Some(mock.transport()));
     assert_eq!(
         d.code,
         4,

@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Dispatch, Mock, World, dispatch};
+use common::{Dispatch, Mock, World, dispatch_with};
 use girpr_tempdir::TempDir;
 
 /// A scratch root that is removed when the test ends, whatever happens.
@@ -93,17 +93,20 @@ fn run(args: &[&str]) -> Run {
 
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Scratch, PathBuf) {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new(name);
-    let d: Dispatch = dispatch(&[
-        "capture",
-        "--out",
-        &scratch.out().to_string_lossy(),
-        "--hyp-base",
-        &mock.hyp_base(),
-        "--sophon-base",
-        &mock.sophon_base(),
-    ]);
+    let d: Dispatch = dispatch_with(
+        &[
+            "capture",
+            "--out",
+            &scratch.out().to_string_lossy(),
+            "--hyp-base",
+            &mock.hyp_base(),
+            "--sophon-base",
+            &mock.sophon_base(),
+        ],
+        Some(mock.transport()),
+    );
     assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
     let bundle = bundle_in(&scratch.out());
     (scratch, bundle)

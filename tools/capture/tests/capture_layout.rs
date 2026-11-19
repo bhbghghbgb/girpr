@@ -16,7 +16,10 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{BundleVariant, Dispatch, File, Mock, World, dispatch, minimal_bundle, shared_bundle};
+use common::{
+    BundleVariant, Dispatch, File, Mock, World, dispatch, dispatch_with, minimal_bundle,
+    shared_bundle,
+};
 use gircap::report::{Record, Val};
 use girpr_tempdir::TempDir;
 
@@ -130,6 +133,11 @@ fn run_spawn(args: &[&str]) -> (i32, String, String) {
 }
 
 /// `gircap capture` against `mock`, writing into `scratch.out()`.
+///
+/// The mock's in-memory transport is injected, so no TCP listener or serving
+/// threads are started for a capture that only needs the fixture's bytes. This
+/// is the same dispatch path as before — clap parse, config resolution, library
+/// call — with the socket swapped for the fixture table.
 fn capture(mock: &Mock, scratch: &Scratch, extra: &[&str]) -> Run {
     let mut args: Vec<String> = vec![
         "capture".into(),
@@ -142,7 +150,7 @@ fn capture(mock: &Mock, scratch: &Scratch, extra: &[&str]) -> Run {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run(&borrowed)
+    Run::from_dispatch(dispatch_with(&borrowed, Some(mock.transport())))
 }
 
 /// Process-only capture for the single retry case that needs a child env var
@@ -219,7 +227,7 @@ fn rejections_in(out: &Path) -> PathBuf {
 
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new(name);
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1118,7 +1126,7 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
 /// other field are unchanged.
 #[test]
 fn the_request_log_rows_are_what_the_spec_says_they_are() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("rows");
     let r = capture(&mock, &scratch, &["--jobs", "1"]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1372,7 +1380,7 @@ fn ureq_get(url: &str) -> Vec<u8> {
 /// whose `--jobs 1` sequence is not reproducible on this default-jobs capture.)
 #[test]
 fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("cdn");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1576,14 +1584,14 @@ fn the_matrix_names_every_class_and_says_what_happened_to_it() {
 /// the audio manifest is fetched from **both** builds either way it appears.
 #[test]
 fn audio_widens_the_selection_pool() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("audio");
     let with = capture(&mock, &scratch, &[]);
     assert_eq!(with.code, 0, "{}\n{}", with.stdout, with.stderr);
     assert_eq!(with.summary()["selection_pool"], "game,en-us");
 
     // Same world, audio switched off: one field, two manifests.
-    let mock2 = Mock::start(World::game_only());
+    let mock2 = Mock::in_memory(World::game_only());
     let scratch2 = Scratch::new("audio-none");
     let without = capture(&mock2, &scratch2, &["--audio", "none"]);
     assert_eq!(without.code, 0, "{}\n{}", without.stdout, without.stderr);
@@ -1602,7 +1610,7 @@ fn audio_widens_the_selection_pool() {
 /// A pool naming a field no build publishes is refused, naming the field.
 #[test]
 fn a_pool_naming_an_unpublished_field_is_refused() {
-    let mock = Mock::start(World::game_only());
+    let mock = Mock::in_memory(World::game_only());
     let scratch = Scratch::new("audiomissing");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
@@ -1634,7 +1642,7 @@ fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
             .1;
         *game = vec![File::new(hostile, &[seed], 32)];
     }
-    let mock = Mock::start(world);
+    let mock = Mock::in_memory(world);
     let scratch = Scratch::new("manifest-escape");
     let r = capture(&mock, &scratch, &["--audio", "none"]);
 
@@ -1684,7 +1692,7 @@ fn a_device_name_manifest_path_is_kept_and_escaped_on_disk() {
             .expect("the all-shapes world has the identical file");
         file.path = LOGICAL.to_string();
     }
-    let mock = Mock::start(world);
+    let mock = Mock::in_memory(world);
     let scratch = Scratch::new("device-path");
     let r = capture(&mock, &scratch, &["--audio", "none"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1790,7 +1798,7 @@ fn a_manifest_chunk_id_outside_the_documented_shape_is_refused() {
             .1;
         game[0].chunks[0].id = hostile.to_string();
     }
-    let mock = Mock::start(world);
+    let mock = Mock::in_memory(world);
     let scratch = Scratch::new("chunk-id-escape");
     let r = capture(&mock, &scratch, &["--audio", "none"]);
 
@@ -1847,7 +1855,7 @@ fn an_audio_scan_dir_that_escapes_the_bundle_is_refused() {
 /// requirement is not met.
 #[test]
 fn requiring_an_unmet_class_is_exit_four() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("require");
     let r = capture(
         &mock,
@@ -1878,7 +1886,7 @@ fn requiring_an_unmet_class_is_exit_four() {
 /// body — so counting files would be counting the wrong thing.
 #[test]
 fn the_six_api_rows_record_where_their_body_was_written() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("stored-as");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1958,7 +1966,7 @@ fn the_six_api_rows_record_where_their_body_was_written() {
 /// *green for the right reason* - because there was a file to read.
 #[test]
 fn no_chunk_blobs_still_writes_the_launcher_metadata() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("nobloobs-prelude");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -2013,7 +2021,7 @@ fn no_chunk_blobs_still_writes_the_launcher_metadata() {
 /// than `pass`: a skip is not a success.
 #[test]
 fn no_chunk_blobs_is_incomplete_not_pass() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -2070,7 +2078,7 @@ fn no_chunk_blobs_is_incomplete_not_pass() {
 /// tag* rather than as a build with no manifests, and says so in the detail.
 #[test]
 fn an_old_tag_the_api_does_not_serve_is_refused() {
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("nosuchtag");
     let r = capture(&mock, &scratch, &["--old-tag", "9.9.9"]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
@@ -2087,7 +2095,7 @@ fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
     let mut world = World::all_shapes();
     // Put the unservable tag first, as a branch whose old build was retired does.
     world.old_in_diff_tags = false;
-    let mock = Mock::start(world);
+    let mock = Mock::in_memory(world);
     let scratch = Scratch::new("nodiff");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);

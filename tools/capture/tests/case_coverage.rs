@@ -36,7 +36,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Dispatch, Mock, World, dispatch};
+use common::{Dispatch, Mock, World, dispatch_with};
 use girpr_tempdir::TempDir;
 
 /// The instrument, beside the crate it measures.
@@ -168,17 +168,20 @@ fn the_instrument_reproduces_the_patchmaps_own_arithmetic() {
         );
         return;
     };
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("outcome");
-    let d = dispatch(&[
-        "capture",
-        "--out",
-        &scratch.out().to_string_lossy(),
-        "--hyp-base",
-        &mock.hyp_base(),
-        "--sophon-base",
-        &mock.sophon_base(),
-    ]);
+    let d = dispatch_with(
+        &[
+            "capture",
+            "--out",
+            &scratch.out().to_string_lossy(),
+            "--hyp-base",
+            &mock.hyp_base(),
+            "--sophon-base",
+            &mock.sophon_base(),
+        ],
+        Some(mock.transport()),
+    );
     assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
     let bundle = bundle_in(&scratch.out(), &d);
 
@@ -255,17 +258,20 @@ fn the_instrument_reproduces_the_crates_class_populations() {
         );
         return;
     };
-    let mock = Mock::start(World::all_shapes());
+    let mock = Mock::in_memory(World::all_shapes());
     let scratch = Scratch::new("population");
-    let d = dispatch(&[
-        "capture",
-        "--out",
-        &scratch.out().to_string_lossy(),
-        "--hyp-base",
-        &mock.hyp_base(),
-        "--sophon-base",
-        &mock.sophon_base(),
-    ]);
+    let d = dispatch_with(
+        &[
+            "capture",
+            "--out",
+            &scratch.out().to_string_lossy(),
+            "--hyp-base",
+            &mock.hyp_base(),
+            "--sophon-base",
+            &mock.sophon_base(),
+        ],
+        Some(mock.transport()),
+    );
     assert_eq!(d.code, 0, "capture failed: {:?}", d.detail.as_deref());
     let bundle = bundle_in(&scratch.out(), &d);
 
