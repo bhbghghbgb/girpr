@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Delete the stale zstd `Decoder` workaround | todo | | |
+| T01 | Delete the stale zstd `Decoder` workaround | in_progress | | |
 | T02 | One shared timestamp helper | todo | | |
 | T03 | Hex encode/decode sweep | todo | | |
 | T04 | FNV literals → named constants | todo | | |
