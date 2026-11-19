@@ -46,7 +46,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T32 | Chunk-range tiling → interval crate | skipped | | Weakest crate case confirmed: measured rangemap rewrite +30/-15 net +15 lines; overlaps need chunk-offset identity crates discard; i64 validation un delegatable; is_tiled fast path must stay allocation-free; §I.5 |
 | T33 | Error `Display` impls → `thiserror` | pending_review | 69384691 | Derived thiserror::Error for ApiError/UsageError/Failure with verbatim format strings; exit_code/url/summary kept hand-written; messages byte-identical; Failure gains std::error::Error impl (additive, required by task) |
 | T34 | sled2redb temp claim → `NamedTempFile` | pending_review | 5547555c | Replaced stat-then-create_new loop with NamedTempFile + persist_noclobber; lock sidecar removed before persist; cleanup_temp shrank; DEVIATION: --force file overwrite now explicitly removes dst before rename (brief no-dst window, not single atomic rename) for stronger no-clobber; docs rewritten; dropped unused girpr-log dep |
-| T35 | `IntOrStr` → `serde_with` (optional) | in_progress | | |
+| T35 | `IntOrStr` → `serde_with` (optional) | skipped | | Premise holds in production but five tests pin the write variant (byte-stable re-serialization); PickFirst would break them; keep hand-rolled type; §F9 |
 
 ## Reviews
 
