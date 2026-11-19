@@ -43,8 +43,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T29 | girpr INI parse/merge/render | skipped | | Byte-level config.ini contract matters; configparser/ini regress comment/dup-section/case-key/headerless/quote/sort/blank-line parity; parser-only saves no net LOC. Keep hand-rolled core. §I.2 validated |
 | T30 | gircap `parse_game_version` | completed | ce97c9a6 | Used ini_core streaming parser (not configparser/ini, which are last-wins and would break first-match); thin adapter keeps lenient [General] header tolerance; byte-exact config_ini renderer untouched; first-match-in-[General] pinned + 33k-input differential check 0 mismatches |
 | T31 | `JoinSet` window → `buffer_unordered` | pending_review | e1da9861 | JoinSet window replaced with buffer_unordered over tokio::spawn handles (keeps parallelism + JoinError panic capture); from_fn iterator preserves fail-fast no-new-file rule; accepted detach-on-drop (driver always awaited to completion, runtime drop aborts anyway); no futures-concurrency needed |
-| T32 | Chunk-range tiling → interval crate | in_progress | | |
-| T33 | Error `Display` impls → `thiserror` | todo | | |
+| T32 | Chunk-range tiling → interval crate | skipped | | Weakest crate case confirmed: measured rangemap rewrite +30/-15 net +15 lines; overlaps need chunk-offset identity crates discard; i64 validation un delegatable; is_tiled fast path must stay allocation-free; §I.5 |
+| T33 | Error `Display` impls → `thiserror` | in_progress | | |
 | T34 | sled2redb temp claim → `NamedTempFile` | todo | | |
 | T35 | `IntOrStr` → `serde_with` (optional) | todo | | |
 
