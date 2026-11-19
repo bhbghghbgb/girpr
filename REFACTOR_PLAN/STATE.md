@@ -53,6 +53,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01, T02, T03, T06 (T04, T05 skipped) | done | All four completed; no fixes/reverts; 4 follow-ups recorded |
+| B | T07, T08, T09, T10, T11 (T12 skipped) | pending | |
 
 ## Follow-ups
 
