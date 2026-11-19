@@ -38,7 +38,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
 | T25 | Hardlink identity → `same-file` | completed | fc2717c5 | FFI removed; same-file 1.0.6 has no FileId so used same_file::Handle; winapi-util for Windows link count; windows-sys dropped; link-count >1 guard preserved (identity never primary refusal); thin platform seam kept |
 | T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
-| T27 | Cache wire codec → `postcard`/`bincode` | pending_review | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
+| T27 | Cache wire codec → `postcard`/`bincode` | completed | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
 | T28 | `cache/open.rs` publish protocol restructure | todo | | |
 | T29 | girpr INI parse/merge/render | todo | | |
 | T30 | gircap `parse_game_version` | todo | | |
@@ -60,7 +60,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
 | F | T23, T24 | done | Both completed; no fixes; all 9 malformed-Length tests retained; bridge/domain servers untouched; 5 follow-ups recorded |
 | G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
-| solo | T27 | pending | |
+| solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
 
 ## Follow-ups
 
@@ -100,6 +100,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F32 | Note transient in_flight() under-report window under tokio wait queues | open | Batch G; diagnostics-only, 30x stress showed no return |
 | F33 | Strengthen T26 deadlock test with asymmetric split(1,2)/split(2,1) barrier case | open | Batch G; invariant structurally covered |
 | F34 | Note blocking_acquire() panics inside a tokio runtime if async is ever introduced | open | Batch G; crate fully synchronous today |
+| F35 | Reword or acknowledge cobs in postcard manifest comment (non-optional dep) | open | Solo T27; tiny crate, zero behavior impact |
+| F36 | Optional streaming Deserialize visitor to cut per-record decode allocations | open | Solo T27; rows small, not on hot path |
+| F37 | Add multi-foreign-name determinism coverage to cache codec tests | open | Solo T27; hardens already-correct sorted-output behavior |
 
 ## Persistent context
 
