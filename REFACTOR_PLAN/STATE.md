@@ -64,62 +64,70 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
 | H | T30 (T29 skipped) | done | Completed; no fixes; byte-exact renderer untouched, first-match-in-[General] preserved; 3 follow-ups recorded |
 | I | T31, T33, T34 (T32, T35 skipped) | done | T31/T33 completed; T34 completed after fix a992600e restoring atomic --force overwrite; 4 follow-ups recorded |
+| PLAN | Follow-up planning review | done | 48 reviewed: 44 dropped, F04 already done, 3 kept in batches FB1 (F08,F28) and FB2 (F46); all KEEP items test-only |
 
 ## Follow-ups
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| F01 | Collapse girsync ts_now shim; call girpr_log::timestamp directly in cache/open.rs | open | Low-payoff cleanup (from T02) |
-| F02 | Optional second hex sweep of non-digest u8::from_str_radix / format sites | open | Not digest-hex; out of T03 scope |
-| F03 | Restore deterministic interleaving test only if saturating logic returns in-house | open | Barrier contention suffices today (from T06) |
+| F01 | Collapse girsync ts_now shim; call girpr_log::timestamp directly in cache/open.rs | dropped | Low-payoff cleanup (from T02)  Dropped at Phase 3 planning: low-payoff cosmetic shim removal; no defect |
+| F02 | Optional second hex sweep of non-digest u8::from_str_radix / format sites | dropped | Not digest-hex; out of T03 scope  Dropped at Phase 3 planning: vague optional out-of-scope sweep; no concrete target |
+| F03 | Restore deterministic interleaving test only if saturating logic returns in-house | dropped | Barrier contention suffices today (from T06)  Dropped at Phase 3 planning: conditional only-if note; nothing actionable today |
 | F04 | Make gircap spawn tests locate the binary robustly via a runner-provided env var | done | Fixed by c7e34ba4 using CARGO_BIN_EXE_gircap; predates orchestration; full suite green |
-| F05 | Consider file-log backpressure via lossy(false) or surface dropped_lines at exit | open | T08; normal runs never approach 128k queue limit |
-| F06 | Drop girsync dev-dependency from crates/tempdir behind a test-support feature | open | T07; build-weight only; proposed by implementer |
-| F07 | Pin the strict percent-decoder %+A pass-through with a regression test | open | T11; encoder never emits a plus escape |
-| F08 | Restore real WalkDir directory-read failure coverage in walk tests | open | T10; production path covered indirectly by passing tests |
-| F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | open | T09; affects only rare RUST_LOG naming redb |
-| F10 | Document/test one shared escaping-consistency invariant across the three JSON renderers | open | Batch C; each crate already pins its own bytes |
-| F11 | Reconsider silent {} / empty-Value serialization fallbacks in the three renderers | open | Batch C; fallback unreachable for current primitive fields |
-| F12 | Note that default 5-attempt girpr retry wait grew from ~10s to up to ~22.5s | open | T16; explicit goal, only slows failing runs; fail-fast unaffected |
-| F13 | Restore 'after 0 attempts' error context for retry(0, ...) in girpr | open | T16; no call site passes 0 |
-| F14 | Document why backoff 0.4 RNG draw at factor 0.0 cannot affect gircap artifacts | open | T17; use custom policy only if strict zero-RNG ever required |
-| F15 | Consider public API impact of RetryPolicy base_delay/max_delay becoming private constants | open | T17; no in-tree external users |
-| F16 | Rename stale UNC test without_verbatim_rebuilds_the_prefix_the_path_needs | open | T18; now tests absolute_alias, name only |
-| F17 | Document junction read_link spelling assumption relied on by absolute_alias | open | T18; low risk, not observable in current tests |
-| F18 | Add cross-crate equivalence test for girpr-filter | open | T20; extraction behavior-preserving by construction |
-| F19 | Restore an observable durability assertion for write_atomic_with durable=true | open | T21; seam loss allowed, durable branch remains |
-| F20 | Add successful Windows overwrite test for NamedTempFile::persist | open | T21; extra assurance only |
-| F21 | Note 3xx no longer treated as failure and join_url signature String to Result<Url> | open | T22; in-tree callers updated, redirects followed by default |
-| F22 | Correct M0/M10 commit hash citations for the bin() helper for traceability | open | Ad-hoc review X; active branch has d48a485d/7fd70570 |
-| F23 | Add a guard comment/test that CARGO_BIN_EXE_gircap is set to prevent regression to current_exe() | open | Ad-hoc review X; non-blocking |
-| F24 | Review the CARGO_BIN_EXE_* pattern for any future spawn-based integration tests in other tool crates | open | Ad-hoc review X; non-blocking |
-| F25 | Replace T23 Drop-time expect(n) with explicit verify()/hits() assertion for cleaner failure diagnostics | open | Batch F; counts already pinned; failure-diagnostics only |
-| F26 | Re-evaluate deleting HttpTransport/MemoryTransport seam contingent on a fast real-server 610-chunk test | open | Batch F; seam intentionally retained, ports pinned by fixtures |
-| F27 | Track added test-build weight from wiremock dev-dependency in girpr and gircap | open | Batch F; dev-only, no shipped-artifact impact |
-| F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | open | Batch F; all 9 malformed tests consume exact scripted counts |
-| F29 | Note serve_status now takes u16; custom reason phrases would need responder customization | open | Batch F; current tests assert numeric status only |
-| F30 | Windows share-mode assurance test for identity_of opening a second handle per claim | open | Batch G; DuplicateHandle inherits share flags; extra assurance only |
-| F31 | Note ReFS identity uniqueness caveat of same-file 1.0.6 on Windows | open | Batch G; identical to old behavior, link-count guard is primary |
-| F32 | Note transient in_flight() under-report window under tokio wait queues | open | Batch G; diagnostics-only, 30x stress showed no return |
-| F33 | Strengthen T26 deadlock test with asymmetric split(1,2)/split(2,1) barrier case | open | Batch G; invariant structurally covered |
-| F34 | Note blocking_acquire() panics inside a tokio runtime if async is ever introduced | open | Batch G; crate fully synchronous today |
-| F35 | Reword or acknowledge cobs in postcard manifest comment (non-optional dep) | open | Solo T27; tiny crate, zero behavior impact |
-| F36 | Optional streaming Deserialize visitor to cut per-record decode allocations | open | Solo T27; rows small, not on hot path |
-| F37 | Add multi-foreign-name determinism coverage to cache codec tests | open | Solo T27; hardens already-correct sorted-output behavior |
-| F38 | Point open.rs one-syscall-gap module docs at backup::publish submodule | open | Solo T28; documentation clarity only |
-| F39 | Add production-path working-name collision test for tempfile-based working_name | open | Solo T28; tempfile guarantees uniqueness upstream |
-| F40 | Consolidate duplicated remove_cache_path in open.rs and publish.rs | open | Solo T28; duplication intentional and behaviorally inert |
-| F41 | Re-evaluate Publisher trait if no second implementation appears | open | Solo T28; harmless abstraction with testability value today |
-| F42 | Document incidental #-line tolerance in ini_core version reader | open | Batch H; # lines ignored as non-matching keys, behavior identical |
-| F43 | Note widened (not narrowed) leniency for indented header-like lines with = | open | Batch H; malformed line never produced by config_ini |
-| F44 | Check in compact golden corpus from the 33k-input differential check | open | Batch H; curated tests already pin the relevant shapes |
-| F45 | Pin T31 panic-path fail-fast window (total_files > jobs, mid-plan panic) | open | Batch I; panic still counted and in-flight tasks drained |
-| F46 | Regression test that induced persist failure under --force leaves previous cache intact | open | Batch I; fixed path is single atomic rename |
-| F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | open | Batch I; fragment tests pass, guards thiserror upgrades |
-| F48 | Document/cover whole-run cancellation for T31 detach-on-drop | open | Batch I; driver always awaited, runtime drop aborts tasks |
+| F05 | Consider file-log backpressure via lossy(false) or surface dropped_lines at exit | dropped | T08; normal runs never approach 128k queue limit  Dropped at Phase 3 planning: consider note; 128k queue never approached in normal runs |
+| F06 | Drop girsync dev-dependency from crates/tempdir behind a test-support feature | dropped | T07; build-weight only; proposed by implementer  Dropped at Phase 3 planning: dev-only build-weight; no correctness or shipped impact |
+| F07 | Pin the strict percent-decoder %+A pass-through with a regression test | dropped | T11; encoder never emits a plus escape  Dropped at Phase 3 planning: extra assurance for an edge the encoder never emits |
+| F08 | Restore real WalkDir directory-read failure coverage in walk tests | batched | T10; production path covered indirectly by passing tests  Batched into FB1 at Phase 3 planning |
+| F09 | Confirm girsync redb=warn hard-floor precedence after RUST_LOG is wanted | dropped | T09; affects only rare RUST_LOG naming redb  Dropped at Phase 3 planning: confirm-intent question; behavior change already recorded in T09 |
+| F10 | Document/test one shared escaping-consistency invariant across the three JSON renderers | dropped | Batch C; each crate already pins its own bytes  Dropped at Phase 3 planning: conflicts with deliberate per-crate renderer independence |
+| F11 | Reconsider silent {} / empty-Value serialization fallbacks in the three renderers | dropped | Batch C; fallback unreachable for current primitive fields  Dropped at Phase 3 planning: reconsider note; fallback unreachable for current fields |
+| F12 | Note that default 5-attempt girpr retry wait grew from ~10s to up to ~22.5s | dropped | T16; explicit goal, only slows failing runs; fail-fast unaffected  Dropped at Phase 3 planning: documentation of an explicit, already-recorded goal |
+| F13 | Restore 'after 0 attempts' error context for retry(0, ...) in girpr | dropped | T16; no call site passes 0  Dropped at Phase 3 planning: dead path; no call site passes 0 |
+| F14 | Document why backoff 0.4 RNG draw at factor 0.0 cannot affect gircap artifacts | dropped | T17; use custom policy only if strict zero-RNG ever required  Dropped at Phase 3 planning: documenting a non-issue; custom policy only if ever required |
+| F15 | Consider public API impact of RetryPolicy base_delay/max_delay becoming private constants | dropped | T17; no in-tree external users  Dropped at Phase 3 planning: speculative public-API concern; no in-tree external users |
+| F16 | Rename stale UNC test without_verbatim_rebuilds_the_prefix_the_path_needs | dropped | T18; now tests absolute_alias, name only  Dropped at Phase 3 planning: misleading-name cleanup only; zero behavior value |
+| F17 | Document junction read_link spelling assumption relied on by absolute_alias | dropped | T18; low risk, not observable in current tests  Dropped at Phase 3 planning: low-risk assumption doc; not observable in tests |
+| F18 | Add cross-crate equivalence test for girpr-filter | dropped | T20; extraction behavior-preserving by construction  Dropped at Phase 3 planning: extra assurance; extraction behavior-preserving by construction |
+| F19 | Restore an observable durability assertion for write_atomic_with durable=true | dropped | T21; seam loss allowed, durable branch remains  Dropped at Phase 3 planning: seam loss was intentional; observable-behavior test exists |
+| F20 | Add successful Windows overwrite test for NamedTempFile::persist | dropped | T21; extra assurance only  Dropped at Phase 3 planning: explicitly extra assurance only |
+| F21 | Note 3xx no longer treated as failure and join_url signature String to Result<Url> | dropped | T22; in-tree callers updated, redirects followed by default  Dropped at Phase 3 planning: documentation of changes already accepted in T22 |
+| F22 | Correct M0/M10 commit hash citations for the bin() helper for traceability | dropped | Ad-hoc review X; active branch has d48a485d/7fd70570  Dropped at Phase 3 planning: commit-hash traceability; directory deleted in Phase 4 |
+| F23 | Add a guard comment/test that CARGO_BIN_EXE_gircap is set to prevent regression to current_exe() | dropped | Ad-hoc review X; non-blocking  Dropped at Phase 3 planning: guard redundant with compile-time env!(CARGO_BIN_EXE_gircap) |
+| F24 | Review the CARGO_BIN_EXE_* pattern for any future spawn-based integration tests in other tool crates | dropped | Ad-hoc review X; non-blocking  Dropped at Phase 3 planning: speculative future-tests review; no concrete defect |
+| F25 | Replace T23 Drop-time expect(n) with explicit verify()/hits() assertion for cleaner failure diagnostics | dropped | Batch F; counts already pinned; failure-diagnostics only  Dropped at Phase 3 planning: failure-diagnostics only; counts already pinned |
+| F26 | Re-evaluate deleting HttpTransport/MemoryTransport seam contingent on a fast real-server 610-chunk test | dropped | Batch F; seam intentionally retained, ports pinned by fixtures  Dropped at Phase 3 planning: speculative re-evaluation; seam intentionally retained |
+| F27 | Track added test-build weight from wiremock dev-dependency in girpr and gircap | dropped | Batch F; dev-only, no shipped-artifact impact  Dropped at Phase 3 planning: build-weight tracking; dev-only, no shipped impact |
+| F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | batched | Batch F; all 9 malformed tests consume exact scripted counts  Batched into FB1 at Phase 3 planning |
+| F29 | Note serve_status now takes u16; custom reason phrases would need responder customization | dropped | Batch F; current tests assert numeric status only  Dropped at Phase 3 planning: documentation note; tests assert numeric status only |
+| F30 | Windows share-mode assurance test for identity_of opening a second handle per claim | dropped | Batch G; DuplicateHandle inherits share flags; extra assurance only  Dropped at Phase 3 planning: explicitly extra assurance only |
+| F31 | Note ReFS identity uniqueness caveat of same-file 1.0.6 on Windows | dropped | Batch G; identical to old behavior, link-count guard is primary  Dropped at Phase 3 planning: documentation note; identical to old behavior |
+| F32 | Note transient in_flight() under-report window under tokio wait queues | dropped | Batch G; diagnostics-only, 30x stress showed no return  Dropped at Phase 3 planning: diagnostics-only note; 30x stress showed no recurrence |
+| F33 | Strengthen T26 deadlock test with asymmetric split(1,2)/split(2,1) barrier case | dropped | Batch G; invariant structurally covered  Dropped at Phase 3 planning: extra assurance; deadlock invariant structurally covered |
+| F34 | Note blocking_acquire() panics inside a tokio runtime if async is ever introduced | dropped | Batch G; crate fully synchronous today  Dropped at Phase 3 planning: speculative doc for a hypothetical future async migration |
+| F35 | Reword or acknowledge cobs in postcard manifest comment (non-optional dep) | dropped | Solo T27; tiny crate, zero behavior impact  Dropped at Phase 3 planning: trivial manifest-comment reword; zero behavior impact |
+| F36 | Optional streaming Deserialize visitor to cut per-record decode allocations | dropped | Solo T27; rows small, not on hot path  Dropped at Phase 3 planning: optional optimization; rows small, not on hot path |
+| F37 | Add multi-foreign-name determinism coverage to cache codec tests | dropped | Solo T27; hardens already-correct sorted-output behavior  Dropped at Phase 3 planning: extra assurance; sorted-output behavior already correct and pinned |
+| F38 | Point open.rs one-syscall-gap module docs at backup::publish submodule | dropped | Solo T28; documentation clarity only  Dropped at Phase 3 planning: documentation clarity only |
+| F39 | Add production-path working-name collision test for tempfile-based working_name | dropped | Solo T28; tempfile guarantees uniqueness upstream  Dropped at Phase 3 planning: tests a guarantee the library already provides upstream |
+| F40 | Consolidate duplicated remove_cache_path in open.rs and publish.rs | dropped | Solo T28; duplication intentional and behaviorally inert  Dropped at Phase 3 planning: consolidates intentional, behaviorally inert duplication |
+| F41 | Re-evaluate Publisher trait if no second implementation appears | dropped | Solo T28; harmless abstraction with testability value today  Dropped at Phase 3 planning: speculative re-evaluate-if note; abstraction has value today |
+| F42 | Document incidental #-line tolerance in ini_core version reader | dropped | Batch H; # lines ignored as non-matching keys, behavior identical  Dropped at Phase 3 planning: documentation note; behavior identical |
+| F43 | Note widened (not narrowed) leniency for indented header-like lines with = | dropped | Batch H; malformed line never produced by config_ini  Dropped at Phase 3 planning: documentation note; malformed line never produced by config_ini |
+| F44 | Check in compact golden corpus from the 33k-input differential check | dropped | Batch H; curated tests already pin the relevant shapes  Dropped at Phase 3 planning: extra-assurance golden corpus; curated tests already pin the shapes |
+| F45 | Pin T31 panic-path fail-fast window (total_files > jobs, mid-plan panic) | dropped | Batch I; panic still counted and in-flight tasks drained  Dropped at Phase 3 planning: extra assurance; panic still counted and in-flight tasks drained |
+| F46 | Regression test that induced persist failure under --force leaves previous cache intact | batched | Batch I; fixed path is single atomic rename  Batched into FB2 at Phase 3 planning |
+| F47 | Exact-message golden test for every ApiError/UsageError/Failure Display string | dropped | Batch I; fragment tests pass, guards thiserror upgrades  Dropped at Phase 3 planning: extra assurance; fragment tests pass, low-probability upgrade guard |
+| F48 | Document/cover whole-run cancellation for T31 detach-on-drop | dropped | Batch I; driver always awaited, runtime drop aborts tasks  Dropped at Phase 3 planning: documentation note; driver always awaited, runtime drop aborts tasks |
 
 ## Persistent context
 
+- Phase 3 follow-up planning: 48 entries reduced to 3 actionable, test-only
+  items. Kept: F08+F28 in FB1 (gircap test hardening - restore real WalkDir
+  directory-read failure coverage; raw-socket helper fail-fast) and F46 in FB2
+  (sled2redb --force persist-failure regression test, must fail on pre-a992600e
+  code). F04 was already done; all others dropped as documentation notes,
+  hypothetical-future guards, or extra-assurance hardening of already-correct
+  behavior with no concrete defect. Batches FB1/FB2 are independent.
 - gircap spawn-based integration tests: the os error 2 "cannot find gircap.exe"
   failures PREDATE the orchestration (reproduced at baseline 36d2a030). Root cause
   was nextest placing test binaries in build-script OUT_DIR, invalidating the
