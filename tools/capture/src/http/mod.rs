@@ -66,7 +66,8 @@ pub use probe::TagProbe;
 pub(crate) use record::header_map;
 pub use record::{ACCEPT, ACCEPT_ENCODING, Kind, RequestRecord};
 pub use transport::{
-    DEFAULT_MAX_RESPONSE_BYTES, RealSleep, RecordingSleep, RetryPolicy, Sleep, SleepFuture,
+    DEFAULT_MAX_RESPONSE_BYTES, HttpRequest, HttpResponse, HttpTransport, RealSleep,
+    RecordingSleep, ReqwestTransport, ResponseBody, RetryPolicy, SendFuture, Sleep, SleepFuture,
     Transport, ZeroSleep,
 };
 

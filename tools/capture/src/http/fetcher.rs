@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::{
-    ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, Kind, RealSleep, RequestLog,
-    RequestRecord, RetryPolicy, Sleep, Transport, header_map, now_rfc3339,
+    ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, HttpRequest, HttpResponse,
+    HttpTransport, Kind, RealSleep, RequestLog, RequestRecord, ReqwestTransport, RetryPolicy,
+    Sleep, Transport, header_map, now_rfc3339,
 };
 
 /// A fetched body and the record of how it arrived.
@@ -120,8 +121,8 @@ pub(crate) fn body_failure(
 ///
 /// The cheap half of the ceiling, shared so a successful body and an error body
 /// cannot disagree about what "declared too large" means.
-fn declared_over_ceiling(resp: &reqwest::Response, cap: u64) -> Option<u64> {
-    resp.content_length().filter(|d| *d > cap)
+fn declared_over_ceiling(resp: &HttpResponse, cap: u64) -> Option<u64> {
+    resp.content_length.filter(|d| *d > cap)
 }
 
 /// How much of a success body to reserve up front, from an untrusted header.
@@ -171,7 +172,7 @@ fn body_reservation(declared: Option<u64>, cap: u64) -> usize {
 /// free. The caller prices the request with the second half of the tuple, so a
 /// partial body costs what it actually cost.
 async fn drain_capped<W: std::io::Write>(
-    mut resp: reqwest::Response,
+    mut resp: HttpResponse,
     sink: &mut W,
     cap: u64,
     url: &str,
@@ -236,7 +237,7 @@ struct DrainedErrorBody {
 /// `bytes_received`, including a read that ended early and a body the retention
 /// cap could not hold.
 async fn drain_error_body(
-    mut resp: reqwest::Response,
+    mut resp: HttpResponse,
     cap: u64,
     retain: u64,
     url: &str,
@@ -423,7 +424,11 @@ pub(crate) fn client_default_headers(
 /// function of which download happened to finish first.
 #[derive(Debug, Clone)]
 pub struct Fetcher {
-    client: reqwest::Client,
+    /// The HTTP transport. Defaults to a `reqwest`-backed one so a live capture
+    /// stays byte-identical; a test may inject an in-memory implementation.
+    /// `Arc<dyn HttpTransport>` is `Send + Sync`, like the sleeper, because a
+    /// `Fetcher` is cloned into each `--jobs` worker.
+    http: Arc<dyn HttpTransport>,
     policy: RetryPolicy,
     sleeper: Arc<dyn Sleep>,
     log: RequestLog,
@@ -542,8 +547,47 @@ impl Fetcher {
             .default_headers(client_default_headers(&ua)?)
             .build()
             .map_err(|e| ApiError::shape("http client", e))?;
+        Self::with_http_and_error_budget(
+            transport,
+            log,
+            sleeper,
+            error_body_budget,
+            Arc::new(ReqwestTransport::new(client)),
+        )
+    }
+
+    /// Build a fetcher with an injected [`HttpTransport`], keeping the default
+    /// production sleeper and error-body budget.
+    ///
+    /// This is the seam an in-memory transport uses; production never calls it
+    /// (it goes through [`Fetcher::new`] / [`Fetcher::with_sleeper`], which build
+    /// the `reqwest`-backed default).
+    pub fn with_http(
+        transport: Transport,
+        log: RequestLog,
+        sleeper: Arc<dyn Sleep>,
+        http: Arc<dyn HttpTransport>,
+    ) -> Result<Self, ApiError> {
+        Self::with_http_and_error_budget(
+            transport,
+            log,
+            sleeper,
+            super::error_bodies::ERROR_BODY_BUDGET_BYTES,
+            http,
+        )
+    }
+
+    /// [`Fetcher::with_http`] with an explicit error-body retention budget.
+    fn with_http_and_error_budget(
+        transport: Transport,
+        log: RequestLog,
+        sleeper: Arc<dyn Sleep>,
+        error_body_budget: u64,
+        http: Arc<dyn HttpTransport>,
+    ) -> Result<Self, ApiError> {
+        let ua = crate::logging::user_agent();
         Ok(Fetcher {
-            client,
+            http,
             policy: RetryPolicy::new(transport.retries),
             sleeper,
             log,
@@ -591,24 +635,26 @@ impl Fetcher {
         let started = Instant::now();
         let seq = self.log.reserve();
         let resp = self
-            .client
-            .get(url)
-            .send()
+            .http
+            .send(HttpRequest {
+                url: url.to_string(),
+                range: None,
+            })
             .await
-            .map_err(|e| ApiError::Transport {
+            .map_err(|detail| ApiError::Transport {
                 url: url.to_string(),
                 attempts: 1,
-                detail: e.to_string(),
+                detail,
             })?;
-        let status = resp.status().as_u16();
-        let final_url = resp.url().to_string();
+        let status = resp.status;
+        let final_url = resp.final_url.clone();
         let redirected = !final_url.eq_ignore_ascii_case(url);
         let content_type = resp
-            .headers()
+            .headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
-        let resp_headers = header_map(resp.headers());
+        let resp_headers = header_map(&resp.headers);
         // A body that will not read is an empty body, not a failure: the status
         // and the content-type are the parts a consumer can rely on, and they
         // have already been captured by this point. The bytes that did arrive
@@ -864,19 +910,22 @@ impl Fetcher {
         dest: &mut Destination<'_>,
     ) -> Result<(Option<Vec<u8>>, RequestRecord), (ApiError, RequestRecord)> {
         let seq = self.log.reserve();
-        let mut req = self.client.get(url);
-        if let Some(r) = range {
-            req = req.header(reqwest::header::RANGE, r);
-        }
         tracing::debug!(seq, url, kind = kind.as_str(), ?range, attempts, "GET");
 
-        let resp = match req.send().await {
+        let resp = match self
+            .http
+            .send(HttpRequest {
+                url: url.to_string(),
+                range: range.map(str::to_string),
+            })
+            .await
+        {
             Ok(r) => r,
-            Err(e) => {
+            Err(detail) => {
                 let err = ApiError::Transport {
                     url: url.to_string(),
                     attempts,
-                    detail: e.to_string(),
+                    detail,
                 };
                 let record = self.record(
                     seq,
@@ -895,17 +944,17 @@ impl Fetcher {
             }
         };
 
-        let status = resp.status().as_u16();
-        let final_url = resp.url().to_string();
+        let status = resp.status;
+        let final_url = resp.final_url.clone();
         // reqwest does not expose a redirect count, so "did anything redirect"
         // is answered by comparing where the request went with where it landed.
         // It is a comparison, not a hop count, and is recorded as such.
         let redirected = !final_url.eq_ignore_ascii_case(url);
-        let resp_headers = header_map(resp.headers());
+        let resp_headers = header_map(&resp.headers);
 
         // `2xx`, which includes `206` — a `Range` response is a success, not a
         // partial failure.
-        if !resp.status().is_success() {
+        if !(200..300).contains(&status) {
             // **The body of a failure is kept as well as counted.** It is the
             // origin's own words about why it would not serve, and the status
             // alone leaves a later reader guessing. `--max-response-bytes` still
@@ -913,7 +962,7 @@ impl Fetcher {
             // what does not fit is a `truncated` row rather than a lost
             // observation. See [`super::error_bodies`].
             let content_type = resp
-                .headers()
+                .headers
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
@@ -996,7 +1045,7 @@ impl Fetcher {
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
                 let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
-                    resp.content_length(),
+                    resp.content_length,
                     self.max_response_bytes,
                 ));
                 match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {

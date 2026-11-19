@@ -1,4 +1,7 @@
+use std::collections::VecDeque;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -184,5 +187,183 @@ impl Transport {
             timeout: Duration::from_secs(10),
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
+    }
+}
+
+// ------------------------------------------------------------ http transport --
+
+/// One outgoing GET, as an [`HttpTransport`] sees it.
+///
+/// `range` is a literal `Range` header value. The production transport puts it
+/// on the wire; an in-memory transport may ignore it, exactly as the TCP mock
+/// does. The fetcher still records it in the request row either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequest {
+    /// The absolute URL to fetch.
+    pub url: String,
+    /// A literal `Range` header value, when one was requested.
+    pub range: Option<String>,
+}
+
+/// Where an [`HttpResponse`]'s body comes from.
+///
+/// A concrete enum rather than another trait object: [`HttpResponse::chunk`]
+/// stays an inherent `async fn`, which keeps `drain_capped`/`drain_error_body`
+/// free of boxed futures and lets the two transports share every byte-accounting
+/// path verbatim.
+pub enum ResponseBody {
+    /// A live body from a socket, drained chunk by chunk.
+    Live(reqwest::Response),
+    /// Pre-built chunks, used by an in-memory transport.
+    Memory(VecDeque<Vec<u8>>),
+}
+
+impl fmt::Debug for ResponseBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResponseBody::Live(_) => f.write_str("Live"),
+            ResponseBody::Memory(chunks) => f.debug_tuple("Memory").field(chunks).finish(),
+        }
+    }
+}
+
+/// One HTTP response, independent of how it was obtained.
+///
+/// The shape is chosen so the fetcher's byte-accounting, header recording and
+/// redirect detection are written **once** and shared by the live (`reqwest`)
+/// transport and any in-memory one. A response carries the exact header map the
+/// origin sent, so `resp_headers` in `api/requests.ndjson` is byte-identical on
+/// both paths.
+pub struct HttpResponse {
+    /// Status as received.
+    pub status: u16,
+    /// Where the request actually landed (after any redirect).
+    pub final_url: String,
+    /// The response headers, exactly as received (names lowercased by `http`).
+    pub headers: reqwest::header::HeaderMap,
+    /// The declared body length, when the origin declared one.
+    pub content_length: Option<u64>,
+    body: ResponseBody,
+}
+
+impl fmt::Debug for HttpResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("final_url", &self.final_url)
+            .field("headers", &self.headers)
+            .field("content_length", &self.content_length)
+            .field("body", &self.body)
+            .finish()
+    }
+}
+
+impl HttpResponse {
+    /// Adapt a live `reqwest` response.
+    pub fn from_reqwest(resp: reqwest::Response) -> Self {
+        let status = resp.status().as_u16();
+        let final_url = resp.url().to_string();
+        let headers = resp.headers().clone();
+        let content_length = resp.content_length();
+        HttpResponse {
+            status,
+            final_url,
+            headers,
+            content_length,
+            body: ResponseBody::Live(resp),
+        }
+    }
+
+    /// Build a response in memory with the three headers the mock server sends.
+    ///
+    /// `connection: keep-alive`, `content-length` (the total of all chunks) and
+    /// `content-type` reproduce exactly what `write_response` in the test mock
+    /// puts on the wire, so a capture through an in-memory transport records the
+    /// same `resp_headers` as one through the TCP mock.
+    pub fn in_memory(
+        status: u16,
+        final_url: String,
+        content_type: Option<&str>,
+        chunks: Vec<Vec<u8>>,
+    ) -> Self {
+        let total: usize = chunks.iter().map(Vec::len).sum();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONNECTION,
+            reqwest::header::HeaderValue::from_static("keep-alive"),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_LENGTH,
+            reqwest::header::HeaderValue::from_str(&total.to_string())
+                .expect("a byte count is a valid header value"),
+        );
+        if let Some(ct) = content_type
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(ct)
+        {
+            headers.insert(reqwest::header::CONTENT_TYPE, value);
+        }
+        HttpResponse {
+            status,
+            final_url,
+            headers,
+            content_length: Some(total as u64),
+            body: ResponseBody::Memory(chunks.into()),
+        }
+    }
+
+    /// The next body chunk, as bytes, or `None` when the body is exhausted.
+    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+        match &mut self.body {
+            ResponseBody::Live(resp) => resp
+                .chunk()
+                .await
+                .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
+                .map_err(|e| e.to_string()),
+            ResponseBody::Memory(chunks) => Ok(chunks.pop_front()),
+        }
+    }
+}
+
+/// The future [`HttpTransport::send`] hands back, boxed because this trait is a
+/// trait object (an `async fn` or `impl Future` is not dyn-compatible).
+pub type SendFuture = Pin<Box<dyn Future<Output = Result<HttpResponse, String>> + Send + 'static>>;
+
+/// Something that can issue a GET and hand back a response.
+///
+/// The second injection seam on [`super::Fetcher`], alongside [`Sleep`]. `Send +
+/// Sync` is required because a `Fetcher` is `Clone` and shared across `--jobs`
+/// workers. The default implementation is [`ReqwestTransport`], which wraps the
+/// same `reqwest::Client` the tool has always used, so a live capture stays
+/// byte-identical; a test may inject an in-memory implementation instead.
+pub trait HttpTransport: Send + Sync + fmt::Debug {
+    /// Issue `request`. `Err` carries the transport-level detail; the fetcher
+    /// wraps it in `ApiError::Transport` with the attempt number it knows.
+    fn send(&self, request: HttpRequest) -> SendFuture;
+}
+
+/// The production [`HttpTransport`]: a real `reqwest` client.
+#[derive(Debug, Clone)]
+pub struct ReqwestTransport {
+    client: reqwest::Client,
+}
+
+impl ReqwestTransport {
+    /// Wrap a configured client (timeout, user agent, default headers already set).
+    pub fn new(client: reqwest::Client) -> Self {
+        ReqwestTransport { client }
+    }
+}
+
+impl HttpTransport for ReqwestTransport {
+    fn send(&self, request: HttpRequest) -> SendFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            let mut builder = client.get(&request.url);
+            if let Some(range) = request.range.as_deref() {
+                builder = builder.header(reqwest::header::RANGE, range);
+            }
+            let resp = builder.send().await.map_err(|e| e.to_string())?;
+            Ok(HttpResponse::from_reqwest(resp))
+        })
     }
 }

@@ -15,7 +15,9 @@ use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
-use crate::http::{Fetcher, RequestLog, Transport, ZeroSleep, negative, probe};
+use crate::http::{
+    Fetcher, HttpTransport, RealSleep, RequestLog, Sleep, Transport, ZeroSleep, negative, probe,
+};
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
@@ -63,6 +65,20 @@ fn zero_backoff_from(value: Option<&str>) -> bool {
 /// The bundle's directory is `<biz>/<old>__<new>/<id>/`, which is why the pair
 /// is resolved before anything is written rather than after.
 pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
+    capture_with_http(plan, None).await
+}
+
+/// [`capture`] with an injected HTTP transport.
+///
+/// Production always passes `None` and gets the `reqwest`-backed default, so a
+/// live capture is unchanged. A test may pass an in-memory [`HttpTransport`] to
+/// run the whole pipeline against a fixture without binding a TCP listener.
+/// Both the transport and the sleeper travel with the `Fetcher`, so every clone
+/// handed to a `--jobs` worker shares them.
+pub async fn capture_with_http(
+    plan: CapturePlan,
+    http: Option<std::sync::Arc<dyn HttpTransport>>,
+) -> Result<Outcome, Failure> {
     let started = chrono::Utc::now();
     let biz = Biz::resolve(plan.biz);
     let log = RequestLog::new();
@@ -83,10 +99,14 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             "test-only zero-delay retry sleeper selected"
         );
     }
-    let fetcher = if use_zero_sleep {
-        Fetcher::with_sleeper(transport, log.clone(), std::sync::Arc::new(ZeroSleep))
+    let sleeper: std::sync::Arc<dyn Sleep> = if use_zero_sleep {
+        std::sync::Arc::new(ZeroSleep)
     } else {
-        Fetcher::new(transport, log.clone())
+        std::sync::Arc::new(RealSleep)
+    };
+    let fetcher = match http {
+        Some(h) => Fetcher::with_http(transport, log.clone(), sleeper, h),
+        None => Fetcher::with_sleeper(transport, log.clone(), sleeper),
     }
     .map_err(|e| apierr("build the http client", &e))?;
 

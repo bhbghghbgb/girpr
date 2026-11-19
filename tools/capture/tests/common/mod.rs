@@ -36,6 +36,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
+use std::fmt;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
@@ -46,6 +47,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use fs2::FileExt;
 use gircap::cli::{Cmd, parse_from, recorded_argv};
 use gircap::config::{capture_plan, materialize_plan, verify_plan};
+use gircap::http::{HttpRequest, HttpResponse, HttpTransport, SendFuture};
 use gircap::report::Record;
 use gircap::run::{self, Failure, Outcome};
 use girpr_tempdir::TempDir;
@@ -105,6 +107,16 @@ pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// Run a gircap command in-process, exactly as `main.rs` dispatches it, and
 /// return the typed records/exit code instead of printing and exiting.
 pub fn dispatch(argv: &[&str]) -> Dispatch {
+    dispatch_with(argv, None)
+}
+
+/// [`dispatch`] with an injected HTTP transport for `capture`.
+///
+/// `None` is exactly [`dispatch`] and uses the live `reqwest` client. Passing an
+/// in-memory transport runs the whole capture pipeline — same clap parse, same
+/// config resolution, same library dispatch — against a fixture with no TCP
+/// listener, no accept thread and no per-connection threads.
+pub fn dispatch_with(argv: &[&str], http: Option<Arc<dyn HttpTransport>>) -> Dispatch {
     // `main.rs` parses `args_os()`, whose first entry is the program name that
     // clap strips. Prepend the same sentinel so the subcommand is not mistaken
     // for argv[0], and record it so `MANIFEST.json → tool_argv` carries the same
@@ -124,7 +136,8 @@ pub fn dispatch(argv: &[&str]) -> Dispatch {
     let outcome: Result<Outcome, Failure> = block_on(async {
         match cli.cmd {
             Cmd::Capture(a) => {
-                run::capture(capture_plan(&a, recorded).expect("capture plan")).await
+                run::capture_with_http(capture_plan(&a, recorded).expect("capture plan"), http)
+                    .await
             }
             Cmd::Verify(a) => run::verify(verify_plan(&a).expect("verify plan")).await,
             Cmd::Materialize(a) => {
@@ -328,7 +341,7 @@ pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
         }
         let staging = TempDir::new("gircap-shared", variant.key());
         let out = staging.join("artifacts");
-        let mock = Mock::start(World::all_shapes());
+        let mock = Mock::in_memory(World::all_shapes());
         let out_arg = out.to_string_lossy().into_owned();
         let mut argv: Vec<String> = vec![
             "capture".into(),
@@ -341,7 +354,7 @@ pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
         ];
         argv.extend(variant.extra().iter().map(|s| s.to_string()));
         let borrowed: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        capture_ok(&borrowed);
+        capture_ok(&borrowed, Some(mock.transport()));
         drop(mock);
         let built = find_bundle(&out);
         std::fs::rename(&built, &dir)
@@ -356,10 +369,10 @@ pub fn shared_bundle(variant: BundleVariant) -> SharedBundle {
 
 /// Run `capture` in-process and require it to succeed. Only the healthy
 /// variants are built through the shared fixture, so a non-zero exit is a
-/// broken fixture, not a result to interpret. The TCP mock is still what the
-/// capture talks to; only the process boundary is gone.
-fn capture_ok(args: &[&str]) {
-    let d = dispatch(args);
+/// broken fixture, not a result to interpret. The injected transport answers
+/// from the fixture table; only the process boundary and the socket are gone.
+fn capture_ok(args: &[&str], http: Option<Arc<dyn HttpTransport>>) {
+    let d = dispatch_with(args, http);
     assert_eq!(
         d.code,
         0,
@@ -1185,6 +1198,9 @@ pub struct Mock {
     base: String,
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Vec<Recorded>>>,
+    /// Whether a TCP listener and serving threads were actually started.
+    /// Only used to skip the Drop-time unblock probe for an in-memory mock.
+    listening: bool,
     /// Kept so `fail_once_for` can arm a route after the listener is already
     /// bound. Shared with the serving threads, which is why the map inside is
     /// behind its own lock.
@@ -1225,8 +1241,41 @@ impl Mock {
             base,
             stop,
             log,
+            listening: true,
             table,
         }
+    }
+
+    /// Build the same world with **no listener and no threads**.
+    ///
+    /// The in-memory transport answers from the very same [`Table`] the TCP
+    /// server uses ([`respond`], [`no_such_key`], [`content_type`] and the
+    /// fail-once map are shared, not reimplemented), so byte-exact bodies,
+    /// status codes and content types are identical. The only difference is the
+    /// HTTP framing layer, which is exactly what the injected transport
+    /// replaces. A fixed five-digit port keeps `base` the same length as a real
+    /// loopback base, so body lengths and therefore every `bytes_in` pin are
+    /// unchanged.
+    pub fn in_memory(world: World) -> Mock {
+        let base = "http://127.0.0.1:50000".to_string();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let table = Arc::new(build_table(&world, &base));
+        Mock {
+            base,
+            stop: Arc::new(AtomicBool::new(false)),
+            log,
+            listening: false,
+            table,
+        }
+    }
+
+    /// A transport handle backed by this mock's table, for [`dispatch_with`].
+    pub fn transport(&self) -> Arc<dyn HttpTransport> {
+        Arc::new(MemoryTransport {
+            table: Arc::clone(&self.table),
+            log: Arc::clone(&self.log),
+            base: self.base.clone(),
+        })
     }
 
     /// Answer the next request whose path contains `needle` with `503`, once.
@@ -1286,8 +1335,97 @@ impl Mock {
 impl Drop for Mock {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // One connect-and-close is enough to unblock `incoming()`.
-        let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
+        if self.listening {
+            // One connect-and-close is enough to unblock `incoming()`. An
+            // in-memory mock has no listener, so it needs no unblock probe.
+            let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
+        }
+    }
+}
+
+/// An in-memory [`HttpTransport`] that answers from a mock [`Table`].
+///
+/// This is the test half of the injectable transport seam. It reuses the exact
+/// routing and body construction the TCP server uses — there is no second
+/// implementation of "what does this fixture serve" to drift — and builds an
+/// [`HttpResponse`] carrying the same three headers `write_response` sends. It
+/// also logs every request and honours the fail-once map, so `mock.requests()`
+/// and a retried 503 behave identically on both paths.
+struct MemoryTransport {
+    table: Arc<Table>,
+    log: Arc<Mutex<Vec<Recorded>>>,
+    base: String,
+}
+
+impl fmt::Debug for MemoryTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryTransport")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HttpTransport for MemoryTransport {
+    fn send(&self, request: HttpRequest) -> SendFuture {
+        let table = Arc::clone(&self.table);
+        let log = Arc::clone(&self.log);
+        let base = self.base.clone();
+        let url = request.url;
+        Box::pin(async move {
+            // Nothing is allowed to escape the fixture, exactly like the TCP
+            // mock's loopback-only listener. A URL under another host is a
+            // transport error rather than a real request.
+            if !url.starts_with(&base) {
+                return Err(format!(
+                    "in-memory transport refuses URL outside {base}: {url}"
+                ));
+            }
+            let (path, query) = split_url(&url);
+            let tag = query_param(&query, "tag");
+            log.lock()
+                .expect("the request log is not poisoned")
+                .push(Recorded {
+                    path: path.clone(),
+                    query: query.clone(),
+                    tag: tag.clone(),
+                });
+
+            let (status, content_type, body) = if table.take_flaky_failure(&path).is_some() {
+                (503, "text/plain", b"armed to fail once".to_vec())
+            } else {
+                match respond(&table, &path, &query, tag.as_deref()) {
+                    None if is_blob_route(&path) => (404, "application/xml", no_such_key(&path)),
+                    None => (
+                        404,
+                        "text/plain",
+                        format!("no route for {path}").into_bytes(),
+                    ),
+                    Some(bytes) => (200, content_type(&path), bytes),
+                }
+            };
+            let final_url = url;
+            Ok(HttpResponse::in_memory(
+                status,
+                final_url,
+                Some(content_type),
+                vec![body],
+            ))
+        })
+    }
+}
+
+/// Split an absolute URL into the path (with its leading `/`) and query the way
+/// the TCP server's request-line parser does, so [`respond`] and [`Recorded`]
+/// see the same values on both paths.
+fn split_url(url: &str) -> (String, String) {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let target = match rest.split_once('/') {
+        Some((_, path)) => format!("/{path}"),
+        None => "/".to_string(),
+    };
+    match target.split_once('?') {
+        Some((path, query)) => (path.to_string(), query.to_string()),
+        None => (target, String::new()),
     }
 }
 
