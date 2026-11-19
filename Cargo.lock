@@ -691,6 +691,7 @@ dependencies = [
  "girpr-log",
  "girpr-tempdir",
  "hex",
+ "ini_core",
  "md-5",
  "percent-encoding",
  "prost",
@@ -1091,6 +1092,15 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "ini_core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a467a31a9f439b5262fa99c17084537bff57f24703d5a09a2b5c9657ec73a61"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]

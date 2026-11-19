@@ -25,6 +25,8 @@
 //! the game's canonical order rather than the caller's.
 use std::path::Path;
 
+use ini_core::{Item, Parser};
+
 use crate::biz::Biz;
 
 /// The `[General]` block `config.ini` carries.
@@ -69,31 +71,50 @@ pub fn config_ini(biz: &Biz, game_version: &str) -> String {
 /// from, because the question is whether a *reader* can get the version out — and
 /// a comparison against the same input would pass even if the format were
 /// unreadable.
+///
+/// `ini_core` owns the INI syntax: line endings, comments, the first `=` as the
+/// key/value boundary, and separating section headers from properties. Only the
+/// tool's own selection policy stays here — the FIRST match, and only inside
+/// `[General]`. A map-building reader (`configparser`/`ini`) would keep the last
+/// match and quietly give this reader the repair binary's semantics instead.
 pub fn parse_game_version(ini: &str) -> Result<String, String> {
     let mut in_general = false;
-    for line in ini.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with([';', '#']) {
-            continue;
-        }
-        if line.starts_with('[') {
-            in_general = line.trim_matches(|c| c == '[' || c == ']').trim() == "General";
-            continue;
-        }
-        if !in_general {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=')
-            && k.trim() == "game_version"
-        {
-            let v = v.trim();
-            if v.is_empty() {
-                return Err("game_version is present but empty".into());
+    for item in Parser::new(ini) {
+        match item {
+            Item::Section(name) => in_general = is_general_section(name),
+            // ini_core only recognises a well-formed `[name]` at the start of a
+            // line. This reader has always accepted an indented or malformed
+            // header and stripped brackets from it, so keep that leniency here
+            // instead of reading such a line as a property.
+            Item::Property(key, _) if key.trim_start().starts_with('[') => {
+                in_general = is_general_section(key);
             }
-            return Ok(v.to_string());
+            Item::Error(line) if line.trim_start().starts_with('[') => {
+                in_general = is_general_section(line);
+            }
+            // A `game_version` line with no `=` is not a match at all (the old
+            // reader split at the first `=` and skipped a line without one).
+            Item::Property(key, Some(value)) if in_general && key.trim() == "game_version" => {
+                let value = value.trim();
+                if value.is_empty() {
+                    return Err("game_version is present but empty".into());
+                }
+                return Ok(value.to_string());
+            }
+            Item::Property(_, _)
+            | Item::Comment(_)
+            | Item::Error(_)
+            | Item::SectionEnd
+            | Item::Blank => {}
         }
     }
     Err(format!("no game_version in the {GENERAL_SECTION} section"))
+}
+
+/// The reader's lenient section-header rule: a `[`-leading line counts, with
+/// all leading/trailing brackets stripped before the name is compared.
+fn is_general_section(line: &str) -> bool {
+    line.trim().trim_matches(|c| c == '[' || c == ']').trim() == "General"
 }
 
 /// The display name the game uses for an audio code, and its position in the
@@ -325,6 +346,47 @@ mod tests {
         assert!(e.contains("empty"), "{e}");
         let e = parse_game_version("").unwrap_err();
         assert!(e.contains("General"), "{e}");
+    }
+
+    /// First match in `[General]`, never the last: the repair binary's reader
+    /// deliberately takes the last match across the whole file, and these two
+    /// policies must stay distinct.
+    #[test]
+    fn game_version_is_the_first_match_in_general_not_the_last() {
+        assert_eq!(
+            parse_game_version(
+                "[General]\ngame_version=7.0.0\ngame_version=9.9.9\n\
+                 [Other]\ngame_version=1.0.0\n"
+            )
+            .unwrap(),
+            "7.0.0"
+        );
+        assert_eq!(
+            parse_game_version("[Other]\ngame_version=9.9.9\n[General]\ngame_version=7.0.0\n")
+                .unwrap(),
+            "7.0.0",
+            "a match outside [General] never wins, wherever it appears"
+        );
+    }
+
+    /// The reader accepts an indented or bracket-loose `[General]` header and a
+    /// `#` comment line; delegating the syntax to ini_core must not narrow that.
+    #[test]
+    fn the_reader_keeps_its_lenient_section_and_comment_shapes() {
+        for header in [
+            "[General]",
+            " [General] ",
+            "[ General ]",
+            "[General",
+            "[[General]]",
+        ] {
+            let ini = format!("{header}\ngame_version=7.0.0\n");
+            assert_eq!(parse_game_version(&ini).unwrap(), "7.0.0", "{header:?}");
+        }
+        assert_eq!(
+            parse_game_version("# game_version=9.9.9\n[General]\ngame_version=7.0.0\n").unwrap(),
+            "7.0.0"
+        );
     }
 
     #[test]

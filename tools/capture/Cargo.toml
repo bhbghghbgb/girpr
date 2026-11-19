@@ -82,6 +82,11 @@ flate2 = "1.1.11"
 # Directory walks in the index and inventory passes. Already in the shared
 # lockfile through the other workspace members; no new dependency is fetched.
 walkdir = "2.5.0"
+# The `game/config.ini` version probe. A streaming parser is used rather than a
+# map-building one (`configparser`/`ini`) because gircap takes the FIRST
+# `game_version` in `[General]`; a hash map keeps only the last. This keeps that
+# reader's policy distinct from the repair binary's last-match/no-section rule.
+ini_core = "0.2.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 # Only the `non_blocking` writer guard, which is what flushes the tail of a
