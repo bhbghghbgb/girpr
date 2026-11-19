@@ -19,7 +19,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | `jobs` range validation in clap | skipped | | Clap-level validation changes error timing/format; --jobs 0 is a pinned post-parse test trigger; semantics cannot be preserved cleanly (stale main.rs:94-96 pointer, real code at 34-44 and 144-157) |
 | T06 | `AtomicU64::fetch_update` + simplify test gate | completed | 8141d6fa | Used try_update (fetch_update deprecated in rustc 1.100, identical method); custom Gate harness removed, race coverage retained via Barrier; downstream ledger race test rewritten with Barrier |
 | T07 | `girpr-tempdir` `TempDir` → `tempfile` | pending_review | 4847a15a | Delegated to tempfile::Builder::tempdir_in; kept custom Drop for at()/absent() (TempPath only removes files); name-shape test replaced with recognizability check. Cargo.lock re-resolution downgraded unrelated transitive deps (originals uncached). Proposed follow-up §I.14: drop girsync dep from tempdir |
-| T08 | `tracing-appender` as single file-log writer | todo | | |
+| T08 | `tracing-appender` as single file-log writer | in_progress | | |
 | T09 | EnvFilter spec via `add_directive` | todo | | |
 | T10 | Directory walkers → `walkdir` | todo | | |
 | T11 | Percent encoding → `percent-encoding` | todo | | |
