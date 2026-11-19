@@ -63,6 +63,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
 | solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
 | H | T30 (T29 skipped) | done | Completed; no fixes; byte-exact renderer untouched, first-match-in-[General] preserved; 3 follow-ups recorded |
+| I | T31, T33, T34 (T32, T35 skipped) | pending | |
 
 ## Follow-ups
 
