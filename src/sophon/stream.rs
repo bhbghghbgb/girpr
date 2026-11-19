@@ -617,7 +617,6 @@ mod tests {
     use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
     use crate::test_http::serve_status;
-    use std::sync::atomic::Ordering;
 
     /// A frame the differential runs over.
     fn frame(payload: &[u8]) -> Vec<u8> {
@@ -1050,14 +1049,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_retryable_manifest_status_is_retried_to_the_cap() {
-        let (base, hits) = serve_status("500 Internal Server Error").await;
-        let meta = manifest_meta(&base);
+        let server = serve_status(500).await;
+        let meta = manifest_meta(&server.uri());
         let client = reqwest::Client::new();
         let err = fetch_manifest(&client, &BackoffPolicy::none(), &meta)
             .await
             .expect_err("the origin never recovers");
         assert_eq!(
-            hits.load(Ordering::Relaxed),
+            server.hits().await,
             ATTEMPTS as usize,
             "a 500 is retried on every allowed attempt"
         );
@@ -1067,17 +1066,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_terminal_manifest_status_is_not_retried() {
-        let (base, hits) = serve_status("404 Not Found").await;
-        let meta = manifest_meta(&base);
+        let server = serve_status(404).await;
+        let meta = manifest_meta(&server.uri());
         let client = reqwest::Client::new();
         let err = fetch_manifest(&client, &BackoffPolicy::none(), &meta)
             .await
             .expect_err("the build has no such manifest");
-        assert_eq!(
-            hits.load(Ordering::Relaxed),
-            1,
-            "the origin answered definitively"
-        );
+        assert_eq!(server.hits().await, 1, "the origin answered definitively");
         let chain = format!("{err:#}");
         assert!(
             !chain.contains("after "),

@@ -723,6 +723,7 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "winapi-util",
+ "wiremock",
  "zstd",
 ]
 

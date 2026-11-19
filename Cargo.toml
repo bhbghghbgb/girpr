@@ -111,6 +111,10 @@ girpr-tempdir = { path = "crates/tempdir" }
 # the normal dependency above; tokio's `default` set is empty, so this withholds
 # no test feature.
 tokio = { version = "1.54.1", default-features = false, features = ["test-util", "process", "net", "io-util"] }
+# Canned reply servers in the HTTP unit tests. The library owns the listener,
+# request journal and invocation counts; the tests only script statuses/bodies
+# and assert on what it recorded.
+wiremock = "0.6"
 
 # The shipped artifact is a single CLI binary, so trade build time for a
 # smaller, slightly faster one: thin LTO and one codegen unit, and no debug

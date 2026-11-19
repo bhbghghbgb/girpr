@@ -1391,13 +1391,13 @@ mod tests {
     /// a fetch that skipped it.
     #[tokio::test]
     async fn fetch_deprecated_normalises_the_server_list() {
-        let (base, _) = crate::test_http::serve_bodies(vec![
+        let server = crate::test_http::serve_bodies(vec![
             r#"{"retcode":0,"message":"OK","data":{"deprecated_file_configs":[{"deprecated_files":[{"name":"old\\legacy.dll"},{"name":"../victim.dll"},{"name":"./kept//file.dat"},{"name":"/abs/evil.dll"},{"name":"a//b\\c.dat"}]}]}}"#,
         ])
         .await;
         let hyp = HypClient::new_with_bases(
             Biz::Hk4eGlobal,
-            base,
+            server.uri(),
             "http://sophon.test/api".into(),
             BackoffPolicy::none(),
         )

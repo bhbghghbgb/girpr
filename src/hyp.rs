@@ -559,7 +559,6 @@ fn urlencode(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_http::serve_bodies;
-    use std::sync::atomic::Ordering;
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -654,16 +653,16 @@ mod tests {
     /// caller must see the second answer, and the server both requests.
     #[tokio::test]
     async fn get_node_retries_a_retryable_retcode_and_takes_the_next_answer() {
-        let (base, hits) = serve_bodies(vec![
+        let server = serve_bodies(vec![
             r#"{"retcode":-1,"message":"busy","data":null}"#,
             r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"exe_file_name":"GenshinImpact.exe"}]}}"#,
         ])
         .await;
         let list: Vec<GameConfig> = client_for(Biz::Hk4eGlobal)
-            .get_node(&base, "launch_configs")
+            .get_node(&server.uri(), "launch_configs")
             .await
             .expect("the second attempt answers");
-        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(server.hits().await, 2);
         assert_eq!(list[0].exe_file_name, "GenshinImpact.exe");
     }
 
@@ -671,16 +670,16 @@ mod tests {
     /// first answer must end the call.
     #[tokio::test]
     async fn get_node_stops_on_a_terminal_retcode() {
-        let (base, hits) = serve_bodies(vec![
+        let server = serve_bodies(vec![
             r#"{"retcode":-1001,"message":"invalid params","data":null}"#,
         ])
         .await;
         let err = client_for(Biz::Hk4eGlobal)
-            .get_node::<Vec<GameConfig>>(&base, "launch_configs")
+            .get_node::<Vec<GameConfig>>(&server.uri(), "launch_configs")
             .await
             .expect_err("invalid params is final");
         assert_eq!(
-            hits.load(Ordering::Relaxed),
+            server.hits().await,
             1,
             "a terminal retcode must not be retried"
         );
@@ -696,16 +695,16 @@ mod tests {
     /// and the successful body is returned as the node itself.
     #[tokio::test]
     async fn get_direct_retries_a_retryable_retcode_and_takes_the_next_answer() {
-        let (base, hits) = serve_bodies(vec![
+        let server = serve_bodies(vec![
             r#"{"retcode":-1,"message":"busy","data":null}"#,
             r#"{"retcode":0,"message":"OK","data":{"build_id":"build_test"}}"#,
         ])
         .await;
         let build: ChunkBuild = client_for(Biz::Hk4eGlobal)
-            .get_direct(&base)
+            .get_direct(&server.uri())
             .await
             .expect("the second attempt answers");
-        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(server.hits().await, 2);
         assert_eq!(build.build_id, "build_test");
     }
 
@@ -713,16 +712,16 @@ mod tests {
     /// [`SophonNotFound`] after one request, not a retried generic error.
     #[tokio::test]
     async fn get_direct_stops_on_a_fatal_retcode() {
-        let (base, hits) = serve_bodies(vec![
+        let server = serve_bodies(vec![
             r#"{"retcode":-202,"message":"not found","data":null}"#,
         ])
         .await;
         let err = client_for(Biz::Hk4eGlobal)
-            .get_direct::<ChunkBuild>(&base)
+            .get_direct::<ChunkBuild>(&server.uri())
             .await
             .expect_err("an unknown tag is final");
         assert_eq!(
-            hits.load(Ordering::Relaxed),
+            server.hits().await,
             1,
             "a fatal retcode must not be retried"
         );
