@@ -26,7 +26,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T12 | Windows device-name / path-shape rule | skipped | | Share-one-rule premise already met (config calls paths::is_windows_device_name); no library predicate matches current reserved set - sanitize-filename adds COM0/LPT0 and omits CONIN$/CONOUT$, changing artifact layout |
 | T13 | girpr JSON renderer → `Serialize` | pending_review | 69414ccb | Hand-written Serialize for local Record/Val; json() = serde_json::to_string with {} fallback. Intentional byte change in untested edge: backslash-only string values now escaped to \\ (control-char escaping unchanged); declaration order kept, no preserve_order |
 | T14 | girsync JSON renderer → `Serialize` | pending_review | 8607fac2 | Kept alphabetical key order (event in sorted slot) - pinned by byte-level oracle; stale pointer: hand-rolled renderer was write_json, json() is public -> Value, so routed through to_value; no byte changes; no preserve_order |
-| T15 | gircap JSON renderer → `Serialize` | todo | | |
+| T15 | gircap JSON renderer → `Serialize` | in_progress | | |
 | T16 | girpr retry/backoff → `backoff` | todo | | |
 | T17 | gircap retry/backoff → `ExponentialBackoff` | todo | | |
 | T18 | girsync path canonicalization → `dunce` | todo | | |
