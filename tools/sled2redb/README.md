@@ -53,46 +53,41 @@ itself, so `--output json` means the same thing in both tools.
 
 ## Conversion behaviour (unchanged by the move)
 
-**A conversion is atomic for a file destination.** The new cache is written
-into a temporary beside the destination and moved onto it only once it is
-whole, so the destination is either the old cache or the new one — never a
-half-written mixture, and never a file that opens as a valid cache. A
-conversion that fails leaves the previous cache exactly as it was under
-`--force`, and leaves no destination at all without it; the temporary is
-removed either way, so nothing of the tool's own is left in the folder.
+**The finished cache is moved into place once it is whole.** The new cache is
+written into a temporary beside the destination and moved onto it with a single
+no-clobber rename, so the move cannot leave a half-written file and cannot
+overwrite a destination that appeared after the initial check. A conversion
+that fails leaves the previous cache exactly as it was under `--force`, and
+leaves no destination at all without it; the temporary is removed either way,
+so nothing of the tool's own is left in the folder.
 
 The temporary is named inside the tool's own namespace —
-`girpr-cache-convert-<pid>-<ts>.redb`, or `girpr-cache-convert-<pid>-<ts>_2.redb`
-and its `_3`, `_4`, … spellings when a name of that shape is already taken —
-because it is written into the folder the destination cache lives in. Every
-spelling of it is inside that namespace, so a conversion that is killed before
-it could clean up after itself leaves tool state there, not a file the next run
-would mirror out of a source folder or delete as an extra in a destination one.
-**That family of names is bounded** — the plain name and the `_2` … `_1000`
-spellings, a thousand candidates in all — so a conversion that finds every one
-of them taken fails with exit `3` rather than trying forever.
+`girpr-cache-convert-<random>.redb` — because it is written into the folder the
+destination cache lives in. `tempfile` gives it a random middle and retries a
+collision with a fresh name, so two conversions into the same folder cannot
+share a temporary and there is no bounded family of numbered candidates to
+search. The name is inside the namespace, so a conversion that is killed before it could
+clean up after itself leaves tool state there, not a file the next run would
+mirror out of a source folder or delete as an extra in a destination one.
+Ordinarily there is no leftover at all: the temporary is owned by a handle
+whose drop removes it, so a conversion that fails cleans up after itself.
 
-**Nothing reclaims that temporary.** A cache's retention bound ranges over its
-published copies — the `girpr-cache-backup-*` copies and the `girpr-cache-old-*`
-snapshots — and not over the converter's temporary, so a leftover stays in the
-folder until you remove it by hand. That is deliberate: a temporary is the file
-a live conversion is writing, and a sweep that could not tell a live one from a
-dead one would take the copy a running conversion is making. The name carries
-the process id, so a leftover says which run left it.
+**Nothing reclaims a leftover temporary.** A cache's retention bound ranges
+over its published copies — the `girpr-cache-backup-*` copies and the
+`girpr-cache-old-*` snapshots — and not over the converter's temporary, so one
+left by a killed conversion stays in the folder until you remove it by hand.
+That is deliberate: a temporary is the file a live conversion is writing, and a
+sweep that could not tell a live one from a dead one would take the copy a
+running conversion is making. The random name says nothing about which run left
+it, so there is nothing to interpret — a leftover is simply yours to remove.
 
-That process id is for **you**, not for the tool: it cannot answer "is a
-conversion still writing this?". A process id is **reused**, so the number in
-the name may belong to an unrelated process by now. And the folder can be
-**shared between hosts** (a network folder, a container mount, a synced
-directory), where the number was minted in a process table this machine cannot
-ask about at all. So the id names the run for a reader, and a leftover is yours
-to remove.
-
-Replacing a **legacy sled directory** is the one step that is not atomic: the
-directory has to be removed before the new file can take its name, so a failure
-in that window leaves no cache at all. The error says so when it happens. The
-source directory is left alone either way — the conversion never writes to it,
-so deleting it is your call.
+An existing destination is removed before the rename can put the new file
+there: a **legacy sled directory** has to go before a file can take its name,
+and a stale file is removed under `--force`. That removal is the one step that
+is not atomic — a failure in that window leaves no cache at all, and the error
+says so when it happens. A conversion that fails before that point never
+touches the previous cache. The source directory is left alone either way — the
+conversion never writes to it, so deleting it is your call.
 
 Unknown hash algorithms survive conversion untouched as raw bytes, and hex
 digests in the legacy JSON rows are decoded to raw bytes on the way in.

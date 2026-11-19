@@ -27,9 +27,10 @@ path = "src/main.rs"
 # girsync's public cache/hash/util/report API. `sled` is a plain dependency of
 # this crate alone; girsync itself has no sled in its graph at all.
 girsync = { path = "../sync" }
-# Only for the shared timestamp used in converter temp-file names. The format
-# is defined once in girpr-log, the same helper girsync delegates to.
-girpr-log = { path = "../../crates/log" }
+# The temporary the finished cache is moved from: `tempfile` claims a unique
+# name in the destination's folder, its no-clobber rename puts the finished
+# file in place, and dropping the handle on failure leaves no residue.
+tempfile = "3.27"
 sled = "0.34"
 anyhow = "1.0.104"
 # Hex decoding of legacy digest strings, with the bad-row context preserved.

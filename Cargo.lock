@@ -2017,7 +2017,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "girpr-log",
  "girpr-tempdir",
  "girsync",
  "hex",
@@ -2026,6 +2025,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sled",
+ "tempfile",
  "tracing",
 ]
 
