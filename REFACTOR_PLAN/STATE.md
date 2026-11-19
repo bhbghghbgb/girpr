@@ -29,11 +29,11 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T15 | gircap JSON renderer → `Serialize` | completed | e5d6426a | Backslash caveat stale: current helpers already excluded b'\\\\' so serde_json emits \\\\ already; byte-identical, no oracle change. Kept Str|Int|Bool event-first order; test calling removed helper rewritten via public API; design note corrected |
 | T16 | girpr retry/backoff → `backoff` | completed | acb8d6c4 | Adopted backoff 0.4.0 (latest stable); kept Retry/RetryState with Transient/Permanent mapping in adapter; exact attempt count enforced; default SystemClock; sleep.rs deleted, BackoffPolicy exported; determinism loss accepted per §I.3; gircap untouched |
 | T17 | gircap retry/backoff → `ExponentialBackoff` | completed | bc6940c3 | Used ExponentialBackoff with randomization_factor 0.0 (jitter None, diffable artifact preserved); kept retry loop + Sleep injection + seq/bytes_in/restart; no async driver/middleware; base_delay/max_delay folded into private constants |
-| T18 | girsync path canonicalization → `dunce` | pending_review | 97bb62dd | Scope broadened to all canonicalize sites in tools/sync (no std/dunce mixing); 3 strippers removed; UNC test body retargeted to absolute_alias; DIRECT_QUESTIONS seam updated; I.1 validated - girpr/T19 untouched; paths render without \\\\?\\ |
+| T18 | girsync path canonicalization → `dunce` | completed | 97bb62dd | Scope broadened to all canonicalize sites in tools/sync (no std/dunce mixing); 3 strippers removed; UNC test body retargeted to absolute_alias; DIRECT_QUESTIONS seam updated; I.1 validated - girpr/T19 untouched; paths render without \\\\?\\ |
 | T19 | girpr `resolve_existing_prefix` validation | skipped | | No library method preserves symlink-escape detection + fail-closed behavior; path-absolutize methods are purely lexical and its canonicalize() does not exist; §I.1 open assumption confirmed |
-| T20 | Glob filtering → `globset` / shared crate | pending_review | aaa7659a | Chose shared leaf crate girpr-filter (semantics-preserving); globset rejected due to dotfile/**/backslash/case-mode drift risk; both filters delegate but keep their own policies; girsync::glob::Pattern public type unchanged, public_surface test passes |
-| T21 | Atomic publish helpers → library | pending_review | 8e3ee9be | NamedTempFile::persist for write_atomic + pure copy_publish_with; lexical guards/create_dir_all/durable decision kept; promote_tmp + audio cache move untouched; temp_sibling kept behind cfg(test) as legacy fixture; sync-counting seam test replaced with observable behavior |
-| T22 | Status error + URL join → `reqwest` | pending_review | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
+| T20 | Glob filtering → `globset` / shared crate | completed | aaa7659a | Chose shared leaf crate girpr-filter (semantics-preserving); globset rejected due to dotfile/**/backslash/case-mode drift risk; both filters delegate but keep their own policies; girsync::glob::Pattern public type unchanged, public_surface test passes |
+| T21 | Atomic publish helpers → library | completed | 8e3ee9be | NamedTempFile::persist for write_atomic + pure copy_publish_with; lexical guards/create_dir_all/durable decision kept; promote_tmp + audio cache move untouched; temp_sibling kept behind cfg(test) as legacy fixture; sync-counting seam test replaced with observable behavior |
+| T22 | Status error + URL join → `reqwest` | completed | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
 | T23 | gircap HTTP mock servers | todo | | |
 | T24 | girpr canned HTTP reply server | todo | | |
 | T25 | Hardlink identity → `same-file` | todo | | |
@@ -56,7 +56,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | B | T07, T08, T09, T10, T11 (T12 skipped) | done | All five completed; lockfile fix 4636a691; 5 follow-ups recorded |
 | C | T13, T14, T15 | done | All three completed; cross-tool consistency PASS; fix 9177fde1 pins backslash escaping; 2 follow-ups recorded |
 | D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
-| E | T18, T20, T21, T22 (T19 skipped) | pending | |
+| E | T18, T20, T21, T22 (T19 skipped) | done | All four completed; no fixes; DO-NOT-TOUCH resume artifacts preserved; 6 follow-ups recorded |
 
 ## Follow-ups
 
@@ -77,6 +77,12 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F13 | Restore 'after 0 attempts' error context for retry(0, ...) in girpr | open | T16; no call site passes 0 |
 | F14 | Document why backoff 0.4 RNG draw at factor 0.0 cannot affect gircap artifacts | open | T17; use custom policy only if strict zero-RNG ever required |
 | F15 | Consider public API impact of RetryPolicy base_delay/max_delay becoming private constants | open | T17; no in-tree external users |
+| F16 | Rename stale UNC test without_verbatim_rebuilds_the_prefix_the_path_needs | open | T18; now tests absolute_alias, name only |
+| F17 | Document junction read_link spelling assumption relied on by absolute_alias | open | T18; low risk, not observable in current tests |
+| F18 | Add cross-crate equivalence test for girpr-filter | open | T20; extraction behavior-preserving by construction |
+| F19 | Restore an observable durability assertion for write_atomic_with durable=true | open | T21; seam loss allowed, durable branch remains |
+| F20 | Add successful Windows overwrite test for NamedTempFile::persist | open | T21; extra assurance only |
+| F21 | Note 3xx no longer treated as failure and join_url signature String to Result<Url> | open | T22; in-tree callers updated, redirects followed by default |
 
 ## Persistent context
 
