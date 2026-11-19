@@ -111,19 +111,24 @@ fn a_directory_that_is_not_a_bundle_is_not_named_by_list() {
 /// A directory the walk cannot read is **named**, not skipped.
 ///
 /// `list` is the operator's inventory; dropping a subtree makes a confident
-/// answer that is short. The reader is real here — a file passed where a
-/// directory is expected is the cheapest read failure a test can make.
+/// answer that is short. The failure is injected at the pre-descent check —
+/// the point where a file passed where a directory is expected, or a share
+/// that denies the read, used to let the walk drop a subtree silently.
 #[test]
 fn a_walk_that_cannot_read_a_directory_names_it() {
     let d = girpr_tempdir::TempDir::new("gircap-list-unreadable", "unreadable");
     let file = d.join("not_a_directory");
-    std::fs::write(&file, b"x").expect("writes a file");
-
-    let e = child_dirs(&file, |p| {
-        let rd = std::fs::read_dir(p)?;
-        Ok(rd.map(|e| e.map(|e| e.path())).collect())
-    })
-    .expect_err("a file cannot be read as a directory");
+    let e = list_with(
+        &d,
+        move |_| {
+            Err(std::io::Error::other(format!(
+                "{} is not a directory",
+                file.display()
+            )))
+        },
+        |p| std::fs::read(p),
+    )
+    .expect_err("a directory the walk cannot read is not skipped");
     assert!(e.contains("cannot read"), "{e}");
     assert!(e.contains("not_a_directory"), "the path is named: {e}");
 }
@@ -171,10 +176,7 @@ fn a_list_walk_that_cannot_read_a_manifest_fails_instead_of_dropping_the_bundle(
 
     let e = list_with(
         &d,
-        |p| {
-            let rd = std::fs::read_dir(p)?;
-            Ok(rd.map(|e| e.map(|e| e.path())).collect())
-        },
+        |_| Ok(()),
         |_| {
             Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -211,25 +213,42 @@ fn a_manifest_that_cannot_be_stat_ed_fails_the_probe() {
 }
 
 /// One failed entry is the whole walk's failure: a child that vanished
-/// between `read_dir` and the stat may be a bundle, so it cannot be dropped.
+/// between enumeration and the stat may be a bundle, so it cannot be dropped.
 #[test]
 fn a_walk_that_loses_one_entry_names_the_directory() {
     let d = girpr_tempdir::TempDir::new("gircap-list-entry", "entry_error");
-    let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-    let e = child_dirs(&d, move |_| Ok(vec![Err(denied)]))
-        .expect_err("an entry error is not a shorter listing");
-    assert!(e.contains("cannot read an entry"), "{e}");
+    let e = list_with(
+        &d,
+        |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))
+        },
+        |p| std::fs::read(p),
+    )
+    .expect_err("an entry error is not a shorter listing");
+    assert!(e.contains("cannot read"), "{e}");
     assert!(e.contains("denied"), "the cause is kept: {e}");
 }
 
-/// An entry whose metadata cannot be read is an error too; `is_dir`'s
-/// `false` on a failed stat is the same silent omission one level down.
+/// An entry whose metadata cannot be read is an error too; treating a failed
+/// stat as "not a directory" is the same silent omission one level down.
 #[test]
 fn a_walk_that_cannot_stat_one_entry_names_it() {
     let d = girpr_tempdir::TempDir::new("gircap-list-stat", "stat_error");
     let vanished = d.join("vanished");
-    let e =
-        child_dirs(&d, move |_| Ok(vec![Ok(vanished)])).expect_err("a missing entry is not a file");
+    let e = list_with(
+        &d,
+        move |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{}: no such file", vanished.display()),
+            ))
+        },
+        |p| std::fs::read(p),
+    )
+    .expect_err("a missing entry is not a file");
     assert!(e.contains("cannot read"), "{e}");
     assert!(e.contains("vanished"), "the path is named: {e}");
 }

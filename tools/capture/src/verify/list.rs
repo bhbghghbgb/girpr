@@ -3,6 +3,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use walkdir::WalkDir;
+
 use super::bundle::Bundle;
 
 /// One row of `list`: a bundle found under a root.
@@ -87,22 +89,20 @@ pub struct Unreadable {
 /// command fails fast instead and names the directory, entry or manifest it
 /// could not read.
 pub fn list(root: &Path) -> Result<Index, String> {
-    list_with(
-        root,
-        |d| {
-            let rd = std::fs::read_dir(d)?;
-            Ok(rd.map(|e| e.map(|e| e.path())).collect())
-        },
-        |p| std::fs::read(p),
-    )
+    // `WalkDir` reads the directories itself, so the only pre-descent check
+    // production needs is the containment probe below; a real read failure is
+    // reported as a `WalkDir` error and surfaced by the walk loop.
+    list_with(root, |_| Ok(()), |p| std::fs::read(p))
 }
 
-/// [`list`] with the directory and manifest readers injected, so a test can
-/// make one read fail and see that the walk stops rather than shortening the
-/// inventory.
+/// [`list`] with a per-directory access check and the manifest reader injected,
+/// so a test can make one read fail and see that the walk stops rather than
+/// shortening the inventory. `WalkDir` owns the traversal; the seam is called
+/// on each directory just before the walk would descend into it, which is the
+/// point where a failed read used to be able to drop a subtree.
 pub fn list_with(
     root: &Path,
-    mut read: impl FnMut(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+    mut check_dir: impl FnMut(&Path) -> std::io::Result<()>,
     mut read_manifest: impl FnMut(&Path) -> std::io::Result<Vec<u8>>,
 ) -> Result<Index, String> {
     if !root.is_dir() {
@@ -114,58 +114,105 @@ pub fn list_with(
     visited.insert(canonical_root.clone());
     let mut found = Vec::new();
     let mut unreadable = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let manifest = dir.join("MANIFEST.json");
-        let probe = super::bundle::probe_manifest(&manifest, &mut read_manifest)?;
-        match probe {
-            // No manifest, or a manifest that is not a bundle this build can
-            // read: step over it silently and keep descending, so a bundle
-            // nested under a half-written directory is still found.
-            super::bundle::ManifestProbe::Missing | super::bundle::ManifestProbe::NotABundle(_) => {
+    let mut failure: Option<String> = None;
+
+    let entries = WalkDir::new(root)
+        .follow_links(true)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| {
+            if failure.is_some() {
+                return false;
             }
-            // A manifest declaring this schema version is a real bundle
-            // boundary: list it, or name it as unreadable if it does not open,
-            // and do not descend into it. A bundle does not contain a bundle.
-            super::bundle::ManifestProbe::Version(_) => {
-                match Bundle::open(&dir) {
-                    Ok(b) => found.push(listed_of(root, &b)),
-                    Err(e) => {
-                        unreadable.push(Unreadable {
-                            path: crate::emit::index::rel(root, &dir),
-                            reason: e.clone(),
-                        });
+            // The root bounds the walk; it is never resolved as an entry.
+            if e.depth() > 0 {
+                // A child is entered only when its canonical path is inside the
+                // canonical root and has not been seen. A link out of the root
+                // would put bytes the root does not own into the inventory, and
+                // a link back up the tree would loop or list a bundle twice.
+                let Some(canonical) = canonical_under_root(&canonical_root, e.path()) else {
+                    if e.file_type().is_dir() {
                         tracing::warn!(
-                            dir = %dir.display(),
-                            error = %e,
-                            "a directory under --root looks like a bundle but does not open; skipped"
+                            dir = %e.path().display(),
+                            "a directory under --root resolves outside the root through a link; skipped"
                         );
                     }
+                    return false;
+                };
+                if !visited.insert(canonical) {
+                    return false;
                 }
-                continue;
             }
-        }
-        // Sorted so the walk is the same on every filesystem; reversed because
-        // the stack pops from the back. A child is only queued when its canonical
-        // path is inside the canonical root and has not been seen: a link back
-        // up the tree would loop, and a link out of the root would put bytes
-        // the root does not own into the inventory.
-        let subs = child_dirs(&dir, |d| read(d))?;
-        let mut next = Vec::new();
-        for sub in subs {
-            let Some(canonical) = canonical_under_root(&canonical_root, &sub) else {
-                tracing::warn!(
-                    dir = %sub.display(),
-                    "a directory under --root resolves outside the root through a link; skipped"
-                );
-                continue;
+            // Only directories can be bundles; a file contributes nothing.
+            if !e.file_type().is_dir() {
+                return false;
+            }
+            let dir = e.path();
+            let manifest = dir.join("MANIFEST.json");
+            let probe = match super::bundle::probe_manifest(&manifest, &mut read_manifest) {
+                Ok(probe) => probe,
+                Err(err) => {
+                    failure.get_or_insert(err);
+                    return false;
+                }
             };
-            if !visited.insert(canonical) {
-                continue;
+            match probe {
+                // No manifest, or a manifest that is not a bundle this build
+                // can read: step over it silently and keep descending, so a
+                // bundle nested under a half-written directory is still found.
+                super::bundle::ManifestProbe::Missing
+                | super::bundle::ManifestProbe::NotABundle(_) => {}
+                // A manifest declaring this schema version is a real bundle
+                // boundary: list it, or name it as unreadable if it does not
+                // open, and do not descend into it. A bundle does not contain
+                // a bundle.
+                super::bundle::ManifestProbe::Version(_) => {
+                    match Bundle::open(dir) {
+                        Ok(b) => found.push(listed_of(root, &b)),
+                        Err(e) => {
+                            unreadable.push(Unreadable {
+                                path: crate::emit::index::rel(root, dir),
+                                reason: e.clone(),
+                            });
+                            tracing::warn!(
+                                dir = %dir.display(),
+                                error = %e,
+                                "a directory under --root looks like a bundle but does not open; skipped"
+                            );
+                        }
+                    }
+                    return false;
+                }
             }
-            next.push(sub);
+            // About to descend: a directory the walk cannot read is an error,
+            // not a shorter inventory.
+            if let Err(err) = check_dir(dir) {
+                failure.get_or_insert(format!("cannot read {}: {err}", dir.display()));
+                return false;
+            }
+            true
+        });
+
+    for entry in entries {
+        match entry {
+            Ok(_) => {}
+            Err(err) => {
+                // A link to an ancestor is a cycle: `WalkDir` refuses to follow
+                // it, and the old walk skipped it rather than failing. Every
+                // other error is a directory or entry the walk could not see,
+                // which must stop the walk rather than shorten the inventory.
+                if err.loop_ancestor().is_some() {
+                    continue;
+                }
+                let path = err.path().unwrap_or(root).to_path_buf();
+                failure.get_or_insert(format!("cannot read {}: {err}", path.display()));
+                break;
+            }
         }
-        stack.extend(next.into_iter().rev());
+    }
+
+    if let Some(err) = failure {
+        return Err(err);
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
     unreadable.sort_by(|a, b| a.path.cmp(&b.path));
@@ -173,37 +220,6 @@ pub fn list_with(
         bundles: found,
         unreadable,
     })
-}
-
-/// The child directories of `dir`, sorted, or the first reason the walk could
-/// not see all of them.
-///
-/// The reader is injected so the entry-error arm can be exercised without
-/// platform-specific permissions: a test hands over a synthetic `Err` for one
-/// entry, which is otherwise only reachable when a share disconnects between
-/// `read_dir` and the stat. `metadata` follows symlinks to decide which entries
-/// are directories, and an entry that cannot be stat'ed is an error rather than
-/// a file: losing it would be the same silent omission this walk is fixing.
-/// [`list_with`] resolves each returned directory against the canonical root
-/// before descending, so a link that leaves the root or returns to a directory
-/// already visited is not walked.
-pub fn child_dirs(
-    dir: &Path,
-    read: impl FnOnce(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
-) -> Result<Vec<PathBuf>, String> {
-    let entries = read(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
-    let mut subs = Vec::new();
-    for entry in entries {
-        let path = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
-        let is_dir = std::fs::metadata(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?
-            .is_dir();
-        if is_dir {
-            subs.push(path);
-        }
-    }
-    subs.sort();
-    Ok(subs)
 }
 
 /// The canonical form of `path`, but only when it resolves inside

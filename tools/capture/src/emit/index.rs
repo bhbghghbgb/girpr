@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use super::selfcheck;
 
 use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
 use crate::hash;
 
@@ -255,72 +256,94 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
 ///
 /// Sorted, because a list that depends on the filesystem's enumeration order
 /// makes two identical artifacts produce different documents — and this tool's
-/// whole claim is that the same world produces the same bundle.
+/// whole claim is that the same world produces the same bundle. `WalkDir`'s
+/// `sort_by_file_name` is a depth-first, per-directory sort, the same order the
+/// hand-rolled stack produced, so the document bytes do not change.
 ///
 /// **Every entry is resolved against the canonical root before it is used.**
 /// A directory is only descended into when its canonical path is inside the
-/// canonical root and has not been visited already, so a symlink or junction
-/// that points back up the tree cannot loop the walk and one that points
-/// outside cannot pull bytes from beyond the artifact into it. The same rule
+/// canonical root and has not been seen already, so a symlink or junction that
+/// points back up the tree cannot loop the walk and one that points outside
+/// cannot pull bytes from beyond the artifact into it. `WalkDir` follows links
+/// and detects ancestor loops on its own; the canonical-path set additionally
+/// dedupes a symlink to a sibling that a pure ancestor check would walk twice
+/// (the same real tree reached under two names). The same containment rule
 /// applies to files: a file whose canonical path is outside the root is not
 /// part of the artifact. Paths in the result stay relative to the `root`
 /// argument and keep its spelling, so a symlinked root (whose canonical form
 /// is its target) still yields an ordinary artifact-relative listing.
 pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     // Resolve the root once. A root that cannot be resolved fails here, just
-    // as it would fail at the first `read_dir` below. The canonical root is in
-    // the visited set from the start so a link back to the root is skipped.
+    // as it would fail at the first directory read. The canonical root is in
+    // the visited set from the start so a link back to it is not walked again.
     let canonical_root = std::fs::canonicalize(root)?;
     let mut visited: HashSet<PathBuf> = HashSet::new();
     visited.insert(canonical_root.clone());
+    let mut out = Vec::new();
 
-    fn go(
-        dir: &Path,
-        root: &Path,
-        canonical_root: &Path,
-        visited: &mut HashSet<PathBuf>,
-        out: &mut Vec<PathBuf>,
-    ) -> std::io::Result<()> {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
-            .map(|e| e.map(|e| e.path()))
-            .collect::<Result<_, _>>()?;
-        entries.sort();
-        for e in entries {
-            // `is_dir`/`is_file` follow links, so resolve first: the canonical
-            // path is the only honest answer to "is this inside the artifact?".
-            // An entry that cannot be resolved is a broken link and, as before,
-            // contributes nothing to the walk.
-            let Some(canonical) = canonical_under_root(canonical_root, &e) else {
-                continue;
+    let entries = WalkDir::new(root)
+        .follow_links(true)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| {
+            // The root defines the walk; it is not resolved as an entry.
+            if e.depth() == 0 {
+                return true;
+            }
+            // `file_type()` follows the link, so the canonical path is the
+            // only honest answer to "is this inside the artifact?". An entry
+            // that cannot be resolved is a broken link and contributes nothing.
+            let Some(canonical) = canonical_under_root(&canonical_root, e.path()) else {
+                return false;
             };
-            if canonical.is_dir() {
-                // A link to a directory already seen (the root included) is a
-                // cycle; descending again would revisit the same real tree.
-                if !visited.insert(canonical) {
+            // A canonical path already seen is a link back into walked ground;
+            // descending again would list the same real files twice.
+            visited.insert(canonical)
+        });
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                // `WalkDir` reports a link to an ancestor as an error. The old
+                // walk skipped such a link, so do the same rather than turning
+                // a harmless cycle into a failed capture. A dangling link
+                // resolves nowhere and is skipped for the same reason; any
+                // other error is a real read failure and is propagated.
+                if err.loop_ancestor().is_some() || is_broken_link(&err) {
                     continue;
                 }
-                go(&e, root, canonical_root, visited, out)?;
-            } else if canonical.is_file() {
-                // Unreachable in practice — `read_dir` builds its entries by
-                // joining the rooted path it was given — and an `io::Error`
-                // anyway, matching every other function here. A `walk` that
-                // panics is a `walk` that cannot report a junction or a
-                // dangling symlink it did not expect.
-                let rel = e.strip_prefix(root).map_err(|_| {
-                    std::io::Error::other(format!(
-                        "{} is not under the artifact root {}",
-                        e.display(),
-                        root.display()
-                    ))
-                })?;
-                out.push(rel.to_path_buf());
+                let description = err.to_string();
+                return Err(err
+                    .into_io_error()
+                    .unwrap_or_else(|| std::io::Error::other(description)));
             }
+        };
+        // Directories are yielded too; only regular files make the listing.
+        // `WalkDir` builds each path by joining the root it was given, so
+        // `strip_prefix` cannot fail here — but report an error rather than
+        // panic if that ever stops being true.
+        if entry.file_type().is_file() {
+            let rel = entry.path().strip_prefix(root).map_err(|_| {
+                std::io::Error::other(format!(
+                    "{} is not under the artifact root {}",
+                    entry.path().display(),
+                    root.display()
+                ))
+            })?;
+            out.push(rel.to_path_buf());
         }
-        Ok(())
     }
-    let mut out = Vec::new();
-    go(root, root, &canonical_root, &mut visited, &mut out)?;
     Ok(out)
+}
+
+/// Whether a `WalkDir` failure is a dangling symlink: its path still names a
+/// link even though the target cannot be stat'ed. Those are skipped like any
+/// other entry that resolves outside the artifact.
+fn is_broken_link(err: &walkdir::Error) -> bool {
+    err.path().is_some_and(|path| {
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// The canonical form of `path`, but only when it resolves inside

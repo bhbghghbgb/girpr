@@ -71,7 +71,7 @@ use checks::{
     A20, A20_ID, check_agreement, check_blobs, check_patchmap_arithmetic, check_plan_against_index,
 };
 #[cfg(test)]
-use list::{child_dirs, list_with};
+use list::list_with;
 #[cfg(test)]
 use std::path::Path;
 
