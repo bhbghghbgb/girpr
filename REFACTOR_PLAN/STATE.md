@@ -16,7 +16,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | One shared timestamp helper | pending_review | 382f992f | girpr_log::timestamp is single source; girsync ts_now shim kept for cache/open.rs. Stale pointer: hard-coded stamp not at plan/tests.rs:439, now in cache/open.rs tests; all pass. capture uses caller-supplied DateTime, left out of scope; unused chrono dep removed |
 | T03 | Hex encode/decode sweep | pending_review | 9f6ce80d | All six sites use hex 0.4.3; Md5 Display kept allocation-free via encode_to_slice + stack buffer; sled2redb param renamed hex→text to avoid crate shadowing; Cargo.lock updated minimally (no unrelated downgrades) |
 | T04 | FNV literals → named constants | skipped | | Premise false: pinned fnv 1.0.7 exposes no named constants; goal already met by existing FNV_OFFSET/FNV_PRIME named constants in repair/lock.rs; do not add hashkit |
-| T05 | `jobs` range validation in clap | in_progress | | |
+| T05 | `jobs` range validation in clap | skipped | | Clap-level validation changes error timing/format; --jobs 0 is a pinned post-parse test trigger; semantics cannot be preserved cleanly (stale main.rs:94-96 pointer, real code at 34-44 and 144-157) |
 | T06 | `AtomicU64::fetch_update` + simplify test gate | todo | | |
 | T07 | `girpr-tempdir` `TempDir` → `tempfile` | todo | | |
 | T08 | `tracing-appender` as single file-log writer | todo | | |
