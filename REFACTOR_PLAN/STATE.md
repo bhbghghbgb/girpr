@@ -34,8 +34,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T20 | Glob filtering → `globset` / shared crate | completed | aaa7659a | Chose shared leaf crate girpr-filter (semantics-preserving); globset rejected due to dotfile/**/backslash/case-mode drift risk; both filters delegate but keep their own policies; girsync::glob::Pattern public type unchanged, public_surface test passes |
 | T21 | Atomic publish helpers → library | completed | 8e3ee9be | NamedTempFile::persist for write_atomic + pure copy_publish_with; lexical guards/create_dir_all/durable decision kept; promote_tmp + audio cache move untouched; temp_sibling kept behind cfg(test) as legacy fixture; sync-counting seam test replaced with observable behavior |
 | T22 | Status error + URL join → `reqwest` | completed | b656f563 | Used Url::join + error_for_status_ref; normalized base to directory URL (append /) so production prefixes without trailing slash keep build segment; narrow retryable policy (server_error + 408/429) preserved; join_url kept as reqwest-backed wrapper |
-| T23 | gircap HTTP mock servers | pending_review | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
-| T24 | girpr canned HTTP reply server | pending_review | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
+| T23 | gircap HTTP mock servers | completed | 8f181ace | Used wiremock 0.6 for canned replies with expect(n)/received_requests(); kept HttpTransport/MemoryTransport seam (domain server not delegable, manifest bodies pin ports); raw-socket helper retained for 9 lying/omitted Content-Length tests; domain state preserved; stale serve_bodies/Served pointers belonged to T24/bridge; md5_hex duplicate switched to gircap::hash::md5_hex |
+| T24 | girpr canned HTTP reply server | completed | b4055b87 | Replaced raw-socket test_http server with wiremock 0.6; Mock handle with uri() + async hits() via received_requests(); serve_status takes u16; no expect(n) (unbounded repeat-last, counts via journal); bridge/domain servers untouched; workspace 2114 passed |
 | T25 | Hardlink identity → `same-file` | todo | | |
 | T26 | girsync gate/concurrency simplification | todo | | |
 | T27 | Cache wire codec → `postcard`/`bincode` | todo | | |
@@ -58,7 +58,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | D | T16, T17 | done | Both completed; two-semantics comparison PASS, no cross-leak; no fixes; 4 follow-ups recorded |
 | E | T18, T20, T21, T22 (T19 skipped) | done | All four completed; no fixes; DO-NOT-TOUCH resume artifacts preserved; 6 follow-ups recorded |
 | X | gircap spawn-test investigation/fix (c7e34ba4) | done | Failure predates orchestration; all 27 were env-only; fixed via CARGO_BIN_EXE_gircap; F04 resolved; review APPROVE; residual compile caveat disproven |
-| F | T23, T24 | pending | |
+| F | T23, T24 | done | Both completed; no fixes; all 9 malformed-Length tests retained; bridge/domain servers untouched; 5 follow-ups recorded |
 
 ## Follow-ups
 
@@ -88,6 +88,11 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F22 | Correct M0/M10 commit hash citations for the bin() helper for traceability | open | Ad-hoc review X; active branch has d48a485d/7fd70570 |
 | F23 | Add a guard comment/test that CARGO_BIN_EXE_gircap is set to prevent regression to current_exe() | open | Ad-hoc review X; non-blocking |
 | F24 | Review the CARGO_BIN_EXE_* pattern for any future spawn-based integration tests in other tool crates | open | Ad-hoc review X; non-blocking |
+| F25 | Replace T23 Drop-time expect(n) with explicit verify()/hits() assertion for cleaner failure diagnostics | open | Batch F; counts already pinned; failure-diagnostics only |
+| F26 | Re-evaluate deleting HttpTransport/MemoryTransport seam contingent on a fast real-server 610-chunk test | open | Batch F; seam intentionally retained, ports pinned by fixtures |
+| F27 | Track added test-build weight from wiremock dev-dependency in girpr and gircap | open | Batch F; dev-only, no shipped-artifact impact |
+| F28 | Make retained raw-socket helper fail fast on unexpected extra request instead of hanging to timeout | open | Batch F; all 9 malformed tests consume exact scripted counts |
+| F29 | Note serve_status now takes u16; custom reason phrases would need responder customization | open | Batch F; current tests assert numeric status only |
 
 ## Persistent context
 
