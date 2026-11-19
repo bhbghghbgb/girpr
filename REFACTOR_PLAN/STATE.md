@@ -62,6 +62,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | G | T25, T26 | done | Both completed; no fixes; link-count guard and deadlock freedom verified; DO-NOT-TOUCH items untouched; 5 follow-ups recorded |
 | solo | T27 | done | Completed; no fixes; forward-compat/rejection/version-gate verified; DO-NOT-TOUCH intact; 3 follow-ups recorded |
 | solo | T28 | done | Completed; no fixes/reverts; moved bodies verified behavior-identical, one-syscall gaps/fail-fast/DO-NOT-TOUCH intact; 4 follow-ups recorded |
+| H | T30 (T29 skipped) | pending | |
 
 ## Follow-ups
 
