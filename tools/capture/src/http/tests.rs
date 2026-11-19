@@ -678,88 +678,155 @@ fn the_buffered_file_write_equals_the_string() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ------------------------------------------------------------- sleeper --
+// --------------------------------------------------------- mock servers --
 
-/// Exercises the retry loop against a real socket, with the waiting removed.
-///
-/// These bind `127.0.0.1:0` and are therefore local-only; nothing here
-/// reaches a CDN.
-mod local_server {
+// Two test servers with deliberately different jobs.
+//
+// `canned` delegates to a mock library: it feeds `reqwest` a scripted
+// status/body pair and lets the library own the listener, the invocation
+// counts and the request journal. `malformed` stays a small raw-socket
+// helper, because a well-behaved mock server cannot announce a
+// `Content-Length` larger than the body it sends, or omit the header
+// entirely — and those two shapes are the whole point of those tests.
+
+/// Canned replies, served by a real HTTP mock library.
+mod canned {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::method;
+    use wiremock::{Mock as Reply, MockServer, Request, ResponseTemplate};
+
+    /// A scripted reply: the status line and body for one attempt.
+    struct Answer {
+        status: u16,
+        body: &'static [u8],
+    }
+
+    /// A canned server. The library's request journal is the only record;
+    /// there is no hand-rolled accept loop or response writer here.
+    pub struct Mock {
+        server: MockServer,
+    }
+
+    impl Mock {
+        /// How many requests reached the server, from the library's journal.
+        pub async fn hits(&self) -> usize {
+            self.requests().await.len()
+        }
+
+        /// The requests the library recorded, for asserting what went on the wire.
+        pub async fn requests(&self) -> Vec<Request> {
+            self.server
+                .received_requests()
+                .await
+                .expect("the request journal is enabled")
+        }
+
+        /// `http://127.0.0.1:<port>`, from the library.
+        pub fn uri(&self) -> String {
+            self.server.uri()
+        }
+    }
+
+    /// Serve `statuses` in order, one reply per request, on any path.
+    ///
+    /// `extra` are response headers the product records (`content-range`,
+    /// `set-cookie`, ...) but that are not part of the canned body. The
+    /// library sends the incidental headers (`date`, `transfer-encoding`,
+    /// `server`); the tests assert only the ones the product reads.
+    pub async fn spawn(
+        statuses: Vec<(u16, &'static [u8])>,
+        extra: &[(&'static str, &'static str)],
+    ) -> Mock {
+        let expected = statuses.len() as u64;
+        spawn_expect(statuses, expected, extra).await
+    }
+
+    /// [`spawn`] with an explicit expected request count. Used by the two
+    /// tests that deliberately script an answer they must **not** consume:
+    /// `expect(n)` is verified when the server is dropped.
+    pub async fn spawn_expect(
+        statuses: Vec<(u16, &'static [u8])>,
+        expect: u64,
+        extra: &[(&'static str, &'static str)],
+    ) -> Mock {
+        let answers: Vec<Answer> = statuses
+            .into_iter()
+            .map(|(status, body)| Answer { status, body })
+            .collect();
+        assert!(
+            !answers.is_empty(),
+            "a canned server needs at least one answer"
+        );
+        let cursor = Arc::new(AtomicUsize::new(0));
+        let server = MockServer::start().await;
+        let next = Arc::clone(&cursor);
+        let headers: Vec<(&'static str, &'static str)> = extra.to_vec();
+        Reply::given(method("GET"))
+            .respond_with(move |_req: &Request| {
+                let i = next.fetch_add(1, Ordering::SeqCst).min(answers.len() - 1);
+                let mut response = ResponseTemplate::new(answers[i].status)
+                    .insert_header("content-type", "application/octet-stream")
+                    .insert_header("etag", "\"abc\"");
+                for (name, value) in &headers {
+                    response = response.append_header(*name, *value);
+                }
+                response.set_body_bytes(answers[i].body)
+            })
+            .expect(expect)
+            .mount(&server)
+            .await;
+        Mock { server }
+    }
+}
+
+/// The one raw-socket helper that stays: malformed responses.
+mod malformed {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};
 
-    /// A throwaway HTTP server that answers with a scripted sequence and
-    /// records the request lines it saw.
-    pub struct Mock {
-        pub port: u16,
-        pub hits: Arc<AtomicU32>,
-        pub requests: Arc<Mutex<Vec<String>>>,
-    }
-
-    pub fn spawn(statuses: Vec<(u16, &'static [u8])>, extra_body: &'static str) -> Mock {
-        spawn_answers(
-            statuses
-                .into_iter()
-                .map(|(status, body)| Answer {
-                    status,
-                    body,
-                    claim: None,
-                    omit_length: false,
-                })
-                .collect(),
-            extra_body,
-        )
-    }
-
-    /// One scripted answer, and how much of it to actually deliver.
+    /// One scripted answer, and how much of it is actually delivered.
     ///
     /// `claim` is the `Content-Length` the server announces. Setting it
     /// larger than `body.len()` makes the server promise more than it sends
-    /// and then hang up — **a truncated response**, which is the one failure
-    /// a real CDN produces and the only way to exercise the retry path from
-    /// *mid-body*. Every other mock failure happens before a single body byte
-    /// is written, so it never reaches the code that has to cope with a
-    /// partial write.
+    /// and then hang up — **a truncated response**, the one failure a real
+    /// CDN produces and the only way to exercise the retry path from
+    /// *mid-body*. `omit_length` sends no header at all, the one shape a
+    /// `Content-Length` pre-check cannot see.
     pub struct Answer {
         pub status: u16,
         pub body: &'static [u8],
         pub claim: Option<usize>,
-        /// Send **no** Content-Length, so the body is delimited by the
-        /// connection closing. The one shape a Content-Length pre-check
-        /// cannot see, and therefore the only way to test the running
-        /// total on its own.
         pub omit_length: bool,
     }
 
-    pub fn spawn_answers(answers: Vec<Answer>, extra_body: &'static str) -> Mock {
+    pub struct Mock {
+        pub port: u16,
+        hits: Arc<AtomicU32>,
+    }
+
+    impl Mock {
+        pub async fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst) as usize
+        }
+    }
+
+    pub fn spawn_answers(answers: Vec<Answer>) -> Mock {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port();
         let hits = Arc::new(AtomicU32::new(0));
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let (h, r) = (hits.clone(), requests.clone());
+        let h = Arc::clone(&hits);
         std::thread::spawn(move || {
             for a in answers {
                 let Ok((stream, _)) = listener.accept() else {
                     return;
                 };
                 h.fetch_add(1, Ordering::SeqCst);
-                serve_one(
-                    stream,
-                    a.status,
-                    a.body,
-                    a.claim,
-                    a.omit_length,
-                    extra_body,
-                    &r,
-                );
+                serve_one(stream, a.status, a.body, a.claim, a.omit_length);
             }
         });
-        Mock {
-            port,
-            hits,
-            requests,
-        }
+        Mock { port, hits }
     }
 
     fn serve_one(
@@ -768,35 +835,16 @@ mod local_server {
         body: &'static [u8],
         claim: Option<usize>,
         omit_length: bool,
-        extra_body: &'static str,
-        requests: &Arc<Mutex<Vec<String>>>,
     ) {
+        // Read the request off the socket so the client does not see a response
+        // before it has written one. Only the status line is needed here;
+        // the malformed tests do not assert on the request journal.
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut line = String::new();
         reader.read_line(&mut line).ok();
-        // Drain headers; record the ones that matter.
-        let mut headers = Vec::new();
-        loop {
-            let mut h = String::new();
-            if reader.read_line(&mut h).unwrap_or(0) == 0 {
-                break;
-            }
-            if h.trim().is_empty() {
-                break;
-            }
-            headers.push(h);
-        }
-        requests.lock().unwrap().push(format!(
-            "{line}{}",
-            headers
-                .iter()
-                .filter(|h| h.to_ascii_lowercase().starts_with("range:"))
-                .map(String::as_str)
-                .collect::<String>()
-        ));
 
         let head = format!(
-            "HTTP/1.1 {status} X\r\n{}Content-Type: application/octet-stream\r\nETag: \"abc\"\r\nServer: MockOSS\r\n{extra_body}Connection: close\r\n\r\n",
+            "HTTP/1.1 {status} X\r\n{}Content-Type: application/octet-stream\r\nETag: \"abc\"\r\nServer: MockOSS\r\nConnection: close\r\n\r\n",
             if omit_length {
                 String::new()
             } else {
@@ -807,13 +855,31 @@ mod local_server {
         let _ = stream.write_all(body);
         let _ = stream.flush();
     }
+}
 
-    pub fn url(mock: &Mock, path: &str) -> String {
-        format!("http://127.0.0.1:{}{path}", mock.port)
+use canned::{spawn, spawn_expect};
+use malformed::{Answer, spawn_answers};
+
+/// The base URL of either mock, so one `url` helper serves both.
+trait BaseUrl {
+    fn base(&self) -> String;
+}
+
+impl BaseUrl for canned::Mock {
+    fn base(&self) -> String {
+        self.uri()
     }
 }
 
-use local_server::*;
+impl BaseUrl for malformed::Mock {
+    fn base(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+fn url<M: BaseUrl>(mock: &M, path: &str) -> String {
+    format!("{}{path}", mock.base())
+}
 
 fn fetcher(retries: u32, sleeper: Arc<dyn Sleep>) -> Fetcher {
     fetcher_with(retries, sleeper, DEFAULT_MAX_RESPONSE_BYTES)
@@ -972,7 +1038,7 @@ async fn waiting_for_a_retry_yields_the_runtime_rather_than_blocking_it() {
 
 #[tokio::test]
 async fn a_first_attempt_success_records_attempts_one_and_no_waiting() {
-    let mock = spawn(vec![(200, b"hello")], "");
+    let mock = spawn(vec![(200, b"hello")], &[]).await;
     let sleeper = Arc::new(RecordingSleep::default());
     let f = fetcher(3, sleeper.clone());
     let got = f
@@ -996,15 +1062,16 @@ async fn a_first_attempt_success_records_attempts_one_and_no_waiting() {
         Vec::<Duration>::new(),
         "no backoff on success"
     );
-    assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(mock.hits().await, 1);
 }
 
 #[tokio::test]
 async fn a_server_fault_is_retried_and_the_recovered_record_says_so() {
     let mock = spawn(
         vec![(503, b"busy"), (503, b"busy"), (200, b"recovered")],
-        "",
-    );
+        &[],
+    )
+    .await;
     let sleeper = Arc::new(RecordingSleep::default());
     let f = fetcher(3, sleeper.clone());
     let got = f
@@ -1018,7 +1085,7 @@ async fn a_server_fault_is_retried_and_the_recovered_record_says_so() {
         3,
         "the provenance row must show the retries"
     );
-    assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.hits().await, 3);
     assert_eq!(
         sleeper.delays(),
         vec![Duration::from_millis(500), Duration::from_millis(1000)],
@@ -1042,7 +1109,7 @@ async fn a_server_fault_is_retried_and_the_recovered_record_says_so() {
 
 #[tokio::test]
 async fn a_404_is_not_retried_because_retrying_it_changes_nothing() {
-    let mock = spawn(vec![(404, b"gone"), (200, b"never reached")], "");
+    let mock = spawn_expect(vec![(404, b"gone")], 1, &[]).await;
     let sleeper = Arc::new(RecordingSleep::default());
     let f = fetcher(5, sleeper.clone());
     let err = f
@@ -1059,11 +1126,7 @@ async fn a_404_is_not_retried_because_retrying_it_changes_nothing() {
         }
         other => panic!("expected a status error, got {other:?}"),
     }
-    assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
-        1,
-        "the second answer is unused"
-    );
+    assert_eq!(mock.hits().await, 1, "a 404 is not retried");
     assert!(sleeper.delays().is_empty());
     assert_eq!(err.exit_code(), ExitCode::Network);
     assert_eq!(f.log().len(), 1, "the failure is still recorded");
@@ -1071,7 +1134,7 @@ async fn a_404_is_not_retried_because_retrying_it_changes_nothing() {
 
 #[tokio::test]
 async fn exhausting_the_attempts_fails_and_logs_every_one() {
-    let mock = spawn(vec![(503, b"a"), (503, b"b"), (503, b"c")], "");
+    let mock = spawn(vec![(503, b"a"), (503, b"b"), (503, b"c")], &[]).await;
     let sleeper = Arc::new(RecordingSleep::default());
     let f = fetcher(3, sleeper.clone());
     let err = f
@@ -1083,7 +1146,7 @@ async fn exhausting_the_attempts_fails_and_logs_every_one() {
         ApiError::Status { attempts, .. } => assert_eq!(*attempts, 3),
         other => panic!("expected a status error, got {other:?}"),
     }
-    assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
+    assert_eq!(mock.hits().await, 3);
     assert_eq!(sleeper.delays().len(), 2, "no wait after the last attempt");
     assert_eq!(f.log().len(), 3);
 }
@@ -1156,7 +1219,7 @@ async fn observe_refuses_a_body_over_the_ceiling_rather_than_recording_an_empty_
     // an empty body rather than an error. That asymmetry is the point, so it is
     // what the assertion pins.
     let body = big_body(4096);
-    let mock = spawn(vec![(200, leak(&body))], "");
+    let mock = spawn(vec![(200, leak(&body))], &[]).await;
     let f = fetcher_with(
         1,
         Arc::new(RecordingSleep::default()),
@@ -1177,7 +1240,7 @@ async fn a_body_over_the_ceiling_is_refused_rather_than_buffered() {
     // does not help: a server streaming a gigabyte steadily for ten minutes
     // never trips one.
     let body = big_body(4096);
-    let mock = spawn(vec![(200, leak(&body)), (200, leak(&body))], "");
+    let mock = spawn_expect(vec![(200, leak(&body))], 1, &[]).await;
     let f = fetcher_with(
         1,
         Arc::new(RecordingSleep::default()),
@@ -1197,10 +1260,9 @@ async fn a_body_over_the_ceiling_is_refused_rather_than_buffered() {
         text.contains("--max-response-bytes"),
         "and how to raise it: {text}"
     );
-    // **Not retried.** An origin that sent too much will send too much again,
-    // and the mock had a second answer that must not have been consumed.
+    // **Not retried.** An origin that sent too much will send too much again.
     assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
+        mock.hits().await,
         1,
         "a `Shape` is not retried, so one attempt is all it gets"
     );
@@ -1212,7 +1274,7 @@ async fn a_body_under_the_ceiling_is_untouched() {
     // Byte-for-byte equality, so this also pins that routing the buffered path
     // through `drain_capped` did not alter what a caller receives.
     let body = big_body(4096);
-    let mock = spawn(vec![(200, leak(&body))], "");
+    let mock = spawn(vec![(200, leak(&body))], &[]).await;
     let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
     let got = f
@@ -1230,18 +1292,15 @@ async fn a_declared_length_over_the_ceiling_is_refused_without_reading_it() {
     // tool has spent the time and the bandwidth receiving it.
     //
     // Driven with `Content-Length` set to more than the body actually sent —
-    // which is what `local_server::Answer::claim` is for, and is also the
+    // which is what the raw-socket helper's `claim` is for, and is also the
     // shape of a lying origin.
     let body = big_body(64);
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 200,
-            body: leak(&body),
-            claim: Some(body.len() * 1000),
-            omit_length: false,
-        }],
-        "",
-    );
+    let mock = spawn_answers(vec![Answer {
+        status: 200,
+        body: leak(&body),
+        claim: Some(body.len() * 1000),
+        omit_length: false,
+    }]);
     let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
     let err = f
@@ -1271,15 +1330,12 @@ async fn a_declared_length_far_beyond_the_ceiling_is_a_typed_refusal_not_an_allo
             continue;
         };
         let body = big_body(64);
-        let mock = spawn_answers(
-            vec![Answer {
-                status: 200,
-                body: leak(&body),
-                claim: Some(claim),
-                omit_length: false,
-            }],
-            "",
-        );
+        let mock = spawn_answers(vec![Answer {
+            status: 200,
+            body: leak(&body),
+            claim: Some(claim),
+            omit_length: false,
+        }]);
         let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
         let err = f
@@ -1291,11 +1347,7 @@ async fn a_declared_length_far_beyond_the_ceiling_is_a_typed_refusal_not_an_allo
             text.contains("ceiling"),
             "Content-Length {claim} must be refused by the ceiling, not the allocator: {text}"
         );
-        assert_eq!(
-            mock.hits.load(Ordering::SeqCst),
-            1,
-            "a Shape refusal is not retried"
-        );
+        assert_eq!(mock.hits().await, 1, "a Shape refusal is not retried");
     }
 }
 
@@ -1305,7 +1357,7 @@ async fn the_file_destination_is_capped_too() {
     // ceiling with a hole in it — and the file path is the one that fetches
     // blobs, so it is the hole that matters.
     let body = big_body(2048);
-    let mock = spawn(vec![(200, leak(&body))], "");
+    let mock = spawn(vec![(200, leak(&body))], &[]).await;
     let dir = scratch("file-cap");
     let path = dir.join("blob.bin");
     let mut out = crate::hash::HashingFile::create(&path).expect("create");
@@ -1327,15 +1379,12 @@ async fn a_body_over_the_ceiling_is_stopped_even_with_no_content_length() {
     // header is the only shape the pre-check cannot see, and without the running
     // total it is unbounded exactly as before this change.
     let body = big_body(4096);
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 200,
-            body: leak(&body),
-            claim: None,
-            omit_length: true,
-        }],
-        "",
-    );
+    let mock = spawn_answers(vec![Answer {
+        status: 200,
+        body: leak(&body),
+        claim: None,
+        omit_length: true,
+    }]);
     let f = fetcher_with(
         1,
         Arc::new(RecordingSleep::default()),
@@ -1364,10 +1413,7 @@ async fn observe_records_a_server_error_once_and_never_retries() {
     // rather than split into two kinds. What *can* be pinned is the asymmetry the
     // documentation asserts, and this is it: a `500`, which the retry policy
     // treats as retryable, is still recorded once by `observe`.
-    let mock = spawn(
-        vec![(503, b"<Error><Code>Busy</Code></Error>"), (200, b"unused")],
-        "",
-    );
+    let mock = spawn_expect(vec![(503, b"<Error><Code>Busy</Code></Error>")], 1, &[]).await;
     let f = fetcher(3, Arc::new(RecordingSleep::default()));
 
     let o = f
@@ -1377,7 +1423,7 @@ async fn observe_records_a_server_error_once_and_never_retries() {
     assert_eq!(o.status, 503, "the status is recorded as received");
     assert!(o.text().contains("Busy"), "and so is the body");
     assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
+        mock.hits().await,
         1,
         "observe must not retry: the mock only had one answer for it to consume"
     );
@@ -1402,7 +1448,7 @@ async fn a_failed_request_counts_the_body_it_threw_away() {
     let envelope = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
                          <Code>TooManyRequests</Code>\n  <Message>Slow down.</Message>\n\
                          </Error>\n";
-    let mock = spawn(vec![(429, envelope)], "");
+    let mock = spawn(vec![(429, envelope)], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
 
     let err = f
@@ -1444,7 +1490,7 @@ async fn a_body_over_the_run_budget_is_kept_in_part_and_marked_truncated() {
     // make the evidence larger than the artifact. The row survives, the body
     // is cut, and `truncated` says which.
     let envelope = b"0123456789";
-    let mock = spawn(vec![(404, envelope)], "");
+    let mock = spawn(vec![(404, envelope)], &[]).await;
     let f = fetcher_with_error_budget(1, Arc::new(RecordingSleep::default()), 4);
 
     f.get(&url(&mock, "/gone"), Kind::Chunk, None)
@@ -1469,29 +1515,11 @@ async fn a_rejected_request_is_priced_at_every_attempt_it_cost() {
     // so. Two `429`s and a `200` is a run that cost three bodies.
     let envelope = b"<Error><Code>TooManyRequests</Code></Error>";
     let payload = b"the blob, at last";
-    let mock = spawn_answers(
-        vec![
-            Answer {
-                status: 429,
-                body: envelope,
-                claim: None,
-                omit_length: false,
-            },
-            Answer {
-                status: 503,
-                body: envelope,
-                claim: None,
-                omit_length: false,
-            },
-            Answer {
-                status: 200,
-                body: leak(payload),
-                claim: None,
-                omit_length: false,
-            },
-        ],
-        "",
-    );
+    let mock = spawn(
+        vec![(429, envelope), (503, envelope), (200, leak(payload))],
+        &[],
+    )
+    .await;
     let f = fetcher(3, Arc::new(RecordingSleep::default()));
 
     let got = f
@@ -1500,7 +1528,7 @@ async fn a_rejected_request_is_priced_at_every_attempt_it_cost() {
         .expect("the third attempt succeeds");
 
     assert_eq!(got.body, payload, "the successful body is the third one");
-    assert_eq!(mock.hits.load(Ordering::SeqCst), 3, "it retried twice");
+    assert_eq!(mock.hits().await, 3, "it retried twice");
 
     // Every attempt is logged — a run that recovered from a throttle must
     // show the 429s, or `attempts` is a claim nobody can check.
@@ -1527,15 +1555,12 @@ async fn a_declared_oversized_error_body_is_not_read_at_all() {
     // error body was drained with no ceiling at all, so a hostile origin could
     // hold the request open until the timeout — once per retry.
     let body = big_body(4096);
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 503,
-            body: leak(&body),
-            claim: Some(10 * 1024 * 1024),
-            omit_length: false,
-        }],
-        "",
-    );
+    let mock = spawn_answers(vec![Answer {
+        status: 503,
+        body: leak(&body),
+        claim: Some(10 * 1024 * 1024),
+        omit_length: false,
+    }]);
     let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 1024);
 
     let err = f
@@ -1566,24 +1591,21 @@ async fn a_declared_oversized_error_body_is_not_read_at_all() {
 async fn a_truncated_success_body_is_priced_at_what_arrived() {
     let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
     let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
-    let mock = spawn_answers(
-        vec![
-            Answer {
-                status: 200,
-                body: sent,
-                // Promise more than is sent, then hang up: a mid-body close.
-                claim: Some(sent.len() * 10),
-                omit_length: false,
-            },
-            Answer {
-                status: 200,
-                body: full,
-                claim: None,
-                omit_length: false,
-            },
-        ],
-        "",
-    );
+    let mock = spawn_answers(vec![
+        Answer {
+            status: 200,
+            body: sent,
+            // Promise more than is sent, then hang up: a mid-body close.
+            claim: Some(sent.len() * 10),
+            omit_length: false,
+        },
+        Answer {
+            status: 200,
+            body: full,
+            claim: None,
+            omit_length: false,
+        },
+    ]);
     let f = fetcher(3, Arc::new(RecordingSleep::default()));
 
     let got = f
@@ -1611,23 +1633,20 @@ async fn a_truncated_success_body_is_priced_at_what_arrived() {
 async fn a_truncated_success_body_is_priced_at_what_arrived_for_a_file_too() {
     let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
     let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
-    let mock = spawn_answers(
-        vec![
-            Answer {
-                status: 200,
-                body: sent,
-                claim: Some(sent.len() * 10),
-                omit_length: false,
-            },
-            Answer {
-                status: 200,
-                body: full,
-                claim: None,
-                omit_length: false,
-            },
-        ],
-        "",
-    );
+    let mock = spawn_answers(vec![
+        Answer {
+            status: 200,
+            body: sent,
+            claim: Some(sent.len() * 10),
+            omit_length: false,
+        },
+        Answer {
+            status: 200,
+            body: full,
+            claim: None,
+            omit_length: false,
+        },
+    ]);
     let dir = scratch("truncated-file");
     let path = dir.join("blob.bin");
     let mut out = crate::hash::HashingFile::create(&path).expect("create");
@@ -1661,16 +1680,13 @@ async fn a_truncated_error_body_keeps_its_status_and_is_not_retried() {
     // `Transport`, which the retry policy then retried. A `404` with a
     // truncated body would be fetched again, three times, for the same answer.
     let sent = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 404,
-            body: sent,
-            // Promise more than is sent, then hang up: a truncated body.
-            claim: Some(sent.len() * 10),
-            omit_length: false,
-        }],
-        "",
-    );
+    let mock = spawn_answers(vec![Answer {
+        status: 404,
+        body: sent,
+        // Promise more than is sent, then hang up: a truncated body.
+        claim: Some(sent.len() * 10),
+        omit_length: false,
+    }]);
     let f = fetcher(3, Arc::new(RecordingSleep::default()));
 
     let err = f
@@ -1682,7 +1698,7 @@ async fn a_truncated_error_body_keeps_its_status_and_is_not_retried() {
         "a truncated error body must not replace the status: {err:?}"
     );
     assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
+        mock.hits().await,
         1,
         "a 404 is not retryable, and a broken body does not make it one"
     );
@@ -1706,15 +1722,12 @@ async fn an_oversized_error_body_is_counted_only_as_far_as_it_arrived() {
     // observable: `bytes_in` is over the ceiling but nowhere near the body.
     let body = big_body(1024 * 1024);
     let cap = 64 * 1024;
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 503,
-            body: leak(&body),
-            claim: None,
-            omit_length: true,
-        }],
-        "",
-    );
+    let mock = spawn_answers(vec![Answer {
+        status: 503,
+        body: leak(&body),
+        claim: None,
+        omit_length: true,
+    }]);
     let f = fetcher_with(1, Arc::new(RecordingSleep::default()), cap);
 
     let err = f
@@ -1747,10 +1760,10 @@ async fn a_streamed_fetch_writes_the_body_and_reports_the_digests_of_those_bytes
     // `bytes_in`, so nothing downstream — `chunks/index.json`'s md5, A6's four
     // checks, the size in `MANIFEST.json` — can tell the two apart.
     let body = streamable_body();
-    // Two mocks, because the server answers exactly as many requests as it
-    // was given answers and this test makes two.
-    let buffered_mock = spawn(vec![(200, leak(&body))], "");
-    let streamed_mock = spawn(vec![(200, leak(&body))], "");
+    // Two servers, each with `expect(1)`: this test makes two requests, one
+    // buffered and one streamed, and neither should hit the other's script.
+    let buffered_mock = spawn(vec![(200, leak(&body))], &[]).await;
+    let streamed_mock = spawn(vec![(200, leak(&body))], &[]).await;
     let dir = scratch("same-as-buffered");
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
 
@@ -1793,26 +1806,23 @@ async fn the_digests_of_a_retried_blob_cover_only_the_body_that_landed() {
     // concatenation, and not a prefix of the first.
     let first = streamable_body();
     let second = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec();
-    let mock = spawn_answers(
-        vec![
-            Answer {
-                status: 200,
-                // Announce the whole length, send a third of it, then hang
-                // up — a truncated response. `claim` is what the header says
-                // and `body` is what goes on the wire, so they must differ.
-                body: leak(&first[..first.len() / 3]),
-                claim: Some(first.len()),
-                omit_length: false,
-            },
-            Answer {
-                status: 200,
-                body: leak(&second),
-                claim: None,
-                omit_length: false,
-            },
-        ],
-        "",
-    );
+    let mock = spawn_answers(vec![
+        Answer {
+            status: 200,
+            // Announce the whole length, send a third of it, then hang
+            // up — a truncated response. `claim` is what the header says
+            // and `body` is what goes on the wire, so they must differ.
+            body: leak(&first[..first.len() / 3]),
+            claim: Some(first.len()),
+            omit_length: false,
+        },
+        Answer {
+            status: 200,
+            body: leak(&second),
+            claim: None,
+            omit_length: false,
+        },
+    ]);
     let dir = scratch("retry-digests");
     let path = dir.join("blob.bin");
     let mut out = crate::hash::HashingFile::create(&path).expect("create");
@@ -1826,11 +1836,7 @@ async fn the_digests_of_a_retried_blob_cover_only_the_body_that_landed() {
         .expect("the retry should succeed");
     let digests = out.finish().expect("finish");
 
-    assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
-        2,
-        "it should have retried"
-    );
+    assert_eq!(mock.hits().await, 2, "it should have retried");
     assert_eq!(
         digests,
         crate::hash::md5_sha256(&second),
@@ -1892,8 +1898,9 @@ async fn a_write_failure_is_not_retried_as_if_it_were_the_network() {
 async fn a_range_request_sends_the_literal_header_and_records_it() {
     let mock = spawn(
         vec![(206, b"0123456789")],
-        "Content-Range: bytes 0-9/100\r\n",
-    );
+        &[("content-range", "bytes 0-9/100")],
+    )
+    .await;
     let sleeper = Arc::new(RecordingSleep::default());
     let f = fetcher(1, sleeper.clone());
     let got = f
@@ -1908,16 +1915,17 @@ async fn a_range_request_sends_the_literal_header_and_records_it() {
     assert_eq!(recorded(&f).resp_headers["content-range"], "bytes 0-9/100");
     assert_eq!(recorded(&f).bytes_in, 10);
 
-    let seen = mock.requests.lock().unwrap().clone();
-    assert!(
-        seen[0].to_ascii_lowercase().contains("range: bytes=0-9"),
+    let seen = mock.requests().await;
+    assert_eq!(
+        seen[0].headers.get("range").map(|v| v.to_str().unwrap()),
+        Some("bytes=0-9"),
         "the header never reached the server: {seen:?}"
     );
 }
 
 #[tokio::test]
 async fn a_response_without_a_range_sends_no_range_header() {
-    let mock = spawn(vec![(200, b"whole")], "");
+    let mock = spawn(vec![(200, b"whole")], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     f.get(&url(&mock, "/m"), Kind::Manifest, None)
         .await
@@ -1926,16 +1934,14 @@ async fn a_response_without_a_range_sends_no_range_header() {
     assert_eq!(got.range, None);
     assert!(!got.req_headers.contains_key("range"));
     assert!(
-        !mock.requests.lock().unwrap()[0]
-            .to_ascii_lowercase()
-            .contains("range:"),
+        !mock.requests().await[0].headers.contains_key("range"),
         "an absent --range must not be sent as an empty header"
     );
 }
 
 #[tokio::test]
 async fn response_headers_are_lowercased_and_kept_verbatim() {
-    let mock = spawn(vec![(200, b"x")], "");
+    let mock = spawn(vec![(200, b"x")], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
     let got = recorded(&f);
@@ -1944,16 +1950,25 @@ async fn response_headers_are_lowercased_and_kept_verbatim() {
             .keys()
             .all(|k| k.chars().all(|c| !c.is_ascii_uppercase()))
     );
-    assert_eq!(got.resp_headers["server"], "MockOSS");
+    // `server` and `date` are the mock library's, not the product's; only the
+    // headers it actually reads are pinned here.
     assert_eq!(got.resp_headers["etag"], "\"abc\"", "quotes are kept");
+    assert_eq!(
+        got.resp_headers["content-type"], "application/octet-stream",
+        "the canned body's type is recorded verbatim"
+    );
 }
 
 #[tokio::test]
 async fn repeated_response_headers_are_joined_in_the_recorded_evidence() {
     let mock = spawn(
         vec![(200, b"x")],
-        "Set-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; HttpOnly\r\n",
-    );
+        &[
+            ("set-cookie", "a=1; Path=/"),
+            ("set-cookie", "b=2; HttpOnly"),
+        ],
+    )
+    .await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
     let got = recorded(&f);
@@ -1966,7 +1981,7 @@ async fn repeated_response_headers_are_joined_in_the_recorded_evidence() {
 
 #[tokio::test]
 async fn a_zero_retcode_is_accepted_and_a_nonzero_one_is_exit_two() {
-    let mock = spawn(vec![(200, br#"{"retcode":0,"data":{"tag":"7.1.0"}}"#)], "");
+    let mock = spawn(vec![(200, br#"{"retcode":0,"data":{"tag":"7.1.0"}}"#)], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     let (body, v) = f.get_json(&url(&mock, "/g"), Kind::Api).await.unwrap();
     assert_eq!(v["data"]["tag"], "7.1.0");
@@ -1978,8 +1993,9 @@ async fn a_zero_retcode_is_accepted_and_a_nonzero_one_is_exit_two() {
             200,
             br#"{"data":null,"message":"not found","retcode":-202}"#,
         )],
-        "",
-    );
+        &[],
+    )
+    .await;
     let f2 = fetcher(1, Arc::new(RecordingSleep::default()));
     let err = f2
         .get_json(&url(&mock2, "/g?tag=0.0.1"), Kind::Api)
@@ -1995,11 +2011,11 @@ async fn a_zero_retcode_is_accepted_and_a_nonzero_one_is_exit_two() {
 /// slower wrong answer.
 #[tokio::test]
 async fn a_body_that_is_not_a_wrapper_is_an_error_not_a_silent_pass() {
-    let mock = spawn(vec![(200, b"<html>404</html>")], "");
+    let mock = spawn(vec![(200, b"<html>404</html>")], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     let err = f.get_json(&url(&mock, "/g"), Kind::Api).await.unwrap_err();
     assert!(err.to_string().contains("retcode"), "{err}");
-    assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(mock.hits().await, 1);
 }
 
 #[tokio::test]
@@ -2007,7 +2023,7 @@ async fn the_log_is_written_to_disk_as_ndjson() {
     let dir = girpr_tempdir::TempDir::new("gircap-http", "written_to_disk_as_ndjson");
     let path = dir.join("api").join("requests.ndjson");
 
-    let mock = spawn(vec![(200, b"body")], "");
+    let mock = spawn(vec![(200, b"body")], &[]).await;
     let f = fetcher(1, Arc::new(RecordingSleep::default()));
     f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
     let n = f.log().write_ndjson(&path).unwrap();

@@ -36,7 +36,7 @@
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 

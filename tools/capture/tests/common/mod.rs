@@ -661,13 +661,14 @@ pub fn blob(seed: u64, len: usize) -> Blob {
                 body.push((x >> 24) as u8);
             }
             let raw = zstd::encode_all(body.as_slice(), 3).expect("zstd encode");
-            let uncompressed_md5 = md5_hex(&body);
+            let uncompressed_md5 = gircap::hash::md5_hex(&body);
             // The 16-hex prefix is deliberately *not* a function of anything a reader
             // could check, because upstream's is not either (docs/00-spec.md §3.7).
-            let prefix = md5_hex(format!("prefix/{seed}").as_bytes())[..16].to_string();
+            let prefix =
+                gircap::hash::md5_hex(format!("prefix/{seed}").as_bytes())[..16].to_string();
             Blob {
                 id: format!("{prefix}_{uncompressed_md5}"),
-                compressed_md5: md5_hex(&raw),
+                compressed_md5: gircap::hash::md5_hex(&raw),
                 compressed_size: raw.len() as i64,
                 uncompressed_md5,
                 uncompressed_size: body.len() as i64,
@@ -751,7 +752,7 @@ impl File {
 
     /// The declared whole-file MD5.
     pub fn md5(&self) -> String {
-        md5_hex(&self.bytes())
+        gircap::hash::md5_hex(&self.bytes())
     }
 
     /// This file's chunks, with the offsets they tile from.
@@ -1079,9 +1080,10 @@ impl World {
         use prost::Message as _;
         let plain = pb.encode_to_vec();
         let raw = zstd::encode_all(plain.as_slice(), 3).map_err(|e| e.to_string())?;
-        let checksum = md5_hex(&plain);
-        let prefix =
-            md5_hex(format!("manifest/{}/{}", build.tag, field).as_bytes())[..16].to_string();
+        let checksum = gircap::hash::md5_hex(&plain);
+        let prefix = gircap::hash::md5_hex(format!("manifest/{}/{}", build.tag, field).as_bytes())
+            [..16]
+            .to_string();
         Ok(Archive {
             id: format!("manifest_{prefix}_{checksum}"),
             checksum,
@@ -2131,9 +2133,4 @@ fn write_response(
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()
-}
-
-fn md5_hex(bytes: &[u8]) -> String {
-    use md5::{Digest as _, Md5};
-    hex::encode(Md5::digest(bytes))
 }

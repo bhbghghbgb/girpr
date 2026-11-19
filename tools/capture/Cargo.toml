@@ -102,6 +102,12 @@ fs2 = "0.4.3"
 # workspace. A dev-dependency, because nothing that ships creates a scratch
 # directory.
 girpr-tempdir = { path = "../../crates/tempdir" }
+# Canned reply servers in the HTTP unit tests. The library owns the listener,
+# request journal and invocation counts; the tests only script statuses/bodies
+# and assert on what it recorded. The malformed-response tests keep a small
+# raw-socket helper, because a well-behaved mock server cannot lie about
+# `Content-Length`.
+wiremock = "0.6"
 
 # Deliberately absent: `twox-hash`. The 16-hex manifest-id prefix is not a hash
 # of any observable input (docs/00-spec.md §3.7), so an xxh64 implementation
