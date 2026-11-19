@@ -40,7 +40,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T26 | girsync gate/concurrency simplification | completed | 15f4c5db | Used sanctioned tokio::sync::Semaphore fallback (not pure removal): Split needs cross-side min(src,dst) bounding and try_acquire/in_flight cannot come from pool sizing; src-then-dst ordering + reverse-order Drop preserve deadlock freedom; in_flight() kept; tokio sync feature only, no new crate |
 | T27 | Cache wire codec → `postcard`/`bincode` | completed | 1e0e2450 | Deleted codec.rs, added wire.rs; postcard 1.1.3; custom DigestSet serde preserves iter()+foreign order and unknown-name carry; CACHE_VERSION 2→3, marker 1→2; §I.9 confirmed (old caches refused, rebuild via --ignore-cache); foreign names sorted on serialize for determinism; forward-compat tests pass |
 | T28 | `cache/open.rs` publish protocol restructure | completed | 9bbdc130 | Extracted backup/ with Publisher trait (FsPublisher) + narrow PublishHooks trait (CacheHooks); open.rs keeps claim protocol/registries/retention/42 tests; delegated working names to tempfile; atomicwrites not used (offline cache + would break no-half-copy invariant); one-syscall/fail-fast docs and §H/§A11 items untouched; claim_sibling test-only |
-| T29 | girpr INI parse/merge/render | in_progress | | |
+| T29 | girpr INI parse/merge/render | skipped | | Byte-level config.ini contract matters; configparser/ini regress comment/dup-section/case-key/headerless/quote/sort/blank-line parity; parser-only saves no net LOC. Keep hand-rolled core. §I.2 validated |
 | T30 | gircap `parse_game_version` | todo | | |
 | T31 | `JoinSet` window → `buffer_unordered` | todo | | |
 | T32 | Chunk-range tiling → interval crate | todo | | |
@@ -117,6 +117,14 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
   current_exe()-relative bin() lookup. Fixed in c7e34ba4 by using
   env!("CARGO_BIN_EXE_gircap"); all 2114 workspace tests pass under both cargo
   test and cargo nextest with no manual binary copying (report §F, T23-T24).
+- INI migration (T29/§A4) ruled out: the byte-level config.ini contract matters
+  (deliberate Starward/Collapse parity: drop comments/blanks, merge duplicate
+  sections, case-insensitive key dedup + sort, headerless→[General], strip quotes,
+  trailing blank line, atomic UTF-8 publish; pinned by 20 tests). configparser/ini
+  regress several rules and would need a re-implementation layer; parser-only
+  adoption saves no net LOC and adds a fallible path. Keep hand-rolled parse/merge/
+  render in girpr; gircap config_ini renderer is byte-exact and out of scope (T30).
+  See §I.2.
 - JSON-renderer decision (§A1, from T13 commit 69414ccb), reuse for T14/T15:
   hand-write Serialize per crate on its own local Record/Val with
   serialize_map(Some(n)) + serialize_entry in THAT tool's own order; json() =
