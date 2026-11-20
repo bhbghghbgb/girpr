@@ -17,7 +17,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | completed | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03. Review B: no changes |
 | T04 | Trailing-dot/space and path-key predicates | completed | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05. Review B: no code change |
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
-| T06 | File identity + link-count leaf | pending_review | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09 |
+| T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
@@ -39,7 +39,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01, T02 | done | T01 completed (no fixes); T02 skipped — not reviewed. FU-01, FU-02 raised |
 | B | T03, T04, T05 | done | All completed, no reverts/skips; fix 44dcae95 (girsync README); FU-03..07 unchanged |
-| C | T06, T07 | pending | Filesystem identity + publish — medium risk |
+| C | T06, T07 | done | T06 completed, no fixes; T07 skipped — not reviewed. FU-08/09 kept open |
 | D | T08, T09, T10 | pending | Hashing, bounded decode, retry — review together |
 | E | T11, T12, T13, T14 | pending | Logging/CLI surface — check no cross-program coupling |
 | solo | T15 | pending | Report core — byte-contract critical, own review |
@@ -206,3 +206,19 @@ Finding from T07 (skipped; no code change):
 - tempfile opens NamedTempFile with share_mode(0) on Windows; handle-based and
   path-based writes are not interchangeable in a shared API. Excluded/untouched:
   capture .slot.tmp / non-atomic docs (N8), girpr _tmp resume artifacts (N6).
+
+Review C confirmation (no fix commit):
+
+- The "one deliberate unsafe in girsync" narrative (report A4/F9, README:505-507)
+  is factually stale — no unsafe existed in the file-identity sites; the only
+  real unsafe is the env-var test at tools/sync/tests/cli_dispatch.rs:17.
+  Treat the report's unsafe claim as invalid (FU-08 tracks README correction).
+- F9's "both derive the same platform facts" understates a real divergence:
+  girsync follows links, girpr's lock deliberately does not. The leaf bridges
+  this via separate from-path/handle APIs, never a shared path-read policy.
+- crates/fs-identity is a fifth shared leaf but NOT a gircap dep, so 00-spec.md:42
+  (four crates) stays accurate. Root README module map (40-69) also omits several
+  leaves (digest, filter, fs-names); adding fs-identity there is a low-priority
+  doc nicety from the F30 under-description gap, NOT an A2 requirement.
+- Leaf uses a private scratch-dir test helper (temp_dir + pid + atomic counter),
+  not girpr-tempdir, avoiding a test-only inversion (A11 concern). No coupling.
