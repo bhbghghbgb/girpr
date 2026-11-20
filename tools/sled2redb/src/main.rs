@@ -37,18 +37,18 @@ fn main() {
             // is declared, and it exits 0 then too.
             // Every other error is a usage error, and a usage error here is a
             // failure like any other, so it exits 3 rather than clap's 2 — this
-            // binary has one code for every way it can fail.
-            if matches!(
-                e.kind(),
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
-            ) {
+            // binary has one code for every way it can fail. The shared leaf
+            // decides only the number; this binary still calls `e.exit()` for
+            // the answers and prints + exits with its own literal 3 otherwise.
+            let code = girpr_cli::clap_error_code(e.kind(), 3);
+            if code == 0 {
                 e.exit();
             }
             // The message is written to stderr, where clap puts a usage error.
             // A failed write is not worth a second failure: the run is already
             // on its way out with the code that says what happened.
             let _ = e.print();
-            std::process::exit(3);
+            std::process::exit(i32::from(code));
         }
     };
     // Tracing is installed up front so a conversion failure is a structured

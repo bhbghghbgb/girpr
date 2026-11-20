@@ -4,7 +4,6 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use clap::error::ErrorKind;
 
 use girpr::{
     Args, RunCtx, RunExit, emit, flush_log, init_tracing, run as repair_run, summary_record,
@@ -139,9 +138,11 @@ async fn run(ctx: RunCtx) -> RunExit {
 ///
 /// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with
 /// [`RunExit::Metadata`]; only `--help` / `--version` keep the conventional
-/// `0`. clap prints the message (and the usage block) either way.
-/// This runs before `init_tracing`, so a usage error creates no log file and
-/// there is no non-blocking worker to drain: `process::exit` skipping
+/// `0`. The shared `girpr_cli::clap_error_code` decides that number from the
+/// error kind and this binary's own usage status; clap prints the message (and
+/// the usage block) either way. This runs before `init_tracing`, so a usage
+/// error creates no log file and there is no non-blocking worker to drain:
+/// `process::exit` skipping
 /// destructors is harmless here. Every path that does install logging flushes
 /// the worker through `flush_log` before returning (see below), so the explicit
 /// seam covers all exits that have a log tail to lose.
@@ -150,12 +151,10 @@ fn parse_args() -> Args {
         Ok(a) => a,
         Err(e) => {
             let _ = e.print();
-            std::process::exit(i32::from(match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                    RunExit::Success.process_status()
-                }
-                _ => RunExit::Usage.process_status(),
-            }));
+            std::process::exit(i32::from(girpr_cli::clap_error_code(
+                e.kind(),
+                RunExit::Usage.process_status(),
+            )));
         }
     }
 }

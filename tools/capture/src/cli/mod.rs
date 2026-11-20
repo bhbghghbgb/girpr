@@ -489,14 +489,14 @@ pub fn exit_on_clap_error(e: clap::Error) -> ! {
 
 /// The exit code a clap error maps to, without exiting.
 ///
+/// The decision comes from `girpr_cli::clap_error_code`, parameterised by
+/// gircap's own usage code; no exit table crosses from the repair binary.
 /// Exposed so the process-level contract can be asserted against one function
 /// rather than against a spawned binary in every case; `tests/cli_contract.rs`
 /// spawns the binary anyway, to prove the shim actually calls this.
 pub fn clap_error_code(kind: clap::error::ErrorKind) -> ExitCode {
-    match kind {
-        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
-            ExitCode::Ok
-        }
+    match girpr_cli::clap_error_code(kind, ExitCode::Usage.code() as u8) {
+        0 => ExitCode::Ok,
         _ => ExitCode::Usage,
     }
 }

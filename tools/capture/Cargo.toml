@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its ten path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its eleven path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
@@ -21,6 +21,8 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # gircap keeps its own zero jitter and its own side-effectful attempt loop),
 # `girpr-exit` (the exit-table generation mechanism — the enum/`ALL`/code/pin
 # pattern only; gircap supplies its own codes and meanings),
+# `girpr-cli` (the clap-error to usage-code mapping mechanics — help/version map
+# to 0 and every other error to the usage code gircap passes in),
 # `girpr-audio-language` (the lower + `_`→`-` token primitive and the four
 # code/display-name pairs — gircap keeps its own trim, none sentinel and
 # path-component validation),
@@ -73,6 +75,10 @@ girpr-log = { path = "../../crates/log" }
 # gircap supplies its own codes, meanings and helper methods — no exit-code
 # value crosses between the tools.
 girpr-exit = { path = "../../crates/exit" }
+# The clap-error to usage-code mapping mechanics, shared with the repair
+# binary. The leaf only decides help/version -> 0, else the usage code passed
+# in; gircap keeps its own `ExitCode` type and `exit_with` process boundary.
+girpr-cli = { path = "../../crates/cli" }
 # The runtime (`#[tokio::main]` runs the multi-threaded one), its macros
 # (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
 # No source here calls `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`.

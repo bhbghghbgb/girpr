@@ -685,6 +685,7 @@ dependencies = [
  "flate2",
  "fs2",
  "girpr-audio-language",
+ "girpr-cli",
  "girpr-digest",
  "girpr-exit",
  "girpr-fs-names",
@@ -720,6 +721,7 @@ dependencies = [
  "clap",
  "futures-util",
  "girpr-audio-language",
+ "girpr-cli",
  "girpr-digest",
  "girpr-exit",
  "girpr-filter",
@@ -749,6 +751,13 @@ dependencies = [
 [[package]]
 name = "girpr-audio-language"
 version = "0.1.0"
+
+[[package]]
+name = "girpr-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+]
 
 [[package]]
 name = "girpr-digest"
@@ -2092,6 +2101,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "girpr-cli",
  "girpr-digest",
  "girpr-tempdir",
  "girsync",

@@ -11,8 +11,9 @@ policy, override seam and URL builder stays here),
 the Windows path-name and canonical-path mechanics (device names, trailing
 dot/space, ASCII case fold, forward slash and verbatim-free canonicalization;
 each tool passes its own rule flags), the retry schedule/sleep driver
-(each tool passes its own rule, jitter and cap) and the exit-table generation
-mechanism (each tool supplies its own codes and meanings) and the audio-language
+(each tool passes its own rule, jitter and cap), the exit-table generation
+mechanism (each tool supplies its own codes and meanings), the clap-error to
+usage-code mapping (each tool passes its own usage code) and the audio-language
 mechanics (each tool keeps its own alias map, sentinel and validation), plus the
 test scratch-directory policy.** It talks to the real HoYoPlay + Sophon
 APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding one real file per test-matrix

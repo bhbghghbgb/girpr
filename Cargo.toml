@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -57,6 +57,10 @@ girpr-report-core = { path = "crates/report-core" }
 # owns only the enum/`ALL`/code/pin pattern; this binary supplies its own codes,
 # meanings and helper methods, so no exit-code value is shared.
 girpr-exit = { path = "crates/exit" }
+# The clap-error to usage-code mapping mechanics, shared with the two dev
+# tools. The leaf only decides "help/version -> 0, otherwise the supplied
+# usage code"; this binary keeps its own `RunExit` process-status boundary.
+girpr-cli = { path = "crates/cli" }
 # The runtime, its macros (`join!`) and the timers the pipeline awaits. This
 # list is the crate's own request; `reqwest` enables tokio's network surface in
 # every build anyway, so the real saving is what this list does *not* ask for:
