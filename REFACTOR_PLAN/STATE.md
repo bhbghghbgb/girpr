@@ -69,7 +69,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | done | 9d8524f4; asserts exit 1, stderr `log file: <name>`, file contents. open_log_file unchanged; no byte impact |
 | FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | dropped | Raised by T11. Planning: speculative "split if we must" with no trigger or concrete benefit |
 | FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | dropped | Raised by T11. Planning: changes observable stderr bytes (§A3) |
-| FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | batched (Batch C) | Raised by T12 (F-T12A): preserve exit mechanics, verify codes 0/1/3 identical. Planning: kept, only byte-neutral piece of skipped T12 |
+| FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | done | 51c50963; new girpr-cli leaf (one pure fn, clap only), each tool keeps its exit mechanics; all five A2 locations + capture manifest header updated for 11th gircap leaf dep. Review: 0 byte diffs across 24 streams, exit codes 0/1/3 unchanged |
 | FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text | dropped | Raised by T12 (F-T12B). Planning: user-visible --help change (§A3), not a pure extraction |
 | FU-21 | Reconcile the three OutputFormat types only after confirming error string and per-variant help are not contracts | dropped | Raised by T12 (F-T12C). Planning: changes --help/error bytes (§A3); cited test is not a byte guard |
 | FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test | dropped | Raised by T13. Planning: widening public API for one test already rejected; no value |
@@ -592,3 +592,26 @@ Batch T review confirmation (9d8524f4 + fix cd1f4638; all three FU done):
   Unix swap test's expect_err("no longer names") may similarly be unable to fire
   behind the is_file guard; and the bare --log-file test could optionally assert
   the `log file:` line inside the created file.
+
+Batch C review confirmation (51c50963; FU-19 done, no fix):
+
+- Byte-neutrality verified independently by building parent and HEAD in separate
+  trees and diffing raw stdout/stderr for 12 invocations across all three
+  binaries: 0 byte diffs across 24 streams. Help/version -> 0, girpr/gircap
+  errors -> 1, sled2redb errors -> 3, all unchanged.
+- girpr-cli holds exactly one pure function clap_error_code(kind, usage_code):
+  help/version -> 0, else caller's code; only dependency clap; no exit table,
+  no exit-code values, no process boundary. Each tool's exit mechanics stay
+  local (girpr process_status, gircap exit_with, sled2redb e.exit()+literal 3).
+  The literal 0 is the mapper's intrinsic answer code, not a shared exit
+  contract (§A9).
+- gircap now has ELEVEN leaf deps (cli added); all five §A2 locations + capture
+  manifest header updated in the same commit; girsync explicitly stays out
+  (keeps clap's default exit status). No plan/report references in tracked
+  artifacts or commit messages of this batch.
+- Reviewer noted historical PRE-CONVENTION commit messages (e.g. 8372afa41,
+  d38f6110) still mention the plan; removing them needs a history rewrite —
+  flag for final cleanup decision, not a batch change. Other non-blocking nits
+  (capture's usage-code parameter effectively discarded; version arm forward-
+  looking for two tools; document 0 as answer code) NOT reopened, per the
+  Phase 3 guard.
