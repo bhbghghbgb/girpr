@@ -29,7 +29,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | completed | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26. Review F: no fixes — wire tags/misspelling/field 6/Serialize keys byte-identical to pre-extraction, no program coupling |
 | T17 | Region model leaf (`girpr-model::region`) | completed | 92292793, 042683eb | F25, A9; leaf holds three ids + launcher/game ids + channel tuples + Host families + four base URLs + DOWNLOAD_MODE_CHUNK/CHANNEL_ENDPOINT; clap ValueEnum feature-gated (zero deps off); override seam + resolve policies stay local; needs_channel now path()==CHANNEL_ENDPOINT (was const matches!), pinned by both suites; gircap 10 leaf deps, all five A2 tables + manifest header updated; test oracles keep literal region strings (A3). Review F: fixed --help byte regression (042683eb removed leaf variant docs, restored capture's local byte-pinned clap Biz enum); region values/URLs/channel rule unchanged; FU-27..29 |
-| T18 | API DTO leaf (keep both decoding strategies) | in_progress | | F26, A7 |
+| T18 | API DTO leaf (keep both decoding strategies) | skipped | | F26 premise contradicted by code: DTO field sets do NOT match (different JSON subsets, field types, serde strictness); decoding/URL strategies deliberately distinct; capture DTOs carry program logic + byte-critical re-serialization. A logic-free leaf forces a byte/validation change or couples the programs. Details in Persistent context |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
 | T20 | Shared generic test helpers | todo | | F17, A5, A11; fake HTTP servers excluded (N7) |
 
@@ -44,7 +44,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | E | T11, T12, T13, T14 | done | T11/T13/T14 completed, no fixes; T12 skipped — not reviewed. FU-16 assessed acceptable; all follow-ups kept |
 | solo | T15 | done | Completed, no fixes; all byte oracles pass, no preserve_order; FU-24/25 kept open |
 | F | T16, T17 | done | T16 completed (no fixes); T17 completed with fix 042683eb (--help byte regression); byte/wire contracts, gircap boundary and DO-NOT-TOUCH preserved; FU-27..29 raised |
-| solo | T18 | pending | API DTO leaf — largest model task, own review |
+| solo | T18 | done | T18 skipped — not reviewed; §F26 premise refuted by code (see Finding from T18) |
 | G | T19, T20 | pending | Test infrastructure — A5/A11 constraints |
 
 ## Follow-ups
@@ -480,3 +480,34 @@ Review F confirmation (fix 042683eb — capture --help bytes):
   digest vocabularies, INI parsers, URL/status helpers, artifact writer or fake
   servers touched). Full suite --all-features 2162 passed, 11 skipped; clippy
   --all-features -D warnings clean.
+
+Finding from T18 (skipped; no code change):
+
+- §F26's "field sets match" claim is REFUTED by current code. The two families
+  model different JSON subsets: girpr GameConfig has audio_pkg_cache_dir/
+  res_category_dir/blacklist_dir/enable_resource_blacklist that capture's
+  LaunchConfig lacks, and capture has installation_dir/enable_audio_pkg_mgmt/
+  enable_ldiff that girpr lacks; shared field names are String (girpr) vs
+  Option<String> (capture). ManifestFile/ManifestRef differ (i64 via
+  num_from_string vs Option<IntOrStr>; girpr Deserialize-only vs capture
+  Serialize+Deserialize). ManifestUrl/Download differ (capture adds encryption,
+  password, compression). ChunkManifestMeta/BuildManifest differ (capture adds
+  stats, deduplicated_stats). Wrapper<T> differs (girpr Option<String>/
+  Option<T>, Deserialize vs capture String/T, Serialize+Deserialize). Closest
+  look-alikes (GameIdRef/GameRef, DeprecatedFile) differ in serde strictness:
+  girpr requires id/biz/name, capture defaults them. Only the decoding/URL
+  divergence is real; sharing would weaken one program's validation (A3).
+- num_from_string (girpr, strings -> i64) and IntOrStr (capture, wire-preserving
+  re-serialization) must stay separate (§F26/§A7); URL joins stay distinct
+  (Url::join trailing slash vs prefix+id+suffix, §N9). Capture DTOs carry
+  program-logic inherent methods (ApiError, paths, zstd/encryption, URL join)
+  and girpr relies pervasively on concrete i64/String fields — a logic-free leaf
+  is not possible without a byte/validation change or program coupling (§A1/A2).
+- Both candidate boundaries rejected: girpr-model module (no doc churn) still
+  needs incompatible types; dedicated girpr-api leaf adds an 11th gircap dep and
+  §A2 churn for nothing shareable. No §A2 table changed (no dependency added).
+- Possible re-scope for a future reviewer/follow-up: (a) explicit decision
+  accepting a byte/validation-contract change, or (b) share ONLY the two decoder
+  mechanics as separate public adapters in a leaf while leaving structs, inherent
+  logic and URL joins local — low value (each decoder has one consumer). Baseline:
+  gircap hyp:: 42/42, girpr hyp:: 13/13, clippy -D warnings clean.
