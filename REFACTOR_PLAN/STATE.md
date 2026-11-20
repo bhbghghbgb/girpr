@@ -14,9 +14,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Digest newtypes + hex sweep (`girpr-digest`) | completed | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Review A: mechanics-only leaf, §A7 preserved, §A2 tables updated, no fixes |
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
-| T03 | Windows device-name predicate leaf (`girpr-fs-names`) | pending_review | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03 |
-| T04 | Trailing-dot/space and path-key predicates | pending_review | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05 |
-| T05 | Canonicalize + `\\?\` stripping helpers | pending_review | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07 |
+| T03 | Windows device-name predicate leaf (`girpr-fs-names`) | completed | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03. Review B: no changes |
+| T04 | Trailing-dot/space and path-key predicates | completed | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05. Review B: no code change |
+| T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
 | T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
@@ -38,7 +38,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01, T02 | done | T01 completed (no fixes); T02 skipped — not reviewed. FU-01, FU-02 raised |
-| B | T03, T04, T05 | pending | Path and fs-name predicates — related leaf |
+| B | T03, T04, T05 | done | All completed, no reverts/skips; fix 44dcae95 (girsync README); FU-03..07 unchanged |
 | C | T06, T07 | pending | Filesystem identity + publish — medium risk |
 | D | T08, T09, T10 | pending | Hashing, bounded decode, retry — review together |
 | E | T11, T12, T13, T14 | pending | Logging/CLI surface — check no cross-program coupling |
@@ -154,3 +154,17 @@ Finding from T05 (ebd758b9):
   The `safety.rs` source-scan test pins canonicalizer paths by literal source
   text (DISK_MODULES + DIRECT_QUESTIONS) — update both if repathed. FU-06 tracks
   the gircap canonicalization question.
+
+Review B confirmation (fix 44dcae95 — girsync README shared-deps description
+corrected to list girpr-fs-names; the five §A2 gircap tables were already
+correct at four leaf deps and were left unchanged):
+
+- girpr-fs-names is a logic-free leaf shared by girpr, gircap and girsync with
+  five mechanisms: parameterized device-name predicate, host-independent
+  trailing dot/space, explicit-flag ASCII fold, explicit-flag forward slash, and
+  dunce-backed canonical_no_verbatim. Gircap boundary intact.
+- girpr's fail-closed `resolve_existing_prefix` (src/util/path.rs:447) remains
+  local, std::canonicalize-based; must not be folded into the shared helper.
+- No §N / DO-NOT-TOUCH "keep" item pulled into a leaf; no byte/containment/bundle
+  contract changed. Full workspace: 2131 passed, 11 skipped. All §F6-F8 stale
+  pointers confirmed (§F8 capture/dunce wrong, §F7 lines drifted, §A2 "two" wrong).
