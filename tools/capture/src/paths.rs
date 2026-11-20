@@ -107,9 +107,11 @@ fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> 
             ),
         ));
     }
+    // The shared crate owns the trailing-character check; this call site owns
+    // the rule: refuse the shape on every host, before anything is written.
     if value
         .split('/')
-        .any(|c| c.ends_with('.') || c.ends_with(' '))
+        .any(girpr_fs_names::has_trailing_dot_or_space)
     {
         return Some((
             "path.windows-fold",

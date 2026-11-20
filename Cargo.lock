@@ -788,6 +788,7 @@ dependencies = [
  "clap",
  "dunce",
  "girpr-filter",
+ "girpr-fs-names",
  "girpr-log",
  "girpr-tempdir",
  "md-5",

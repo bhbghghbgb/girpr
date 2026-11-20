@@ -38,6 +38,10 @@ clap = { version = "4.6.8", features = ["derive"] }
 # `gircap`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters.
 girpr-log = { path = "../../crates/log" }
+# Shared Windows path-name mechanics (device names, trailing dot/space, ASCII
+# fold, forward slash). Each call site passes its own policy; no program rule is
+# borrowed, so this couples no program to another.
+girpr-fs-names = { path = "../../crates/fs-names" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 # Unique, atomically-created working names for cache copies. The publish

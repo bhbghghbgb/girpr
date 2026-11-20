@@ -3,7 +3,7 @@ name = "girpr-fs-names"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared Windows device-name predicate mechanism, parameterised by reserved set and trailing-character trimming"
+description = "The shared Windows path-name mechanics, each parameterised by the caller's rule: device names, trailing dot/space, ASCII case fold and forward slash"
 
 [lib]
 name = "girpr_fs_names"

@@ -81,11 +81,10 @@ pub(crate) fn slash_rel(rel: &str) -> String {
 /// The rewrite itself, with the host's separator taken as an argument so the
 /// rule can be checked for both hosts on either one.
 fn slash_rel_for(rel: &str, windows: bool) -> String {
-    if windows {
-        rel.replace('\\', "/")
-    } else {
-        rel.to_owned()
-    }
+    // The shared crate owns the rewrite mechanic; this call site owns the
+    // policy (the host's separator) and keeps the wrapper whose two arguments
+    // the pinned test below asks directly on either host.
+    girpr_fs_names::forward_slash(rel, windows)
 }
 
 /// The ASCII-case comparison: ASCII case folded, every other byte exact.
@@ -426,7 +425,11 @@ pub(crate) fn unicode_case_eq(a: &OsStr, b: &OsStr) -> bool {
 /// the half of the rule that is easy to get wrong, because a Unicode fold
 /// merges spellings the disk keeps apart.
 pub fn path_key(rel: &str) -> String {
-    rel.to_ascii_lowercase()
+    // The shared crate owns the ASCII-fold mechanic; this call site owns the
+    // rule: fold on every host, because case-insensitive pairing is a user
+    // option here, not a property of the host filesystem. The repair binary's
+    // `path_key` folds only on Windows; the two behaviours stay separate.
+    girpr_fs_names::fold_ascii_case(rel, true)
 }
 
 /// A path's folded key, borrowed.

@@ -87,7 +87,9 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// disagree with the purge walk — which reports `game/foo.dat` — and the
 /// cleanup would delete the file this run just repaired.
 fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
-    let normalized = rel.replace('\\', "/");
+    // The shared crate owns the rewrite mechanic; this call site owns the
+    // normalisation policy: a rel is `/`-spelled on every host.
+    let normalized = girpr_fs_names::forward_slash(rel, true);
     anyhow::ensure!(!normalized.is_empty(), "path is empty");
     anyhow::ensure!(
         !normalized.ends_with('/'),
@@ -198,7 +200,9 @@ pub(crate) fn rel_pair_from_base<'a>(path: &'a Path, base: &Path) -> Option<(Str
 /// The conversion is shared by [`rel_from_base`] and [`join_rel`], so both
 /// halves of a rel use the same separator rule on every host.
 fn lossy_slash(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    // The shared crate owns the rewrite mechanic; this call site owns the
+    // policy: rels are `/`-spelled on every host.
+    girpr_fs_names::forward_slash(&path.to_string_lossy(), true)
 }
 
 /// Join a rel directory and a name into the `/`-separated form the scope
@@ -253,11 +257,11 @@ pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
 /// *identity*, where over-merging silently drops or keeps the wrong file, so it
 /// folds only where the filesystem does (Windows) and stays ASCII-only there.
 pub(crate) fn path_key(rel: &str) -> String {
-    if cfg!(windows) {
-        rel.to_ascii_lowercase()
-    } else {
-        rel.to_string()
-    }
+    // The shared crate owns the ASCII-fold mechanic; this call site owns the
+    // rule: fold only where the filesystem does (Windows), never on a host whose
+    // names are case-sensitive. The sync tool's `path_key` passes `true` for its
+    // case-insensitive pairing option; the two behaviours stay separate.
+    girpr_fs_names::fold_ascii_case(rel, cfg!(windows))
 }
 
 /// Does this name end in a dot or a space, which Windows strips when it
@@ -270,7 +274,9 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// component, and [`any_component_has_windows_trailing_dot_or_space`] applies
 /// it to every component of a writer's target.
 pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
-    part.ends_with('.') || part.ends_with(' ')
+    // The shared crate owns the trailing-character check; this call site owns
+    // the rule: apply it to every component name, on every host.
+    girpr_fs_names::has_trailing_dot_or_space(part)
 }
 
 /// Does any component of `path` that names a file end in a Windows-trailing
