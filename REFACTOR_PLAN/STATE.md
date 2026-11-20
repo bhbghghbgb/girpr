@@ -23,7 +23,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
 | T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
-| T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | in_progress | | F20 |
+| T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
 | T13 | Exit-table mechanism macro | todo | | F22, A9; tables stay independent |
 | T14 | Audio-language normalisation primitive | todo | | F23 |
 | T15 | Ordered-JSON / `write_line` report core | todo | | F21, A3, A8; medium confidence, byte-critical |
@@ -69,6 +69,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-16 | Decide whether product's bare --log-file behavior change (now opens file instead of warning) needs an explicit CLI test or should be reverted | open | Raised by T11: behavior-only, no format/bundle impact; no existing test covers it — Review E should assess |
 | FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | open | Raised by T11: girpr-log now depends on tracing/tracing-appender at runtime; still logic-free, no new gircap dep, no A2 update needed |
 | FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | open | Raised by T11: deliberate divergence preserved to keep bytes unchanged (A3) |
+| FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | open | Raised by T12 (F-T12A): preserve each tool's exit mechanics (girpr process_status u8, capture ExitCode::exit_with, sled2redb e.exit() + literal 3); verify exit codes 0/1/3 identical |
+| FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text and update byte-contract tests | open | Raised by T12 (F-T12B): user-visible --help change, not a pure extraction |
+| FU-21 | Reconcile the three OutputFormat types only after confirming capture's FromStr error string and per-variant help are not program contracts | open | Raised by T12 (F-T12C): sled2redb convert.rs:832-859 pins --help against its own command definition — passes even after bytes change, not a guard |
 
 ## Persistent context
 
@@ -308,3 +311,17 @@ Finding from T11 (7b4ff3be):
 - Behavior change to assess: bare --log-file run.log now opens the file (was
   warn+no file) — matches product CLI doc, no byte impact; FU-16. Full suite:
   2151 passed, 11 skipped. No new gircap leaf dep, so no A2 doc edit.
+
+Finding from T12 (skipped; no code change):
+
+- F20 is NOT a valid extraction boundary for help-bearing CLI declarations. The
+  three tools' --log-level/--log-file/--output help text and value_name differ
+  substantively; OutputFormat variant doc comments render into --help "Possible
+  values:" lines, so one shared enum changes CLI bytes (A3). The four log flags
+  do share value_name=LV, default=info, girpr_log::parse_level, conflicts_with.
+- Only byte-neutral shareable piece: clap-error mapper (help/version -> 0, else
+  the tool's own usage code) with NO shared exit table (A9); FU-19 tracks it.
+- Rust stable cannot expand macros into struct fields; a shared LogArgs must
+  either be a #[derive(Args)] struct (cannot preserve per-tool help/global
+  placement) or generate whole structs. capture alone has --version. F20 line
+  numbers drifted; A2 spec table now names five leaf crates.
