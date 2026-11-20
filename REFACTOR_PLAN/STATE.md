@@ -27,8 +27,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
-| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | pending_review | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26 |
-| T17 | Region model leaf (`girpr-model::region`) | pending_review | 92292793 | F25, A9; leaf holds three ids + launcher/game ids + channel tuples + Host families + four base URLs + DOWNLOAD_MODE_CHUNK/CHANNEL_ENDPOINT; clap ValueEnum feature-gated (zero deps off); both tools re-export Region as Biz; override seam + resolve policies stay local; needs_channel now path()==CHANNEL_ENDPOINT (was const matches!), pinned by both suites; gircap 10 leaf deps, all five A2 tables + manifest header updated; test oracles keep literal region strings (A3). Non-blocking suggestions for reviewer: cosmetic Biz->Region rename at call sites; let girpr production_bases accept Host to drop local string->enum remap; stale "names two" guidance wording |
+| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | completed | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26. Review F: no fixes — wire tags/misspelling/field 6/Serialize keys byte-identical to pre-extraction, no program coupling |
+| T17 | Region model leaf (`girpr-model::region`) | completed | 92292793, 042683eb | F25, A9; leaf holds three ids + launcher/game ids + channel tuples + Host families + four base URLs + DOWNLOAD_MODE_CHUNK/CHANNEL_ENDPOINT; clap ValueEnum feature-gated (zero deps off); override seam + resolve policies stay local; needs_channel now path()==CHANNEL_ENDPOINT (was const matches!), pinned by both suites; gircap 10 leaf deps, all five A2 tables + manifest header updated; test oracles keep literal region strings (A3). Review F: fixed --help byte regression (042683eb removed leaf variant docs, restored capture's local byte-pinned clap Biz enum); region values/URLs/channel rule unchanged; FU-27..29 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
 | T20 | Shared generic test helpers | todo | | F17, A5, A11; fake HTTP servers excluded (N7) |
@@ -43,7 +43,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | D | T08, T09, T10 | done | T08 + T10 completed, no fixes; T09 skipped — not reviewed. FU-13 kept; FU-14/15 dropped |
 | E | T11, T12, T13, T14 | done | T11/T13/T14 completed, no fixes; T12 skipped — not reviewed. FU-16 assessed acceptable; all follow-ups kept |
 | solo | T15 | done | Completed, no fixes; all byte oracles pass, no preserve_order; FU-24/25 kept open |
-| F | T16, T17 | pending | Domain model leaves — review together |
+| F | T16, T17 | done | T16 completed (no fixes); T17 completed with fix 042683eb (--help byte regression); byte/wire contracts, gircap boundary and DO-NOT-TOUCH preserved; FU-27..29 raised |
 | solo | T18 | pending | API DTO leaf — largest model task, own review |
 | G | T19, T20 | pending | Test infrastructure — A5/A11 constraints |
 
@@ -77,6 +77,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-24 | Deduplicate the three report planes' text layout logic (bare/keyed/pair, quoting vs percent-encoding) | open | Raised by T15 (F-T15-01): blocked by A8 — would require normalizing value vocabularies and move bytes; raise only if a reviewer reopens the report boundary |
 | FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | open | Raised by T15 (F-T15-02): intentional per F21; only relevant if girsync's writer or JSON order changes |
 | FU-26 | If source-level field-name parity ever matters, add a serde rename seam so product can keep `unknown` for field 6 | open | Raised by T16 (F-T16-02): no byte impact (prost keys by tag, product never serializes); current source-name collapse minimizes churn |
+| FU-27 | Decide whether the three region variant names duplicated in capture's local clap Biz enum are acceptable long-term, or revisit if a per-consumer help-text mechanism appears | open | Raised by Review F (T17): keep both programs' `--help` bytes pinned — leaf variant docs rendered into product --help and forced fix 042683eb; do not reintroduce shared variant docs |
+| FU-28 | Consider having girpr's production_bases accept Host directly to drop its local string->enum remap | open | Raised by Review F (T17): call-site policy only, stays local either way; no byte impact |
+| FU-29 | Cosmetic: rename product's Biz alias to Region at call sites | open | Raised by Review F (T17): naming only, no behavior or byte change |
 
 ## Persistent context
 
@@ -436,8 +439,10 @@ Finding from T17 (92292793):
   four production base URLs, and the byte-stable DOWNLOAD_MODE_CHUNK +
   CHANNEL_ENDPOINT. No resolve policy, URL building or validation in the leaf.
   clap ValueEnum derive is behind an optional `clap` feature — `cargo tree
-  -p girpr-model --no-default-features` has zero deps. Both programs re-export
-  `Region as Biz` and enable the feature.
+  -p girpr-model --no-default-features` has zero deps. Both programs enable the
+  feature; see Review F — the product re-exports `Region as Biz`, but capture
+  keeps a local byte-pinned clap `Biz` enum (variants delegate to the shared
+  table) so its `--help` bytes stay identical.
 - girpr's production_bases string->Host mapping, capture's Biz::resolve, and the
   full Endpoints<'a> override seam (incl. owned's Box::leak) stay at call sites.
   The channel-only-on-deprecated rule moved from capture's `const fn matches!`
@@ -452,3 +457,26 @@ Finding from T17 (92292793):
   names two" wording in CONVENTIONS/ORCHESTRATION is stale point-in-time, like
   earlier tasks noted. Full suite 2162 passed, 11 skipped; clippy -D warnings
   clean; fmt clean.
+
+Review F confirmation (fix 042683eb — capture --help bytes):
+
+- Byte-contract regression found and fixed: shared `Region`'s per-variant doc
+  comments made clap render possible-value descriptions into the PRODUCT's
+  `--biz` help (described list) while capture's was already described. Fix
+  removed variant docs from the leaf and restored capture's local byte-pinned
+  clap `Biz` enum (variants delegate values to the shared region table). Do NOT
+  reintroduce variant docs into the leaf — workspace feature unification can
+  change other programs' `--help` bytes (FU-27). Pre/post `--help` diffs for both
+  binaries are now identical.
+- T16 verified against pre-extraction snapshots: wire tags/types, `chuncks`
+  misspelling, field 6 and Serialize key set byte-identical; product field-6
+  source rename is source-only. Capture's six methods + three normalise variants
+  remain local extension traits.
+- gircap boundary preserved: girpr-proto deps = prost + serde; girpr-model zero
+  deps without clap; no girpr dep or binary invocation in capture; both leaves
+  logic-free; capture's Endpoints<'a>/Box::leak seam and resolve policies local;
+  five §A2 locations current at ten leaf deps.
+- No DO-NOT-TOUCH / §N item pulled into a leaf (no exit codes, report semantics,
+  digest vocabularies, INI parsers, URL/status helpers, artifact writer or fake
+  servers touched). Full suite --all-features 2162 passed, 11 skipped; clippy
+  --all-features -D warnings clean.
