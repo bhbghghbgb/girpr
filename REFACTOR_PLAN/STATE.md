@@ -19,7 +19,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
 | T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
-| T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
+| T08 | Streaming hash-sink leaf | in_progress | | F3; ordering policies stay with owners |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | todo | | F15, A6; jitter divergence stays local |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
