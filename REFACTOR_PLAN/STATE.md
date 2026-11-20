@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Digest newtypes + hex sweep (`girpr-digest`) | pending_review | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Deviations + context in Persistent context |
+| T01 | Digest newtypes + hex sweep (`girpr-digest`) | completed | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Review A: mechanics-only leaf, §A7 preserved, §A2 tables updated, no fixes |
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | todo | | F6, A10; share the rule, do not change behavior |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
@@ -37,7 +37,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| A | T01, T02 | pending | Digest/identity foundations — review together |
+| A | T01, T02 | done | T01 completed (no fixes); T02 skipped — not reviewed. FU-01, FU-02 raised |
 | B | T03, T04, T05 | pending | Path and fs-name predicates — related leaf |
 | C | T06, T07 | pending | Filesystem identity + publish — medium risk |
 | D | T08, T09, T10 | pending | Hashing, bounded decode, retry — review together |
@@ -51,7 +51,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| (none yet) | | | |
+| FU-01 | Add girpr-filter to cross-program "what ships" tables | open | Review A: pre-existing §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); doc-only, non-blocking, out of T01 scope |
+| FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | open | Review A: failed once under full parallel run, passed in isolation and on clean full rerun; unrelated to digest changes |
 
 ## Persistent context
 
@@ -105,3 +106,11 @@ Finding from T02 (skipped; no code change):
   type (§A7). first-occurrence-wins is caller selection logic, not a value-type
   property. If a follow-up wants cleanup, capture's `assemble/assembly.rs`
   duplicates `SophonChunk::identity()` and could call it — within-capture only.
+
+Review A confirmation (no code change):
+
+- §A7 three digest representations confirmed distinct and must be kept: girpr
+  strict `Md5`, girsync raw bytes + verbatim foreign names, gircap lowercase hex
+  strings. `girpr-digest` is logic-free; girsync deliberately stays off it.
+- Full workspace suite green (2125 passed, 11 skipped); one intermittent,
+  unrelated flake captured as FU-02.
