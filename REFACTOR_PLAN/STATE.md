@@ -24,7 +24,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
 | T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
-| T13 | Exit-table mechanism macro | in_progress | | F22, A9; tables stay independent |
+| T13 | Exit-table mechanism macro | pending_review | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; gircap now 6 leaf deps, §A2 updated; FU-22 |
 | T14 | Audio-language normalisation primitive | todo | | F23 |
 | T15 | Ordered-JSON / `write_line` report core | todo | | F21, A3, A8; medium confidence, byte-critical |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
@@ -72,6 +72,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | open | Raised by T12 (F-T12A): preserve each tool's exit mechanics (girpr process_status u8, capture ExitCode::exit_with, sled2redb e.exit() + literal 3); verify exit codes 0/1/3 identical |
 | FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text and update byte-contract tests | open | Raised by T12 (F-T12B): user-visible --help change, not a pure extraction |
 | FU-21 | Reconcile the three OutputFormat types only after confirming capture's FromStr error string and per-variant help are not program contracts | open | Raised by T12 (F-T12C): sled2redb convert.rs:832-859 pins --help against its own command definition — passes even after bytes change, not a guard |
+| FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test instead of the duplicated documented_exit_codes! list | open | Raised by T13: non-blocking — deliberately duplicated to keep RunExit::ALL crate-internal; widening public API for one test was rejected |
 
 ## Persistent context
 
@@ -108,7 +109,7 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap leaf deps are now FIVE after T10 (log, digest, fs-names, retry,
+- gircap leaf deps are now SIX after T13 (log, digest, exit, fs-names, retry,
   tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
@@ -279,17 +280,19 @@ Finding from T10 (217477de):
   backoff::future::retry. gircap re-exports the leaf Sleep types via http::transport
   so its public surface is unchanged. Zero-wait test modes + byte-stable artifacts
   pass. Full workspace: 2146 passed, 11 skipped.
-- gircap now has FIVE leaf deps (log, digest, fs-names, retry, tempdir); all five
-  A2 doc locations updated in this commit. Earlier "four leaf deps" references
-  in this file are point-in-time (superseded by this). FU-15 likely moot at cleanup.
+- gircap had FIVE leaf deps after T10 (log, digest, fs-names, retry, tempdir);
+  all five A2 doc locations were updated in that commit. SIX after T13 (exit).
+  Earlier "four leaf deps" references in this file are point-in-time. FU-15
+  likely moot at cleanup.
 
 Review D confirmation (no fix commit):
 
 - A7 three digest semantics confirmed distinct after T08; shared digest leaf
   carries only raw bytes/hex mechanics, never a program digest vocabulary.
-- gircap has five leaf deps; five A2 doc locations current (00-spec.md:42,
-  README.md, tools/sync/README.md, tools/capture/README.md,
-  docs/06-artifact-bridge-spec.md) — any new leaf must update all five.
+- gircap has five leaf deps as of Review D (six after T13); five A2 doc locations
+  current (00-spec.md:42, README.md, tools/sync/README.md,
+  tools/capture/README.md, docs/06-artifact-bridge-spec.md) — any new leaf must
+  update all five.
 - girpr retry sleeps must go through the injected Sleep hook; jitter is a caller
   parameter (girpr 0.5 / gircap 0.0), never baked into the leaf. girsync uses
   girpr-digest for bytes/hex only; keep DigestSet/AlgoSet/HashAlg + foreign names
@@ -324,4 +327,19 @@ Finding from T12 (skipped; no code change):
 - Rust stable cannot expand macros into struct fields; a shared LogArgs must
   either be a #[derive(Args)] struct (cannot preserve per-tool help/global
   placement) or generate whole structs. capture alone has --version. F20 line
-  numbers drifted; A2 spec table now names five leaf crates.
+  numbers drifted; A2 spec table now names five leaf crates (five at T12; six
+  after T13).
+
+Finding from T13 (3c691e58):
+
+- girpr-exit leaf's define_exit_table! generates only the mechanism: enum with
+  caller-supplied #[repr(u8)] discriminants, ALL, code(), wildcard-free pin.
+  girpr RunExit 0-5, capture ExitCode 0-4; all codes/slugs/descriptions/helpers
+  and usage->exit mappings stay local, including capture's 1/2 overlap (A9/N3).
+  Capture's enum gained #[repr(u8)] + explicit discriminants — internal repr only,
+  table test pins all five (code, slug) pairs.
+- The shared pin requires codes contiguous from zero; a future tool with
+  non-contiguous exit literals (girsync/sled2redb) needs a parameterized pin,
+  not a table change. No usage-error mapping moved into the leaf.
+- gircap now has SIX leaf deps (log, digest, exit, fs-names, retry, tempdir);
+  all five A2 doc locations updated in this commit. FU-22 is non-blocking.
