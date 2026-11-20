@@ -68,38 +68,49 @@ pub struct Digests {
 ///
 /// Not [`Debug`]: a partial dump of a half-fed hash state is worse than none.
 /// [`Digests`] is the thing to print.
+///
+/// The absorbing mechanics come from the shared `girpr-digest` sink, which runs
+/// MD5 and SHA-256 over one pass and counts the bytes. Everything that is a
+/// *policy* — which algorithms, when a retry restarts, and the lowercase hex
+/// published in [`Digests`] — stays in this crate.
 pub struct DualDigest {
-    md5: Md5,
-    sha: sha2::Sha256,
-    len: u64,
+    sink: girpr_digest::Sink,
 }
 
 impl DualDigest {
     /// An empty pair, ready to be fed.
     pub fn new() -> Self {
         DualDigest {
-            md5: Md5::new(),
-            sha: <sha2::Sha256 as sha2::Digest>::new(),
-            len: 0,
+            sink: girpr_digest::Sink::new(girpr_digest::Algorithms::MD5_SHA256),
         }
     }
 
     /// How many bytes have gone in so far.
     pub fn len(&self) -> u64 {
-        self.len
+        self.sink.bytes()
     }
 
     /// Whether nothing has gone in yet.
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
+    }
+
+    /// Discard everything fed so far and start a fresh pair.
+    ///
+    /// The digest half of a retry: [`HashingFile::restart`] still truncates and
+    /// rewinds the file itself, since the shared sink owns no file or timing
+    /// policy.
+    pub fn reset(&mut self) {
+        self.sink.reset();
     }
 
     /// Finish, and take the digests.
     pub fn finish(self) -> Digests {
+        let raw = self.sink.finish();
         Digests {
-            bytes: self.len,
-            md5: hex_bytes(&self.md5.finalize()),
-            sha256: hex_bytes(&sha2::Digest::finalize(self.sha)),
+            bytes: raw.bytes,
+            md5: raw.md5.map(|d| hex_bytes(&d)).unwrap_or_default(),
+            sha256: raw.sha256.map(|d| hex_bytes(&d)).unwrap_or_default(),
         }
     }
 }
@@ -112,9 +123,7 @@ impl Default for DualDigest {
 
 impl std::io::Write for DualDigest {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.md5.update(buf);
-        sha2::Digest::update(&mut self.sha, buf);
-        self.len += buf.len() as u64;
+        self.sink.update(buf);
         Ok(buf.len())
     }
 
@@ -186,7 +195,8 @@ impl HashingFile {
         self.file.set_len(0)?;
         use std::io::Seek as _;
         self.file.rewind()?;
-        self.digests = DualDigest::new();
+        // The file reset stays here; only the digest state is shared machinery.
+        self.digests.reset();
         Ok(())
     }
 

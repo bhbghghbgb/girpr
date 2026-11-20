@@ -90,7 +90,9 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
 percent-encoding = "2.3.2"
-sha2 = "0.11.1"
+# SHA-256 is computed inside `girpr-digest`, shared by all three programs;
+# this crate only publishes its lowercase hex, so it no longer depends on the
+# hasher directly.
 flate2 = "1.1.11"
 # Directory walks in the index and inventory passes. Already in the shared
 # lockfile through the other workspace members; no new dependency is fetched.

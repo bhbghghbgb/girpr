@@ -1,0 +1,341 @@
+//! Streaming digest mechanics: a sink that absorbs bytes into a caller-chosen
+//! set of algorithms, and a reader helper that drives it in caller-sized chunks.
+//!
+//! This is mechanics only. There is no byte ceiling, no forwarding, no file or
+//! retry policy here and no program's digest vocabulary: the caller decides
+//! which algorithms to run, how large its reads are, when to restart, and what
+//! the raw result means to it. Those ordering rules are load-bearing — a sink
+//! that hashes before a write lands, or after a limit check, produces a digest
+//! that looks plausible and is wrong — so they stay at the call site.
+
+use std::io::Read;
+// `md-5` and `sha2` re-export the same `digest::Digest` trait, so one import
+// brings `new`/`update`/`finalize` into scope for both hashers.
+use md5::Digest as _;
+
+/// Which algorithms a sink runs.
+///
+/// Plain mechanics, not a program's algorithm vocabulary: girsync's `AlgoSet`
+/// and command-line names stay in girsync and are mapped to this at the call
+/// site. Two booleans are enough for the fixed-width algorithms this crate owns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Algorithms {
+    md5: bool,
+    sha256: bool,
+}
+
+impl Algorithms {
+    /// Run no algorithms. The sink is inert: it counts bytes but yields no digests.
+    pub const NONE: Self = Self::new(false, false);
+    /// MD5 only.
+    pub const MD5: Self = Self::new(true, false);
+    /// SHA-256 only.
+    pub const SHA256: Self = Self::new(false, true);
+    /// MD5 and SHA-256 over the same bytes, in one pass.
+    pub const MD5_SHA256: Self = Self::new(true, true);
+
+    /// Build a set from two membership flags.
+    pub const fn new(md5: bool, sha256: bool) -> Self {
+        Self { md5, sha256 }
+    }
+
+    /// Whether MD5 was requested.
+    pub const fn md5(self) -> bool {
+        self.md5
+    }
+
+    /// Whether SHA-256 was requested.
+    pub const fn sha256(self) -> bool {
+        self.sha256
+    }
+
+    /// Whether nothing was requested.
+    pub const fn is_empty(self) -> bool {
+        !self.md5 && !self.sha256
+    }
+}
+
+/// The raw result of a finished [`Sink`]: a byte count and the digest each
+/// requested algorithm computed, as fixed-width byte arrays.
+///
+/// No program's result type. A caller maps these bytes into its own shape —
+/// girpr's `Md5` newtype, gircap's lowercase hex strings, girsync's raw-byte
+/// cache row — without the mechanics choosing a single digest semantics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DigestBytes {
+    /// Bytes absorbed.
+    pub bytes: u64,
+    /// MD5 bytes, when requested.
+    pub md5: Option<[u8; 16]>,
+    /// SHA-256 bytes, when requested.
+    pub sha256: Option<[u8; 32]>,
+}
+
+impl DigestBytes {
+    /// Bytes absorbed.
+    pub fn len(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Whether no bytes were absorbed.
+    pub fn is_empty(&self) -> bool {
+        self.bytes == 0
+    }
+
+    /// The MD5 bytes, when requested.
+    pub fn md5_bytes(&self) -> Option<[u8; 16]> {
+        self.md5
+    }
+
+    /// The SHA-256 bytes, when requested.
+    pub fn sha256_bytes(&self) -> Option<[u8; 32]> {
+        self.sha256
+    }
+
+    /// The MD5 as lowercase hex, when requested.
+    pub fn md5_hex(&self) -> Option<String> {
+        self.md5.map(|d| super::encode_hex(&d))
+    }
+
+    /// The SHA-256 as lowercase hex, when requested.
+    pub fn sha256_hex(&self) -> Option<String> {
+        self.sha256.map(|d| super::encode_hex(&d))
+    }
+}
+
+/// A byte-absorbing sink: feeds every byte to the requested hashers and counts
+/// them.
+///
+/// It does **not** forward bytes, enforce a ceiling, touch a file, or decide
+/// when a retry starts over. Those are the owner's policies. A writer that
+/// wraps this sink checks its limit before forwarding and calls [`Self::update`]
+/// only with the bytes that actually landed; a file wrapper writes before it
+/// hashes and calls [`Self::reset`] when a retry discards the partial body.
+pub struct Sink {
+    md5: Option<md5::Md5>,
+    sha256: Option<sha2::Sha256>,
+    bytes: u64,
+    algos: Algorithms,
+}
+
+impl Sink {
+    /// A fresh sink running exactly the requested algorithms.
+    pub fn new(algos: Algorithms) -> Self {
+        Self {
+            md5: algos.md5().then(md5::Md5::new),
+            sha256: algos.sha256().then(sha2::Sha256::new),
+            bytes: 0,
+            algos,
+        }
+    }
+
+    /// Absorb the next chunk. Chunks must arrive in file order; the split is
+    /// the caller's business, and the digest is the same for any split.
+    pub fn update(&mut self, chunk: &[u8]) {
+        if let Some(h) = self.md5.as_mut() {
+            h.update(chunk);
+        }
+        if let Some(h) = self.sha256.as_mut() {
+            h.update(chunk);
+        }
+        self.bytes += chunk.len() as u64;
+    }
+
+    /// How many bytes have been absorbed so far.
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// The algorithm set this sink was built with.
+    pub fn algos(&self) -> Algorithms {
+        self.algos
+    }
+
+    /// Read the current MD5 without finishing the sink, for a writer that must
+    /// keep absorbing after it asks. `None` when MD5 was not requested.
+    pub fn md5_bytes(&self) -> Option<[u8; 16]> {
+        self.md5.as_ref().map(|h| bytes16(h.clone().finalize()))
+    }
+
+    /// Read the current SHA-256 without finishing the sink. `None` when
+    /// SHA-256 was not requested.
+    pub fn sha256_bytes(&self) -> Option<[u8; 32]> {
+        self.sha256.as_ref().map(|h| bytes32(h.clone().finalize()))
+    }
+
+    /// Discard everything absorbed and start over with the same algorithm set.
+    ///
+    /// This is the reset *mechanic* only. When to call it — on a reader seek, a
+    /// file truncation, or a fresh writer per attempt — is the owner's contract.
+    pub fn reset(&mut self) {
+        self.md5 = self.algos.md5().then(md5::Md5::new);
+        self.sha256 = self.algos.sha256().then(sha2::Sha256::new);
+        self.bytes = 0;
+    }
+
+    /// Finish and take the digests of everything absorbed.
+    pub fn finish(self) -> DigestBytes {
+        DigestBytes {
+            bytes: self.bytes,
+            md5: self.md5.map(|h| bytes16(h.finalize())),
+            sha256: self.sha256.map(|h| bytes32(h.finalize())),
+        }
+    }
+}
+
+/// Absorb every byte, always accept the whole buffer. A `Write` sink with no
+/// forwarding of its own: wrapping writers keep their own limit and ordering.
+impl std::io::Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Hash everything a reader yields, in caller-sized chunks.
+///
+/// The caller supplies the read buffer, so the buffer size is its policy — a
+/// 64 KiB file-digest read and a 512 KiB chunk read drive the same sink. The
+/// reader starts wherever it currently is: seeking to the beginning (or not)
+/// is the caller's reset contract, not this function's.
+pub fn hash_reader<R: Read>(
+    mut reader: R,
+    algos: Algorithms,
+    buf: &mut [u8],
+) -> std::io::Result<DigestBytes> {
+    let mut sink = Sink::new(algos);
+    loop {
+        let n = reader.read(buf)?;
+        if n == 0 {
+            break;
+        }
+        sink.update(&buf[..n]);
+    }
+    Ok(sink.finish())
+}
+
+fn bytes16(output: md5::digest::Output<md5::Md5>) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&output);
+    bytes
+}
+
+fn bytes32(output: sha2::digest::Output<sha2::Sha256>) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&output);
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn algorithms_membership_and_empty() {
+        assert_eq!(Algorithms::default(), Algorithms::NONE);
+        assert!(Algorithms::NONE.is_empty());
+        assert!(Algorithms::MD5.md5() && !Algorithms::MD5.sha256());
+        assert!(!Algorithms::SHA256.md5() && Algorithms::SHA256.sha256());
+        assert_eq!(Algorithms::MD5_SHA256, Algorithms::new(true, true));
+        assert!(!Algorithms::MD5_SHA256.is_empty());
+    }
+
+    #[test]
+    fn sink_agrees_with_the_one_shot_vectors_for_every_algorithm_set() {
+        for (input, want_md5) in super::super::vectors::RFC1321_MD5 {
+            let want_sha = super::super::sha256_hex(input);
+            let mut sink = Sink::new(Algorithms::MD5_SHA256);
+            sink.update(input);
+            let out = sink.finish();
+            assert_eq!(out.len(), input.len() as u64);
+            assert_eq!(out.md5_hex().as_deref(), Some(*want_md5), "{input:?}");
+            assert_eq!(
+                out.sha256_hex().as_deref(),
+                Some(want_sha.as_str()),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_split_stream_matches_a_single_write_and_the_one_shot_helpers() {
+        let data: Vec<u8> = (0..5000).map(|i| (i % 251) as u8).collect();
+        let want_md5 = super::super::md5_hex(&data);
+        let want_sha = super::super::sha256_hex(&data);
+        let mut sink = Sink::new(Algorithms::MD5_SHA256);
+        for chunk in data.chunks(37) {
+            sink.update(chunk);
+        }
+        let out = sink.finish();
+        assert_eq!(out.len(), data.len() as u64);
+        assert_eq!(out.md5_hex().as_deref(), Some(want_md5.as_str()));
+        assert_eq!(out.sha256_hex().as_deref(), Some(want_sha.as_str()));
+    }
+
+    #[test]
+    fn empty_algorithm_set_yields_no_digests_but_still_counts() {
+        let mut sink = Sink::new(Algorithms::NONE);
+        sink.update(b"bytes are counted even with no hasher");
+        let out = sink.finish();
+        assert_eq!(out.len(), 37);
+        assert_eq!(out.md5, None);
+        assert_eq!(out.sha256, None);
+    }
+
+    #[test]
+    fn reset_starts_a_fresh_digest_and_count() {
+        let mut sink = Sink::new(Algorithms::MD5_SHA256);
+        sink.update(b"first");
+        let partial = sink.md5_bytes();
+        assert!(partial.is_some());
+        sink.reset();
+        assert_eq!(sink.bytes(), 0);
+        let first = sink.clone_finish();
+        sink.update(b"second");
+        let second = sink.clone_finish();
+        let empty_md5 = super::super::md5_hex(b"");
+        let second_md5 = super::super::md5_hex(b"second");
+        assert_eq!(first.md5_hex().as_deref(), Some(empty_md5.as_str()));
+        assert_eq!(second.md5_hex().as_deref(), Some(second_md5.as_str()));
+    }
+
+    #[test]
+    fn write_impl_accepts_every_byte() {
+        use std::io::Write as _;
+        let want = super::super::md5_hex(b"abc");
+        let mut sink = Sink::new(Algorithms::MD5);
+        assert_eq!(sink.write(b"abc").unwrap(), 3);
+        sink.flush().unwrap();
+        assert_eq!(sink.finish().md5_hex().as_deref(), Some(want.as_str()));
+    }
+
+    #[test]
+    fn hash_reader_agrees_across_buffer_sizes_and_reader_types() {
+        let data: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
+        let want = (
+            super::super::md5_hex(&data),
+            super::super::sha256_hex(&data),
+        );
+        for capacity in [1, 7, 4096, 512 * 1024] {
+            let mut buf = vec![0u8; capacity];
+            let got = hash_reader(data.as_slice(), Algorithms::MD5_SHA256, &mut buf).unwrap();
+            assert_eq!(got.len(), data.len() as u64);
+            assert_eq!(got.md5_hex().as_deref(), Some(want.0.as_str()));
+            assert_eq!(got.sha256_hex().as_deref(), Some(want.1.as_str()));
+        }
+    }
+
+    impl Sink {
+        fn clone_finish(&self) -> DigestBytes {
+            DigestBytes {
+                bytes: self.bytes,
+                md5: self.md5_bytes(),
+                sha256: self.sha256_bytes(),
+            }
+        }
+    }
+}

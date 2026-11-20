@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream::Stream};
-use md5::Digest;
+use girpr_digest::{Algorithms, Sink};
 use prost::Message;
 use std::io::Write;
 
@@ -188,8 +188,7 @@ pub struct ChunkDigest {
 /// crosses the line rather than after the whole thing has been written.
 pub struct HashingWriter<W: Write> {
     inner: W,
-    hasher: md5::Md5,
-    written: u64,
+    digest: Sink,
     limit: Option<u64>,
 }
 
@@ -202,20 +201,24 @@ impl<W: Write> HashingWriter<W> {
     pub fn new(inner: W, limit: Option<u64>) -> Self {
         Self {
             inner,
-            hasher: md5::Md5::new(),
-            written: 0,
+            digest: Sink::new(Algorithms::MD5),
             limit,
         }
     }
 
     /// How many bytes have passed through.
     pub fn written(&self) -> u64 {
-        self.written
+        self.digest.bytes()
     }
 
-    /// The MD5 of the bytes that passed through.
+    /// The MD5 of the bytes that passed through. Reading it does not end the
+    /// sink, so a caller can keep writing afterwards.
     pub fn md5(&self) -> Md5 {
-        Md5::from(self.hasher.clone().finalize())
+        match self.digest.md5_bytes() {
+            Some(bytes) => Md5::from(bytes),
+            // `new` always builds the sink with `Algorithms::MD5`.
+            None => unreachable!("the MD5 hasher was requested"),
+        }
     }
 }
 
@@ -223,8 +226,9 @@ impl<W: Write> Write for HashingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         // The ceiling is checked *before* the bytes are forwarded: a writer
         // that takes them and complains afterwards has already landed them.
+        // It stays here, at the owner — the shared sink has no limit policy.
         if let Some(limit) = self.limit
-            && self.written.saturating_add(buf.len() as u64) > limit
+            && self.digest.bytes().saturating_add(buf.len() as u64) > limit
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -234,8 +238,9 @@ impl<W: Write> Write for HashingWriter<W> {
         let n = self.inner.write(buf)?;
         // Only the bytes that were really taken are hashed: a short write is
         // the inner writer's business, and the caller retries with the rest.
-        self.hasher.update(&buf[..n]);
-        self.written += n as u64;
+        // Hashing after the forward, and only the accepted bytes, is the rule
+        // that keeps the digest honest; the shared sink just absorbs them.
+        self.digest.update(&buf[..n]);
         Ok(n)
     }
 

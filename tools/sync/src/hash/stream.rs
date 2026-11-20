@@ -1,7 +1,7 @@
 //! [`Digests`] and [`hash_file`]: streaming file digests in a single pass.
 
 use anyhow::{Context, Result};
-use md5::{Digest as _, Md5};
+use girpr_digest::{Algorithms, Sink};
 use std::io::Read;
 use std::path::Path;
 
@@ -24,8 +24,7 @@ pub const CHUNK: usize = 512 * 1024;
 /// one of them, and a drift here is not a wrong number in a log — it is a
 /// spurious `verify hash mismatch`, or a silently weakened one.
 pub struct Digests {
-    md5ctx: Option<Md5>,
-    sha2ctx: Option<sha2::Sha256>,
+    sink: Sink,
 }
 
 impl Digests {
@@ -33,43 +32,37 @@ impl Digests {
     /// [`update`](Self::update) does nothing and [`finish`](Self::finish)
     /// yields an empty map — the same answer [`hash_file`] gives for it.
     ///
-    /// A membership test on a bitfield rather than a scan for a name: this runs
-    /// once per file per phase C and once per copied file, so a `String` search
-    /// would be the whole of what this function does.
+    /// The shared sink runs only the requested algorithms. The mapping from
+    /// this crate's `AlgoSet` to the leaf's plain algorithm set happens here,
+    /// at the call site: `AlgoSet`, `HashAlg` and `DigestSet` stay local.
     pub fn new(algos: &AlgoSet) -> Self {
         Self {
-            md5ctx: algos.contains(HashAlg::Md5).then(Md5::new),
-            sha2ctx: algos.contains(HashAlg::Sha256).then(sha2::Sha256::new),
+            sink: Sink::new(Algorithms::new(
+                algos.contains(HashAlg::Md5),
+                algos.contains(HashAlg::Sha256),
+            )),
         }
     }
 
     /// Absorb the next chunk. Chunks must arrive in file order — the split is
     /// the caller's business, and [`hash_file`]'s is its read loop's.
     pub fn update(&mut self, chunk: &[u8]) {
-        if let Some(c) = self.md5ctx.as_mut() {
-            c.update(chunk);
-        }
-        if let Some(c) = self.sha2ctx.as_mut() {
-            c.update(chunk);
-        }
+        self.sink.update(chunk);
     }
 
     /// The digests of everything fed so far. Values are **raw** bytes (16 for
     /// md5, 32 for sha256), which is what the cache stores.
     ///
     /// Assigned to the slots directly rather than through `insert_named`: the
-    /// context knows exactly which algorithm each of its two halves is, so there
+    /// sink knows exactly which algorithm each of its two halves is, so there
     /// is no name to route and no decision to get wrong.
     pub fn finish(self) -> DigestSet {
-        let mut out = DigestSet::default();
-        if let Some(c) = self.md5ctx {
-            out.md5 = Some(c.finalize().into());
+        let raw = self.sink.finish();
+        DigestSet {
+            md5: raw.md5,
+            sha256: raw.sha256,
+            ..Default::default()
         }
-        if let Some(c) = self.sha2ctx {
-            let d = c.finalize();
-            out.sha256 = Some(d.into());
-        }
-        out
     }
 }
 

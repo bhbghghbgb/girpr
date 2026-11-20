@@ -289,17 +289,17 @@ pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
 }
 
 /// [`md5_reader_digest`] with a caller-supplied read buffer.
+///
+/// The seek is this function's reset contract — the digest always starts at
+/// the beginning of the file — and stays here. The shared reader sink owns
+/// only the read loop and the MD5 context; the buffer size is the caller's.
 fn md5_reader_digest_with_buf(f: &mut File, buf: &mut [u8]) -> Result<Md5> {
     f.seek(SeekFrom::Start(0))?;
-    let mut ctx = md5::Md5::new();
-    loop {
-        let n = f.read(&mut buf[..])?;
-        if n == 0 {
-            break;
-        }
-        ctx.update(&buf[..n]);
-    }
-    Ok(Md5::from(ctx.finalize()))
+    let raw = girpr_digest::hash_reader(f, girpr_digest::Algorithms::MD5, buf)?;
+    let md5 = raw
+        .md5
+        .ok_or_else(|| anyhow::anyhow!("the MD5 hasher was not requested"))?;
+    Ok(Md5::from(md5))
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).

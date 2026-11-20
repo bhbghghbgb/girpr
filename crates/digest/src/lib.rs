@@ -9,6 +9,15 @@
 //! lowercase hex strings. Those three representations stay distinct. This
 //! crate supplies the spelling and the fixed-width mechanics they share — it
 //! is deliberately not a single semantic `Digest` type used by all three.
+//!
+//! [`stream`] adds the byte-absorbing sink shared by the three programs' hash
+//! readers and writers. It runs a caller-chosen set of algorithms and yields
+//! raw digest bytes; byte ceilings, accepted-byte rules and restart policies
+//! stay with each owner.
+
+mod stream;
+
+pub use stream::{Algorithms, DigestBytes, Sink, hash_reader};
 
 use std::fmt;
 
@@ -125,6 +134,13 @@ impl From<md5::digest::Output<md5::Md5>> for Md5 {
     }
 }
 
+/// Build the newtype from raw digest bytes — the shape a streaming sink yields.
+impl From<[u8; 16]> for Md5 {
+    fn from(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+}
+
 /// A 32-byte SHA-256 digest, with the same hex mechanics as [`Md5`].
 ///
 /// girpr does not use this newtype — it only needs the MD5 one — but gircap
@@ -185,6 +201,13 @@ impl From<sha2::digest::Output<sha2::Sha256>> for Sha256 {
     fn from(digest: sha2::digest::Output<sha2::Sha256>) -> Self {
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&digest);
+        Self(bytes)
+    }
+}
+
+/// Build the newtype from raw digest bytes — the shape a streaming sink yields.
+impl From<[u8; 32]> for Sha256 {
+    fn from(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
