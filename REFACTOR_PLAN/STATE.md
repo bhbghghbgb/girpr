@@ -51,14 +51,14 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| FU-01 | Add girpr-filter to cross-program "what ships" tables | batched (Batch D) | Review A §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); real gap in product docs that survives cleanup. Planning: kept, doc-only |
+| FU-01 | Add girpr-filter to cross-program "what ships" tables | done | f054b3c8; added to root README + tools/sync/README (girsync is a dep), correctly NOT to gircap tables (not a gircap dep). Review: verified, doc-only |
 | FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | dropped | Review A: failed once, passed in isolation + clean rerun; unrelated. Planning: one-off non-reproducible flake, no repro to act on |
 | FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim) | dropped | Raised by T03 per §A10 — defect candidate, not verdict. Planning: needs human verdict; any fix may move §A3 bundle bytes — unsafe to batch |
-| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations | batched (Batch D) | Raised by T04/T05; doc-only, no behaviour change. Planning: kept, keeps docs accurate |
+| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations | done | f054b3c8; all five locations + root README program list updated to match crates/fs-names/Cargo.toml. Review: verified, consistent |
 | FU-05 | Consider documenting sync's local ascii_case_eq/ascii_lower/FoldedKey as intentionally unshared | dropped | Raised by T04; deliberately local. Planning: doc-only nicety with no value |
 | FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | dropped | Raised by T05; coordinated root+child rewrite, byte-stability risk. Planning: "decide whether" with no safe implementation |
 | FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | dropped | Raised by T05; optional cleanup. Planning: circular oracle risk (tests helper with itself), marginal value |
-| FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | batched (Batch D) | Raised by T06; doc-only, unsafe claim stale. Planning: kept, cheap factual fix |
+| FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | done | f054b3c8; replaced with verified facts (no unsafe in hardlink.rs; only env-var test). Review: verified |
 | FU-09 | Add Windows regression test for lock path swapped to symlink after open | batched (Batch T) | Raised by T06; existing swap test cfg(unix). Planning: kept, test-only, no byte risk |
 | FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf | dropped | Raised by T07 (F07-a). Planning: expands skipped T07; note itself questions thin-wrapper value |
 | FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | dropped | Raised by T07 (F07-b). Planning: different primitive explicitly excluded from skipped T07 |
@@ -73,7 +73,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text | dropped | Raised by T12 (F-T12B). Planning: user-visible --help change (§A3), not a pure extraction |
 | FU-21 | Reconcile the three OutputFormat types only after confirming error string and per-variant help are not contracts | dropped | Raised by T12 (F-T12C). Planning: changes --help/error bytes (§A3); cited test is not a byte guard |
 | FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test | dropped | Raised by T13. Planning: widening public API for one test already rejected; no value |
-| FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | batched (Batch D) | Raised by T14; renderer writes only selected names. Planning: kept, cheap factual doc fix |
+| FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | done | f054b3c8; merged contradictory sections, matches audio_scan_file(). Review: verified |
 | FU-24 | Deduplicate the three report planes' text layout logic | dropped | Raised by T15 (F-T15-01). Planning: §A8-blocked, would normalize vocabularies and move bytes (§A3) |
 | FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | dropped | Raised by T15 (F-T15-02). Planning: moot at cleanup, no action |
 | FU-26 | If source-level field-name parity ever matters, add a serde rename seam so product can keep `unknown` for field 6 | dropped | Raised by T16 (F-T16-02). Planning: speculative; would reintroduce churn T16 deliberately avoided |
@@ -554,3 +554,19 @@ Follow-up planning review (Phase 3 guard — all 20 tasks settled):
   FU-25); doc-only niceties/cosmetic/already-rejected (FU-05, FU-22, FU-28,
   FU-29, FU-31); speculative/conditional (FU-17, FU-26, FU-27); non-reproducible
   noise (FU-02). FU-14/FU-15 were already dropped earlier.
+
+Batch D review confirmation (f054b3c8; all four FU done, no fix):
+
+- Doc-only across six files (five Markdown plus //! module-doc lines in gamedir.rs);
+  no code, byte, contract, test or manifest change. No source/test/comment/
+  manifest/doc-table/commit-message references REFACTOR_PLAN/ or the report;
+  remaining references are only inside those files themselves (final cleanup).
+- All claims verified against current code: girpr-filter is a girsync/root dep
+  but NOT a gircap dep (correctly absent from gircap leaf tables); girpr-fs-names
+  description matches crates/fs-names/Cargo.toml across all five §A2 locations;
+  no unsafe in hardlink.rs (only the env-var test); gamedir doc matches
+  audio_scan_file(). git diff --check, fmt, doc and clippy clean.
+- Reviewer raised three doc-only nits (manifest comment wording, README entry-
+  points table exhaustiveness, a README wording nit). NOT reopened as follow-ups:
+  same category the Phase 3 guard already dropped as doc-only cosmetic (FU-05,
+  FU-29, FU-31); reopening would defeat the run-away guard.
