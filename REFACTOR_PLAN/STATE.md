@@ -26,7 +26,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
 | T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
-| T15 | Ordered-JSON / `write_line` report core | pending_review | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25 |
+| T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
@@ -42,7 +42,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | C | T06, T07 | done | T06 completed, no fixes; T07 skipped — not reviewed. FU-08/09 kept open |
 | D | T08, T09, T10 | done | T08 + T10 completed, no fixes; T09 skipped — not reviewed. FU-13 kept; FU-14/15 dropped |
 | E | T11, T12, T13, T14 | done | T11/T13/T14 completed, no fixes; T12 skipped — not reviewed. FU-16 assessed acceptable; all follow-ups kept |
-| solo | T15 | pending | Report core — byte-contract critical, own review |
+| solo | T15 | done | Completed, no fixes; all byte oracles pass, no preserve_order; FU-24/25 kept open |
 | F | T16, T17 | pending | Domain model leaves — review together |
 | solo | T18 | pending | API DTO leaf — largest model task, own review |
 | G | T19, T20 | pending | Test infrastructure — A5/A11 constraints |
@@ -397,3 +397,12 @@ Finding from T15 (bcdbfa02):
 - gircap now has EIGHT leaf deps; all five A2 doc locations + capture manifest
   comment updated (00-spec table names eight). Full suite 2095 passed (4-core
   selected crates), 11 skipped; clippy clean.
+
+Solo review confirmation (no fix commit):
+
+- F21 boundary confirmed: narrow ordered-JSON/write_line core works WITHOUT
+  normalizing the three value vocabularies; A3/A8 satisfied, no preserve_order
+  enabled anywhere. All named byte oracles pass unchanged across all planes.
+- Full workspace suite 2157 passed, 11 skipped; clippy -D warnings clean. Leaf
+  deps: serde + dev serde_json only. gircap eight leaf deps; five A2 locations +
+  capture manifest comment current. sled2redb still reuses girsync writer (FU-25).
