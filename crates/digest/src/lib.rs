@@ -1,0 +1,307 @@
+//! The shared mechanics at the digest/text boundary: hex spelling, fixed-width
+//! digest newtypes, and the published test vectors.
+//!
+//! ## Mechanics, not a program's data model
+//!
+//! Nothing here decides what a digest *means* to a program. girpr uses the
+//! strict [`Md5`] newtype, where `EMPTY` means "unknown, not a match"; girsync
+//! keeps raw bytes plus verbatim foreign algorithm names; gircap publishes
+//! lowercase hex strings. Those three representations stay distinct. This
+//! crate supplies the spelling and the fixed-width mechanics they share — it
+//! is deliberately not a single semantic `Digest` type used by all three.
+
+use std::fmt;
+
+use anyhow::{Result, anyhow, bail};
+// md-5 and sha2 re-export the same `digest::Digest` trait, so one import
+// brings `digest()` into scope for both hashers.
+use md5::Digest as _;
+
+/// The MD5 of the empty file — what a missing (or empty) file hashes to.
+///
+/// The lowercase hex spelling every artifact carries. Named rather than
+/// inlined so "the file is not there" and "the file is there and empty" cannot
+/// drift apart, and so every program's oracle is the same constant.
+pub const EMPTY_MD5: &str = "d41d8cd98f00b204e9800998ecf8427e";
+
+/// The SHA-256 of the empty file, in the same lowercase hex spelling.
+pub const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// Lowercase hex, two characters per byte.
+pub fn encode_hex(bytes: &[u8]) -> String {
+    hex::encode(bytes)
+}
+
+/// Uppercase hex, two characters per byte — the form percent-encoding requires.
+pub fn encode_hex_upper(bytes: &[u8]) -> String {
+    hex::encode_upper(bytes)
+}
+
+/// Decode hex into bytes. The caller keeps its own context on a bad row.
+pub fn decode_hex(text: &str) -> std::result::Result<Vec<u8>, hex::FromHexError> {
+    hex::decode(text)
+}
+
+/// One-shot lowercase-hex MD5 of `bytes`.
+pub fn md5_hex(bytes: &[u8]) -> String {
+    encode_hex(&md5::Md5::digest(bytes))
+}
+
+/// One-shot lowercase-hex SHA-256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    encode_hex(&sha2::Sha256::digest(bytes))
+}
+
+/// A 16-byte MD5 digest.
+///
+/// The manifest's spelling is not canonical — either case is legal — so the
+/// digest is parsed once at the boundary and compared as bytes from then on.
+/// [`Md5::parse_hex`] is the only way in from a `String`; [`Md5::to_hex`] is
+/// the only way back out. A string that is not 32 hex digits (the empty string
+/// above all) is not a digest, which keeps "an empty MD5 is unknown, not a
+/// match" an `Option<Md5>` rather than a string sentinel.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Md5([u8; 16]);
+
+impl Md5 {
+    /// The MD5 of the empty file, as a digest.
+    pub const EMPTY: Self = Self([
+        0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42,
+        0x7e,
+    ]);
+
+    /// Parse a hex MD5 into the 16 bytes it spells.
+    ///
+    /// Either case is accepted. Anything that is not exactly 32 hex digits is
+    /// an error, so a caller that wants "unknown" can turn it into `None`.
+    pub fn parse_hex(s: &str) -> Result<Self> {
+        if s.len() != 32 {
+            bail!("an MD5 is 32 hex digits, not {} bytes", s.len());
+        }
+        let mut out = [0u8; 16];
+        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow!("not a hex MD5: {s:?}"))?;
+        Ok(Self(out))
+    }
+
+    /// The digest as lowercase hex.
+    pub fn to_hex(self) -> String {
+        encode_hex(&self.0)
+    }
+
+    /// The digest bytes, for a key or a byte comparison.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+
+    /// Does `s` spell this digest?
+    ///
+    /// Either case is accepted; a string that is not a digest (the empty MD5
+    /// above all) matches nothing.
+    pub fn matches_hex(self, s: &str) -> bool {
+        Self::parse_hex(s).is_ok_and(|other| other == self)
+    }
+}
+
+impl fmt::Display for Md5 {
+    /// Lowercase hex, without allocating an intermediate `String`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0u8; 32];
+        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
+        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
+    }
+}
+
+impl fmt::Debug for Md5 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Md5({self})")
+    }
+}
+
+impl From<md5::digest::Output<md5::Md5>> for Md5 {
+    fn from(digest: md5::digest::Output<md5::Md5>) -> Self {
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
+    }
+}
+
+/// A 32-byte SHA-256 digest, with the same hex mechanics as [`Md5`].
+///
+/// girpr does not use this newtype — it only needs the MD5 one — but gircap
+/// publishes SHA-256 hex too, so the spelling and the empty-file oracle live
+/// here alongside the MD5 ones rather than in a third copy.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sha256([u8; 32]);
+
+impl Sha256 {
+    /// The SHA-256 of the empty file, as a digest.
+    pub const EMPTY: Self = Self([
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
+        0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
+        0xb8, 0x55,
+    ]);
+
+    /// Parse a hex SHA-256 into the 32 bytes it spells. Either case is accepted.
+    pub fn parse_hex(s: &str) -> Result<Self> {
+        if s.len() != 64 {
+            bail!("a SHA-256 is 64 hex digits, not {} bytes", s.len());
+        }
+        let mut out = [0u8; 32];
+        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow!("not a hex SHA-256: {s:?}"))?;
+        Ok(Self(out))
+    }
+
+    /// The digest as lowercase hex.
+    pub fn to_hex(self) -> String {
+        encode_hex(&self.0)
+    }
+
+    /// The digest bytes, for a key or a byte comparison.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Does `s` spell this digest? Either case is accepted.
+    pub fn matches_hex(self, s: &str) -> bool {
+        Self::parse_hex(s).is_ok_and(|other| other == self)
+    }
+}
+
+impl fmt::Display for Sha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0u8; 64];
+        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
+        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
+    }
+}
+
+impl fmt::Debug for Sha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Sha256({self})")
+    }
+}
+
+impl From<sha2::digest::Output<sha2::Sha256>> for Sha256 {
+    fn from(digest: sha2::digest::Output<sha2::Sha256>) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
+    }
+}
+
+/// Published digest vectors, shared so each implementation is checked against
+/// the same oracles instead of a copy that can drift.
+///
+/// The helpers take the caller's own hex function: each program tests the code
+/// it ships, only the expected values come from here.
+pub mod vectors {
+    use super::EMPTY_MD5;
+
+    /// (input, expected lowercase hex) from RFC 1321, plus the widely published
+    /// "quick brown fox" vector.
+    pub const RFC1321_MD5: &[(&[u8], &str)] = &[
+        (b"", EMPTY_MD5),
+        (b"a", "0cc175b9c0f1b6a831c399e269772661"),
+        (b"abc", "900150983cd24fb0d6963f7d28e17f72"),
+        (b"message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
+        (
+            b"abcdefghijklmnopqrstuvwxyz",
+            "c3fcd3d76192e4007dfb496cca67e13b",
+        ),
+        (
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+            "d174ab98d277d9f5a5611c2c9f419d9f",
+        ),
+        (
+            b"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            "57edf4a22be3c955ac49da2e2107b67a",
+        ),
+        (
+            b"The quick brown fox jumps over the lazy dog",
+            "9e107d9d372bb6826bd81d3542a419d6",
+        ),
+    ];
+
+    /// The RFC 1321 million-`a` vector, kept out of the table because its input
+    /// is a megabyte rather than a literal.
+    pub const RFC1321_MD5_MILLION_A: &str = "7707d6ae4e027c70eea2a935c2296f21";
+
+    /// (input, expected lowercase hex) from FIPS 180-4.
+    pub const FIPS180_4_SHA256: &[(&[u8], &str)] = &[
+        (
+            b"",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            b"abc",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+    ];
+
+    /// Assert `hex_of` reproduces every shared MD5 vector, including the
+    /// million-`a` case that crosses many block boundaries.
+    pub fn assert_md5_vectors(hex_of: impl Fn(&[u8]) -> String) {
+        for (input, want) in RFC1321_MD5 {
+            assert_eq!(hex_of(input), *want, "{input:?}");
+        }
+        let million_a = "a".repeat(1_000_000);
+        assert_eq!(hex_of(million_a.as_bytes()), RFC1321_MD5_MILLION_A);
+    }
+
+    /// Assert `hex_of` reproduces every shared SHA-256 vector.
+    pub fn assert_sha256_vectors(hex_of: impl Fn(&[u8]) -> String) {
+        for (input, want) in FIPS180_4_SHA256 {
+            assert_eq!(hex_of(input), *want, "{input:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_constants_agree_with_the_newtypes() {
+        assert_eq!(Md5::EMPTY.to_hex(), EMPTY_MD5);
+        assert_eq!(Md5::EMPTY.to_string(), EMPTY_MD5);
+        assert_eq!(Sha256::EMPTY.to_hex(), EMPTY_SHA256);
+        assert_eq!(Sha256::EMPTY.to_string(), EMPTY_SHA256);
+    }
+
+    #[test]
+    fn md5_parses_either_case_and_prints_lowercase() {
+        let upper = Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap();
+        let lower = Md5::parse_hex(EMPTY_MD5).unwrap();
+        assert_eq!(upper, lower);
+        assert_eq!(upper.to_hex(), EMPTY_MD5);
+        assert_eq!(upper.to_string(), lower.to_hex());
+        assert_eq!(format!("{upper:?}"), format!("Md5({EMPTY_MD5})"));
+        assert!(upper.matches_hex(EMPTY_MD5));
+        assert!(upper.matches_hex("D41D8CD98F00B204E9800998ECF8427E"));
+        assert!(!upper.matches_hex(""));
+        assert!(!upper.matches_hex("md5-a"));
+        assert!(Md5::parse_hex("").is_err());
+        assert!(Md5::parse_hex(&"g".repeat(32)).is_err());
+        assert!(Md5::parse_hex(&"a".repeat(31)).is_err());
+    }
+
+    #[test]
+    fn sha256_parses_either_case_and_prints_lowercase() {
+        let upper = Sha256::parse_hex(&EMPTY_SHA256.to_ascii_uppercase()).unwrap();
+        assert_eq!(upper.to_hex(), EMPTY_SHA256);
+        assert_eq!(upper.to_string(), EMPTY_SHA256);
+        assert!(upper.matches_hex(EMPTY_SHA256));
+        assert!(Sha256::parse_hex(EMPTY_MD5).is_err());
+    }
+
+    #[test]
+    fn hex_helpers_round_trip_every_byte_in_both_cases() {
+        let all: Vec<u8> = (0..=255u8).collect();
+        let lower = encode_hex(&all);
+        let upper = encode_hex_upper(&all);
+        assert_eq!(lower.len(), 512);
+        assert_eq!(upper, lower.to_ascii_uppercase());
+        assert_eq!(decode_hex(&lower).unwrap(), all);
+        assert_eq!(decode_hex(&upper).unwrap(), all);
+    }
+}

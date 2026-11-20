@@ -1,0 +1,25 @@
+[package]
+name = "girpr-digest"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared digest-hex and fixed-width digest mechanics the girpr workspace uses"
+
+[lib]
+name = "girpr_digest"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Hex spelling of digests, shared by every site that crosses the digest/text
+# boundary. One version and one set of spelling rules for all three programs.
+hex = "0.4.3"
+# The digest computations behind the one-shot hex helpers and the fixed-width
+# newtypes' conversions from a hasher's output.
+md-5 = "0.11.0"
+sha2 = "0.11.1"
+# Only for `parse_hex`, so a bad spelling reports the same message at every
+# call site.
+anyhow = "1.0.104"

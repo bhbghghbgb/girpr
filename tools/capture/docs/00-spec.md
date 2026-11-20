@@ -39,7 +39,7 @@ main tool, and never imports its code.
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
 | No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`, `--no-log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
-| Two shared *leaf* crates: the log policy and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. Neither holds any logic of any program, and no test of one program depends on another's |
+| Three shared *leaf* crates: the log policy, the digest mechanics and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-digest` (`crates/digest/`): hex spelling and fixed-width digest mechanics — no flag, no exit code, no published shape. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. None holds any logic of any program, and no test of one program depends on another's |
 
 The intent is **do not couple**. Two tools that must stay independent should not
 end up depending on each other in order to prove one of them works, and the
@@ -65,9 +65,16 @@ three suites cannot drift apart on the one thing where a drift is invisible
 until it eats another test's tree. Nothing that ships links against it, and it
 depends on no program at all.
 
+**The digest crate is mechanics only, on the same grounds.** Hex spelling and
+the fixed-width digest type are shared because every program crosses the same
+digest/text boundary; gircap still publishes lowercase hex strings of its own,
+girsync still keeps raw bytes and verbatim foreign names, and girpr still owns
+its strict `Md5` semantics. The crate carries no flag, no exit code, no output
+shape and no program logic, so it couples nothing that matters.
+
 This mirrors `tools/sync`: *"Separate from the `girpr` binary; shares no flags,
-no exit-code contract, no code."* — with the same exceptions, the log policy
-and the scratch-directory policy, on the same grounds.
+no exit-code contract, no code."* — with the same exceptions, the log policy,
+the digest mechanics and the scratch-directory policy, on the same grounds.
 
 ---
 

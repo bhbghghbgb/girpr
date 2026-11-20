@@ -1,8 +1,9 @@
 # gircap — live-artifact capture for `girpr` testing
 
-**Dev-only. Not a patcher, not part of the `girpr` binary, shares no code with
-it.** It talks to the real HoYoPlay + Sophon APIs and writes a self-contained
-artifact bundle: a real `game_dir` fixture holding one real file per test-matrix
+**Dev-only. Not a patcher, not part of the `girpr` binary, shares no program code
+with it — only logic-free leaf crates: the log policy, the digest hex mechanics
+and the test scratch-directory policy.** It talks to the real HoYoPlay + Sophon
+APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding one real file per test-matrix
 variant, every API response and manifest behind it, every chunk blob needed to
 materialize the old file, the current file, and the patch between them, and
 ground truth for the result.

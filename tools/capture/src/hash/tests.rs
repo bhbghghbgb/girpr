@@ -469,7 +469,7 @@ fn one_pass_agrees_with_the_two_one_shots() {
         assert_eq!(streamed.bytes, bytes.len() as u64);
     }
     // Empty input is still a valid digest pair, not a special case.
-    assert_eq!(md5_sha256(&[]).md5, "d41d8cd98f00b204e9800998ecf8427e");
+    assert_eq!(md5_sha256(&[]).md5, girpr_digest::EMPTY_MD5);
 }
 
 /// Streaming a zstd decode must agree with decompressing the same bytes.
@@ -524,22 +524,10 @@ fn a_streaming_measurement_agrees_with_decompressing_the_same_bytes() {
 
 #[test]
 fn md5_and_sha256_match_the_published_vectors() {
-    // RFC 1321 / FIPS 180-4 test vectors, so a wrong implementation cannot
-    // quietly agree with itself across every test in the crate.
-    assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
-    assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
-    assert_eq!(
-        md5_hex(b"The quick brown fox jumps over the lazy dog"),
-        "9e107d9d372bb6826bd81d3542a419d6"
-    );
-    assert_eq!(
-        sha256_hex(b""),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-    assert_eq!(
-        sha256_hex(b"abc"),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
+    // The RFC 1321 / FIPS 180-4 oracles are shared with the other two programs;
+    // `md5_hex` / `sha256_hex` here are still the code this crate ships.
+    girpr_digest::vectors::assert_md5_vectors(md5_hex);
+    girpr_digest::vectors::assert_sha256_vectors(sha256_hex);
 }
 
 #[test]

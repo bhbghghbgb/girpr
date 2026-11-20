@@ -33,8 +33,9 @@ girsync = { path = "../sync" }
 tempfile = "3.27"
 sled = "0.34"
 anyhow = "1.0.104"
-# Hex decoding of legacy digest strings, with the bad-row context preserved.
-hex = "0.4.3"
+# Hex decoding of legacy digest strings, with the bad-row context kept here in
+# the caller. The shared crate supplies only the decode primitive.
+girpr-digest = { path = "../../crates/digest" }
 clap = { version = "4.6.8", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

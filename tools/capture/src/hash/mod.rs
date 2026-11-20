@@ -29,13 +29,12 @@ use md5::{Digest as _, Md5};
 
 /// Hex MD5 of `bytes`, lowercase.
 pub fn md5_hex(bytes: &[u8]) -> String {
-    hex_bytes(&Md5::digest(bytes))
+    girpr_digest::md5_hex(bytes)
 }
 
 /// Hex SHA-256 of `bytes`, lowercase.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest as _, Sha256};
-    hex_bytes(&Sha256::digest(bytes))
+    girpr_digest::sha256_hex(bytes)
 }
 
 /// What one pass over some bytes says about them.
@@ -217,16 +216,17 @@ impl std::io::Write for HashingFile {
 
 /// Lowercase hex, two characters per byte.
 ///
-/// A thin shim over the `hex` crate so call sites keep one name for "spell these
-/// bytes as hex"; the crate does the table-driven, single-allocation work. The
-/// hand-rolled versions this replaced called `format!` once per byte.
+/// A thin shim over the shared digest mechanics so call sites keep one name for
+/// "spell these bytes as hex"; the leaf crate does the table-driven,
+/// single-allocation work. The hand-rolled versions this replaced called
+/// `format!` once per byte.
 pub fn hex_bytes(bytes: &[u8]) -> String {
-    hex::encode(bytes)
+    girpr_digest::encode_hex(bytes)
 }
 
 /// Uppercase hex, two characters per byte — the form percent-encoding requires.
 pub fn hex_bytes_upper(bytes: &[u8]) -> String {
-    hex::encode_upper(bytes)
+    girpr_digest::encode_hex_upper(bytes)
 }
 
 /// How a stored document is encoded on disk.

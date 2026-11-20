@@ -7,12 +7,13 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its two path deps are leaf crates holding a
-# shared *policy* and no logic of any program: `girpr-log` (the log-file and
-# log-level policy — flag names, environment variables, default levels and
-# default paths) and `girpr-tempdir` (the scratch-directory policy, a
-# dev-dependency, so the tree a test writes into is named and removed the same
-# way in all three projects).
+# the tree (docs/00-spec.md §2). Its three path deps are leaf crates holding a
+# shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
+# log-file and log-level policy — flag names, environment variables, default
+# levels and default paths), `girpr-digest` (the hex spelling and fixed-width
+# digest mechanics — no flag, no exit code and no published shape) and
+# `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the tree a
+# test writes into is named and removed the same way in all three projects).
 
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for
@@ -75,8 +76,10 @@ serde_json = "1.0.154"
 prost = "0.14.6"
 zstd = "0.14.4"
 md-5 = "0.11.0"
-# Hex spelling of digests, shared with the repair binary and the converter.
-hex = "0.4.3"
+# Hex spelling of digests, shared with the repair binary and the converter. A
+# leaf mechanics crate: gircap still publishes lowercase hex strings and owns
+# its own algorithm set, it only borrows the spelling.
+girpr-digest = { path = "../../crates/digest" }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
 percent-encoding = "2.3.2"

@@ -688,9 +688,9 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "girpr-digest",
  "girpr-log",
  "girpr-tempdir",
- "hex",
  "ini_core",
  "md-5",
  "percent-encoding",
@@ -718,10 +718,10 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "girpr-digest",
  "girpr-filter",
  "girpr-log",
  "girpr-tempdir",
- "hex",
  "md-5",
  "prost",
  "reqwest",
@@ -736,6 +736,16 @@ dependencies = [
  "winapi-util",
  "wiremock",
  "zstd",
+]
+
+[[package]]
+name = "girpr-digest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "md-5",
+ "sha2",
 ]
 
 [[package]]
@@ -2017,9 +2027,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "girpr-digest",
  "girpr-tempdir",
  "girsync",
- "hex",
  "md-5",
  "serde",
  "serde_json",

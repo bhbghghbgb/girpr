@@ -705,5 +705,8 @@ the bridge actually reads.
 - **Automating the bundle preparation.** A bundle is captured when someone wants
   one, by hand.
 - **Sharing code with `gircap`.** A server that replays a bundle's bytes shares no
-  knowledge of how the bundle was made. A shared crate would make two tools that
-  must stay independent depend on each other to prove one of them works.
+  knowledge of how the bundle was made. Sharing a crate that held either tool's
+  program logic would make two tools that must stay independent depend on each
+  other to prove one of them works. A logic-free leaf such as `girpr-digest`
+  (hex spelling and fixed-width digest mechanics) is not that kind of sharing:
+  it carries no program behavior, and the bridge does not depend on `gircap`.

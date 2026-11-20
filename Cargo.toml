@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/filter", "crates/log", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/digest", "crates/filter", "crates/log", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -59,9 +59,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 prost = "0.14.6"
 md-5 = "0.11.0"
-# Hex at the digest/text boundary: one tiny, ubiquitous crate instead of a
-# hand-rolled table and per-byte formatting at every such site.
-hex = "0.4.3"
+# Hex spelling and fixed-width digest mechanics, shared with the two dev tools
+# that cross the same digest/text boundary. A leaf crate with no program logic.
+girpr-digest = { path = "crates/digest" }
 zstd = "0.14.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

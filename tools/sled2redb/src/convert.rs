@@ -95,7 +95,7 @@ pub struct Converted {
 }
 
 fn hex_to_bytes(text: &str, rel: &str, algo: &str) -> Result<Vec<u8>> {
-    hex::decode(text).with_context(|| format!("decode {algo} hex of {rel}"))
+    girpr_digest::decode_hex(text).with_context(|| format!("decode {algo} hex of {rel}"))
 }
 
 /// Convert sled DB at `sled_dir` into a new redb file at `redb_path`.

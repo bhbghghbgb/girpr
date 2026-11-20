@@ -26,9 +26,9 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
-/// Render a digest as lowercase hex.
+/// Render a digest as lowercase hex, with the shared spelling.
 fn hex(bytes: &[u8]) -> String {
-    ::hex::encode(bytes)
+    girpr_digest::encode_hex(bytes)
 }
 
 /// A decoded row built directly, for cases that only exercise the redb-write
@@ -177,11 +177,8 @@ fn build_sled_db_at(dir: &std::path::Path, name: &str) {
             "file",
             0,
             [
-                ("md5".to_string(), hex(&Md5::digest(b""))),
-                (
-                    "sha256".to_string(),
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
-                ),
+                ("md5".to_string(), girpr_digest::EMPTY_MD5.to_string()),
+                ("sha256".to_string(), girpr_digest::EMPTY_SHA256.to_string()),
                 ("blake3".to_string(), "ab".repeat(32)),
             ]
             .into_iter()

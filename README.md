@@ -387,8 +387,12 @@ plane always carries each string value as a quoted string.
 ## Logging
 
 One policy, four programs: this binary and the three dev tools (`gircap`,
-`girsync`, `sled2redb`). It lives in `crates/log/` and is the only thing they
-share that ships.
+`girsync`, `sled2redb`). It lives in `crates/log/` and is the only *policy* they
+share that ships. It is a logic-free leaf, as is `crates/digest/`, which
+supplies hex spelling and fixed-width digest mechanics to this binary, `gircap`
+and `sled2redb`. All four share the test-only scratch-directory policy in
+`crates/tempdir/`. None of these carries a program's flags, exit codes or
+published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is

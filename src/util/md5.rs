@@ -1,91 +1,18 @@
 use anyhow::{Context, Result};
 use md5::Digest;
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 const MD5_BUF: usize = 512 * 1024;
 
-/// The MD5 of the empty file — what a missing (or empty) file hashes to.
-///
-/// Named rather than inlined so the "the file is not there" answer and the
-/// "the file is there and empty" answer cannot drift apart.
-pub const EMPTY_MD5: &str = "d41d8cd98f00b204e9800998ecf8427e";
-
-/// A 16-byte MD5 digest.
-///
-/// The manifest's spelling is not canonical — either case is legal — so the
-/// digest is parsed once at the boundary and compared as bytes from then on.
-/// [`Md5::parse_hex`] is the only way in from a `String`; [`Md5::to_hex`] is
-/// the only way back out. A string that is not 32 hex digits (the empty string
-/// above all) is not a digest, which keeps "an empty MD5 is unknown, not a
-/// match" an `Option<Md5>` rather than a string sentinel.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Md5([u8; 16]);
-
-impl Md5 {
-    /// The MD5 of the empty file, as a digest.
-    pub const EMPTY: Self = Self([
-        0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42,
-        0x7e,
-    ]);
-
-    /// Parse a hex MD5 into the 16 bytes it spells.
-    ///
-    /// Either case is accepted. Anything that is not exactly 32 hex digits is
-    /// an error, so a caller that wants "unknown" can turn it into `None`.
-    pub fn parse_hex(s: &str) -> Result<Self> {
-        if s.len() != 32 {
-            anyhow::bail!("an MD5 is 32 hex digits, not {} bytes", s.len());
-        }
-        let mut out = [0u8; 16];
-        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
-        Ok(Self(out))
-    }
-
-    /// The digest as lowercase hex.
-    pub fn to_hex(self) -> String {
-        hex::encode(self.0)
-    }
-
-    /// The digest bytes, for a key or a byte comparison.
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-
-    /// Does `s` spell this digest?
-    ///
-    /// Either case is accepted; a string that is not a digest (the empty MD5
-    /// above all) matches nothing.
-    pub fn matches_hex(self, s: &str) -> bool {
-        Self::parse_hex(s).is_ok_and(|other| other == self)
-    }
-}
-
-impl fmt::Display for Md5 {
-    /// Lowercase hex, without allocating an intermediate `String`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; 32];
-        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
-        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
-    }
-}
-
-impl fmt::Debug for Md5 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Md5({self})")
-    }
-}
-
-impl From<md5::digest::Output<md5::Md5>> for Md5 {
-    fn from(digest: md5::digest::Output<md5::Md5>) -> Self {
-        let mut bytes = [0u8; 16];
-        bytes.copy_from_slice(&digest);
-        Self(bytes)
-    }
-}
+// The strict 16-byte `Md5` newtype and the empty-file oracle come from the
+// shared digest mechanics. girpr keeps the semantics — `EMPTY` means "unknown,
+// not a match", a non-32-digit string is not a digest — and everything below
+// that relies on them; only the hex spelling and the fixed-width type are
+// sourced from the leaf crate.
+pub use girpr_digest::{EMPTY_MD5, Md5};
 
 /// A byte range of a file, with the MD5 the manifest expects for its content.
 ///
@@ -472,32 +399,9 @@ mod tests {
 
     #[test]
     fn the_rfc_1321_vectors_hold() {
-        let million_a = "a".repeat(1_000_000);
-        let cases = [
-            ("", "d41d8cd98f00b204e9800998ecf8427e"),
-            ("a", "0cc175b9c0f1b6a831c399e269772661"),
-            ("abc", "900150983cd24fb0d6963f7d28e17f72"),
-            ("message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
-            (
-                "abcdefghijklmnopqrstuvwxyz",
-                "c3fcd3d76192e4007dfb496cca67e13b",
-            ),
-            (
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-                "d174ab98d277d9f5a5611c2c9f419d9f",
-            ),
-            (
-                "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
-                "57edf4a22be3c955ac49da2e2107b67a",
-            ),
-        ];
-        for (input, want) in cases {
-            assert_eq!(hex(input.as_bytes()), want, "{input:?}");
-        }
-        assert_eq!(
-            hex(million_a.as_bytes()),
-            "7707d6ae4e027c70eea2a935c2296f21"
-        );
+        // The expected values are shared with the other two programs; `hex`
+        // still exercises this crate's own digest path.
+        girpr_digest::vectors::assert_md5_vectors(hex);
     }
 
     #[test]
