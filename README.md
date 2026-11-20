@@ -388,8 +388,11 @@ plane always carries each string value as a quoted string.
 
 One policy, four programs: this binary and the three dev tools (`gircap`,
 `girsync`, `sled2redb`). It lives in `crates/log/` and is the only *policy* they
-share that ships. It is a logic-free leaf, as is `crates/digest/`, which
-supplies hex spelling and fixed-width digest mechanics to this binary, `gircap`
+share that ships. It is a logic-free leaf, as is `crates/report-core/`, which
+supplies ordered-JSON and line-writing mechanics to all four: each tool keeps
+its own key order, event placement, value types, escaping and boolean spelling,
+so no report format is shared. `crates/digest/` supplies hex spelling and
+fixed-width digest mechanics to this binary, `gircap`
 and `sled2redb`, and `crates/fs-names/`, which supplies the Windows device-name
 predicate *mechanism* to this binary and `gircap` — each passes its own reserved
 set and trim flag, so no program rule is shared. `crates/retry/` supplies the

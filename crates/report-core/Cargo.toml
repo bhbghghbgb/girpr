@@ -1,0 +1,25 @@
+[package]
+name = "girpr-report-core"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared ordered-JSON and line-writing mechanics used by the three report planes"
+
+[lib]
+name = "girpr_report_core"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Only the `Serialize`/`SerializeMap`/`Serializer` traits are used. No derive,
+# no `serde_json`, and in particular no `preserve_order`: emission order is
+# produced by `serialize_entry` here regardless of how the workspace unifies
+# that feature for `serde_json::Map`/`Value` elsewhere.
+serde = "1.0.229"
+
+[dev-dependencies]
+# Byte-level tests render the core to a string. This is a dev-only dependency
+# of a logic-free leaf, so it cannot couple any program to another.
+serde_json = "1.0.154"

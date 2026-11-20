@@ -1,7 +1,9 @@
 # gircap — live-artifact capture for `girpr` testing
 
 **Dev-only. Not a patcher, not part of the `girpr` binary, shares no program code
-with it — only logic-free leaf crates: the log policy, the digest hex mechanics,
+with it — only logic-free leaf crates: the log policy, the ordered-JSON/line-writing
+mechanics (each tool keeps its own key order, event placement, value types,
+escaping and boolean spelling), the digest hex mechanics,
 the Windows device-name predicate mechanism, the retry schedule/sleep driver
 (each tool passes its own rule, jitter and cap) and the exit-table generation
 mechanism (each tool supplies its own codes and meanings) and the audio-language

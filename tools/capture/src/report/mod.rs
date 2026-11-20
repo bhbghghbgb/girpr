@@ -23,7 +23,9 @@
 use std::io::Write as _;
 use std::sync::Mutex;
 
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{Serialize, Serializer};
+
+use girpr_report_core::{Order, write_json_object};
 
 use crate::VERSION;
 use crate::encoding;
@@ -339,30 +341,32 @@ impl Serialize for Record {
     where
         S: Serializer,
     {
-        // Emit an ordered map: `event` first, then the fields in report
-        // (declaration) order, skipping the one `event` field so it is not
-        // written twice. `serialize_entry` yields entries in exactly this
-        // order, so no `preserve_order` feature is needed — that feature only
-        // affects `serde_json::Map`/`Value`, which this renderer never builds.
+        // `event` first, then this crate's fields in report (declaration)
+        // order, skipping the one `event` field so it is not written twice.
+        // The core emits exactly this order with `serialize_entry`, so no
+        // `preserve_order` feature is needed — that feature only affects
+        // `serde_json::Map`/`Value`, which this renderer never builds.
         //
         // `event`'s value is the record's own `event` field when it has one
         // (the command for a summary), else the label lowercased (so a `BUNDLE`
-        // record is still self-identifying).
+        // record is still self-identifying). Either way it is this crate's
+        // `Val`, so the core cannot change its spelling or type. Values keep
+        // gircap's own boolean spelling and percent-encoding untouched.
         let fallback;
-        let event = match self.fields.iter().find(|(k, _)| *k == "event") {
+        let event: &Val = match self.fields.iter().find(|(k, _)| *k == "event") {
             Some((_, v)) => v,
             None => {
                 fallback = Val::Str(self.json_event());
                 &fallback
             }
         };
-        let count = 1 + self.fields.iter().filter(|(k, _)| *k != "event").count();
-        let mut map = serializer.serialize_map(Some(count))?;
-        map.serialize_entry("event", event)?;
-        for (key, value) in self.fields.iter().filter(|(k, _)| *k != "event") {
-            map.serialize_entry(key, value)?;
-        }
-        map.end()
+        let fields: Vec<(&str, &Val)> = self
+            .fields
+            .iter()
+            .filter(|(k, _)| *k != "event")
+            .map(|(k, v)| (*k, v))
+            .collect();
+        write_json_object(serializer, "event", event, &fields, Order::EventFirst)
     }
 }
 

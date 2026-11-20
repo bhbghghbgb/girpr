@@ -21,7 +21,9 @@
 
 use std::borrow::Cow;
 
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{Serialize, Serializer};
+
+use girpr_report_core::{Order, write_json_object};
 
 /// How often the background reporter emits `PROGRESS` during long phases.
 pub const PROGRESS_INTERVAL_SECS: u64 = 10;
@@ -176,13 +178,14 @@ impl Record {
 
     /// The JSON object for this record, as one line: `{"event":"summary",…}`.
     ///
-    /// Rendered through [`serde::Serialize`]. The [`Serialize`] impl emits an
-    /// ordered map, so keys keep report order without `serde_json`'s
+    /// Rendered through [`serde::Serialize`], delegating the ordered map to
+    /// `girpr_report_core`. Keys keep report order without `serde_json`'s
     /// `preserve_order` feature — enabling that feature here would silently
     /// reorder the JSON another tool in this workspace emits. `serde_json` also
     /// owns escaping, so control characters are byte-for-byte what it produced
     /// before (the old fast path already fell back to it for any value that
-    /// needed escaping).
+    /// needed escaping). The core is given this crate's own `Val`s and a
+    /// lowercased label, so it cannot introduce a boolean or a foreign order.
     pub fn json(&self) -> String {
         // Serializing to a `String` with this impl is infallible; the fallback
         // only keeps the signature panic-free, as the old renderer's did.
@@ -203,16 +206,14 @@ impl Serialize for Record {
     where
         S: Serializer,
     {
-        // Emit an ordered map: `event` first, then each field in report
-        // (declaration) order. `serialize_entry` yields entries in exactly this
-        // order, so no `preserve_order` feature is needed — that feature only
-        // affects `serde_json::Map`/`Value`, which this renderer never builds.
-        let mut map = serializer.serialize_map(Some(1 + self.fields.len()))?;
-        map.serialize_entry("event", &self.label.to_ascii_lowercase())?;
-        for (key, value) in &self.fields {
-            map.serialize_entry(key, value)?;
-        }
-        map.end()
+        // `event` first, then each field in report (declaration) order. The
+        // core's `serialize_entry` yields entries in exactly this order, so no
+        // `preserve_order` feature is needed — that feature only affects
+        // `serde_json::Map`/`Value`, which this renderer never builds. The
+        // event value is this label lowercased; no `Val` of this crate carries
+        // a boolean, so a flag-shaped fact stays a `1`/`0` integer here.
+        let event = self.label.to_ascii_lowercase();
+        write_json_object(serializer, "event", &event, &self.fields, Order::EventFirst)
     }
 }
 

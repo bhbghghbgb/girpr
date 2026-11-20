@@ -7,11 +7,14 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its seven path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its eight path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
-# levels and default paths), `girpr-digest` (the hex spelling and fixed-width
-# digest mechanics — no flag, no exit code and no published shape),
+# levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
+# mechanics — gircap supplies its own event-first order, event field, value
+# types, percent-encoding and boolean spelling), `girpr-digest` (the hex
+# spelling and fixed-width digest mechanics — no flag, no exit code and no
+# published shape),
 # `girpr-fs-names` (the Windows device-name predicate mechanism — gircap passes
 # its own reserved set and raw-stem comparison; no program rule is borrowed),
 # `girpr-retry` (the retry schedule factory and injectable sleep driver —
@@ -102,6 +105,10 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # trimming, ASCII folding, `none` sentinel and path-component validation, and
 # writes the same scan-file bytes as the repair binary for the same selection.
 girpr-audio-language = { path = "../../crates/audio-language" }
+# The ordered-JSON writer and the one newline-appending line writer. A logic-free
+# leaf: it emits the entries in the order gircap supplies, with gircap's own
+# `event` value, `Val` types, `serde_json` escaping and `true`/`false` spelling.
+girpr-report-core = { path = "../../crates/report-core" }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
 percent-encoding = "2.3.2"

@@ -76,6 +76,10 @@ postcard = { version = "1.1.3", default-features = false }
 # The shared --include/--exclude glob rules, used by this crate and by girpr.
 # Re-exported at the crate root so callers name the same `glob::Pattern` type.
 girpr-filter = { path = "../../crates/filter" }
+# Ordered-JSON and line-writing mechanics for the stdout data plane. This
+# crate keeps its own alphabetical key order, `serde_json::Value` fields and
+# record layouts; the leaf only writes the object in the order asked for.
+girpr-report-core = { path = "../../crates/report-core" }
 rayon = "1.12.0"
 # The rw counters use tokio's semaphore: std::sync::Semaphore is still unstable,
 # and this is a maintained, fair primitive. Only the `sync` feature is needed —

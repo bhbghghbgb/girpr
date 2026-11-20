@@ -689,6 +689,7 @@ dependencies = [
  "girpr-exit",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
  "ini_core",
@@ -723,6 +724,7 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
  "md-5",
@@ -792,6 +794,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-report-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "girpr-retry"
 version = "0.1.0"
 dependencies = [
@@ -820,6 +830,7 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-report-core",
  "girpr-tempdir",
  "md-5",
  "postcard",

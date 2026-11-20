@@ -6,8 +6,10 @@
 
 use std::fmt::Write as _;
 
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{Serialize, Serializer};
 use serde_json::{Map, Value};
+
+use girpr_report_core::{Order, write_json_object};
 
 use super::{OutputFormat, Report};
 
@@ -241,25 +243,20 @@ impl Serialize for Record {
     where
         S: Serializer,
     {
-        // Emit girsync's alphabetical key order, with `event` in its sorted
-        // place, so the bytes match what the old writer and the `Map`-backed
-        // object form produced. `serialize_entry` yields entries in exactly
-        // this order; the `preserve_order` feature is deliberately NOT enabled
-        // because emission order is preserved by `serialize_map` regardless of
-        // how the workspace unifies that feature.
-        let mut fields: Vec<(&str, &Value)> = self.fields.iter().map(|(k, v)| (*k, v)).collect();
-        fields.sort_unstable_by_key(|(k, _)| *k);
-        let event_at = fields.partition_point(|(k, _)| *k < "event");
-
-        let mut map = serializer.serialize_map(Some(1 + fields.len()))?;
-        for (k, v) in &fields[..event_at] {
-            map.serialize_entry(k, v)?;
-        }
-        map.serialize_entry("event", &self.label.to_ascii_lowercase())?;
-        for (k, v) in &fields[event_at..] {
-            map.serialize_entry(k, v)?;
-        }
-        map.end()
+        // girsync's alphabetical key order, with `event` in its sorted place,
+        // so the bytes match both the direct writer and the `Map`-backed object
+        // form. The core sorts a copy of this crate's field list; it never
+        // changes a field's value or reuses another tool's vocabulary. The
+        // `preserve_order` feature is deliberately NOT enabled — emission order
+        // comes from `serialize_entry`, regardless of feature unification.
+        let event = self.label.to_ascii_lowercase();
+        write_json_object(
+            serializer,
+            "event",
+            &event,
+            &self.fields,
+            Order::Alphabetical,
+        )
     }
 }
 

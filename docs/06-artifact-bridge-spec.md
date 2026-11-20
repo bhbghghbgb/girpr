@@ -707,7 +707,10 @@ the bridge actually reads.
 - **Sharing code with `gircap`.** A server that replays a bundle's bytes shares no
   knowledge of how the bundle was made. Sharing a crate that held either tool's
   program logic would make two tools that must stay independent depend on each
-  other to prove one of them works. Logic-free leaves such as `girpr-digest`
+  other to prove one of them works. Logic-free leaves such as
+  `girpr-report-core` (ordered-JSON and line-writing mechanics, parameterised by
+  each caller's own field order, event placement, value types, escaping and
+  boolean spelling), `girpr-digest`
   (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (the
   Windows device-name predicate mechanism, parameterised by each caller's rule)
   and `girpr-retry` (the retry schedule factory and sleep driver, parameterised

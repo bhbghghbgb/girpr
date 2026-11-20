@@ -24,6 +24,10 @@ use super::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
 use super::summary::{Summary, conditional_extras};
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 
+// The newline-appending writer is shared with the other two report planes; it
+// stays nameable here because `emit` and the writer tests name it directly.
+pub(super) use girpr_report_core::write_line;
+
 /// Emit one record to **both** stdout and the log in the run's chosen plane, so
 /// unattended runs keep it regardless of which stream is captured.
 ///
@@ -48,15 +52,6 @@ pub fn emit(record: &Record, format: OutputFormat) {
         }
         Err(e) => tracing::warn!("stdout write failed ({:?}): {e}", e.kind()),
     }
-}
-
-/// Write one rendered record plus its newline.
-///
-/// Private seam for the writer tests; the process stdout is the only real
-/// caller.
-pub(super) fn write_line(out: &mut impl std::io::Write, line: &str) -> std::io::Result<()> {
-    out.write_all(line.as_bytes())?;
-    out.write_all(b"\n")
 }
 
 /// The `PROGRESS` snapshot: where the run is, without touching the disk.
