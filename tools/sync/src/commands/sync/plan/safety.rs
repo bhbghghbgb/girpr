@@ -73,7 +73,7 @@ pub(crate) struct SystemProbes;
 
 impl Probes for SystemProbes {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        dunce::canonicalize(path)
+        girpr_fs_names::canonical_no_verbatim(path)
     }
 
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
@@ -138,7 +138,7 @@ pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     },
     DirectQuestion {
         file: "safety.rs",
-        call: "dunce::canonicalize",
+        call: "girpr_fs_names::canonical_no_verbatim",
         asks: "where a target outside dst resolves",
     },
     DirectQuestion {
@@ -158,7 +158,7 @@ pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     },
     DirectQuestion {
         file: "link.rs",
-        call: "dunce::canonicalize",
+        call: "girpr_fs_names::canonical_no_verbatim",
         asks: "the parent a link target resolves through",
     },
     DirectQuestion {
@@ -352,7 +352,7 @@ pub(crate) fn spare_link_storage(
                     }
                     // Record the external file too: two links to one outside
                     // inode are the same shared-storage hazard as two inside.
-                    match dunce::canonicalize(&target) {
+                    match girpr_fs_names::canonical_no_verbatim(&target) {
                         Ok(p) => terminals.push((
                             rel.clone(),
                             format!("external:{}", p.display()),
@@ -818,14 +818,15 @@ mod tests {
 
     use super::DIRECT_QUESTIONS;
 
-    /// The modules whose functions reach the disk. `dunce::canonicalize` is a
-    /// path canonicalizer like `std::fs`'s, so its calls are direct disk
-    /// questions too.
-    const DISK_MODULES: [&str; 4] = [
+    /// The modules whose functions reach the disk. `girpr_fs_names::canonical_no_verbatim`
+    /// is a path canonicalizer (dunce-backed) like `std::fs`'s, so its calls are
+    /// direct disk questions too.
+    const DISK_MODULES: [&str; 5] = [
         "std::fs",
-        "dunce::canonicalize",
+        "girpr_fs_names::canonical_no_verbatim",
         "crate::link",
         "crate::hardlink",
+        "dunce::canonicalize",
     ];
 
     /// The `Path` methods that reach the disk.

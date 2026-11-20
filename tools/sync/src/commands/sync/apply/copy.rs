@@ -128,7 +128,8 @@ fn refuse_link_ancestor(dst_root: &Path, rel: &str) -> Result<()> {
 /// through.
 fn refuse_final_link_into_src(d: &Path, rel: &str, src_canonical: &Path) -> Result<()> {
     if crate::link::try_is_link(d).with_context(|| format!("check link {}", d.display()))? {
-        let target = dunce::canonicalize(d).with_context(|| format!("resolve dst link `{rel}`"))?;
+        let target = girpr_fs_names::canonical_no_verbatim(d)
+            .with_context(|| format!("resolve dst link `{rel}`"))?;
         if path_within(&target, src_canonical) {
             bail!(
                 "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \

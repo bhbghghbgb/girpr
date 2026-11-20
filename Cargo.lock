@@ -761,6 +761,9 @@ dependencies = [
 [[package]]
 name = "girpr-fs-names"
 version = "0.1.0"
+dependencies = [
+ "dunce",
+]
 
 [[package]]
 name = "girpr-log"

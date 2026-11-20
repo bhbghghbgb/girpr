@@ -712,7 +712,7 @@ fn guard_removal_outside_src(src_canonical: &Path, dst: &Path, rel: &str) -> Res
     let Some(parent) = target.parent() else {
         return Ok(());
     };
-    match dunce::canonicalize(parent) {
+    match girpr_fs_names::canonical_no_verbatim(parent) {
         Ok(resolved) if path_within(&resolved, src_canonical) => bail!(
             "refusing to remove `{rel}`: its directory resolves to `{}`, which is \
              inside src `{}`; a mirror may not delete the files it is copying",

@@ -16,6 +16,27 @@
 //! host-independent and needs no policy argument. The case-fold and
 //! forward-slash checks take a boolean for the host's rule. None of the four
 //! holds a program's policy.
+//!
+//! In addition to those name predicates, [`canonical_no_verbatim`] is the one
+//! canonical-path spelling shared by the tools: it resolves links but strips
+//! the Windows `\\?\` prefix so a canonical path compares directly with a
+//! link's own target. A caller that needs the fail-closed longest-existing-
+//! prefix variant (the repair binary does) keeps its own routine — that is a
+//! different contract, not this helper's duplicate.
+
+/// The canonical form of `path`, without the Windows `\\?\` verbatim prefix.
+///
+/// `std::fs::canonicalize` resolves links but, on Windows, returns a verbatim
+/// path (`\\?\C:\...`). A junction's own `read_link` target has no such prefix,
+/// so a verbatim canonical path cannot be compared component-wise with it.
+/// This helper uses `dunce::canonicalize`, which resolves links identically
+/// but omits the prefix, giving every caller one comparable spelling.
+///
+/// The `io::Result` is returned unchanged: a caller that treats `NotFound`
+/// specially or reports its own context does so here, before any fallback.
+pub fn canonical_no_verbatim(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    dunce::canonicalize(path)
+}
 
 /// Is one path component a reserved Windows device name under the supplied rule?
 ///
@@ -105,8 +126,30 @@ pub fn forward_slash(value: &str, rewrite_backslash: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        fold_ascii_case, forward_slash, has_trailing_dot_or_space, is_reserved_device_name,
+        canonical_no_verbatim, fold_ascii_case, forward_slash, has_trailing_dot_or_space,
+        is_reserved_device_name,
     };
+
+    #[test]
+    fn canonical_has_no_verbatim_prefix() {
+        // A directory that exists on every host; canonicalization must resolve
+        // it to an absolute path and, on Windows, drop the `\\?\` prefix.
+        let resolved = canonical_no_verbatim(&std::env::temp_dir()).expect("temp dir resolves");
+        assert!(resolved.is_absolute(), "{}", resolved.display());
+        assert!(resolved.is_dir(), "{}", resolved.display());
+        #[cfg(windows)]
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            resolved.display()
+        );
+        // The helper is the one spelling: it agrees with dunce, which is what
+        // it wraps, rather than with std's verbatim form.
+        assert_eq!(
+            resolved,
+            dunce::canonicalize(std::env::temp_dir()).expect("temp dir resolves")
+        );
+    }
 
     // girpr's rule: the full set, including CLOCK$, with trailing trim.
     const TRIMMING_SET: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];

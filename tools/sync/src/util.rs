@@ -262,13 +262,13 @@ pub fn is_cache_rel(rel: &str) -> bool {
 /// directories by the time this is called, so the final component exists; only
 /// the cache name joined afterwards may be absent.
 ///
-/// Canonicalization goes through `dunce`, which resolves links like
-/// `std::fs::canonicalize` but leaves off the Windows `\\?\` prefix. Every
-/// canonical path this crate produces must be in that one spelling: a
-/// junction's own target has no verbatim prefix, so a canonical path that kept
-/// one could not be compared with it component-wise.
+/// Canonicalization goes through the shared `girpr_fs_names::canonical_no_verbatim`
+/// helper, which resolves links like `std::fs::canonicalize` but leaves off the
+/// Windows `\\?\` prefix. Every canonical path this crate produces must be in
+/// that one spelling: a junction's own target has no verbatim prefix, so a
+/// canonical path that kept one could not be compared with it component-wise.
 pub fn canonical_or_raw(p: &Path) -> PathBuf {
-    dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    girpr_fs_names::canonical_no_verbatim(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Whether two paths name the same location.

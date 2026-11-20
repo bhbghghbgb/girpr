@@ -3,7 +3,7 @@ name = "girpr-fs-names"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared Windows path-name mechanics, each parameterised by the caller's rule: device names, trailing dot/space, ASCII case fold and forward slash"
+description = "The shared Windows path-name and canonical-path mechanics, each parameterised by the caller's rule: device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization"
 
 [lib]
 name = "girpr_fs_names"
@@ -13,3 +13,8 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# `std::fs::canonicalize` returns a `\\?\` verbatim path on Windows, which
+# cannot be compared component-wise with a junction's own `read_link` target.
+# `dunce` resolves links identically but omits that prefix. It is kept here, in
+# the leaf, so every program that needs a canonical path shares one spelling.
+dunce = "1.0.5"

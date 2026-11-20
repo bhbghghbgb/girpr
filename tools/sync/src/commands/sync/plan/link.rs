@@ -145,9 +145,10 @@ pub(super) fn absolute_alias(
     canonical_dst: &Path,
     on_disk: Option<&DiskSpelling>,
 ) -> Option<String> {
-    // Canonicalization goes through `dunce`, which — like a junction's
-    // `read_link` — spells a UNC root with two backslashes and a local drive
-    // path without a verbatim prefix, so the two compare directly.
+    // Canonicalization goes through the shared `girpr_fs_names::canonical_no_verbatim`
+    // helper (dunce-backed), which — like a junction's `read_link` — spells a
+    // UNC root with two backslashes and a local drive path without a verbatim
+    // prefix, so the two compare directly.
     let rel = target.strip_prefix(canonical_dst).ok()?;
     let mut parts: Vec<&str> = Vec::new();
     for comp in rel.components() {
@@ -257,7 +258,7 @@ pub(super) fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<S
     let Some(parent) = target.parent() else {
         return Ok(None);
     };
-    let parent = match dunce::canonicalize(parent) {
+    let parent = match girpr_fs_names::canonical_no_verbatim(parent) {
         Ok(parent) => parent,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {

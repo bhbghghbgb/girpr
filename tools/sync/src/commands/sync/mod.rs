@@ -664,7 +664,7 @@ fn validate_links_disjoint(
         if !ent.is_link {
             continue;
         }
-        let target = dunce::canonicalize(root.join(rel))
+        let target = girpr_fs_names::canonical_no_verbatim(&root.join(rel))
             .with_context(|| format!("resolve {} link `{rel}`", side.name()))?;
         if path_within(&target, other_canonical) {
             bail!(
