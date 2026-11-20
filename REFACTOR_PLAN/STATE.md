@@ -14,7 +14,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Digest newtypes + hex sweep (`girpr-digest`) | completed | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Review A: mechanics-only leaf, §A7 preserved, §A2 tables updated, no fixes |
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
-| T03 | Windows device-name predicate leaf (`girpr-fs-names`) | in_progress | | F6, A10; share the rule, do not change behavior |
+| T03 | Windows device-name predicate leaf (`girpr-fs-names`) | pending_review | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03 |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
 | T05 | Canonicalize + `\\?\` stripping helpers | todo | | F8 |
 | T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
@@ -53,6 +53,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------------|-------|------|
 | FU-01 | Add girpr-filter to cross-program "what ships" tables | open | Review A: pre-existing §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); doc-only, non-blocking, out of T01 scope |
 | FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | open | Review A: failed once under full parallel run, passed in isolation and on clean full rerun; unrelated to digest changes |
+| FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim): decide defect vs intentional bundle-format allowance, whether to unify | open | Raised by T03 per §A10 — defect candidate, not verdict; behavior change may move bundle bytes (§A3), needs confirmation. T03 shared mechanism only |
 
 ## Persistent context
 
@@ -114,3 +115,14 @@ Review A confirmation (no code change):
   strings. `girpr-digest` is logic-free; girsync deliberately stays off it.
 - Full workspace suite green (2125 passed, 11 skipped); one intermittent,
   unrelated flake captured as FU-02.
+
+Finding from T03 (db8c5e37):
+
+- girpr-fs-names is a fourth logic-free leaf shared by girpr and gircap; its
+  `is_reserved_device_name` takes caller-supplied reserved set + trim flag.
+  girpr keeps full set incl. `CLOCK$` / trim=true; gircap keeps set minus
+  `CLOCK$` / trim=false. Neither behavior changed; §A2 tables now list four
+  gircap leaf deps. girsync does NOT depend on girpr-fs-names. FU-03 tracks the
+  §A10 divergence question (defect candidate, unresolved).
+- CONVENTIONS §A2 note "table currently names two" is stale — it named three
+  (log, digest, tempdir) before T03; always check the actual doc tables.
