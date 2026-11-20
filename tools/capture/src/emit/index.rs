@@ -71,7 +71,7 @@ pub struct ManifestInput<'a> {
 /// so the returned document is whole and there is no second step that can be
 /// skipped or reordered.
 pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
-    let id = i.started.format("%Y%m%dT%H%M%S%.6fZ").to_string();
+    let id = girpr_log::format_timestamp(&i.started);
     let manifest_entries: BTreeMap<String, u64> = i
         .fields
         .iter()

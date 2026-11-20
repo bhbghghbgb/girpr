@@ -45,6 +45,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
 
+use girpr_log::install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
 use girpr_log::{Level, LogOptions, LogPlan};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
@@ -107,9 +108,7 @@ fn init_tracing_with(
     no_log_file: bool,
 ) -> LogPlan {
     let env = girpr_log::env_options(PROJECT);
-    for warning in &env.warnings {
-        let _ = writeln!(warnings, "WARN {warning}");
-    }
+    emit_env_warnings(warnings, "WARN", &env);
     let plan = LogPlan::resolve(
         PROJECT,
         LogOptions {
@@ -136,13 +135,13 @@ fn init_tracing_with(
         None => None,
         Some(path) => match open_log_file(path) {
             Ok(f) => {
-                let (writer, worker_guard) = tracing_appender::non_blocking(f);
+                let (writer, worker_guard, filter) = file_sink(f, &plan);
                 guard = Some(worker_guard);
                 Some(
                     tracing_subscriber::fmt::layer()
                         .with_writer(writer)
                         .with_ansi(false)
-                        .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter())),
+                        .with_filter(filter),
                 )
             }
             Err(e) => {
@@ -171,14 +170,11 @@ fn init_tracing_with(
         Ok(()) => install_guard(guard),
         Err(e) => {
             // `guard` is dropped here, draining the empty rejected file.
-            let _ = writeln!(warnings, "WARN cannot install the tracing subscriber: {e}");
+            warn_subscriber_install(warnings, e);
         }
     }
 
-    match plan.file_path() {
-        Some(path) => tracing::info!("log file: {}", path.display()),
-        None => tracing::info!("log file: none"),
-    }
+    girpr_log::announce_log_file!(plan, module_path!());
     plan
 }
 
@@ -208,23 +204,6 @@ pub fn flush_log() {
         .unwrap_or_else(|e| e.into_inner())
         .take();
     drop(guard);
-}
-
-/// Open the log file for appending, creating the parent directory if needed.
-///
-/// The non-blocking appender owns the file and writes each record from its
-/// worker thread; [`flush_log`] is what drains the queue at exit. An ordinary
-/// dropped file would flush on its own, but the process exits through paths
-/// that skip destructors, which is why the explicit guard drop exists.
-fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-    std::fs::create_dir_all(dir)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
 }
 
 #[cfg(test)]

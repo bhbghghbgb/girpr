@@ -13,13 +13,14 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-# Only for the timestamp in a default log file name.
+# For the timestamp in a default log file name and in a caller-supplied instant
+# (a capture id or a manifest id).
 chrono = { version = "0.4.45", features = ["clock"] }
-# For building the console's filter from `--log-level` or `RUST_LOG`, and for
-# the one place a broken spec is turned into a warning.
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-
-[dev-dependencies]
-# For the test that pins the two `EnvFilter` rules the console's spec relies
-# on: a target directive beats a global one, and a tie goes to the last.
+# For building the console's filter from `--log-level` or `RUST_LOG`, for the
+# one place a broken spec is turned into a warning, and for the `info!` that
+# announces where the log file went.
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# For the non-blocking file writer shared by the three installations. The
+# guard it returns is stored by each project, not by this crate.
+tracing-appender = "0.2.5"

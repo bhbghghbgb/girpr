@@ -317,14 +317,27 @@ pub fn default_log_path(project: &str) -> PathBuf {
         .join(format!("{project}_{}.log", timestamp()))
 }
 
-/// The shared UTC timestamp: `20261014T101500.000000Z`.
+/// Format a caller-supplied UTC instant with the shared stamp:
+/// `20261014T101500.000000Z`.
+///
+/// This is the format-agnostic half of [`timestamp`]. A capture id names the
+/// moment a run *started*, which the caller injects so a long run's id still
+/// says when it began; a manifest id names the same instant. Both format their
+/// own `DateTime` here instead of reading the wall clock, so the seam stays
+/// where the caller needs it and the format still has one definition.
+pub fn format_timestamp(now: &chrono::DateTime<chrono::Utc>) -> String {
+    now.format("%Y%m%dT%H%M%S%.6fZ").to_string()
+}
+
+/// The shared UTC timestamp for "now": `20261014T101500.000000Z`.
 ///
 /// The one definition of the format every tool in the workspace uses to stamp
 /// a name — default log files, cache backups and snapshots, converter leftovers.
 /// UTC in ISO form and sortable as text, so a `logs/` directory reads
-/// oldest-first when listed by name.
+/// oldest-first when listed by name. Callers that need to name a specific
+/// instant rather than "now" use [`format_timestamp`].
 pub fn timestamp() -> String {
-    chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
+    format_timestamp(&chrono::Utc::now())
 }
 
 /// Read the environment seams for one project.

@@ -18,12 +18,15 @@
 //!
 //! # What this crate is not
 //!
-//! It is not a logging *implementation*. Each project still installs its own
-//! `tracing` subscriber, because each one writes a different file format and
-//! each one owns the writer that flushes it. What is shared is the policy:
-//! the path, the levels, the precedence, and the names of the environment
-//! variables. Two projects that each re-decided those would drift, and the
-//! drift would show up as "why does this tool's log file live somewhere else".
+//! It is not a logging *implementation*. Each project still builds its own
+//! layers and owns the guard that keeps its non-blocking writer alive, because
+//! each one writes a different file format and drains that guard differently.
+//! What is shared is the policy — the path, the levels, the precedence, and the
+//! names of the environment variables — plus the format-agnostic mechanics in
+//! [`install`]: opening the file, making the non-blocking writer and filter,
+//! and saying where the file went or what went wrong. Two projects that each
+//! re-decided those would drift, and the drift would show up as "why does this
+//! tool's log file live somewhere else".
 //!
 //! # Using it
 //!
@@ -56,14 +59,16 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod filter;
+pub mod install;
 pub mod level;
 pub mod plan;
 
 pub use filter::{console_filter, filter};
+pub use install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
 pub use level::Level;
 pub use plan::{
     EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,
-    timestamp,
+    format_timestamp, timestamp,
 };
 
 /// Parse a level name, for use as a `clap` value parser.
@@ -83,6 +88,18 @@ mod tests {
         assert_eq!(stamp.as_bytes()[8], b'T');
         assert_eq!(stamp.as_bytes()[15], b'.');
         assert_eq!(stamp.as_bytes()[22], b'Z');
+    }
+
+    /// A caller-supplied instant formats exactly as the wall-clock helper does,
+    /// so a capture id and a default log file name cannot drift apart.
+    #[test]
+    fn a_supplied_instant_uses_the_shared_stamp() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:15:00Z")
+            .expect("a valid instant")
+            .with_timezone(&chrono::Utc);
+        assert_eq!(format_timestamp(&t), "20261014T101500.000000Z");
+        let later = t + chrono::Duration::seconds(1);
+        assert!(format_timestamp(&later) > format_timestamp(&t));
     }
 
     /// The example in the module docs, **run**.

@@ -25,10 +25,12 @@
 //! in the `girpr-log` crate, so that `girpr` and `girsync` answer the same
 //! questions the same way.
 
-use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use girpr_log::install::{
+    emit_env_warnings, file_sink, open_log_file as open_shared_log_file, warn_subscriber_install,
+};
 use girpr_log::{LogOptions, LogPlan};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::Layer as _;
@@ -119,9 +121,7 @@ pub fn init(
     use tracing_subscriber::fmt::layer;
 
     let env = girpr_log::env_options(PROJECT);
-    for warning in &env.warnings {
-        eprintln!("gircap: {warning}");
-    }
+    emit_env_warnings(&mut std::io::stderr(), "gircap:", &env);
     let plan = LogPlan::resolve(
         PROJECT,
         LogOptions {
@@ -166,14 +166,14 @@ pub fn init(
         // version pair was chosen and what each request cost, and a reader parsing
         // it should not have to strip a timestamp and a target off the front of
         // every line.
-        let (non_blocking, guard) = tracing_appender::non_blocking(w);
+        let (non_blocking, guard, filter) = file_sink(w, &plan);
         worker = Some(guard);
         layer()
             .json()
             .with_ansi(false)
             .with_target(true)
             .with_writer(non_blocking)
-            .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
+            .with_filter(filter)
     });
 
     // A subscriber that is already installed would swallow the file layer
@@ -186,7 +186,7 @@ pub fn init(
         .with(file_layer)
         .try_init()
     {
-        eprintln!("WARN cannot install the tracing subscriber: {e}");
+        warn_subscriber_install(&mut std::io::stderr(), e);
     }
 
     let guard = LogGuard {
@@ -198,10 +198,7 @@ pub fn init(
     // projects: `log file: <path>`, or `log file: none` when there is no
     // file. A run that leaves nothing behind should say so, rather than
     // saying nothing and leaving the reader to guess.
-    match plan.file_path() {
-        Some(path) => tracing::info!("log file: {}", path.display()),
-        None => tracing::info!("log file: none"),
-    }
+    girpr_log::announce_log_file!(plan, module_path!());
 
     tracing::info!(
         version = crate::VERSION,
@@ -214,11 +211,10 @@ pub fn init(
     guard
 }
 
+/// Opening the file is shared; this only adds capture's thread-safe
+/// `MakeWriter` wrapper around the handle the shared opener returns.
 fn open_log_file(path: &Path) -> std::io::Result<AppendFile> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
-    }
-    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let file = open_shared_log_file(path)?;
     Ok(AppendFile(Arc::new(Mutex::new(file))))
 }
 

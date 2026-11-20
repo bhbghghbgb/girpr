@@ -761,7 +761,7 @@ pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf 
 /// for the moment the capture started rather than finished, so a long run's id
 /// still says when the run began.
 pub fn capture_id(now: chrono::DateTime<chrono::Utc>) -> String {
-    now.format("%Y%m%dT%H%M%S%.6fZ").to_string()
+    girpr_log::format_timestamp(&now)
 }
 
 /// The full bundle directory: `<out>/<biz>/<old>__<new>/<id>/`.

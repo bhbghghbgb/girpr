@@ -34,6 +34,8 @@ use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*};
 
+use girpr_log::install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
+
 pub use girpr_log::Level;
 
 /// This project's name: the default log file's stem, and the prefix of the
@@ -69,9 +71,7 @@ pub fn plan(
     no_log_file: bool,
 ) -> girpr_log::LogPlan {
     let env = girpr_log::env_options(PROJECT);
-    for warning in &env.warnings {
-        eprintln!("WARN {warning}");
-    }
+    emit_env_warnings(&mut std::io::stderr(), "WARN", &env);
     girpr_log::LogPlan::resolve(
         PROJECT,
         girpr_log::LogOptions {
@@ -113,17 +113,14 @@ pub fn init_tracing(
     // binary's own `main`, and if it ever does, the run says so rather than
     // pretending to have logged.
     if let Err(e) = subscriber.try_init() {
-        eprintln!("WARN cannot install the tracing subscriber: {e}");
+        warn_subscriber_install(&mut std::io::stderr(), e);
     }
 
     // The file's fate, said out loud and said the same way in all three
     // projects: `log file: <path>`, or `log file: none` when there is no file.
     // A run that leaves nothing behind should say so, rather than saying
     // nothing and leaving the reader to guess.
-    match plan.file_path() {
-        Some(path) => info!("log file: {}", path.display()),
-        None => info!("log file: none"),
-    }
+    girpr_log::announce_log_file!(plan, module_path!());
 
     info!(
         path = %plan
@@ -194,7 +191,7 @@ where
 
     let mut worker = None;
     let file_layer = file.map(|f| {
-        let (nb, guard) = tracing_appender::non_blocking(f);
+        let (nb, guard, filter) = file_sink(f, plan);
         worker = Some(guard);
         fmt::layer()
             .json()
@@ -203,7 +200,7 @@ where
             .with_target(true)
             .with_current_span(true)
             .with_span_list(true)
-            .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
+            .with_filter(filter)
     });
 
     (
@@ -212,19 +209,6 @@ where
             .with(file_layer),
         worker,
     )
-}
-
-/// Open the log file for appending, creating the parent directory if needed.
-fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
 }
 
 /// The default log file path: `<exe-dir>/logs/girsync_<timestamp>.log`.
