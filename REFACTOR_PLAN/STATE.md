@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Digest newtypes + hex sweep (`girpr-digest`) | in_progress | | F2, F4, F5 |
+| T01 | Digest newtypes + hex sweep (`girpr-digest`) | pending_review | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Deviations + context in Persistent context |
 | T02 | `ChunkIdentity` (md5, size) value type | todo | | F27; follows T01 |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | todo | | F6, A10; share the rule, do not change behavior |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
@@ -80,3 +80,18 @@ that in the relevant task's `note` instead of silently proceeding):
 - **Not shared-crate work** (report §F12 lines 218–224, §F13 226–231, §F14
   233–237, §F29 379–386, and all of §N 396–442): local/deliberately-distinct
   duplication. Raise a follow-up rather than expanding a task into these.
+
+Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
+
+- girpr's strict `Md5` and `EMPTY_MD5` now live in `crates/digest/src/lib.rs`
+  (`girpr-digest`); `src/util/md5.rs` only re-exports them plus scan/read_range.
+  Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
+  `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
+  vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
+- gircap now has **three** shared leaf deps (log, digest, tempdir); any future
+  leaf addition must update the five §A2 doc locations (see CONVENTIONS.md) in
+  the same commit. girsync stays off `girpr-digest` — raw bytes + verbatim
+  foreign names are deliberate distinct §A7 semantics.
+- F5's "third `md5hex` spelling in `tools/sync/tests/helpers.rs`" was stale:
+  those are raw-byte digest lines (no `hex` dep, no `md5hex`), so girsync code
+  was left untouched. §A7's three digest representations confirmed distinct.
