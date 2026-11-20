@@ -51,37 +51,37 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| FU-01 | Add girpr-filter to cross-program "what ships" tables | open | Review A: pre-existing §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); doc-only, non-blocking, out of T01 scope |
-| FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | open | Review A: failed once under full parallel run, passed in isolation and on clean full rerun; unrelated to digest changes |
-| FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim): decide defect vs intentional bundle-format allowance, whether to unify | open | Raised by T03 per §A10 — defect candidate, not verdict; behavior change may move bundle bytes (§A3), needs confirmation. T03 shared mechanism only |
-| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations (crate now also owns trailing-dot/space, ASCII-fold, forward-slash and canonicalization mechanics) | open | Raised by T04, extended by T05 (Cargo.toml description already updated): doc-only, no behaviour change; no new gircap dep so not required; reviewer may batch with other doc cleanup |
-| FU-05 | Consider documenting sync's local `ascii_case_eq`/`ascii_lower`/`FoldedKey` as intentionally unshared | open | Raised by T04: non-blocking; deliberately local (std-independent comparison, zero-allocation borrowed key, not duplicated elsewhere) |
-| FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | open | Raised by T05: verify/list.rs, verify/bundle.rs, emit/index.rs use std (not dunce per §F8) and rely on verbatim spelling on both sides of starts_with; coordinated root+child change needed, preserve escape detection + byte stability |
-| FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | open | Raised by T05: optional cleanup — plan/tests.rs + two cfg(test) helpers still use dunce::canonicalize as oracles; all production sites now use the shared helper |
-| FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | open | Raised by T06: doc-only — unsafe claim is stale, both sites delegate to winapi-util/same-file; left untouched to keep T06 code-scoped |
-| FU-09 | Add Windows regression test for lock path swapped to symlink after open | open | Raised by T06: non-blocking coverage — existing swap test is cfg(unix); reparse-point branch preserved structurally but not directly asserted on Windows |
-| FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf (configurable temp creation + persist/noclobber + writer/path access; keep girsync claim local) | open | Raised by T07 (F07-a): thin-wrapper value questionable; needs explicit decision that indirection is worth it and per-phase error messages preserved |
-| FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | open | Raised by T07 (F07-b): girsync uses tempdir_in/tempfile_in with kept path, no cleanup, claim publish — a different primitive, excluded from T07 |
-| FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
-| FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
-| FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same suggestion, same N10 constraint); FU-13 is the more specific formulation |
-| FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted; same bucket for stale F3/F15/A6 line pointers |
-| FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | open | Raised by T11, assessed by Review E: acceptable, do NOT revert open_log_file — on current stable toolchain create_dir_all("") = Ok(()) so no observable delta; no byte impact; aligns with CLI docs |
-| FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | open | Raised by T11: girpr-log now depends on tracing/tracing-appender at runtime; still logic-free, no new gircap dep, no A2 update needed |
-| FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | open | Raised by T11: deliberate divergence preserved to keep bytes unchanged (A3) |
-| FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | open | Raised by T12 (F-T12A): preserve each tool's exit mechanics (girpr process_status u8, capture ExitCode::exit_with, sled2redb e.exit() + literal 3); verify exit codes 0/1/3 identical |
-| FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text and update byte-contract tests | open | Raised by T12 (F-T12B): user-visible --help change, not a pure extraction |
-| FU-21 | Reconcile the three OutputFormat types only after confirming capture's FromStr error string and per-variant help are not program contracts | open | Raised by T12 (F-T12C): sled2redb convert.rs:832-859 pins --help against its own command definition — passes even after bytes change, not a guard |
-| FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test instead of the duplicated documented_exit_codes! list | open | Raised by T13: non-blocking — deliberately duplicated to keep RunExit::ALL crate-internal; widening public API for one test was rejected |
-| FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | open | Raised by T14: lines 9-17 claim four display names written with unselected lines blanked; renderer actually writes only selected names (tests pin "English(US)\n"); predates T14, left scoped out |
-| FU-24 | Deduplicate the three report planes' text layout logic (bare/keyed/pair, quoting vs percent-encoding) | open | Raised by T15 (F-T15-01): blocked by A8 — would require normalizing value vocabularies and move bytes; raise only if a reviewer reopens the report boundary |
-| FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | open | Raised by T15 (F-T15-02): intentional per F21; only relevant if girsync's writer or JSON order changes |
-| FU-26 | If source-level field-name parity ever matters, add a serde rename seam so product can keep `unknown` for field 6 | open | Raised by T16 (F-T16-02): no byte impact (prost keys by tag, product never serializes); current source-name collapse minimizes churn |
-| FU-27 | Decide whether the three region variant names duplicated in capture's local clap Biz enum are acceptable long-term, or revisit if a per-consumer help-text mechanism appears | open | Raised by Review F (T17): keep both programs' `--help` bytes pinned — leaf variant docs rendered into product --help and forced fix 042683eb; do not reintroduce shared variant docs |
-| FU-28 | Consider having girpr's production_bases accept Host directly to drop its local string->enum remap | open | Raised by Review F (T17): call-site policy only, stays local either way; no byte impact |
-| FU-29 | Cosmetic: rename product's Biz alias to Region at call sites | open | Raised by Review F (T17): naming only, no behavior or byte change |
-| FU-30 | Consider an always-on guard for logs_of_async's current-thread precondition (debug_assert_eq! only today) | open | Raised by Review G (T19): a release-mode multi_thread #[tokio::test] would silently capture partial logs; only if that failure mode matters |
-| FU-31 | Optionally route sync/capture suites through the shared test_support::temp_dir helper instead of calling TempDir::new directly | open | Raised by Review G (T20): workspace consistency only; scratch-directory policy is shareable, no fixture coupling; product already uses the shim |
+| FU-01 | Add girpr-filter to cross-program "what ships" tables | batched (Batch D) | Review A §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); real gap in product docs that survives cleanup. Planning: kept, doc-only |
+| FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | dropped | Review A: failed once, passed in isolation + clean rerun; unrelated. Planning: one-off non-reproducible flake, no repro to act on |
+| FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim) | dropped | Raised by T03 per §A10 — defect candidate, not verdict. Planning: needs human verdict; any fix may move §A3 bundle bytes — unsafe to batch |
+| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations | batched (Batch D) | Raised by T04/T05; doc-only, no behaviour change. Planning: kept, keeps docs accurate |
+| FU-05 | Consider documenting sync's local ascii_case_eq/ascii_lower/FoldedKey as intentionally unshared | dropped | Raised by T04; deliberately local. Planning: doc-only nicety with no value |
+| FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | dropped | Raised by T05; coordinated root+child rewrite, byte-stability risk. Planning: "decide whether" with no safe implementation |
+| FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | dropped | Raised by T05; optional cleanup. Planning: circular oracle risk (tests helper with itself), marginal value |
+| FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | batched (Batch D) | Raised by T06; doc-only, unsafe claim stale. Planning: kept, cheap factual fix |
+| FU-09 | Add Windows regression test for lock path swapped to symlink after open | batched (Batch T) | Raised by T06; existing swap test cfg(unix). Planning: kept, test-only, no byte risk |
+| FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf | dropped | Raised by T07 (F07-a). Planning: expands skipped T07; note itself questions thin-wrapper value |
+| FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | dropped | Raised by T07 (F07-b). Planning: different primitive explicitly excluded from skipped T07 |
+| FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | dropped | Raised by T07 (F07-c). Planning: meta "re-validate report" task, moot at report deletion |
+| FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | dropped | Raised by T08. Planning: §N10 keeps the loops duplicated for distinct error text; changing risks §A3 error bytes |
+| FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same N10 constraint) |
+| FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted |
+| FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | batched (Batch T) | Raised by T11, Review E accepted; no byte impact. Planning: kept, cheap regression test locking in accepted behavior |
+| FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | dropped | Raised by T11. Planning: speculative "split if we must" with no trigger or concrete benefit |
+| FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | dropped | Raised by T11. Planning: changes observable stderr bytes (§A3) |
+| FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | batched (Batch C) | Raised by T12 (F-T12A): preserve exit mechanics, verify codes 0/1/3 identical. Planning: kept, only byte-neutral piece of skipped T12 |
+| FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text | dropped | Raised by T12 (F-T12B). Planning: user-visible --help change (§A3), not a pure extraction |
+| FU-21 | Reconcile the three OutputFormat types only after confirming error string and per-variant help are not contracts | dropped | Raised by T12 (F-T12C). Planning: changes --help/error bytes (§A3); cited test is not a byte guard |
+| FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test | dropped | Raised by T13. Planning: widening public API for one test already rejected; no value |
+| FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | batched (Batch D) | Raised by T14; renderer writes only selected names. Planning: kept, cheap factual doc fix |
+| FU-24 | Deduplicate the three report planes' text layout logic | dropped | Raised by T15 (F-T15-01). Planning: §A8-blocked, would normalize vocabularies and move bytes (§A3) |
+| FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | dropped | Raised by T15 (F-T15-02). Planning: moot at cleanup, no action |
+| FU-26 | If source-level field-name parity ever matters, add a serde rename seam so product can keep `unknown` for field 6 | dropped | Raised by T16 (F-T16-02). Planning: speculative; would reintroduce churn T16 deliberately avoided |
+| FU-27 | Decide whether the three region variant names duplicated in capture's local clap Biz enum are acceptable long-term | dropped | Raised by Review F. Planning: "decide/revisit if" with no action; safe state correct — do not reintroduce shared variant docs |
+| FU-28 | Consider having girpr's production_bases accept Host directly to drop its local string->enum remap | dropped | Raised by Review F. Planning: local call-site policy cleanup, no cross-program value |
+| FU-29 | Cosmetic: rename product's Biz alias to Region at call sites | dropped | Raised by Review F. Planning: cosmetic only |
+| FU-30 | Consider an always-on guard for logs_of_async's current-thread precondition | batched (Batch T) | Raised by Review G. Planning: kept, cheap one-line robustness fix preventing silent partial-log capture |
+| FU-31 | Optionally route sync/capture suites through the shared test_support::temp_dir helper | dropped | Raised by Review G. Planning: workspace-consistency-only test churn, low value, touches multiple suites |
 
 ## Persistent context
 
@@ -531,3 +531,26 @@ Review G confirmation (no fix commit):
   SharedBuffer and its phases.rs copy stay local. logs_of_async's CurrentThread
   debug_assert message byte-identical (FU-30 for an always-on guard).
   Full girpr suite 618 passed, 0 failed, 8 skipped; clippy clean.
+
+Follow-up planning review (Phase 3 guard — all 20 tasks settled):
+
+- Kept only follow-ups that are safe (no §A3 byte change, no §A2 coupling, no
+  §N/DO-NOT-TOUCH 'keep' item, no expansion of a skipped task) AND bounded;
+  dropped the rest. No new follow-ups proposed.
+- Batch D (documentation accuracy): FU-01, FU-04, FU-08, FU-23 — correct
+  factual/stale PRODUCT docs (what-ships tables, fs-names description, README
+  unsafe claim, gamedir module doc); zero code/byte changes; must not touch
+  REFACTOR_PLAN/ or the research report.
+- Batch T (test coverage & robustness): FU-09, FU-16, FU-30 — Windows symlink-
+  swap regression test, cheap bare-`--log-file` CLI test, always-on runtime
+  precondition guard in logs_of_async; no production/byte changes.
+- Batch C (byte-neutral CLI helper): FU-19 — extract the clap-error -> usage-code
+  mapper into a logic-free leaf parameterised by caller usage code; verify exit
+  codes 0/1/3 identical, keep each tool's exit mechanics; update all five A2 doc
+  locations only if capture takes the dependency.
+- Dropped rationale: byte/keep violations (FU-03 §A10+bundle bytes, FU-06
+  containment, FU-13 §N10, FU-18/FU-20/FU-21 §A3, FU-24 §A8+§A3); skipped-task
+  scope creep (FU-10, FU-11, FU-12); stale/moot at cleanup (FU-12, FU-15,
+  FU-25); doc-only niceties/cosmetic/already-rejected (FU-05, FU-22, FU-28,
+  FU-29, FU-31); speculative/conditional (FU-17, FU-26, FU-27); non-reproducible
+  noise (FU-02). FU-14/FU-15 were already dropped earlier.
