@@ -25,7 +25,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
 | T13 | Exit-table mechanism macro | pending_review | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; gircap now 6 leaf deps, §A2 updated; FU-22 |
-| T14 | Audio-language normalisation primitive | in_progress | | F23 |
+| T14 | Audio-language normalisation primitive | pending_review | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap now 7 leaf deps, §A2 updated; FU-23 |
 | T15 | Ordered-JSON / `write_line` report core | todo | | F21, A3, A8; medium confidence, byte-critical |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
@@ -73,6 +73,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-20 | If a single CLI leaf is still wanted, first get explicit decision to unify the three --output/log-flag help text and update byte-contract tests | open | Raised by T12 (F-T12B): user-visible --help change, not a pure extraction |
 | FU-21 | Reconcile the three OutputFormat types only after confirming capture's FromStr error string and per-variant help are not program contracts | open | Raised by T12 (F-T12C): sled2redb convert.rs:832-859 pins --help against its own command definition — passes even after bytes change, not a guard |
 | FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test instead of the duplicated documented_exit_codes! list | open | Raised by T13: non-blocking — deliberately duplicated to keep RunExit::ALL crate-internal; widening public API for one test was rejected |
+| FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | open | Raised by T14: lines 9-17 claim four display names written with unselected lines blanked; renderer actually writes only selected names (tests pin "English(US)\n"); predates T14, left scoped out |
 
 ## Persistent context
 
@@ -109,8 +110,8 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap leaf deps are now SIX after T13 (log, digest, exit, fs-names, retry,
-  tempdir); any future leaf addition must update the five §A2 doc
+- gircap leaf deps are now SEVEN after T14 (audio-language, digest, exit,
+  fs-names, log, retry, tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
   and verbatim foreign names local (§A7).
@@ -281,7 +282,8 @@ Finding from T10 (217477de):
   so its public surface is unchanged. Zero-wait test modes + byte-stable artifacts
   pass. Full workspace: 2146 passed, 11 skipped.
 - gircap had FIVE leaf deps after T10 (log, digest, fs-names, retry, tempdir);
-  all five A2 doc locations were updated in that commit. SIX after T13 (exit).
+  all five A2 doc locations were updated in that commit. SIX after T13 (exit),
+  SEVEN after T14 (audio-language).
   Earlier "four leaf deps" references in this file are point-in-time. FU-15
   likely moot at cleanup.
 
@@ -289,7 +291,7 @@ Review D confirmation (no fix commit):
 
 - A7 three digest semantics confirmed distinct after T08; shared digest leaf
   carries only raw bytes/hex mechanics, never a program digest vocabulary.
-- gircap has five leaf deps as of Review D (six after T13); five A2 doc locations
+- gircap has five leaf deps as of Review D (seven after T14); five A2 doc locations
   current (00-spec.md:42, README.md, tools/sync/README.md,
   tools/capture/README.md, docs/06-artifact-bridge-spec.md) — any new leaf must
   update all five.
@@ -341,5 +343,20 @@ Finding from T13 (3c691e58):
 - The shared pin requires codes contiguous from zero; a future tool with
   non-contiguous exit literals (girsync/sled2redb) needs a parameterized pin,
   not a table change. No usage-error mapping moved into the leaf.
-- gircap now has SIX leaf deps (log, digest, exit, fs-names, retry, tempdir);
-  all five A2 doc locations updated in this commit. FU-22 is non-blocking.
+- gircap had SIX leaf deps after T13 (log, digest, exit, fs-names, retry,
+  tempdir), all five A2 doc locations updated then; SEVEN after T14. FU-22 is
+  non-blocking.
+
+Finding from T14 (e67cf272):
+
+- girpr-audio-language leaf holds normalize_audio_token (lower + _->-, with a
+  CaseFold policy parameter: girpr Unicode no-trim, capture ASCII + trim at
+  call site), the four canonical AUDIO_LANGUAGES code/display pairs, and pure
+  lookup helpers. Alias map (girpr), none-sentinel (both), trim and
+  field_component_problem validation (capture) stay local. Do NOT collapse the
+  two CaseFold flavours — they are byte contracts (A3).
+- gircap now has SEVEN leaf deps (audio-language, digest, exit, fs-names, log,
+  retry, tempdir); all five A2 doc locations, capture manifest header and root
+  manifest comment updated. Audio bytes verified identical against baseline.
+- Unrelated stale doc FU-23 (gamedir.rs game/ scan-file module comment) left out
+  of scope. Product lib 422 + capture lib 727 + leaf 2 tests pass.
