@@ -19,9 +19,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
 | T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
-| T08 | Streaming hash-sink leaf | pending_review | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13 |
+| T08 | Streaming hash-sink leaf | completed | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13. Review D: no changes |
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
-| T10 | Retry policy/schedule leaf (`girpr-retry`) | pending_review | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; FU-15 |
+| T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
 | T13 | Exit-table mechanism macro | todo | | F22, A9; tables stay independent |
@@ -40,7 +40,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | A | T01, T02 | done | T01 completed (no fixes); T02 skipped — not reviewed. FU-01, FU-02 raised |
 | B | T03, T04, T05 | done | All completed, no reverts/skips; fix 44dcae95 (girsync README); FU-03..07 unchanged |
 | C | T06, T07 | done | T06 completed, no fixes; T07 skipped — not reviewed. FU-08/09 kept open |
-| D | T08, T09, T10 | pending | Hashing, bounded decode, retry — review together |
+| D | T08, T09, T10 | done | T08 + T10 completed, no fixes; T09 skipped — not reviewed. FU-13 kept; FU-14/15 dropped |
 | E | T11, T12, T13, T14 | pending | Logging/CLI surface — check no cross-program coupling |
 | solo | T15 | pending | Report core — byte-contract critical, own review |
 | F | T16, T17 | pending | Domain model leaves — review together |
@@ -64,8 +64,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | open | Raised by T07 (F07-b): girsync uses tempdir_in/tempfile_in with kept path, no cleanup, claim publish — a different primitive, excluded from T07 |
 | FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
-| FU-14 | Consider using the shared digest sink in capture's measure path | open | Raised by T09 (FU-T09-B): zstd_measure/zstd_measure_from use raw md5::Md5 while DualDigest uses girpr_digest::Sink; low value, risks N10 error-text/byte contracts — flag only, do not implement without confirmation |
-| FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | open | Raised by T10: actually four before T10 (log, digest, fs-names, tempdir), five after (retry added); likely moot if REFACTOR_PLAN/ + report deleted at final cleanup — reviewer to decide |
+| FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same suggestion, same N10 constraint); FU-13 is the more specific formulation |
+| FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted; same bucket for stale F3/F15/A6 line pointers |
 
 ## Persistent context
 
@@ -276,3 +276,15 @@ Finding from T10 (217477de):
 - gircap now has FIVE leaf deps (log, digest, fs-names, retry, tempdir); all five
   A2 doc locations updated in this commit. Earlier "four leaf deps" references
   in this file are point-in-time (superseded by this). FU-15 likely moot at cleanup.
+
+Review D confirmation (no fix commit):
+
+- A7 three digest semantics confirmed distinct after T08; shared digest leaf
+  carries only raw bytes/hex mechanics, never a program digest vocabulary.
+- gircap has five leaf deps; five A2 doc locations current (00-spec.md:42,
+  README.md, tools/sync/README.md, tools/capture/README.md,
+  docs/06-artifact-bridge-spec.md) — any new leaf must update all five.
+- girpr retry sleeps must go through the injected Sleep hook; jitter is a caller
+  parameter (girpr 0.5 / gircap 0.0), never baked into the leaf. girsync uses
+  girpr-digest for bytes/hex only; keep DigestSet/AlgoSet/HashAlg + foreign names
+  local (N5). Full suite 2146 passed, 11 skipped; clippy -D warnings clean.
