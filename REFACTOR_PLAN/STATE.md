@@ -21,7 +21,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
 | T08 | Streaming hash-sink leaf | pending_review | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13 |
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
-| T10 | Retry policy/schedule leaf (`girpr-retry`) | in_progress | | F15, A6; jitter divergence stays local |
+| T10 | Retry policy/schedule leaf (`girpr-retry`) | pending_review | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; FU-15 |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
 | T13 | Exit-table mechanism macro | todo | | F22, A9; tables stay independent |
@@ -65,6 +65,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
 | FU-14 | Consider using the shared digest sink in capture's measure path | open | Raised by T09 (FU-T09-B): zstd_measure/zstd_measure_from use raw md5::Md5 while DualDigest uses girpr_digest::Sink; low value, risks N10 error-text/byte contracts — flag only, do not implement without confirmation |
+| FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | open | Raised by T10: actually four before T10 (log, digest, fs-names, tempdir), five after (retry added); likely moot if REFACTOR_PLAN/ + report deleted at final cleanup — reviewer to decide |
 
 ## Persistent context
 
@@ -101,8 +102,8 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap gained digest as a leaf in T01 (four leaf deps now: log, digest,
-  fs-names, tempdir); any future leaf addition must update the five §A2 doc
+- gircap leaf deps are now FIVE after T10 (log, digest, fs-names, retry,
+  tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
   and verbatim foreign names local (§A7).
@@ -134,8 +135,9 @@ Finding from T03 (db8c5e37):
 - girpr-fs-names is a fourth logic-free leaf shared by girpr and gircap; its
   `is_reserved_device_name` takes caller-supplied reserved set + trim flag.
   girpr keeps full set incl. `CLOCK$` / trim=true; gircap keeps set minus
-  `CLOCK$` / trim=false. Neither behavior changed; §A2 tables now list four
-  gircap leaf deps. girsync gained girpr-fs-names as a dep in T04. FU-03 tracks
+  `CLOCK$` / trim=false. Neither behavior changed; §A2 tables listed four
+  gircap leaf deps at the time (five after T10). girsync gained girpr-fs-names
+  as a dep in T04. FU-03 tracks
   the §A10 divergence question (defect candidate, unresolved).
 - CONVENTIONS §A2 note "table currently names two" is stale — it named three
   (log, digest, tempdir) before T03; always check the actual doc tables.
@@ -166,7 +168,7 @@ Finding from T05 (ebd758b9):
 
 Review B confirmation (fix 44dcae95 — girsync README shared-deps description
 corrected to list girpr-fs-names; the five §A2 gircap tables were already
-correct at four leaf deps and were left unchanged):
+correct at four leaf deps then (five after T10) and were left unchanged):
 
 - girpr-fs-names is a logic-free leaf shared by girpr, gircap and girsync with
   five mechanisms: parameterized device-name predicate, host-independent
@@ -220,8 +222,9 @@ Review C confirmation (no fix commit):
 - F9's "both derive the same platform facts" understates a real divergence:
   girsync follows links, girpr's lock deliberately does not. The leaf bridges
   this via separate from-path/handle APIs, never a shared path-read policy.
-- crates/fs-identity is a fifth shared leaf but NOT a gircap dep, so 00-spec.md:42
-  (four crates) stays accurate. Root README module map (40-69) also omits several
+- crates/fs-identity is a shared leaf but NOT a gircap dep, so 00-spec.md:42
+  (four crates then; five after T10) stays accurate. Root README module map
+  (40-69) also omits several
   leaves (digest, filter, fs-names); adding fs-identity there is a low-priority
   doc nicety from the F30 under-description gap, NOT an A2 requirement.
 - Leaf uses a private scratch-dir test helper (temp_dir + pid + atomic counter),
@@ -238,7 +241,8 @@ Finding from T08 (f84ec7b9):
   (girpr reader), girsync AlgoSet→leaf mapping local. No ceiling/accepted-byte/
   restart policy entered the leaf; digests byte-identical.
 - girsync now depends on girpr-digest (mechanics only); DigestSet/AlgoSet/HashAlg
-  untouched (N5). gircap leaf count unchanged at four; no A2 doc edit. Direct
+  untouched (N5). gircap leaf count unchanged at four then (five after T10);
+  no A2 doc edit here. Direct
   sha2 deps removed from gircap/girsync, md-5 regular dep from girsync (dev only).
 - F3's src/util/md5.rs:365,397-402 pointer stale (now test code); real sink is
   md5_reader_digest_with_buf. FU-13 tracks a possible zstd_measure follow-up
@@ -256,3 +260,19 @@ Finding from T09 (skipped; no code change):
   shared digest crate (T08 design); extracting them would change error messages.
 - zstd_measure / zstd_measure_from stay duplicated (N10). FU-14 is a flag-only
   suggestion to consider the shared sink in capture's measure path.
+
+Finding from T10 (217477de):
+
+- crates/retry (girpr-retry) owns the Schedule factory (base delay, multiplier,
+  jitter, cap, zero-wait mode), DelaySequence and an injectable Sleep hook
+  (RealSleep/ZeroSleep/RecordingSleep). Jitter is passed IN, never chosen: girpr
+  0.5 (+/-50%, 1s/x2/30s), gircap 0.0 (500ms/x2/10s, no elapsed cutoff). Kept
+  local: girpr Retry/RetryState mapping + error text (manual loop so sleeps go
+  through the hook), gircap RequestLog pushes, error bodies and GIRCAP_TEST_ZERO_BACKOFF.
+- backoff is now leaf-only (no tokio feature in consumer programs); girpr dropped
+  backoff::future::retry. gircap re-exports the leaf Sleep types via http::transport
+  so its public surface is unchanged. Zero-wait test modes + byte-stable artifacts
+  pass. Full workspace: 2146 passed, 11 skipped.
+- gircap now has FIVE leaf deps (log, digest, fs-names, retry, tempdir); all five
+  A2 doc locations updated in this commit. Earlier "four leaf deps" references
+  in this file are point-in-time (superseded by this). FU-15 likely moot at cleanup.
