@@ -22,7 +22,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T08 | Streaming hash-sink leaf | completed | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13. Review D: no changes |
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
-| T11 | Log-install helpers + timestamp reuse | in_progress | | F18, F19; guard lifetime stays local |
+| T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
 | T13 | Exit-table mechanism macro | todo | | F22, A9; tables stay independent |
 | T14 | Audio-language normalisation primitive | todo | | F23 |
@@ -66,6 +66,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
 | FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same suggestion, same N10 constraint); FU-13 is the more specific formulation |
 | FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted; same bucket for stale F3/F15/A6 line pointers |
+| FU-16 | Decide whether product's bare --log-file behavior change (now opens file instead of warning) needs an explicit CLI test or should be reverted | open | Raised by T11: behavior-only, no format/bundle impact; no existing test covers it — Review E should assess |
+| FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | open | Raised by T11: girpr-log now depends on tracing/tracing-appender at runtime; still logic-free, no new gircap dep, no A2 update needed |
+| FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | open | Raised by T11: deliberate divergence preserved to keep bytes unchanged (A3) |
 
 ## Persistent context
 
@@ -288,3 +291,20 @@ Review D confirmation (no fix commit):
   parameter (girpr 0.5 / gircap 0.0), never baked into the leaf. girsync uses
   girpr-digest for bytes/hex only; keep DigestSet/AlgoSet/HashAlg + foreign names
   local (N5). Full suite 2146 passed, 11 skipped; clippy -D warnings clean.
+
+Finding from T11 (7b4ff3be):
+
+- girpr-log gains install mechanics (open_log_file, file_sink, emit_env_warnings,
+  warn_subscriber_install, announce_log_file!) and format_timestamp(&DateTime).
+  Layer stacks + guard ownership stay in the three programs. Shared log events
+  must be emitted from a macro expanding at the caller (or carry a 'static
+  target) — each program's console filter is scoped to its own target and drops
+  events emitted from inside girpr-log.
+- Env-warning prefixes (WARN / gircap:) and install-warning text are observable
+  byte contracts (A3); kept identical via a prefix parameter. Capture's
+  capture_id and emit/index.rs ManifestInput::started inject a DateTime — must
+  not use wall-clock timestamp(). F18/F19 overstate remaining duplication; the
+  main.rs eprintln! echo is caller-facing and stays local.
+- Behavior change to assess: bare --log-file run.log now opens the file (was
+  warn+no file) — matches product CLI doc, no byte impact; FU-16. Full suite:
+  2151 passed, 11 skipped. No new gircap leaf dep, so no A2 doc edit.
