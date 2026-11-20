@@ -256,7 +256,7 @@ fn may_write_body(path: &Path, file: &mut File, created: bool) -> Result<bool> {
     if read != 0 && !head[..read].starts_with(b"pid=") {
         return Ok(false);
     }
-    match link_count(file) {
+    match girpr_fs_identity::link_count_of(file) {
         Some(1) => {}
         Some(names) => return Err(unexpected_names(path, names)),
         // The platform cannot tell us whether another name exists: leave the
@@ -304,63 +304,44 @@ fn unexpected_names(path: &Path, names: u64) -> anyhow::Error {
     }
 }
 
-/// How many names the file has, when the platform can say.
-///
-/// A count above one means a hard link: the same bytes are reachable under
-/// another path, so truncating them would change a file this check never saw.
-#[cfg(unix)]
-fn link_count(file: &File) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    file.metadata().ok().map(|meta| meta.nlink())
-}
-
-#[cfg(windows)]
-fn link_count(file: &File) -> Option<u64> {
-    winapi_util::file::information(file)
-        .ok()
-        .map(|info| info.number_of_links())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn link_count(_file: &File) -> Option<u64> {
-    None
-}
-
 /// Whether the open file and the path describe the same file, when the
 /// platform can say.
 ///
-/// `None` means the platform cannot compare them, so the caller must not treat
-/// the unknown as a match.
-#[cfg(unix)]
+/// The raw facts come from the shared leaf; how the path is read stays here.
+/// A path swapped for a symlink after `open` must not be read as its target, so
+/// the path side is deliberately read without following a reparse point.
+/// `None` from either side means the platform cannot compare them, so the
+/// caller must not treat the unknown as a match.
 fn same_file(file: &File, path: &Path) -> Option<bool> {
-    use std::os::unix::fs::MetadataExt;
-    let open = file.metadata().ok()?;
-    let other = std::fs::symlink_metadata(path).ok()?;
-    Some(open.dev() == other.dev() && open.ino() == other.ino())
+    let open = girpr_fs_identity::facts_of(file)?;
+    let other = facts_at_path(path)?;
+    Some(open == other)
+}
+
+/// The identity facts of the path itself, not of anything it points at.
+#[cfg(unix)]
+fn facts_at_path(path: &Path) -> Option<girpr_fs_identity::IdentityFacts> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    girpr_fs_identity::facts_of_metadata(&meta)
 }
 
 #[cfg(windows)]
-fn same_file(file: &File, path: &Path) -> Option<bool> {
+fn facts_at_path(path: &Path) -> Option<girpr_fs_identity::IdentityFacts> {
     use std::os::windows::fs::OpenOptionsExt;
 
     // Ask for the reparse point itself, not what it points at: if the path was
     // swapped for a symlink after `open`, the two identities must not match.
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let open = winapi_util::file::information(file).ok()?;
     let other = OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .ok()?;
-    let other = winapi_util::file::information(&other).ok()?;
-    Some(
-        open.volume_serial_number() == other.volume_serial_number()
-            && open.file_index() == other.file_index(),
-    )
+    girpr_fs_identity::facts_of(&other)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn same_file(_file: &File, _path: &Path) -> Option<bool> {
+fn facts_at_path(_path: &Path) -> Option<girpr_fs_identity::IdentityFacts> {
     None
 }
 

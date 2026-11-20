@@ -42,6 +42,11 @@ girpr-log = { path = "../../crates/log" }
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
 girpr-fs-names = { path = "../../crates/fs-names" }
+# The link-count and file-identity facts used by the copy guard and the cache's
+# publish claim. The leaf owns `same-file` and the Windows handle wrapper and
+# exposes both an error-returning and an option-returning shape; this crate
+# keeps the refusal policy and the plan-time seam around it.
+girpr-fs-identity = { path = "../../crates/fs-identity" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 # Unique, atomically-created working names for cache copies. The publish
@@ -49,10 +54,6 @@ walkdir = "2.5.0"
 # `tempfile` only replaces the hand-rolled `create_new` retry loop that made
 # a working name, and its "keep" hands the finished path back to the publisher.
 tempfile = "3.27.0"
-# File identity for the hard-link guard. Already in the graph through `walkdir`,
-# so this adds nothing to the dependency tree; its `Handle` keeps an open handle
-# to the file it names, which the cache's publish claim relies on.
-same-file = "1.0.6"
 # Path canonicalization for identity and link-target checks. It resolves links
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.
@@ -83,15 +84,6 @@ tracing-appender = "0.2.5"
 # byte-range lock instead of returning `DatabaseAlreadyOpen`. The sidecar is
 # taken before the open, so the cache keeps its fail-fast behaviour on 4.6.
 redb = "=4.6.0"
-
-# Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
-# `MetadataExt::number_of_links` is still unstable (`windows_by_handle`) on the
-# toolchain this crate builds with, so the count comes from
-# `GetFileInformationByHandle`. `winapi-util` wraps that call and opens
-# directories with backup semantics, so no FFI is written here. It is already
-# in the graph through `same-file`, and is Windows-only where it is used.
-[target.'cfg(windows)'.dependencies]
-winapi-util = "0.1.11"
 
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.

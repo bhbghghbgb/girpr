@@ -721,6 +721,7 @@ dependencies = [
  "futures-util",
  "girpr-digest",
  "girpr-filter",
+ "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
  "girpr-tempdir",
@@ -735,7 +736,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "walkdir",
- "winapi-util",
  "wiremock",
  "zstd",
 ]
@@ -756,6 +756,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glob",
+]
+
+[[package]]
+name = "girpr-fs-identity"
+version = "0.1.0"
+dependencies = [
+ "same-file",
+ "winapi-util",
 ]
 
 [[package]]
@@ -791,6 +799,7 @@ dependencies = [
  "clap",
  "dunce",
  "girpr-filter",
+ "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
  "girpr-tempdir",
@@ -798,7 +807,6 @@ dependencies = [
  "postcard",
  "rayon",
  "redb",
- "same-file",
  "serde",
  "serde_json",
  "sha2",
@@ -808,7 +816,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "walkdir",
- "winapi-util",
 ]
 
 [[package]]

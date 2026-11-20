@@ -1,0 +1,26 @@
+[package]
+name = "girpr-fs-identity"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared file-identity and link-count facts the girpr workspace reads platform-by-platform"
+
+[lib]
+name = "girpr_fs_identity"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Identity is a handle-backed `dev`/`ino` or volume-serial/file-index pair that
+# stays exact after the file's name is taken away — the property the cache's
+# publish claim relies on. `same-file` owns the platform wrapper, so this leaf
+# writes no FFI and needs no `unsafe_code` exception.
+same-file = "1.0.6"
+
+[target.'cfg(windows)'.dependencies]
+# std does not expose a file's link count or stable identity on Windows
+# (`windows_by_handle` is still unstable). This safe wrapper owns the
+# `GetFileInformationByHandle` call and the directory/reparse-point opens.
+winapi-util = "0.1.11"

@@ -9,15 +9,22 @@
 //! so it can tell a refused destination from one whose other name the run
 //! removes first.
 //!
-//! The count comes from the platform's own metadata: `MetadataExt::nlink` on
-//! Unix, `winapi_util::file::information` on Windows. Identity is delegated to
-//! `same-file`, whose `Handle` keeps an open handle to the file it names, so an
-//! identity stays exact even after the name has been taken away — the property
-//! the cache's publish claim relies on. Neither path writes any FFI here.
+//! The count and identity come from the shared fs-identity leaf: platform
+//! `nlink`/handle information and a handle-backed `same-file` identity. This
+//! module keeps girsync's own questions — the count of a path, whether it is a
+//! regular file, and the error-returning shape the guards rely on — so the
+//! runtime copy guard and the plan-time preflight still read one definition.
 
 use std::fs::File;
 use std::io;
 use std::path::Path;
+
+/// The identity of a file, for comparing two paths, or a path with a handle.
+///
+/// The leaf owns the platform pair and the held handle. Every consumer here
+/// names this one type, so a cache name claim and a plan-time identity cannot
+/// become two different notions of "the same file".
+pub use girpr_fs_identity::Identity as FileId;
 
 /// What the copy guard needs to know about one path: how many names share its
 /// file, and which file that is.
@@ -32,15 +39,10 @@ pub struct LinkInfo {
     pub links: u64,
     /// The file those names share.
     ///
-    /// A `same-file` `Handle` owns the file it names, so the identity cannot be
-    /// freed and reused while it is held. Equality is the platform's own pair —
-    /// device and inode on Unix, volume serial number and file index on Windows
-    /// — and is never interpreted here.
-    #[cfg(any(unix, windows))]
-    pub id: same_file::Handle,
-    /// On a platform without file identity the guard is inert: every file is
-    /// the same one, and [`count`](fn@count) never exceeds one.
-    #[cfg(not(any(unix, windows)))]
+    /// The leaf's `same-file` identity owns the file it names, so the identity
+    /// cannot be freed and reused while it is held. Equality is the platform's
+    /// own pair — device and inode on Unix, volume serial number and file index
+    /// on Windows — and is never interpreted here.
     pub id: FileId,
     /// Whether the path names a regular file, following links.
     ///
@@ -48,62 +50,6 @@ pub struct LinkInfo {
     /// removed by the copy phase first, and its link count says nothing about
     /// a shared inode.
     pub regular_file: bool,
-}
-
-/// The identity of a file, for comparing two paths, or a path with a handle.
-///
-/// On the platforms the tool runs on this is `same-file`'s `Handle`. Elsewhere
-/// identities are inert and all compare equal; the link-count guard is disabled
-/// there because no count can be read.
-#[cfg(not(any(unix, windows)))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FileId;
-
-#[cfg(any(unix, windows))]
-pub use same_file::Handle as FileId;
-
-/// The number of names the file at `path` has, following links.
-///
-/// This is the one definition of the link count: the runtime guard
-/// ([`count`]) and the plan-time preflight ([`info`]) both read it here, so
-/// they cannot disagree about what a name's count means.
-#[cfg(unix)]
-fn link_count(path: &Path) -> io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-/// The number of names the file at `path` has, following links.
-///
-/// `GetFileInformationByHandle` is the only stable way to read `nNumberOfLinks`
-/// on this toolchain (`MetadataExt::number_of_links` is still unstable). It is
-/// reached through `winapi_util`, which also opens directories with backup
-/// semantics, rather than through FFI in this crate.
-#[cfg(windows)]
-fn link_count(path: &Path) -> io::Result<u64> {
-    use winapi_util::Handle;
-
-    let handle = Handle::from_path_any(path)?;
-    Ok(winapi_util::file::information(&handle)?.number_of_links())
-}
-
-/// No portable link metadata exists on this platform, so the count is inert.
-#[cfg(not(any(unix, windows)))]
-fn link_count(_path: &Path) -> io::Result<u64> {
-    Ok(1)
-}
-
-/// The identity of the file at `path`, following links.
-#[cfg(any(unix, windows))]
-fn identity_from_path(path: &Path) -> io::Result<FileId> {
-    FileId::from_path(path)
-}
-
-/// No portable file identity exists on this platform.
-#[cfg(not(any(unix, windows)))]
-fn identity_from_path(_path: &Path) -> io::Result<FileId> {
-    Ok(FileId)
 }
 
 /// The link count and identity of the file at `path`, following links.
@@ -117,19 +63,20 @@ fn identity_from_path(_path: &Path) -> io::Result<FileId> {
 /// subdirectories, not additional names for one file.
 pub fn info(path: &Path) -> io::Result<LinkInfo> {
     Ok(LinkInfo {
-        links: link_count(path)?,
+        links: girpr_fs_identity::link_count_at(path)?,
         regular_file: std::fs::metadata(path)?.is_file(),
-        id: identity_from_path(path)?,
+        id: girpr_fs_identity::identity_at(path)?,
     })
 }
 
 /// The number of names the file at `path` has, following links.
 ///
-/// One definition for every caller: [`info`] and this function both go through
-/// `link_count`, so the runtime guard and the plan-time preflight cannot
-/// disagree about a count. A missing path is `NotFound`.
+/// One definition for every caller: [`info`] and this function both ask the
+/// leaf for the same count, so the runtime guard and the plan-time preflight
+/// cannot disagree about what a name's count means. A missing path is
+/// `NotFound`; any other error is returned rather than read as a count.
 pub fn count(path: &Path) -> io::Result<u64> {
-    link_count(path)
+    girpr_fs_identity::link_count_at(path)
 }
 
 /// The identity of the file a handle names.
@@ -137,21 +84,10 @@ pub fn count(path: &Path) -> io::Result<u64> {
 /// The same identity [`info`] reads from a path, read from the handle instead:
 /// a handle names the file it was opened on even after the name has gone, so
 /// this is what lets a caller ask "is the thing at this path still the file
-/// this handle was opened on?".
-///
-/// `same-file` takes ownership of the `File` it is given, so the caller's own
-/// handle is duplicated and kept; the returned identity holds a handle of its
-/// own, keeping the file alive for as long as it is held.
-#[cfg(any(unix, windows))]
+/// this handle was opened on?". The leaf duplicates the `File` for the
+/// identity, leaving the caller's own handle usable.
 pub fn identity_of(file: &File) -> io::Result<FileId> {
-    FileId::from_file(file.try_clone()?)
-}
-
-/// No portable file metadata exists on this platform, so every file has the
-/// same identity.
-#[cfg(not(any(unix, windows)))]
-pub fn identity_of(_file: &File) -> io::Result<FileId> {
-    Ok(FileId)
+    girpr_fs_identity::identity_of(file)
 }
 
 #[cfg(test)]
