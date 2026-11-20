@@ -18,7 +18,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T04 | Trailing-dot/space and path-key predicates | completed | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05. Review B: no code change |
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
 | T06 | File identity + link-count leaf | pending_review | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09 |
-| T07 | Atomic temp-then-publish leaf | in_progress | | F10 |
+| T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | todo | | F15, A6; jitter divergence stays local |
@@ -60,6 +60,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | open | Raised by T05: optional cleanup — plan/tests.rs + two cfg(test) helpers still use dunce::canonicalize as oracles; all production sites now use the shared helper |
 | FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | open | Raised by T06: doc-only — unsafe claim is stale, both sites delegate to winapi-util/same-file; left untouched to keep T06 code-scoped |
 | FU-09 | Add Windows regression test for lock path swapped to symlink after open | open | Raised by T06: non-blocking coverage — existing swap test is cfg(unix); reparse-point branch preserved structurally but not directly asserted on Windows |
+| FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf (configurable temp creation + persist/noclobber + writer/path access; keep girsync claim local) | open | Raised by T07 (F07-a): thin-wrapper value questionable; needs explicit decision that indirection is worth it and per-phase error messages preserved |
+| FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | open | Raised by T07 (F07-b): girsync uses tempdir_in/tempfile_in with kept path, no cleanup, claim publish — a different primitive, excluded from T07 |
+| FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
 
 ## Persistent context
 
@@ -184,3 +187,22 @@ Finding from T06 (57877cac):
 - facts_of_metadata is Unix-only; std's Windows MetadataExt volume/index
   accessors are unstable here — use winapi_util::file::information on Windows.
   No gircap dep added, so no §A2 doc change. Full suite: 2135 passed, 11 skipped.
+
+Finding from T07 (skipped; no code change):
+
+- Atomic publish is NOT one primitive (F10 partly stale, "high confidence" wrong
+  for the sync shape). girpr has two distinct writers: write_atomic_with
+  (write through the open NamedTempFile handle, anyhow + phase context, optional
+  sync_all + best-effort parent sync, lexical name guards) and copy_publish_with
+  (injected copy closure re-opens the temp path, io::Result, no sync, caller
+  creates parent). They share only the lexical name rule in src/util/path.rs
+  (stays local).
+- sled2redb: persist vs persist_noclobber chosen from destination state, handle
+  carried across functions, lock sidecar removed before publish, context message
+  built from the random temp name — all local policies.
+- girsync publish is a cross-process claim protocol (hard link, or create_new
+  claim + identity check + rename), never NamedTempFile::persist; its working
+  name is deliberately kept (no drop cleanup). Must stay local.
+- tempfile opens NamedTempFile with share_mode(0) on Windows; handle-based and
+  path-based writes are not interchangeable in a shared API. Excluded/untouched:
+  capture .slot.tmp / non-atomic docs (N8), girpr _tmp resume artifacts (N6).
