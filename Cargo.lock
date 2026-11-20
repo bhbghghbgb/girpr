@@ -685,6 +685,7 @@ dependencies = [
  "flate2",
  "fs2",
  "girpr-digest",
+ "girpr-exit",
  "girpr-fs-names",
  "girpr-log",
  "girpr-retry",
@@ -715,6 +716,7 @@ dependencies = [
  "clap",
  "futures-util",
  "girpr-digest",
+ "girpr-exit",
  "girpr-filter",
  "girpr-fs-identity",
  "girpr-fs-names",
@@ -745,6 +747,10 @@ dependencies = [
  "md-5",
  "sha2",
 ]
+
+[[package]]
+name = "girpr-exit"
+version = "0.1.0"
 
 [[package]]
 name = "girpr-filter"

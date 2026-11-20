@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its five path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its six path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-digest` (the hex spelling and fixed-width
@@ -15,7 +15,9 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # `girpr-fs-names` (the Windows device-name predicate mechanism — gircap passes
 # its own reserved set and raw-stem comparison; no program rule is borrowed),
 # `girpr-retry` (the retry schedule factory and injectable sleep driver —
-# gircap keeps its own zero jitter and its own side-effectful attempt loop) and
+# gircap keeps its own zero jitter and its own side-effectful attempt loop),
+# `girpr-exit` (the exit-table generation mechanism — the enum/`ALL`/code/pin
+# pattern only; gircap supplies its own codes and meanings) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
@@ -54,6 +56,11 @@ girpr-retry = { path = "../../crates/retry" }
 # §2, "no shared contracts": the flag *names* and defaults are shared on
 # purpose now, the behaviour is not).
 girpr-log = { path = "../../crates/log" }
+# The exit-table generation mechanism, shared with the repair binary. It is a
+# logic-free leaf: the enum/`ALL`/code/pin pattern comes from the macro, while
+# gircap supplies its own codes, meanings and helper methods — no exit-code
+# value crosses between the tools.
+girpr-exit = { path = "../../crates/exit" }
 # The runtime (`#[tokio::main]` runs the multi-threaded one), its macros
 # (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
 # No source here calls `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`.

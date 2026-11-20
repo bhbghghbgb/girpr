@@ -395,9 +395,12 @@ predicate *mechanism* to this binary and `gircap` — each passes its own reserv
 set and trim flag, so no program rule is shared. `crates/retry/` supplies the
 retry schedule factory and injectable sleep driver to this binary and `gircap`;
 each passes its own delay, jitter and cap and keeps its own attempt loop, so
-neither retry policy is shared. All four share the test-only scratch-directory
-policy in `crates/tempdir/`. None of these carries a program's flags, exit codes
-or published shapes.
+neither retry policy is shared. `crates/exit/` supplies the exit-table generation
+mechanism to this binary and `gircap`: the enum/`ALL`/code/pin pattern is shared,
+but each supplies its own codes, meanings and helper methods, so no exit-code
+contract is shared. All four share the test-only scratch-directory policy in
+`crates/tempdir/`. None of these carries a program's flags, exit-code values or
+published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is

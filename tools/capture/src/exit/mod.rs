@@ -20,42 +20,35 @@
 use std::fmt;
 use std::process;
 
-/// Every way a run of this tool can end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExitCode {
-    /// The artifact is complete and every asserted invariant is green.
-    Ok,
-    /// The command line or the resolved configuration is wrong.
-    Usage,
-    /// A request failed, or the API answered something unusable.
-    Network,
-    /// An asserted invariant did not hold; the artifact cannot be trusted.
-    AssertionFailed,
-    /// A class named by `--require-class` was not satisfied.
-    RequirementUnmet,
+use girpr_exit::define_exit_table;
+
+// Only the table mechanism is shared; the codes, meanings and helper methods
+// below are gircap's own contract. The repair binary uses the same mechanism
+// with a different table (the 1/2 overlap noted above is a coincidence).
+define_exit_table! {
+    /// Every way a run of this tool can end.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ExitCode {
+        /// The artifact is complete and every asserted invariant is green.
+        Ok = 0,
+        /// The command line or the resolved configuration is wrong.
+        Usage = 1,
+        /// A request failed, or the API answered something unusable.
+        Network = 2,
+        /// An asserted invariant did not hold; the artifact cannot be trusted.
+        AssertionFailed = 3,
+        /// A class named by `--require-class` was not satisfied.
+        RequirementUnmet = 4,
+    }
+    ALL
+    /// Every code, in table order. Used by tests to pin the table.
+    pub,
+    CODE
+    /// The process exit status this code maps to.
+    ;
 }
 
 impl ExitCode {
-    /// Every code, in table order. Used by tests to pin the table.
-    pub const ALL: [ExitCode; 5] = [
-        ExitCode::Ok,
-        ExitCode::Usage,
-        ExitCode::Network,
-        ExitCode::AssertionFailed,
-        ExitCode::RequirementUnmet,
-    ];
-
-    /// The process exit status this code maps to.
-    pub const fn code(self) -> i32 {
-        match self {
-            ExitCode::Ok => 0,
-            ExitCode::Usage => 1,
-            ExitCode::Network => 2,
-            ExitCode::AssertionFailed => 3,
-            ExitCode::RequirementUnmet => 4,
-        }
-    }
-
     /// The short slug used in logs and in `SUMMARY exit_code=…`.
     pub const fn slug(self) -> &'static str {
         match self {

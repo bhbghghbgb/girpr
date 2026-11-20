@@ -711,5 +711,7 @@ the bridge actually reads.
   (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (the
   Windows device-name predicate mechanism, parameterised by each caller's rule)
   and `girpr-retry` (the retry schedule factory and sleep driver, parameterised
-  by each caller's delay, jitter and cap) are not that kind of sharing: they
-  carry no program behavior, and the bridge does not depend on `gircap`.
+  by each caller's delay, jitter and cap), and `girpr-exit` (the exit-table
+  generation mechanism, parameterised by each caller's own codes and meanings),
+  are not that kind of sharing: they carry no program behavior, and the bridge
+  does not depend on `gircap`.

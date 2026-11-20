@@ -1,0 +1,15 @@
+[package]
+name = "girpr-exit"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared exit-table generation mechanism, parameterised by each caller's own codes and meanings"
+
+[lib]
+name = "girpr_exit"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

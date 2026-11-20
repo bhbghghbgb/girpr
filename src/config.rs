@@ -17,6 +17,7 @@ use crate::Biz;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
+use girpr_exit::define_exit_table;
 
 /// How a file is repaired.
 ///
@@ -60,67 +61,10 @@ impl std::fmt::Display for RepairMode {
     }
 }
 
-/// Define the exit-code enum, its discriminants, and the exhaustive list from
-/// one source.
-///
-/// Every item — the variant, its documented number, and its `ALL` entry — comes
-/// from the same list, so a variant cannot be added to the enum without also
-/// appearing in `ALL`. The match in the compile-time check below is generated
-/// from that list too, and has no wildcard.
-macro_rules! define_run_exits {
-    (
-        $(#[$enum_doc:meta])*
-        pub enum $name:ident {
-            $(
-                $(#[$variant_doc:meta])*
-                $variant:ident = $code:literal,
-            )+
-        }
-    ) => {
-        $(#[$enum_doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        #[repr(u8)]
-        pub enum $name {
-            $(
-                $(#[$variant_doc])*
-                $variant = $code,
-            )+
-        }
-
-        impl $name {
-            /// Every documented exit status, in numeric order.
-            ///
-            /// Generated from the same list as the variants, so the list and
-            /// the enum cannot drift apart. Crate-internal: only the
-            /// compile-time check and the unit tests read it. The binary
-            /// target is a separate crate, so its test cannot see this and
-            /// names the statuses itself; that duplication is deliberate,
-            /// since removing it would mean publishing the list for one test.
-            /// A new variant still fails the binary's wildcard-free match.
-            pub(crate) const ALL: [$name; [$($name::$variant),+].len()] = [
-                $($name::$variant,)+
-            ];
-        }
-
-        /// The exit-code contract is compile-time checked: every variant is
-        /// named after its documented number (the `match` has no wildcard),
-        /// and [`RunExit::ALL`] is numbered contiguously from zero. A new or
-        /// renumbered variant stops the build here, before any test can drift.
-        const _: () = {
-            let mut i = 0;
-            while i < $name::ALL.len() {
-                let documented = match $name::ALL[i] {
-                    $($name::$variant => $code,)+
-                };
-                assert!($name::ALL[i] as u8 == documented);
-                assert!(documented as usize == i);
-                i += 1;
-            }
-        };
-    };
-}
-
-define_run_exits! {
+// The table is generated from one list by the shared exit-table mechanism:
+// the leaf owns the enum/`ALL`/code/pin pattern, while the codes, meanings and
+// helper methods here are this binary's own contract (gircap has its own).
+define_exit_table! {
     /// The documented process exit codes.
     ///
     /// The numbers are the automation contract: a run's final `SUMMARY` carries
@@ -129,6 +73,7 @@ define_run_exits! {
     /// variant to the process status happens at the boundary in `main`; the
     /// `SUMMARY` and the fatal log line call [`RunExit::code`] only to describe
     /// the run.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum RunExit {
         /// The run did everything it was asked to do.
         Success = 0,
@@ -143,17 +88,26 @@ define_run_exits! {
         /// A requested ceiling bound the run.
         Limit = 5,
     }
-}
-
-impl RunExit {
+    ALL
+    /// Every documented exit status, in numeric order.
+    ///
+    /// Generated from the same list as the variants, so the list and
+    /// the enum cannot drift apart. Crate-internal: only the
+    /// compile-time check and the unit tests read it. The binary
+    /// target is a separate crate, so its test cannot see this and
+    /// names the statuses itself; that duplication is deliberate,
+    /// since removing it would mean publishing the list for one test.
+    /// A new variant still fails the binary's wildcard-free match.
+    pub(crate),
+    CODE
     /// The numeric status the process returns.
     ///
     /// `SUMMARY` and the fatal log line take this as an `i32`; the process
     /// boundary takes [`RunExit::process_status`] instead.
-    pub const fn code(self) -> i32 {
-        self as i32
-    }
+    ;
+}
 
+impl RunExit {
     /// The byte a process exit status carries.
     ///
     /// Infallible: `#[repr(u8)]` makes every discriminant fit, so no runtime
