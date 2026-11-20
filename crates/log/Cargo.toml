@@ -16,8 +16,13 @@ workspace = true
 # The `test_support` module holds the one shared `logs_of` implementation. It
 # is a dev/test surface only: no shipped program links against it, and each
 # consumer opts in through a dev-dependency. `tokio` is needed only for the
-# async variant's current-thread debug assertion.
+# async variant's always-on current-thread runtime assertion.
 test-support = ["dep:tokio"]
+
+[dev-dependencies]
+# The runtime-flavor guard's regression test builds a multi-thread runtime;
+# the shipped helper itself only needs `rt` to read the flavor.
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }
 
 [dependencies]
 # For the timestamp in a default log file name and in a caller-supplied instant

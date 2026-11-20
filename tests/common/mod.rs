@@ -818,8 +818,8 @@ pub use girpr_tempdir::test_support::{read_game_file, write_game_file};
 /// emits are captured there too. What a multi-thread runtime does move is the
 /// work `f` spawns: a task started with `tokio::spawn` runs on a worker
 /// thread that carries no subscriber, and that task's lines are silently
-/// missing from the returned text. A debug build asserts the runtime flavor so
-/// that misuse fails instead of returning partial logs.
+/// missing from the returned text. The helper asserts the runtime flavor on
+/// every build so that misuse fails instead of returning partial logs.
 ///
 /// The blocking tasks whose lines a test asserts use `spawn_blocking_traced`,
 /// which installs the same dispatcher on the pool thread, so their lines

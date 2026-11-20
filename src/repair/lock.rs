@@ -385,8 +385,9 @@ fn field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use crate::test_support::FixtureRefusal;
+    #[cfg(windows)]
+    use crate::util::symlink_support::require_symlink;
     #[cfg(unix)]
     use crate::util::symlink_support::{
         require_symlink, symlink_fixture_decision, try_symlink_dir,
@@ -674,6 +675,69 @@ mod tests {
         assert_eq!(
             std::fs::read(&target).expect("the target is untouched"),
             b"user data"
+        );
+    }
+
+    /// A path swapped to a symlink after the handle was opened must not be
+    /// read as its target. The Unix swap case above replaces the path with a
+    /// regular file; on Windows a file symlink is still reported as a file by
+    /// `symlink_metadata`, so this case reaches the reparse-point branch of
+    /// `facts_at_path` — that branch opens the symlink itself, whose identity
+    /// cannot match the file the handle still names.
+    ///
+    /// The case needs a file symlink, which Windows without developer mode
+    /// refuses. A proven host refusal skips (or fails when
+    /// `GIRPR_TEST_REQUIRE_SYMLINK` is set); every other failure is a broken
+    /// environment and fails loudly.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_swapped_to_a_symlink_after_open_is_not_followed() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "symlink_swap");
+        let held = dir.join("held.txt");
+        let target = dir.join("other.txt");
+        std::fs::write(&held, b"pid=1\nstarted=2000-01-01T00:00:00Z\n").unwrap();
+        std::fs::write(&target, b"other data").unwrap();
+        let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
+
+        // A symlink at the lock path resolves to `held`, so the handle names
+        // that file, which keeps its one name throughout.
+        if let Err(e) = std::os::windows::fs::symlink_file(&held, &path) {
+            // The same raw refusals the shared symlink classifier names: 1314
+            // is the privilege/developer-mode denial and 1201 a host that
+            // cannot make the link. Anything else is a broken environment and
+            // must fail rather than pass having checked nothing.
+            if matches!(e.raw_os_error(), Some(1314) | Some(1201)) {
+                crate::test_support::skip_fixture_refusal(
+                    FixtureRefusal::Host,
+                    "a file symlink",
+                    "GIRPR_TEST_REQUIRE_SYMLINK",
+                    e,
+                    require_symlink(),
+                );
+                return;
+            }
+            panic!("could not create the test file symlink: {e}");
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open through the first symlink");
+        // Remove only the symlink: the open handle names its target, so this
+        // needs no delete sharing on the file itself. Then put a different
+        // symlink at the lock path before the body check runs.
+        std::fs::remove_file(&path).expect("remove the first symlink");
+        std::os::windows::fs::symlink_file(&target, &path)
+            .expect("this host already created one file symlink");
+
+        let err = may_write_body(&path, &mut file, false)
+            .expect_err("the handle and the swapped path no longer agree");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no longer names"), "{msg}");
+        assert_eq!(
+            std::fs::read(&target).expect("the target is untouched"),
+            b"other data"
         );
     }
 

@@ -1113,6 +1113,36 @@ fn an_explicit_log_file_is_echoed_and_created() {
     }
 }
 
+/// A bare `--log-file <name>` with no parent directory is accepted: the file
+/// lands in the working directory. `Path::parent` of a bare name is `Some("")`,
+/// so this pins the empty-parent case the shared open helper must not choke on.
+#[test]
+fn a_bare_log_file_name_is_created_in_the_working_directory() {
+    let scratch = TempDir::new("girpr_cli_logfile", "bare_name");
+    let name = "girpr-bare-log-file.log";
+    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args(LOG_BASE_ARGS)
+        .args(["--log-file", name])
+        .current_dir(&scratch)
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        out.status.code().expect("process must exit normally"),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("log file: {name}")),
+        "the bare name is echoed on stderr:\n{stderr}"
+    );
+    let body = std::fs::read_to_string(scratch.join(name)).expect("the bare-named file is created");
+    assert!(
+        body.contains("usage error: --jobs must be >= 1"),
+        "the file holds the run's own records:\n{body}"
+    );
+}
+
 /// `--no-log-file` is both an off-switch that beats the environment and, with
 /// `--log-file`, a conflict that clap refuses. The shared crate pins the
 /// precedence; these are the process-level refusals.

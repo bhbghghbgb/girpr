@@ -16,8 +16,8 @@
 //! The two entry points differ only in how they scope the subscriber:
 //!
 //! - [`logs_of`] uses `with_default` for a synchronous closure;
-//! - [`logs_of_async`] uses `set_default` across an `.await` and, on a debug
-//!   build, asserts a current-thread runtime — a multi-thread runtime would
+//! - [`logs_of_async`] uses `set_default` across an `.await` and asserts a
+//!   current-thread runtime on every build — a multi-thread runtime would
 //!   move spawned work onto threads with no subscriber and silently lose its
 //!   lines.
 
@@ -86,15 +86,15 @@ pub fn logs_of(f: impl FnOnce()) -> String {
 /// emits are captured there too. What a multi-thread runtime does move is the
 /// work `f` spawns: a task started with `tokio::spawn` runs on a worker thread
 /// that carries no subscriber, and that task's lines are silently missing from
-/// the returned text. A debug build asserts the runtime flavor so that misuse
-/// fails instead of returning partial logs.
+/// the returned text. The helper asserts the runtime flavor on every build so
+/// that misuse fails instead of returning partial logs.
 ///
 /// Blocking helpers that install the same dispatcher themselves (the
 /// product's `spawn_blocking_traced`) are captured too — provided the spawn
 /// site already carries the subscriber; the dispatcher is taken at *spawn
 /// time*, so one spawned from another spawned task captures the worker's.
 pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
-    debug_assert_eq!(
+    assert_eq!(
         tokio::runtime::Handle::current().runtime_flavor(),
         tokio::runtime::RuntimeFlavor::CurrentThread,
         "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
@@ -105,4 +105,19 @@ pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
     let out = f.await;
     drop(guard);
     (out, buffer.text())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The precondition must also hold in a release build: a multi-thread
+    /// runtime runs spawned work on threads with no subscriber, so returning
+    /// those partial logs would read as coverage the test never had. The guard
+    /// is always on, so the misuse fails loudly instead.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic(expected = "logs_of requires a current-thread runtime")]
+    async fn a_multi_thread_runtime_is_rejected() {
+        let _ = logs_of_async(async {}).await;
+    }
 }
