@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its eight path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its nine path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
@@ -23,7 +23,10 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # pattern only; gircap supplies its own codes and meanings),
 # `girpr-audio-language` (the lower + `_`→`-` token primitive and the four
 # code/display-name pairs — gircap keeps its own trim, none sentinel and
-# path-component validation) and
+# path-component validation),
+# `girpr-proto` (the Sophon protobuf wire types — tags, the misspelled `chuncks`
+# and opaque tag 6 only; gircap keeps its own dump format and all measurement,
+# validation and normalisation logic in this crate) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
@@ -90,6 +93,10 @@ reqwest = "0.13.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 prost = "0.14.6"
+# The shared Sophon wire types: one byte layout for the three protobuf messages
+# both programs decode. The leaf owns tags and field names only; gircap's dump
+# key names are preserved and every measurement/validation helper stays local.
+girpr-proto = { path = "../../crates/proto" }
 zstd = "0.14.4"
 md-5 = "0.11.0"
 # Hex spelling of digests, shared with the repair binary and the converter. A

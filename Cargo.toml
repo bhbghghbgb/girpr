@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -71,6 +71,10 @@ reqwest = { version = "0.13.5", features = ["json", "stream"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 prost = "0.14.6"
+# The shared Sophon wire types: one set of protobuf tags, misspelled `chuncks`
+# and opaque tag 6 as both programs decode them. The leaf owns only the byte
+# layout; this binary keeps its own wrapper and validation around it.
+girpr-proto = { path = "crates/proto" }
 md-5 = "0.11.0"
 # Hex spelling and fixed-width digest mechanics, shared with the two dev tools
 # that cross the same digest/text boundary. A leaf crate with no program logic.

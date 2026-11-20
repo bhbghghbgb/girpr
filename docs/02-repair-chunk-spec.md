@@ -121,7 +121,7 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
    and nothing has checked it, so it only ever sizes the buffer (clamped). A blob bigger than
    the hint grows the buffer; a wrong number cannot ask for an impossible allocation.
  4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
-   compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}], is_folder, size, md5}]}`
+   compressed_size,uncompressed_size,unknown_field6:int64=6,compressed_md5=7}], is_folder, size, md5}]}`
    (keep opaque field 6; `compressed_md5` is tag 7).
    Drop `is_folder` entries from the work list (create dirs on demand instead).
 5. Same for the local build if present (used only for chunk reuse, §4). Cache manifests outside

@@ -8,56 +8,32 @@
 //! `Serialize` sits alongside `prost::Message` so the full decode can be dumped
 //! without a second struct to keep in step. The field names *are* the dump's key
 //! names, which means a rename here silently renames the artifact — so the dump
-//! test asserts the exact key set.
+//! test asserts the exact key set. The wire types themselves now live in the
+//! logic-free `girpr-proto` leaf; both programs decode that one byte layout.
+//! Everything that is *capture* behaviour — measurement, validation and digest
+//! normalisation — stays here as extension traits, so no program logic moved
+//! into the leaf.
 
-use serde::Serialize;
+pub use girpr_proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 
-/// `SophonChunkManifest`: the top-level message.
-#[derive(Clone, PartialEq, ::prost::Message, Serialize)]
-pub struct SophonChunkManifest {
-    #[prost(message, repeated, tag = "1")]
-    pub chuncks: ::prost::alloc::vec::Vec<SophonChunkFile>,
-}
-
-/// One file's entry: its path, its size, its whole-file MD5, and its chunk list.
-#[derive(Clone, PartialEq, ::prost::Message, Serialize)]
-pub struct SophonChunkFile {
-    #[prost(string, tag = "1")]
-    pub file: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub chunks: ::prost::alloc::vec::Vec<SophonChunk>,
-    #[prost(bool, tag = "3")]
-    pub is_folder: bool,
-    #[prost(int64, tag = "4")]
-    pub size: i64,
-    #[prost(string, tag = "5")]
-    pub md5: ::prost::alloc::string::String,
-}
-
-impl SophonChunkFile {
+/// Capture's measurements and validation of one decoded file entry.
+///
+/// An extension trait, not an inherent impl: the wire type is shared and the
+/// leaf must stay logic-free. Methods here describe how *this tool* reads a
+/// manifest, not how the message is encoded.
+pub trait SophonChunkFileExt {
     /// The file this entry describes, or `""` for a folder entry that carries no
     /// path of its own.
-    pub fn is_folder_entry(&self) -> bool {
-        self.is_folder
-    }
+    fn is_folder_entry(&self) -> bool;
 
     /// `Σ chunk.uncompressed_size`, which the manifest asserts equals `size`.
     ///
     /// Saturating: this is a measurement of a document, and a hostile size must
     /// not abort the tool that is only counting it.
-    pub fn chunk_bytes(&self) -> i64 {
-        self.chunks
-            .iter()
-            .fold(0_i64, |total, c| total.saturating_add(c.uncompressed_size))
-    }
+    fn chunk_bytes(&self) -> i64;
 
     /// The last byte the chunks cover, given the last chunk's offset and length.
-    pub fn covered_end(&self) -> i64 {
-        self.chunks
-            .last()
-            .map(|c| c.offset.saturating_add(c.uncompressed_size))
-            .unwrap_or(0)
-    }
+    fn covered_end(&self) -> i64;
 
     /// Refuse a declaration whose offsets and sizes cannot be added.
     ///
@@ -67,7 +43,32 @@ impl SophonChunkFile {
     /// places chunks unless it is refused here. The capture path calls this once
     /// per entry at the decode boundary; `assemble` calls it again so a
     /// hand-built `FilePair` cannot bypass it.
-    pub fn validate_arithmetic(&self) -> Result<(), String> {
+    fn validate_arithmetic(&self) -> Result<(), String>;
+
+    /// Lower-case this entry's declared digests — the whole-file one and every
+    /// chunk's. See [`SophonChunkExt::normalise`] for why.
+    fn normalise(&mut self);
+}
+
+impl SophonChunkFileExt for SophonChunkFile {
+    fn is_folder_entry(&self) -> bool {
+        self.is_folder
+    }
+
+    fn chunk_bytes(&self) -> i64 {
+        self.chunks
+            .iter()
+            .fold(0_i64, |total, c| total.saturating_add(c.uncompressed_size))
+    }
+
+    fn covered_end(&self) -> i64 {
+        self.chunks
+            .last()
+            .map(|c| c.offset.saturating_add(c.uncompressed_size))
+            .unwrap_or(0)
+    }
+
+    fn validate_arithmetic(&self) -> Result<(), String> {
         for (i, c) in self.chunks.iter().enumerate() {
             if c.offset < 0 {
                 return Err(format!(
@@ -96,33 +97,22 @@ impl SophonChunkFile {
         }
         Ok(())
     }
+
+    fn normalise(&mut self) {
+        if self.md5.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.md5 = self.md5.to_ascii_lowercase();
+        }
+        for c in &mut self.chunks {
+            c.normalise();
+        }
+    }
 }
 
-/// One chunk: where its bytes go in the file and how to check them.
-#[derive(Clone, PartialEq, ::prost::Message, Serialize)]
-pub struct SophonChunk {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub uncompressed_md5: ::prost::alloc::string::String,
-    #[prost(int64, tag = "3")]
-    pub offset: i64,
-    #[prost(int64, tag = "4")]
-    pub compressed_size: i64,
-    #[prost(int64, tag = "5")]
-    pub uncompressed_size: i64,
-    #[prost(int64, tag = "6")]
-    pub unknown_field6: i64,
-    #[prost(string, tag = "7")]
-    pub compressed_md5: ::prost::alloc::string::String,
-}
-
-impl SophonChunk {
+/// Capture's identity and digest policy for one decoded chunk.
+pub trait SophonChunkExt {
     /// The key two chunks are compared by to decide they are the same content:
     /// MD5 alone is not enough, because a truncated chunk can share one.
-    pub fn identity(&self) -> (&str, i64) {
-        (&self.uncompressed_md5, self.uncompressed_size)
-    }
+    fn identity(&self) -> (&str, i64);
 
     /// Lower-case the declared digests.
     ///
@@ -142,7 +132,15 @@ impl SophonChunk {
     /// **No allocation in the normal case.** The live manifests spell their
     /// digests in lower case already, and `to_ascii_lowercase` would allocate
     /// for every one of the ~454 000 chunks regardless.
-    pub fn normalise(&mut self) {
+    fn normalise(&mut self);
+}
+
+impl SophonChunkExt for SophonChunk {
+    fn identity(&self) -> (&str, i64) {
+        (&self.uncompressed_md5, self.uncompressed_size)
+    }
+
+    fn normalise(&mut self) {
         if self
             .uncompressed_md5
             .bytes()
@@ -156,26 +154,18 @@ impl SophonChunk {
     }
 }
 
-impl SophonChunkFile {
-    /// Lower-case this entry's declared digests — the whole-file one and every
-    /// chunk's. See [`SophonChunk::normalise`] for why.
-    pub fn normalise(&mut self) {
-        if self.md5.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.md5 = self.md5.to_ascii_lowercase();
-        }
-        for c in &mut self.chunks {
-            c.normalise();
-        }
-    }
-}
-
-impl SophonChunkManifest {
+/// Capture's one-entry-point normalisation for a whole decoded manifest.
+pub trait SophonChunkManifestExt {
     /// Lower-case every declared digest in the manifest.
     ///
     /// The one place a manifest enters the crate, and therefore the one place
     /// the normalisation has to happen for every later comparison to be
-    /// right. See [`SophonChunk::normalise`].
-    pub fn normalise(&mut self) {
+    /// right. See [`SophonChunkExt::normalise`].
+    fn normalise(&mut self);
+}
+
+impl SophonChunkManifestExt for SophonChunkManifest {
+    fn normalise(&mut self) {
         for e in &mut self.chuncks {
             e.normalise();
         }

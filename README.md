@@ -404,7 +404,11 @@ but each supplies its own codes, meanings and helper methods, so no exit-code
 contract is shared. `crates/audio-language/` supplies the lower + `_`→`-` token
 primitive and the four code/display-name pairs to this binary and `gircap`;
 each passes its own case-folding flavour and keeps its own alias map, `none`
-sentinel and validation, so no audio policy is shared. All four share the
+sentinel and validation, so no audio policy is shared. `crates/proto/` supplies
+the Sophon protobuf wire types to this binary and `gircap` — the three messages,
+their tags, the misspelled `chuncks` and opaque tag 6, so both decode one byte
+layout; each keeps its own decode boundary, dump format, validation and
+normalisation, so no program logic is shared. All four share the
 test-only scratch-directory policy in
 `crates/tempdir/`. None of these carries a program's flags, exit-code values or
 published shapes.

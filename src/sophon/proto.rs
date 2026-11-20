@@ -4,47 +4,15 @@
 //! spelling.
 //! See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30>
 //! message SophonChunkManifest { repeated SophonChunkFile chuncks = 1; }
+//!
+//! The three wire types now live in `girpr-proto` so this binary and `gircap`
+//! decode one byte layout. The leaf owns only the protobuf tags and field names
+//! (`chuncks`, the opaque tag 6); this module keeps the repair binary's own
+//! wrapper and test. Nothing about how a manifest is fetched or used moved out.
+
 use crate::hyp::ChunkManifestMeta;
 
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunkManifest {
-    #[prost(message, repeated, tag = "1")]
-    pub chuncks: Vec<SophonChunkFile>,
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunkFile {
-    #[prost(string, tag = "1")]
-    pub file: String,
-    #[prost(message, repeated, tag = "2")]
-    pub chunks: Vec<SophonChunk>,
-    #[prost(bool, tag = "3")]
-    pub is_folder: bool,
-    #[prost(int64, tag = "4")]
-    pub size: i64,
-    #[prost(string, tag = "5")]
-    pub md5: String,
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunk {
-    #[prost(string, tag = "1")]
-    pub id: String,
-    #[prost(string, tag = "2")]
-    pub uncompressed_md5: String,
-    #[prost(int64, tag = "3")]
-    pub offset: i64,
-    #[prost(int64, tag = "4")]
-    pub compressed_size: i64,
-    #[prost(int64, tag = "5")]
-    pub uncompressed_size: i64,
-    // NOTE(starward-parity): opaque upstream field, preserved for decode compat.
-    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L22-L30
-    #[prost(int64, tag = "6")]
-    pub unknown: i64,
-    #[prost(string, tag = "7")]
-    pub compressed_md5: String,
-}
+pub use girpr_proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 
 #[derive(Debug, Clone)]
 pub struct WantedManifest {
@@ -70,7 +38,7 @@ mod tests {
                     offset: 0,
                     compressed_size: 10,
                     uncompressed_size: 20,
-                    unknown: 0,
+                    unknown_field6: 0,
                     compressed_md5: "x".into(),
                 }],
                 is_folder: false,

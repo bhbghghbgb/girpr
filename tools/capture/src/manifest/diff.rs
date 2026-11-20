@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::manifest::CapturedManifest;
-use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+use crate::manifest::proto::{SophonChunk, SophonChunkExt, SophonChunkFile};
 
 /// One path's state in the diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -794,7 +794,7 @@ pub fn diff_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::proto::SophonChunk;
+    use crate::manifest::proto::{SophonChunk, SophonChunkFileExt};
 
     fn something_changed(c: &Counts) -> bool {
         c.added > 0 || c.removed > 0 || c.changed > 0

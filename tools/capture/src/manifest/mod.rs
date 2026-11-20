@@ -35,7 +35,10 @@ pub mod fetch;
 pub mod proto;
 
 pub use dump::StoredAs;
-pub use proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+pub use proto::{
+    SophonChunk, SophonChunkExt, SophonChunkFile, SophonChunkFileExt, SophonChunkManifest,
+    SophonChunkManifestExt,
+};
 
 /// What the manifest id's two halves mean.
 ///

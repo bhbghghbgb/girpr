@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::blobs::Sources;
 use crate::blobs::chunks::FilePair;
 use crate::hash;
-use crate::manifest::proto::SophonChunkFile;
+use crate::manifest::proto::{SophonChunkFile, SophonChunkFileExt};
 use crate::select::Class;
 
 use super::ranges::{Layout, Range};

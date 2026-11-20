@@ -903,7 +903,7 @@ mod tests {
                     offset: 0,
                     compressed_size: 10,
                     uncompressed_size: 20,
-                    unknown: 0,
+                    unknown_field6: 0,
                     compressed_md5: "x".into(),
                 }],
                 is_folder: false,

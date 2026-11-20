@@ -689,6 +689,7 @@ dependencies = [
  "girpr-exit",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-proto",
  "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
@@ -724,6 +725,7 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-proto",
  "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
@@ -791,6 +793,14 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "girpr-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "serde",
 ]
 
 [[package]]

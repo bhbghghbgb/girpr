@@ -480,7 +480,7 @@ mod tests {
             offset: 0,
             compressed_size: size,
             uncompressed_size: size,
-            unknown: 0,
+            unknown_field6: 0,
             compressed_md5: String::new(),
         }
     }

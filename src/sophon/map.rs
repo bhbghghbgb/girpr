@@ -196,7 +196,7 @@ mod tests {
             offset,
             compressed_size: size + 1,
             uncompressed_size: size,
-            unknown: 0,
+            unknown_field6: 0,
             compressed_md5: "compressed".into(),
         }
     }

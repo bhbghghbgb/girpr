@@ -322,7 +322,7 @@ mod tests {
                 offset,
                 compressed_size: 1,
                 uncompressed_size: 7,
-                unknown: 0,
+                unknown_field6: 0,
                 compressed_md5: String::new(),
             }],
             is_folder: false,

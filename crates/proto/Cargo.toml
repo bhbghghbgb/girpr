@@ -1,0 +1,20 @@
+[package]
+name = "girpr-proto"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared Sophon chunk-manifest protobuf wire types the girpr workspace decodes"
+
+[lib]
+name = "girpr_proto"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The wire layout: message derive and the `alloc` Vec/String it generates.
+prost = "0.14.6"
+# The derive behind the full-decode dump's JSON key names. These keys are part
+# of the artifact's byte layout, not a program's report format.
+serde = { version = "1.0.229", features = ["derive"] }

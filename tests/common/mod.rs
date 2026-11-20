@@ -551,7 +551,7 @@ fn build_new_side(
                     compressed.len() as i64
                 },
                 uncompressed_size: c.data.len() as i64,
-                unknown: 0,
+                unknown_field6: 0,
                 compressed_md5: md5hex(&compressed),
             });
         }
@@ -648,7 +648,7 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
                     offset: c.offset,
                     compressed_size: compressed.len() as i64,
                     uncompressed_size: c.payload.len() as i64,
-                    unknown: 0,
+                    unknown_field6: 0,
                     compressed_md5: md5hex(&compressed),
                 });
             }

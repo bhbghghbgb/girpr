@@ -718,6 +718,9 @@ the bridge actually reads.
   generation mechanism, parameterised by each caller's own codes and meanings),
   and `girpr-audio-language` (the token spelling and canonical code/display-name
   table, parameterised by each caller's case folding and kept beside each tool's
-  own alias map and validation), are not that kind of sharing: they carry no
+  own alias map and validation), and `girpr-proto` (the Sophon protobuf wire
+  types — tags, the misspelled `chuncks` and opaque tag 6 — with each caller's
+  own decode boundary, dump format and validation kept locally), are not that
+  kind of sharing: they carry no
   program behavior, and the bridge
   does not depend on `gircap`.

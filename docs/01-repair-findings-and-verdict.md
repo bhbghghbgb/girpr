@@ -29,8 +29,8 @@ corrupt or any older version; after the run the game must be at the current live
   `game/{manifest.id}`, zstd-decompress (`ZstdSharp`), verify decompressed **MD5 == checksum**,
   else re-download `GET {UrlPrefix}/{id}`. Parse protobuf per `src/Starward.RPC/GameInstall/Sophon.proto`:
   `SophonChunkManifest{chunks: SophonChunkFile{file,chunks,is_folder,size,md5}}`,
-  `SophonChunk{id,uncompressed_md5,offset,compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}`
-  (field 6 is opaque `unknown`; keep tag 7 for `compressed_md5` or protobuf misparses).
+  `SophonChunk{id,uncompressed_md5,offset,compressed_size,uncompressed_size,unknown_field6:int64=6,compressed_md5=7}`
+  (field 6 is opaque and its meaning unknown; keep tag 7 for `compressed_md5` or protobuf misparses).
   Chunk bytes URL = `ChunkDownload.UrlPrefix/{chunk.id}`.
 - Manifest filtering: skip `matching_field` listed in `res_category_dir` file
   (`{"category":"...","is_delete":true}` lines), skip all `*-??` audio fields then re-add only selected
