@@ -13,7 +13,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Digest newtypes + hex sweep (`girpr-digest`) | pending_review | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Deviations + context in Persistent context |
-| T02 | `ChunkIdentity` (md5, size) value type | todo | | F27; follows T01 |
+| T02 | `ChunkIdentity` (md5, size) value type | in_progress | | F27; follows T01 |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | todo | | F6, A10; share the rule, do not change behavior |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
 | T05 | Canonicalize + `\\?\` stripping helpers | todo | | F8 |
