@@ -66,7 +66,7 @@ impl CommitLimits {
     /// `GIRSYNC_TEST_COMMIT_BYTES`, and `GIRSYNC_TEST_COMMIT_INTERVAL_MS`
     /// (milliseconds) override the three thresholds instead. They are read
     /// when a write starts — together with the durability, as one policy (see
-    /// [`CommitPolicy`]) — and not on every mutation, and an unset or
+    /// `CommitPolicy`) — and not on every mutation, and an unset or
     /// unparseable value leaves the default in place.
     ///
     /// Deliberately not CLI flags: they exist so a small fixture can make a

@@ -570,7 +570,8 @@ mod tests {
     #[test]
     fn layout_verdicts_and_the_cheap_tiling_check() {
         // (name, file, tiled, gaps, overlaps)
-        let cases: [(&str, PlannedFile, bool, Vec<(u64, u64)>, Vec<(u64, u64)>); 6] = [
+        type LayoutCase<'a> = (&'a str, PlannedFile, bool, Vec<(u64, u64)>, Vec<(u64, u64)>);
+        let cases: [LayoutCase<'_>; 6] = [
             (
                 "exact cover",
                 file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),

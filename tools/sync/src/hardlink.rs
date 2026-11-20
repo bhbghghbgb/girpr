@@ -126,7 +126,7 @@ pub fn info(path: &Path) -> io::Result<LinkInfo> {
 /// The number of names the file at `path` has, following links.
 ///
 /// One definition for every caller: [`info`] and this function both go through
-/// [`link_count`], so the runtime guard and the plan-time preflight cannot
+/// `link_count`, so the runtime guard and the plan-time preflight cannot
 /// disagree about a count. A missing path is `NotFound`.
 pub fn count(path: &Path) -> io::Result<u64> {
     link_count(path)

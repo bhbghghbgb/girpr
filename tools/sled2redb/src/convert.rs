@@ -211,11 +211,11 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
 
 /// Write already-decoded records into the redb cache at `temp`.
 ///
-/// This is the redb-write half of [`convert_into`]. It owns the cache handle,
+/// This is the redb-write half of `convert_into`. It owns the cache handle,
 /// the write transaction, the per-kind counters and the lock-sidecar cleanup,
 /// but knows nothing about sled: callers that already hold decoded records —
 /// the sled reader above or a test with synthetic rows — use this seam
-/// directly. `case_sensitive` is the mode [`convert_into`] read from the sled
+/// directly. `case_sensitive` is the mode `convert_into` read from the sled
 /// `meta` row; it decides how the cache is opened.
 ///
 /// The temporary's *name* and its cleanup on failure are the caller's job and

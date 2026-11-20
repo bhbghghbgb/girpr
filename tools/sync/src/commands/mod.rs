@@ -207,7 +207,7 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
 ///
 /// This shares the dispatch, the reporter and the exit-code mapping with
 /// [`run`] and `main`, so a value asserted here cannot drift from the binary's.
-/// Parse-error callers build the `Cli` with [`Cli::try_parse_from`]. Hooks come
+/// Parse-error callers build the `Cli` with [`clap::Parser::try_parse_from`]. Hooks come
 /// from the environment, the same fallback the binary uses.
 pub fn run_captured(cli: Cli, plan: &girpr_log::LogPlan) -> Result<RunOutcome> {
     run_captured_with_hooks(cli, plan, TestHooks::from_env())

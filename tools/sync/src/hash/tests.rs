@@ -903,11 +903,12 @@ fn debug_renders_the_spellings_the_logs_already_carry() {
 #[test]
 fn dedup_keeps_first_seen_order() {
     // (parser, [(input, expected)], regression note)
-    let rows: &[(
+    type DedupRow<'a> = (
         fn(&[&str]) -> Vec<HashAlg>,
-        &[(&[&str], Vec<HashAlg>)],
-        &str,
-    )] = &[
+        &'a [(&'a [&'a str], Vec<HashAlg>)],
+        &'a str,
+    );
+    let rows: &[DedupRow<'_>] = &[
         // Non-adjacent repeats: `md5 sha256 md5` still collapses to one
         // request of each algorithm, however many times they are typed.
         (

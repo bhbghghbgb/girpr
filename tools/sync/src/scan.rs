@@ -15,7 +15,7 @@ use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of, s
 /// rather than a rule: a tree of exactly this many entries produces exactly
 /// one heartbeat, and a tree of fewer produces none.
 ///
-/// This is the **production** period. [`heartbeat_entries`] layers a test-only
+/// This is the **production** period. `heartbeat_entries` layers a test-only
 /// env hook over it so a small fixture can trip the heartbeat; with the hook
 /// unset, the walk uses this constant and behaves exactly as before.
 pub const HEARTBEAT_ENTRIES: usize = 2000;
@@ -79,7 +79,7 @@ pub struct LiveEnt {
 /// Walk `root` up to `max_depth`, following symlinks, with the resolved
 /// heartbeat period.
 ///
-/// Resolves [`heartbeat_entries`] once per walk and delegates to
+/// Resolves `heartbeat_entries` once per walk and delegates to
 /// [`walk_live_with`]. With the test hook unset that is [`HEARTBEAT_ENTRIES`],
 /// so every existing caller behaves exactly as it did before the seam; the
 /// child-process suites that set `GIRSYNC_TEST_HEARTBEAT_ENTRIES` keep that
