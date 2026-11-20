@@ -30,8 +30,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | completed | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26. Review F: no fixes — wire tags/misspelling/field 6/Serialize keys byte-identical to pre-extraction, no program coupling |
 | T17 | Region model leaf (`girpr-model::region`) | completed | 92292793, 042683eb | F25, A9; leaf holds three ids + launcher/game ids + channel tuples + Host families + four base URLs + DOWNLOAD_MODE_CHUNK/CHANNEL_ENDPOINT; clap ValueEnum feature-gated (zero deps off); override seam + resolve policies stay local; needs_channel now path()==CHANNEL_ENDPOINT (was const matches!), pinned by both suites; gircap 10 leaf deps, all five A2 tables + manifest header updated; test oracles keep literal region strings (A3). Review F: fixed --help byte regression (042683eb removed leaf variant docs, restored capture's local byte-pinned clap Biz enum); region values/URLs/channel rule unchanged; FU-27..29 |
 | T18 | API DTO leaf (keep both decoding strategies) | skipped | | F26 premise contradicted by code: DTO field sets do NOT match (different JSON subsets, field types, serde strictness); decoding/URL strategies deliberately distinct; capture DTOs carry program logic + byte-critical re-serialization. A logic-free leaf forces a byte/validation change or couples the programs. Details in Persistent context |
-| T19 | Shared log-capture test helper | pending_review | 57b1bd0e | F16, A5; one public girpr-log::test_support helper (sync logs_of + async logs_of_async with CurrentThread debug assert), three copies now shims; tokio feature-gated dev-only (no A11 inversion); no new gircap leaf dep so no A2 table change; girsync SharedBuffer left local (different semantics); 638 passed/8 skipped |
-| T20 | Shared generic test helpers | pending_review | ba57a704 | F17, A5, A11; temp_dir + write/read_game_file consolidated in girpr-tempdir::test_support with product shims; md5hex already a shim over girpr-digest (T01); fs2 lock judged non-duplicate (product CLI lock cleanup, no fs2) and left local; fake HTTP servers + tool fixtures excluded (N7); no new gircap dep (no A2 churn); wfile/rfile left local (Windows-separator/panic differences); 2162 passed/11 skipped |
+| T19 | Shared log-capture test helper | completed | 57b1bd0e | F16, A5; one public girpr-log::test_support helper (sync logs_of + async logs_of_async with CurrentThread debug assert), three copies now shims; tokio feature-gated dev-only (no A11 inversion); no new gircap leaf dep so no A2 table change; girsync SharedBuffer left local (different semantics); 638 passed/8 skipped. Review G: no fixes, contracts preserved; FU-30 |
+| T20 | Shared generic test helpers | completed | ba57a704 | F17, A5, A11; temp_dir + write/read_game_file consolidated in girpr-tempdir::test_support with product shims; md5hex already a shim over girpr-digest (T01); fs2 lock judged non-duplicate (product CLI lock cleanup, no fs2) and left local; fake HTTP servers + tool fixtures excluded (N7); no new gircap dep (no A2 churn); wfile/rfile left local (Windows-separator/panic differences); 2162 passed/11 skipped. Review G: no fixes, contracts preserved; FU-31 |
 
 ## Reviews
 
@@ -45,7 +45,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | solo | T15 | done | Completed, no fixes; all byte oracles pass, no preserve_order; FU-24/25 kept open |
 | F | T16, T17 | done | T16 completed (no fixes); T17 completed with fix 042683eb (--help byte regression); byte/wire contracts, gircap boundary and DO-NOT-TOUCH preserved; FU-27..29 raised |
 | solo | T18 | done | T18 skipped — not reviewed; §F26 premise refuted by code (see Finding from T18) |
-| G | T19, T20 | pending | Test infrastructure — A5/A11 constraints |
+| G | T19, T20 | done | Both completed, no fixes; test independence (gircap/§A11), §N7 exclusion and byte/debug-assert/panic-message contracts preserved; FU-30, FU-31 raised |
 
 ## Follow-ups
 
@@ -80,6 +80,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-27 | Decide whether the three region variant names duplicated in capture's local clap Biz enum are acceptable long-term, or revisit if a per-consumer help-text mechanism appears | open | Raised by Review F (T17): keep both programs' `--help` bytes pinned — leaf variant docs rendered into product --help and forced fix 042683eb; do not reintroduce shared variant docs |
 | FU-28 | Consider having girpr's production_bases accept Host directly to drop its local string->enum remap | open | Raised by Review F (T17): call-site policy only, stays local either way; no byte impact |
 | FU-29 | Cosmetic: rename product's Biz alias to Region at call sites | open | Raised by Review F (T17): naming only, no behavior or byte change |
+| FU-30 | Consider an always-on guard for logs_of_async's current-thread precondition (debug_assert_eq! only today) | open | Raised by Review G (T19): a release-mode multi_thread #[tokio::test] would silently capture partial logs; only if that failure mode matters |
+| FU-31 | Optionally route sync/capture suites through the shared test_support::temp_dir helper instead of calling TempDir::new directly | open | Raised by Review G (T20): workspace consistency only; scratch-directory policy is shareable, no fixture coupling; product already uses the shim |
 
 ## Persistent context
 
@@ -511,3 +513,21 @@ Finding from T18 (skipped; no code change):
   mechanics as separate public adapters in a leaf while leaving structs, inherent
   logic and URL joins local — low value (each decoder has one consumer). Baseline:
   gircap hyp:: 42/42, girpr hyp:: 13/13, clippy -D warnings clean.
+
+Review G confirmation (no fix commit):
+
+- Both T19/T20 completed. One public girpr-log::test_support module (feature-
+  gated) with logs_of/logs_of_async; all three copies are shims. T20's
+  temp_dir/write_game_file/read_game_file live once in girpr-tempdir::test_support
+  with product call-site-identical shims; md5hex already a shim over girpr-digest;
+  the two fs2 fixtures are genuinely distinct (product run-lock cleanup vs
+  capture shared-bundle cache, FNV key is a §N6 keep) and stay independent.
+- Test independence preserved (§A2/§A11): helpers only in logic-free leaves, no
+  program's tests depend on another's; the pre-existing girpr-tempdir->girsync
+  test inversion is unchanged. No fake HTTP server or tool-specific fixture was
+  shared (§N7). No new gircap leaf dep, so no §A2 doc churn.
+- Byte/behavior/debug-assert/panic-message contracts preserved; only unreachable
+  internal panic strings changed (unwrap -> expect), not load-bearing. girsync
+  SharedBuffer and its phases.rs copy stay local. logs_of_async's CurrentThread
+  debug_assert message byte-identical (FU-30 for an always-on guard).
+  Full girpr suite 618 passed, 0 failed, 8 skipped; clippy clean.
