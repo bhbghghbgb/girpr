@@ -678,12 +678,16 @@ mod tests {
         );
     }
 
-    /// A path swapped to a symlink after the handle was opened must not be
-    /// read as its target. The Unix swap case above replaces the path with a
-    /// regular file; on Windows a file symlink is still reported as a file by
-    /// `symlink_metadata`, so this case reaches the reparse-point branch of
-    /// `facts_at_path` — that branch opens the symlink itself, whose identity
-    /// cannot match the file the handle still names.
+    /// A path swapped to a symlink after the handle was opened must not let
+    /// the stale handle write to a file the path check never saw. The handle
+    /// still names `held`; the path now resolves to `target`, whose bytes must
+    /// stay untouched.
+    ///
+    /// Current Windows toolchains report a symlink from `symlink_metadata` as
+    /// a symlink, not a regular file, so the body check declines before any
+    /// identity comparison; toolchains that report the link as a file reach
+    /// the no-follow identity check and refuse with "no longer names". Either
+    /// way a swapped symlink must never authorize a body write.
     ///
     /// The case needs a file symlink, which Windows without developer mode
     /// refuses. A proven host refusal skips (or fails when
@@ -731,10 +735,15 @@ mod tests {
         std::os::windows::fs::symlink_file(&target, &path)
             .expect("this host already created one file symlink");
 
-        let err = may_write_body(&path, &mut file, false)
-            .expect_err("the handle and the swapped path no longer agree");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("no longer names"), "{msg}");
+        let verdict = may_write_body(&path, &mut file, false);
+        match &verdict {
+            Err(err) => {
+                let msg = format!("{err:#}");
+                assert!(msg.contains("no longer names"), "{msg}");
+            }
+            Ok(false) => {}
+            Ok(true) => panic!("a swapped symlink path must not authorize a body write"),
+        }
         assert_eq!(
             std::fs::read(&target).expect("the target is untouched"),
             b"other data"
