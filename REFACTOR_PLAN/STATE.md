@@ -27,7 +27,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
-| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
+| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | in_progress | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
