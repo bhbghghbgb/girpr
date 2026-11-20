@@ -22,10 +22,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T08 | Streaming hash-sink leaf | completed | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13. Review D: no changes |
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
-| T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
+| T11 | Log-install helpers + timestamp reuse | completed | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file reviewed acceptable (FU-16); no new gircap dep. Review E: no changes |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
-| T13 | Exit-table mechanism macro | pending_review | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; gircap now 6 leaf deps, §A2 updated; FU-22 |
-| T14 | Audio-language normalisation primitive | pending_review | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap now 7 leaf deps, §A2 updated; FU-23 |
+| T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
+| T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | todo | | F21, A3, A8; medium confidence, byte-critical |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
@@ -41,7 +41,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | B | T03, T04, T05 | done | All completed, no reverts/skips; fix 44dcae95 (girsync README); FU-03..07 unchanged |
 | C | T06, T07 | done | T06 completed, no fixes; T07 skipped — not reviewed. FU-08/09 kept open |
 | D | T08, T09, T10 | done | T08 + T10 completed, no fixes; T09 skipped — not reviewed. FU-13 kept; FU-14/15 dropped |
-| E | T11, T12, T13, T14 | pending | Logging/CLI surface — check no cross-program coupling |
+| E | T11, T12, T13, T14 | done | T11/T13/T14 completed, no fixes; T12 skipped — not reviewed. FU-16 assessed acceptable; all follow-ups kept |
 | solo | T15 | pending | Report core — byte-contract critical, own review |
 | F | T16, T17 | pending | Domain model leaves — review together |
 | solo | T18 | pending | API DTO leaf — largest model task, own review |
@@ -66,7 +66,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
 | FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same suggestion, same N10 constraint); FU-13 is the more specific formulation |
 | FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted; same bucket for stale F3/F15/A6 line pointers |
-| FU-16 | Decide whether product's bare --log-file behavior change (now opens file instead of warning) needs an explicit CLI test or should be reverted | open | Raised by T11: behavior-only, no format/bundle impact; no existing test covers it — Review E should assess |
+| FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | open | Raised by T11, assessed by Review E: acceptable, do NOT revert open_log_file — on current stable toolchain create_dir_all("") = Ok(()) so no observable delta; no byte impact; aligns with CLI docs |
 | FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | open | Raised by T11: girpr-log now depends on tracing/tracing-appender at runtime; still logic-free, no new gircap dep, no A2 update needed |
 | FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | open | Raised by T11: deliberate divergence preserved to keep bytes unchanged (A3) |
 | FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | open | Raised by T12 (F-T12A): preserve each tool's exit mechanics (girpr process_status u8, capture ExitCode::exit_with, sled2redb e.exit() + literal 3); verify exit codes 0/1/3 identical |
@@ -360,3 +360,21 @@ Finding from T14 (e67cf272):
   manifest comment updated. Audio bytes verified identical against baseline.
 - Unrelated stale doc FU-23 (gamedir.rs game/ scan-file module comment) left out
   of scope. Product lib 422 + capture lib 727 + leaf 2 tests pass.
+
+Review E confirmation (no fix commit):
+
+- Bare --log-file behavior change reviewed and ACCEPTED — do not revert
+  girpr-log::install::open_log_file. On current stable toolchain the old code
+  also opened bare filenames (create_dir_all("") = Ok(())), so no observable
+  delta; no byte/exit-code impact. FU-16 now just suggests cheap test coverage.
+- Any shared tracing event must expand at the caller with explicit target
+  (scoped prefix EnvFilter + rendered target bytes); a plain function in
+  girpr-log changes log bytes. Capture's injected DateTime -> format_timestamp
+  seam is a byte contract — never swap for wall-clock timestamp().
+- gircap has SEVEN leaf deps; five A2 doc locations + capture manifest header
+  current (any new leaf must update all in the same work). CaseFold Unicode vs
+  Ascii + caller-side trim are intentional A3 divergences. Exit codes remain
+  separate contracts (A9/N3); shared leaf holds mechanism only.
+- No cross-program coupling: crates/exit and crates/audio-language have empty
+  [dependencies]; capture still declares no girpr dep. Full suite 2153 passed,
+  11 skipped; clippy -D warnings clean.
