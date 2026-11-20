@@ -77,13 +77,27 @@ pub fn rw() -> CacheOpen {
     }
 }
 
+/// A fresh, uniquely named scratch directory carrying the caller's prefix and
+/// tag, removed when the returned guard drops.
+///
+/// The prefix is supplied by each caller so a leftover still says which suite
+/// leaked it. `cargo nextest run` gives every test its own process, and two
+/// suites may run at once, so the name must be random rather than fixed; the
+/// naming and cleanup policy is the one `girpr-tempdir` documents.
+///
+/// This is the one scratch-directory construction shared by the test suites;
+/// each suite keeps a thin wrapper that pins its own prefix.
+pub fn temp_dir(prefix: &str, tag: &str) -> TempDir {
+    TempDir::new(prefix, tag)
+}
+
 /// Isolated temp directory per test, so parallel `cargo nextest run` workers
 /// never share a cache file.
 ///
 /// The tree is named so nothing can collide with it and removed when the
 /// guard drops; see `girpr-tempdir` for why each part of the name is there.
 pub fn temp_root(tag: &str) -> TempDir {
-    TempDir::new(TEMP_PREFIX, tag)
+    temp_dir(TEMP_PREFIX, tag)
 }
 
 pub fn wfile(root: &Path, rel: &str, bytes: &[u8]) {
@@ -251,6 +265,34 @@ pub fn is_link(path: &Path) -> bool {
 
 pub fn rfile(root: &Path, rel: &str) -> Vec<u8> {
     std::fs::read(root.join(rel)).unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Game-tree file helpers
+// ---------------------------------------------------------------------------
+//
+// The product's integration suite used to keep these two in its own
+// `tests/common`. They are host-relative file mechanics with no product logic:
+// fixture paths are written with `/` on every host, and a missing parent is
+// created so a fixture can describe a nested tree without pre-creating it.
+// Both are copied verbatim so call sites behave exactly as before; each suite
+// reaches them through a re-export shim in its own `tests/common`.
+
+/// Write `bytes` to `root/rel`, treating `/` in `rel` as the host separator and
+/// creating any missing parent directories.
+pub fn write_game_file(root: &Path, rel: &str, bytes: &[u8]) {
+    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let p = root.join(rel_fs);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).expect("create parent");
+    }
+    std::fs::write(&p, bytes).expect("write game file");
+}
+
+/// Read `root/rel`, treating `/` in `rel` as the host separator.
+pub fn read_game_file(root: &Path, rel: &str) -> Option<Vec<u8>> {
+    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    std::fs::read(root.join(rel_fs)).ok()
 }
 
 /// Actual directory entry names, excluding `girpr-cache*`.

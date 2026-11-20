@@ -799,22 +799,13 @@ fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
 /// the tree is removed even when a case fails before its last line. See
 /// `girpr_tempdir` for the naming and cleanup policy.
 pub fn temp_dir(name: &str) -> girpr_tempdir::TempDir {
-    girpr_tempdir::TempDir::new("girpr_it", name)
+    girpr_tempdir::test_support::temp_dir("girpr_it", name)
 }
 
-pub fn write_game_file(game_dir: &std::path::Path, rel: &str, bytes: &[u8]) {
-    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
-    let p = game_dir.join(rel_fs);
-    if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).expect("create parent");
-    }
-    std::fs::write(&p, bytes).expect("write game file");
-}
-
-pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> {
-    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
-    std::fs::read(game_dir.join(rel_fs)).ok()
-}
+// Thin re-exports of the one game-tree file implementation, which lives with
+// the shared scratch-directory fixtures in `girpr_tempdir::test_support`. Keep
+// them here so every `common::*` call site speaks the same spelling as before.
+pub use girpr_tempdir::test_support::{read_game_file, write_game_file};
 
 /// Drive `f` under a debug-level scoped subscriber and return its result with
 /// the log lines the run emitted.
