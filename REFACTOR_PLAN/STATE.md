@@ -19,7 +19,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
 | T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
-| T08 | Streaming hash-sink leaf | in_progress | | F3; ordering policies stay with owners |
+| T08 | Streaming hash-sink leaf | pending_review | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13 |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | todo | | F15, A6; jitter divergence stays local |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
@@ -63,6 +63,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf (configurable temp creation + persist/noclobber + writer/path access; keep girsync claim local) | open | Raised by T07 (F07-a): thin-wrapper value questionable; needs explicit decision that indirection is worth it and per-phase error messages preserved |
 | FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | open | Raised by T07 (F07-b): girsync uses tempdir_in/tempfile_in with kept path, no cleanup, claim publish — a different primitive, excluded from T07 |
 | FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
+| FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
 
 ## Persistent context
 
@@ -99,10 +100,11 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap now has **three** shared leaf deps (log, digest, tempdir); any future
-  leaf addition must update the five §A2 doc locations (see CONVENTIONS.md) in
-  the same commit. girsync stays off `girpr-digest` — raw bytes + verbatim
-  foreign names are deliberate distinct §A7 semantics.
+- gircap gained digest as a leaf in T01 (four leaf deps now: log, digest,
+  fs-names, tempdir); any future leaf addition must update the five §A2 doc
+  locations (see CONVENTIONS.md) in the same commit. girsync began depending on
+  girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
+  and verbatim foreign names local (§A7).
 - F5's "third `md5hex` spelling in `tools/sync/tests/helpers.rs`" was stale:
   those are raw-byte digest lines (no `hex` dep, no `md5hex`), so girsync code
   was left untouched. §A7's three digest representations confirmed distinct.
@@ -121,7 +123,8 @@ Review A confirmation (no code change):
 
 - §A7 three digest representations confirmed distinct and must be kept: girpr
   strict `Md5`, girsync raw bytes + verbatim foreign names, gircap lowercase hex
-  strings. `girpr-digest` is logic-free; girsync deliberately stays off it.
+  strings. `girpr-digest` is logic-free; girsync uses only its bytes/hex mechanics
+  (from T08), never a shared semantic digest type.
 - Full workspace suite green (2125 passed, 11 skipped); one intermittent,
   unrelated flake captured as FU-02.
 
@@ -222,3 +225,20 @@ Review C confirmation (no fix commit):
   doc nicety from the F30 under-description gap, NOT an A2 requirement.
 - Leaf uses a private scratch-dir test helper (temp_dir + pid + atomic counter),
   not girpr-tempdir, avoiding a test-only inversion (A11 concern). No coupling.
+
+Finding from T08 (f84ec7b9):
+
+- girpr-digest now also supplies Algorithms (plain MD5/SHA membership, NOT
+  girsync AlgoSet), DigestBytes (raw bytes + hex), Sink (update, non-consuming
+  md5_bytes/sha256_bytes, reset, Write, finish) and hash_reader. Migrated all
+  five F3 sites; each owner keeps its ordering policy: limit-before-forward
+  (girpr HashingWriter), write-before-hash (gircap HashingFile), restart-on-retry
+  (HashingFile::restart local truncate/rewind + shared reset), seek-to-start
+  (girpr reader), girsync AlgoSet→leaf mapping local. No ceiling/accepted-byte/
+  restart policy entered the leaf; digests byte-identical.
+- girsync now depends on girpr-digest (mechanics only); DigestSet/AlgoSet/HashAlg
+  untouched (N5). gircap leaf count unchanged at four; no A2 doc edit. Direct
+  sha2 deps removed from gircap/girsync, md-5 regular dep from girsync (dev only).
+- F3's src/util/md5.rs:365,397-402 pointer stale (now test code); real sink is
+  md5_reader_digest_with_buf. FU-13 tracks a possible zstd_measure follow-up
+  (must respect N10 duplication + distinct error text).
