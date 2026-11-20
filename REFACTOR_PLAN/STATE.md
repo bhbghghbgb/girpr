@@ -15,7 +15,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T01 | Digest newtypes + hex sweep (`girpr-digest`) | completed | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Review A: mechanics-only leaf, §A7 preserved, §A2 tables updated, no fixes |
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | pending_review | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03 |
-| T04 | Trailing-dot/space and path-key predicates | in_progress | | F7; host policy explicit, `path_key` not merged |
+| T04 | Trailing-dot/space and path-key predicates | pending_review | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05 |
 | T05 | Canonicalize + `\\?\` stripping helpers | todo | | F8 |
 | T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
@@ -54,6 +54,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-01 | Add girpr-filter to cross-program "what ships" tables | open | Review A: pre-existing §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); doc-only, non-blocking, out of T01 scope |
 | FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | open | Review A: failed once under full parallel run, passed in isolation and on clean full rerun; unrelated to digest changes |
 | FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim): decide defect vs intentional bundle-format allowance, whether to unify | open | Raised by T03 per §A10 — defect candidate, not verdict; behavior change may move bundle bytes (§A3), needs confirmation. T03 shared mechanism only |
+| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations (crate now also owns trailing-dot/space, ASCII-fold, forward-slash mechanics) | open | Raised by T04: doc-only, no behaviour change; no new gircap dep so not required for T04; reviewer may batch with other doc cleanup |
+| FU-05 | Consider documenting sync's local `ascii_case_eq`/`ascii_lower`/`FoldedKey` as intentionally unshared | open | Raised by T04: non-blocking; deliberately local (std-independent comparison, zero-allocation borrowed key, not duplicated elsewhere) |
 
 ## Persistent context
 
@@ -126,3 +128,14 @@ Finding from T03 (db8c5e37):
   §A10 divergence question (defect candidate, unresolved).
 - CONVENTIONS §A2 note "table currently names two" is stale — it named three
   (log, digest, tempdir) before T03; always check the actual doc tables.
+
+Finding from T04 (0651c39b):
+
+- girpr-fs-names now also owns trailing-dot/space detection, ASCII case folding
+  and forward-slash rendering. Host-dependent steps are explicit caller flags;
+  the crate never checks the host itself. `has_trailing_dot_or_space` is
+  parameterless by design (both callers apply it on every host). girsync gained
+  girpr-fs-names as a dep; girpr-fs-names was already a gircap leaf, so no §A2
+  gircap table update was needed. All three §F7 host-policy divergences and both
+  path_key variants preserved; no path test changed. FU-04/FU-05 are doc-only
+  suggestions (FU-05: sync's comparison helper stays local by design).
