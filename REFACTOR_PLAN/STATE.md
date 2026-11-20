@@ -16,7 +16,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | pending_review | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03 |
 | T04 | Trailing-dot/space and path-key predicates | pending_review | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05 |
-| T05 | Canonicalize + `\\?\` stripping helpers | in_progress | | F8 |
+| T05 | Canonicalize + `\\?\` stripping helpers | pending_review | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07 |
 | T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
@@ -54,8 +54,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-01 | Add girpr-filter to cross-program "what ships" tables | open | Review A: pre-existing §F30 doc gap (README.md:44-45,62; tools/capture/docs/00-spec.md:40-42); doc-only, non-blocking, out of T01 scope |
 | FU-02 | Investigate intermittent `repair_machinery the_three_tiers_produce_the_same_file` flake under full parallel nextest | open | Review A: failed once under full parallel run, passed in isolation and on clean full rerun; unrelated to digest changes |
 | FU-03 | Resolve girpr/gircap Windows device-name divergence (CLOCK$ reservation + trailing-space trim): decide defect vs intentional bundle-format allowance, whether to unify | open | Raised by T03 per §A10 — defect candidate, not verdict; behavior change may move bundle bytes (§A3), needs confirmation. T03 shared mechanism only |
-| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations (crate now also owns trailing-dot/space, ASCII-fold, forward-slash mechanics) | open | Raised by T04: doc-only, no behaviour change; no new gircap dep so not required for T04; reviewer may batch with other doc cleanup |
+| FU-04 | Generalise girpr-fs-names one-line description in the five §A2 doc locations (crate now also owns trailing-dot/space, ASCII-fold, forward-slash and canonicalization mechanics) | open | Raised by T04, extended by T05 (Cargo.toml description already updated): doc-only, no behaviour change; no new gircap dep so not required; reviewer may batch with other doc cleanup |
 | FU-05 | Consider documenting sync's local `ascii_case_eq`/`ascii_lower`/`FoldedKey` as intentionally unshared | open | Raised by T04: non-blocking; deliberately local (std-independent comparison, zero-allocation borrowed key, not duplicated elsewhere) |
+| FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | open | Raised by T05: verify/list.rs, verify/bundle.rs, emit/index.rs use std (not dunce per §F8) and rely on verbatim spelling on both sides of starts_with; coordinated root+child change needed, preserve escape detection + byte stability |
+| FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | open | Raised by T05: optional cleanup — plan/tests.rs + two cfg(test) helpers still use dunce::canonicalize as oracles; all production sites now use the shared helper |
 
 ## Persistent context
 
@@ -124,8 +126,8 @@ Finding from T03 (db8c5e37):
   `is_reserved_device_name` takes caller-supplied reserved set + trim flag.
   girpr keeps full set incl. `CLOCK$` / trim=true; gircap keeps set minus
   `CLOCK$` / trim=false. Neither behavior changed; §A2 tables now list four
-  gircap leaf deps. girsync does NOT depend on girpr-fs-names. FU-03 tracks the
-  §A10 divergence question (defect candidate, unresolved).
+  gircap leaf deps. girsync gained girpr-fs-names as a dep in T04. FU-03 tracks
+  the §A10 divergence question (defect candidate, unresolved).
 - CONVENTIONS §A2 note "table currently names two" is stale — it named three
   (log, digest, tempdir) before T03; always check the actual doc tables.
 
@@ -139,3 +141,16 @@ Finding from T04 (0651c39b):
   gircap table update was needed. All three §F7 host-policy divergences and both
   path_key variants preserved; no path test changed. FU-04/FU-05 are doc-only
   suggestions (FU-05: sync's comparison helper stays local by design).
+
+Finding from T05 (ebd758b9):
+
+- `canonical_no_verbatim(&Path)` in girpr-fs-names is the single canonical-path
+  spelling (dunce-backed, no `\\?\`); returns `io::Result` unchanged so callers
+  keep their own `NotFound`/fallback handling. All girsync production dunce
+  sites now use it; girsync keeps a direct dunce dep only for test oracles
+  (FU-07). girpr's fail-closed `resolve_existing_prefix` and capture's
+  std::canonicalize containment sites were deliberately left unchanged (§N6,
+  §F8 separate-variant) — §F8's capture/dunce pointer was stale (they use std).
+  The `safety.rs` source-scan test pins canonicalizer paths by literal source
+  text (DISK_MODULES + DIRECT_QUESTIONS) — update both if repathed. FU-06 tracks
+  the gircap canonicalization question.
