@@ -17,7 +17,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | completed | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03. Review B: no changes |
 | T04 | Trailing-dot/space and path-key predicates | completed | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05. Review B: no code change |
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
-| T06 | File identity + link-count leaf | in_progress | | F9, A4; one deliberate `unsafe` to account for |
+| T06 | File identity + link-count leaf | pending_review | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09 |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
@@ -58,6 +58,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-05 | Consider documenting sync's local `ascii_case_eq`/`ascii_lower`/`FoldedKey` as intentionally unshared | open | Raised by T04: non-blocking; deliberately local (std-independent comparison, zero-allocation borrowed key, not duplicated elsewhere) |
 | FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | open | Raised by T05: verify/list.rs, verify/bundle.rs, emit/index.rs use std (not dunce per §F8) and rely on verbatim spelling on both sides of starts_with; coordinated root+child change needed, preserve escape detection + byte stability |
 | FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | open | Raised by T05: optional cleanup — plan/tests.rs + two cfg(test) helpers still use dunce::canonicalize as oracles; all production sites now use the shared helper |
+| FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | open | Raised by T06: doc-only — unsafe claim is stale, both sites delegate to winapi-util/same-file; left untouched to keep T06 code-scoped |
+| FU-09 | Add Windows regression test for lock path swapped to symlink after open | open | Raised by T06: non-blocking coverage — existing swap test is cfg(unix); reparse-point branch preserved structurally but not directly asserted on Windows |
 
 ## Persistent context
 
@@ -168,3 +170,17 @@ correct at four leaf deps and were left unchanged):
 - No §N / DO-NOT-TOUCH "keep" item pulled into a leaf; no byte/containment/bundle
   contract changed. Full workspace: 2131 passed, 11 skipped. All §F6-F8 stale
   pointers confirmed (§F8 capture/dunce wrong, §F7 lines drifted, §A2 "two" wrong).
+
+Finding from T06 (57877cac):
+
+- girpr-fs-identity owns platform fact reads (nlink; dev/ino or volume-serial/
+  file-index; handle identity) via same-file/winapi-util seams; no unsafe in the
+  leaf or either program (A4/F9 "one deliberate unsafe" claim is stale). Keep
+  same-file/winapi-util only in the leaf.
+- Path-read POLICY stays local per N6: girsync follows the path, girpr reads
+  without following (symlink_metadata / FILE_FLAG_OPEN_REPARSE_POINT) so a
+  swapped symlink compares unequal. Fail-closed Option<bool> + count->1 guard
+  stay in src/repair/lock.rs; girsync refusal stays in its policy modules.
+- facts_of_metadata is Unix-only; std's Windows MetadataExt volume/index
+  accessors are unstable here — use winapi_util::file::information on Windows.
+  No gircap dep added, so no §A2 doc change. Full suite: 2135 passed, 11 skipped.
