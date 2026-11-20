@@ -1,10 +1,11 @@
-//! One retry driver, backed by `backoff`'s exponential policy.
+//! One retry driver, backed by the shared schedule and sleep mechanics.
 //!
 //! The caller owns the classifier — a retcode table, an HTTP status rule, a
 //! file-level failure — and answers [`Retry`] (or [`RetryState`], when work must
-//! be carried across attempts) per attempt. The driver maps a transient answer
-//! onto `backoff::Error::Transient` and a fatal answer onto `Permanent`, then
-//! lets `backoff::future::retry` own the attempt loop and the sleeps.
+//! be carried across attempts) per attempt. This module maps a transient answer
+//! onto a wait from the [`Schedule`](girpr_retry::Schedule) and a fatal answer
+//! onto an immediate return, then drives the attempts itself so the wait goes
+//! through the injected [`Sleep`](girpr_retry::Sleep) hook.
 //!
 //! A retry may need to keep work across attempts (a scratch buffer, a byte
 //! counter, a partially written file). [`RetryState`] and [`retry_state`] hand
@@ -15,36 +16,34 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backoff::backoff::{Backoff, Zero};
-use backoff::future::retry as backoff_retry;
-use backoff::{Error, ExponentialBackoffBuilder};
+use girpr_retry::{DelaySequence, RealSleep, Schedule, Sleep, ZeroSleep};
 
 /// What waits between attempts.
 ///
-/// [`BackoffPolicy::real`] is production: `backoff`'s exponential policy with
-/// RNG jitter, so loops that start together de-synchronize through the random
+/// [`BackoffPolicy::real`] is production: `backoff`'s exponential schedule with
+/// ±50 % jitter, so loops that start together de-synchronise through the random
 /// spread instead of through a deterministic salt. [`BackoffPolicy::none`] is
-/// for tests that count attempts rather than durations.
+/// for tests that count attempts rather than durations. Both the schedule and
+/// the sleeper come from the shared leaf; this program only chooses the jitter
+/// and the zero-wait mode.
 #[derive(Clone, Debug)]
 pub struct BackoffPolicy {
-    initial_interval: Duration,
-    multiplier: f64,
-    randomization_factor: f64,
-    max_interval: Duration,
-    /// `false` selects a zero-wait policy instead of the exponential one.
-    real: bool,
+    schedule: Schedule,
+    sleeper: Arc<dyn Sleep>,
 }
 
 impl BackoffPolicy {
-    /// Production: exponential waits with ±50% jitter, from one second up to a
+    /// Production: exponential waits with ±50 % jitter, from one second up to a
     /// thirty-second ceiling.
     pub fn real() -> Self {
         Self {
-            initial_interval: Duration::from_secs(1),
-            multiplier: 2.0,
-            randomization_factor: 0.5,
-            max_interval: Duration::from_secs(30),
-            real: true,
+            schedule: Schedule::exponential(
+                Duration::from_secs(1),
+                2.0,
+                0.5,
+                Duration::from_secs(30),
+            ),
+            sleeper: Arc::new(RealSleep),
         }
     }
 
@@ -52,32 +51,15 @@ impl BackoffPolicy {
     /// spending the delay.
     pub fn none() -> Self {
         Self {
-            initial_interval: Duration::ZERO,
-            multiplier: 1.0,
-            randomization_factor: 0.0,
-            max_interval: Duration::ZERO,
-            real: false,
+            schedule: Schedule::zero(),
+            sleeper: Arc::new(ZeroSleep),
         }
     }
 
-    /// A fresh `Backoff` for one loop: `backoff::future::retry` consumes the
-    /// policy and resets it, so each call needs its own instance.
-    fn build(&self) -> Box<dyn Backoff + Send> {
-        if !self.real {
-            return Box::new(Zero {});
-        }
-        // The root alias builds an `ExponentialBackoff<SystemClock>`: the
-        // builder's `C::default()` supplies the clock, so no caller-managed
-        // clock handle is needed here.
-        Box::new(
-            ExponentialBackoffBuilder::new()
-                .with_initial_interval(self.initial_interval)
-                .with_multiplier(self.multiplier)
-                .with_randomization_factor(self.randomization_factor)
-                .with_max_interval(self.max_interval)
-                .with_max_elapsed_time(None)
-                .build(),
-        )
+    /// A fresh delay sequence for one loop. Each `retry`/`retry_state` call
+    /// needs its own instance because a backoff policy is stateful.
+    fn build(&self) -> DelaySequence {
+        self.schedule.build()
     }
 }
 
@@ -118,7 +100,8 @@ pub enum RetryState<T, S> {
 ///   `after {attempts} attempts` as its context.
 ///
 /// The wait is taken between attempts only: exhausting the attempts does not
-/// pay for a wait before returning.
+/// pay for a wait before returning. The transient/permanent decision stays
+/// here, at the caller's seam; the leaf only supplies delays and sleeps.
 pub async fn retry<T, F, Fut>(
     attempts: u32,
     backoff: &BackoffPolicy,
@@ -131,35 +114,33 @@ where
     if attempts == 0 {
         return Err(anyhow::anyhow!("no attempts"));
     }
-    let policy = backoff.build();
-    let mut made = 0u32;
-    backoff_retry(policy, || {
-        made += 1;
-        let attempt_no = made;
-        let fut = attempt(attempt_no);
-        async move {
-            match fut.await {
-                Retry::Done(v) => Ok(v),
-                Retry::Fatal(e) => Err(Error::permanent(e)),
-                Retry::Retry(e) if attempt_no >= attempts => Err(Error::permanent(
-                    e.context(format!("after {attempts} attempts")),
-                )),
-                Retry::Retry(e) => Err(Error::transient(e)),
+    let mut delays = backoff.build();
+    for attempt_no in 1..=attempts {
+        match attempt(attempt_no).await {
+            Retry::Done(v) => return Ok(v),
+            Retry::Fatal(e) => return Err(e),
+            Retry::Retry(e) if attempt_no >= attempts => {
+                return Err(e.context(format!("after {attempts} attempts")));
+            }
+            Retry::Retry(_) => {
+                if let Some(wait) = delays.next_delay() {
+                    backoff.sleeper.sleep(wait).await;
+                }
             }
         }
-    })
-    .await
+    }
+    Err(anyhow::anyhow!("no attempts"))
 }
 
 /// Run `attempt` up to `attempts` times, handing `state` to each attempt and
 /// taking it back on a retry.
 ///
-/// `backoff::future::retry` re-invokes one closure and cannot carry a value
-/// from one attempt's answer into the next. The captured-mutation adapter keeps
-/// the state in a slot shared by the closure and its futures: each attempt
-/// takes the state out, and a retry puts the state the attempt returned back
-/// for the next call. A `Done` or `Fatal` answer ends the loop with the state
-/// dropped; the backoff policy is the same as [`retry`].
+/// The shared leaf's delay sequence cannot carry a value from one attempt's
+/// answer into the next. The captured-mutation adapter keeps the state in a
+/// slot shared by the loop and its attempts: each attempt takes the state out,
+/// and a retry puts the state the attempt returned back for the next call. A
+/// `Done` or `Fatal` answer ends the loop with the state dropped; the waits are
+/// the same as [`retry`].
 #[allow(clippy::expect_used)] // the slot is always filled on entry and refilled on a retry
 pub async fn retry_state<T, S, F, Fut>(
     attempts: u32,
@@ -174,37 +155,29 @@ where
     if attempts == 0 {
         return Err(anyhow::anyhow!("no attempts"));
     }
-    let policy = backoff.build();
+    let mut delays = backoff.build();
     let slot = Arc::new(Mutex::new(Some(state)));
-    let mut made = 0u32;
-    backoff_retry(policy, || {
-        made += 1;
-        let attempt_no = made;
+    for attempt_no in 1..=attempts {
         let carried = slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
             .expect("retry state present for the next attempt");
-        let fut = attempt(carried, attempt_no);
-        let slot = Arc::clone(&slot);
-        async move {
-            match fut.await {
-                RetryState::Done(v) => Ok(v),
-                RetryState::Fatal(e) => Err(Error::permanent(e)),
-                RetryState::Retry(next, e) => {
-                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(next);
-                    if attempt_no >= attempts {
-                        Err(Error::permanent(
-                            e.context(format!("after {attempts} attempts")),
-                        ))
-                    } else {
-                        Err(Error::transient(e))
-                    }
+        match attempt(carried, attempt_no).await {
+            RetryState::Done(v) => return Ok(v),
+            RetryState::Fatal(e) => return Err(e),
+            RetryState::Retry(next, e) => {
+                *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(next);
+                if attempt_no >= attempts {
+                    return Err(e.context(format!("after {attempts} attempts")));
+                }
+                if let Some(wait) = delays.next_delay() {
+                    backoff.sleeper.sleep(wait).await;
                 }
             }
         }
-    })
-    .await
+    }
+    Err(anyhow::anyhow!("no attempts"))
 }
 
 #[cfg(test)]

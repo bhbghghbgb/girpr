@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/digest", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/digest", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -69,10 +69,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # logging never blocks the run and the worker guard flushes the tail on exit.
 tracing-appender = "0.2.5"
 anyhow = "1.0.104"
-# The shared retry driver uses backoff's exponential policy and its tokio
-# sleeper. 0.4 is the maintained release line (the latest published stable);
-# its RNG jitter replaces girpr's old deterministic salt spread.
-backoff = { version = "0.4", features = ["tokio"] }
+# The retry schedule factory and the injectable sleep driver. The leaf owns
+# `backoff` and the ±50 % jitter is this program's choice, passed in as a
+# parameter, so its retry waits stay exactly as before.
+girpr-retry = { path = "crates/retry" }
 walkdir = "2.5.0"
 # The shared --include/--exclude glob rules, used by this crate's repair scope
 # and by girsync. One glob version and one set of matching rules for both.

@@ -1,0 +1,29 @@
+[package]
+name = "girpr-retry"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared retry schedule factory and injectable sleep driver, parameterised by each caller's delay, jitter and cap"
+
+[lib]
+name = "girpr_retry"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Only the stateful delay sequence (`ExponentialBackoffBuilder`/`Zero` and the
+# `Backoff` trait) is used; no async retry driver and no clock feature, so the
+# leaf adds nothing to a program's runtime surface.
+backoff = "0.4"
+# `RealSleep` yields the current worker through `tokio::time::sleep` instead of
+# blocking it for the whole backoff. Nothing in the leaf needs timers paused or
+# advanced, so only the `time` feature is requested.
+tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+# Only for `#[tokio::test]` in the leaf's own sleep-hook tests. A workspace
+# build unifies this with the programs' tokio features, but the leaf must also
+# compile and test on its own.
+tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt"] }

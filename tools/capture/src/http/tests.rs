@@ -1,7 +1,6 @@
 use super::*;
 use crate::biz::{Biz, BranchParams};
 use crate::cli::Biz as BizId;
-use backoff::backoff::Backoff;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -135,19 +134,19 @@ fn the_measured_global_urls_are_reproduced_exactly() {
 
 #[test]
 fn the_backoff_is_exponential_from_the_second_attempt_and_capped() {
-    // The schedule is `backoff`'s ExponentialBackoff with jitter disabled, so
-    // the delays are exact, not a range. The first call is the delay *before*
-    // attempt 2; attempt 1 never waits (the loop does not call next_backoff).
+    // The schedule is the leaf's exponential one with jitter disabled, so the
+    // delays are exact, not a range. The first call is the delay *before*
+    // attempt 2; attempt 1 never waits (the loop does not call next_delay).
     let mut b = RetryPolicy::new(10).backoff();
-    assert_eq!(b.next_backoff(), Some(Duration::from_millis(500)));
-    assert_eq!(b.next_backoff(), Some(Duration::from_millis(1000)));
-    assert_eq!(b.next_backoff(), Some(Duration::from_millis(2000)));
-    assert_eq!(b.next_backoff(), Some(Duration::from_millis(4000)));
-    assert_eq!(b.next_backoff(), Some(Duration::from_millis(8000)));
-    assert_eq!(b.next_backoff(), Some(Duration::from_secs(10)), "capped");
+    assert_eq!(b.next_delay(), Some(Duration::from_millis(500)));
+    assert_eq!(b.next_delay(), Some(Duration::from_millis(1000)));
+    assert_eq!(b.next_delay(), Some(Duration::from_millis(2000)));
+    assert_eq!(b.next_delay(), Some(Duration::from_millis(4000)));
+    assert_eq!(b.next_delay(), Some(Duration::from_millis(8000)));
+    assert_eq!(b.next_delay(), Some(Duration::from_secs(10)), "capped");
     // Doubling past the cap must stay clamped, not overflow or grow past 10 s.
     for _ in 0..57 {
-        assert_eq!(b.next_backoff(), Some(Duration::from_secs(10)));
+        assert_eq!(b.next_delay(), Some(Duration::from_secs(10)));
     }
 }
 

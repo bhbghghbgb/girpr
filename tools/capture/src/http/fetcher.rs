@@ -3,8 +3,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use backoff::backoff::Backoff;
-
 use super::{
     ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, HttpRequest, HttpResponse,
     HttpTransport, Kind, RealSleep, RequestLog, RequestRecord, ReqwestTransport, RetryPolicy,
@@ -807,8 +805,8 @@ impl Fetcher {
             // them, and a `--jobs` worker yields instead of blocking.
             if attempts > 1 {
                 let waiting = backoff
-                    .next_backoff()
-                    .expect("no max_elapsed_time: every retry has a delay");
+                    .next_delay()
+                    .expect("no elapsed-time cap: every retry has a delay");
                 tracing::debug!(url, ?waiting, attempts, "retry backoff");
                 self.sleeper.sleep(waiting).await;
             }

@@ -392,9 +392,12 @@ share that ships. It is a logic-free leaf, as is `crates/digest/`, which
 supplies hex spelling and fixed-width digest mechanics to this binary, `gircap`
 and `sled2redb`, and `crates/fs-names/`, which supplies the Windows device-name
 predicate *mechanism* to this binary and `gircap` — each passes its own reserved
-set and trim flag, so no program rule is shared. All four share the test-only
-scratch-directory policy in `crates/tempdir/`. None of these carries a program's
-flags, exit codes or published shapes.
+set and trim flag, so no program rule is shared. `crates/retry/` supplies the
+retry schedule factory and injectable sleep driver to this binary and `gircap`;
+each passes its own delay, jitter and cap and keeps its own attempt loop, so
+neither retry policy is shared. All four share the test-only scratch-directory
+policy in `crates/tempdir/`. None of these carries a program's flags, exit codes
+or published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is

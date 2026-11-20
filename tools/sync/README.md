@@ -7,7 +7,7 @@
 
 Workspace member (`tools/sync`, binary `girsync`) for testing version upgrades/downgrades:
 snapshot a game folder's state, diff two folders/records, and restore `dst` to `src` content.
-Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-fs-names` (Windows path-name mechanics — this tool passes its own host policy for ASCII case folding and backslash rewriting), and, for tests, `girpr-tempdir`. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets.
+Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-fs-names` (Windows path-name mechanics — this tool passes its own host policy for ASCII case folding and backslash rewriting), and, for tests, `girpr-tempdir`. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets, nor the retry schedule and sleep driver that those two parameterise with their own delay and jitter policies.
 
 ## Source layout
 

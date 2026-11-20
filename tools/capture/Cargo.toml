@@ -7,14 +7,16 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its four path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its five path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-digest` (the hex spelling and fixed-width
 # digest mechanics — no flag, no exit code and no published shape),
 # `girpr-fs-names` (the Windows device-name predicate mechanism — gircap passes
-# its own reserved set and raw-stem comparison; no program rule is borrowed)
-# and `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
+# its own reserved set and raw-stem comparison; no program rule is borrowed),
+# `girpr-retry` (the retry schedule factory and injectable sleep driver —
+# gircap keeps its own zero jitter and its own side-effectful attempt loop) and
+# `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
 
@@ -42,12 +44,10 @@ clap = { version = "4.6.8", features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
 thiserror = "2"
-# The clamped exponential retry schedule is delegated to `backoff`'s
-# `ExponentialBackoff`; only its policy and `Backoff` trait are used, not the
-# async retry driver, so the `tokio` feature is not needed here. 0.4 is the
-# latest published line, already in the workspace lockfile. Jitter is disabled
-# (randomization_factor 0.0) so capture artifacts stay byte-stable and diffable.
-backoff = "0.4"
+# The clamped exponential retry schedule and the sleep hook both come from the
+# leaf; gircap passes `0.0` jitter so capture artifacts stay byte-stable and
+# diffable, and keeps its own side-effectful attempt loop local.
+girpr-retry = { path = "../../crates/retry" }
 # The log-file and log-level policy, shared with the repair binary and with
 # `girsync`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters (see docs/00-spec.md

@@ -133,12 +133,9 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
 dependencies = [
- "futures-core",
  "getrandom 0.2.17",
  "instant",
- "pin-project-lite",
  "rand 0.8.8",
- "tokio",
 ]
 
 [[package]]
@@ -683,7 +680,6 @@ dependencies = [
 name = "gircap"
 version = "0.1.0"
 dependencies = [
- "backoff",
  "chrono",
  "clap",
  "flate2",
@@ -691,6 +687,7 @@ dependencies = [
  "girpr-digest",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-retry",
  "girpr-tempdir",
  "ini_core",
  "md-5",
@@ -714,7 +711,6 @@ name = "girpr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "backoff",
  "chrono",
  "clap",
  "futures-util",
@@ -723,6 +719,7 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-retry",
  "girpr-tempdir",
  "md-5",
  "prost",
@@ -779,6 +776,14 @@ dependencies = [
  "chrono",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "girpr-retry"
+version = "0.1.0"
+dependencies = [
+ "backoff",
+ "tokio",
 ]
 
 [[package]]

@@ -708,7 +708,8 @@ the bridge actually reads.
   knowledge of how the bundle was made. Sharing a crate that held either tool's
   program logic would make two tools that must stay independent depend on each
   other to prove one of them works. Logic-free leaves such as `girpr-digest`
-  (hex spelling and fixed-width digest mechanics) and `girpr-fs-names` (the
+  (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (the
   Windows device-name predicate mechanism, parameterised by each caller's rule)
-  are not that kind of sharing: they carry no program behavior, and the bridge
-  does not depend on `gircap`.
+  and `girpr-retry` (the retry schedule factory and sleep driver, parameterised
+  by each caller's delay, jitter and cap) are not that kind of sharing: they
+  carry no program behavior, and the bridge does not depend on `gircap`.

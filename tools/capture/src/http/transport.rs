@@ -2,10 +2,14 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
 use std::time::Duration;
 
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+use girpr_retry::{DelaySequence, Schedule};
+
+// The sleep hook lives in the shared leaf so both tools inject the same three
+// drivers. Re-exported here to keep the `http` module's public surface (and the
+// in-tree imports that reach through it) unchanged.
+pub use girpr_retry::{RealSleep, RecordingSleep, Sleep, SleepFuture, ZeroSleep};
 
 /// When to retry, and how long to wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,32 +31,21 @@ impl RetryPolicy {
         }
     }
 
-    /// A fresh, no-jitter exponential schedule for one request's retry loop.
+    /// A fresh, no-jitter schedule for one request's retry loop.
     ///
-    /// `backoff`'s `ExponentialBackoff` owns the doubling and the clamp: the
-    /// delay before retry *k* is `BASE_DELAY * 2^(k-1)` capped at `MAX_DELAY`,
-    /// with the overflow-safe clamp coming from the crate rather than a
-    /// hand-rolled shift. A fresh instance is needed per request because a
-    /// `Fetcher` is cloned into every `--jobs` worker and the backoff is stateful.
+    /// The leaf's `Schedule` owns the doubling and the clamp: the delay before
+    /// retry *k* is `BASE_DELAY * 2^(k-1)` capped at `MAX_DELAY`, with the
+    /// overflow-safe clamp coming from `backoff` rather than a hand-rolled
+    /// shift. A fresh `DelaySequence` is needed per request because a `Fetcher`
+    /// is cloned into every `--jobs` worker and the backoff is stateful.
     ///
-    /// `randomization_factor = 0.0` is **jitter: None**. `next_backoff` still
-    /// draws an internal random number, but with a zero-width range the drawn
-    /// value cannot change the returned duration, so the schedule — and every
-    /// artifact derived from a capture — stays deterministic and diffable. This
-    /// is the opposite of girpr, which deliberately wants RNG de-synchronization.
-    ///
-    /// `max_elapsed_time(None)` removes the wall-clock cutoff: the loop already
-    /// bounds attempts with `attempts`, and an injected sleeper need not advance
-    /// real time at all, so an elapsed-time cap would be redundant and a source
-    /// of nondeterminism.
-    pub fn backoff(&self) -> ExponentialBackoff {
-        ExponentialBackoffBuilder::new()
-            .with_initial_interval(Self::BASE_DELAY)
-            .with_multiplier(2.0)
-            .with_max_interval(Self::MAX_DELAY)
-            .with_randomization_factor(0.0)
-            .with_max_elapsed_time(None)
-            .build()
+    /// `jitter = 0.0` is **jitter: None**. `next_delay` still draws an internal
+    /// random number, but with a zero-width range the drawn value cannot change
+    /// the returned duration, so the schedule — and every artifact derived from
+    /// a capture — stays deterministic and diffable. This is the opposite of
+    /// girpr, which deliberately passes `0.5` for RNG de-synchronization.
+    pub fn backoff(&self) -> DelaySequence {
+        Schedule::exponential(Self::BASE_DELAY, 2.0, 0.0, Self::MAX_DELAY).build()
     }
 
     /// Whether a status is worth another attempt.
@@ -62,90 +55,6 @@ impl RetryPolicy {
     /// decided this URL does not exist will not.
     pub fn should_retry_status(status: u16) -> bool {
         matches!(status, 408 | 429) || (500..=599).contains(&status)
-    }
-}
-
-/// The future [`Sleep::sleep`] hands back.
-///
-/// **Boxed on purpose.** [`super::Fetcher`] holds an `Arc<dyn Sleep>`, and a trait
-/// method returning `impl Future` or declared `async fn` is not dyn-compatible.
-/// One `Box` per *retry backoff* is nothing beside the 55.5 s of waiting it may
-/// be standing in for. `'static` because neither implementor borrows `self`.
-pub type SleepFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
-
-/// Something that can be waited on, so tests can count delays instead of
-/// spending them.
-///
-/// **Async on purpose.** A blocking `std::thread::sleep` would stall a tokio
-/// worker thread for the whole backoff — with `--retries 10` the schedule is
-/// 0.5+1+2+4+8+10+10+10+10 = 55.5 s of thread-blocked time per failing
-/// request, and on a 4-core box at `--jobs 64` all four workers can be asleep
-/// at once with nothing able to make progress.
-///
-/// [`tokio::time::sleep`] yields the worker instead, so the requests that *are*
-/// in flight keep going while this one waits.
-pub trait Sleep: Send + Sync + fmt::Debug {
-    /// Wait for `d`.
-    fn sleep(&self, d: Duration) -> SleepFuture;
-}
-
-/// Real wall-clock waiting, without taking the worker with it.
-#[derive(Debug, Default)]
-pub struct RealSleep;
-
-impl Sleep for RealSleep {
-    fn sleep(&self, d: Duration) -> SleepFuture {
-        Box::pin(async move {
-            if !d.is_zero() {
-                tokio::time::sleep(d).await;
-            }
-        })
-    }
-}
-
-/// A sleeper that never waits.
-///
-/// Test-only, selected by the `GIRCAP_TEST_ZERO_BACKOFF` hook in [`crate::run`]
-/// so a spawned capture child can exercise a real retry without paying its
-/// production backoff. Unlike [`RecordingSleep`] it records nothing — the child
-/// process cannot hand a delay log back to the test, so an empty future is all
-/// that is needed. Production never selects this; it uses [`RealSleep`].
-#[derive(Debug, Default)]
-pub struct ZeroSleep;
-
-impl Sleep for ZeroSleep {
-    fn sleep(&self, _d: Duration) -> SleepFuture {
-        Box::pin(async {})
-    }
-}
-
-/// Records what it was asked to wait for and returns immediately.
-#[derive(Debug, Default)]
-pub struct RecordingSleep(Mutex<Vec<Duration>>);
-
-impl RecordingSleep {
-    /// Every delay requested so far.
-    pub fn delays(&self) -> Vec<Duration> {
-        self.lock().clone()
-    }
-
-    /// Take the lock, recovering from poisoning — the same reasoning as
-    /// [`RequestLog::lock`]. A recorded delay is evidence about a retry
-    /// schedule, and losing it to a panic is a worse outcome than reading a
-    /// half-pushed vector.
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Duration>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
-    }
-}
-
-impl Sleep for RecordingSleep {
-    fn sleep(&self, d: Duration) -> SleepFuture {
-        // Recorded before the future is built rather than inside it: this
-        // sleeper never waits, so the only observable difference would be when
-        // the push happens, and doing it here keeps the future free of a
-        // borrow and therefore `'static`.
-        self.lock().push(d);
-        Box::pin(async {})
     }
 }
 
