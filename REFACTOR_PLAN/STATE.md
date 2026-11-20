@@ -13,7 +13,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Digest newtypes + hex sweep (`girpr-digest`) | pending_review | e3a1bc08 | F2, F4, F5 (F5 stale: girsync raw bytes, no hex). Deviations + context in Persistent context |
-| T02 | `ChunkIdentity` (md5, size) value type | in_progress | | F27; follows T01 |
+| T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | todo | | F6, A10; share the rule, do not change behavior |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
 | T05 | Canonicalize + `\\?\` stripping helpers | todo | | F8 |
@@ -95,3 +95,13 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
 - F5's "third `md5hex` spelling in `tools/sync/tests/helpers.rs`" was stale:
   those are raw-byte digest lines (no `hex` dep, no `md5hex`), so girsync code
   was left untouched. §A7's three digest representations confirmed distinct.
+
+Finding from T02 (skipped; no code change):
+
+- Chunk identity (§F27) is **two rules, not one**. Capture = raw lowercase-hex
+  `(&str, i64)` lowercased at the manifest decode boundary, accepting any string
+  (a test uses `"same"`). Product (`sophon/map.rs`, `repair/reuse.rs`) = parsed
+  16-byte `Md5` + size, skipping malformed md5. Do not merge into one shared
+  type (§A7). first-occurrence-wins is caller selection logic, not a value-type
+  property. If a follow-up wants cleanup, capture's `assemble/assembly.rs`
+  duplicates `SophonChunk::identity()` and could call it — within-capture only.
