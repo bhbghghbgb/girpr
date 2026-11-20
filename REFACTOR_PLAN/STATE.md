@@ -20,7 +20,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
 | T08 | Streaming hash-sink leaf | pending_review | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13 |
-| T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
+| T09 | Bounded zstd decode primitive | in_progress | | F28; medium confidence, may be skipped |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | todo | | F15, A6; jitter divergence stays local |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
