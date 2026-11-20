@@ -16,7 +16,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | `ChunkIdentity` (md5, size) value type | skipped | | F27; follows T01. F27 premise contradicted by code: two distinct §A7 case-insensitive-MD5 mechanisms (capture raw normalised hex `&str` vs product parsed 16-byte `Md5` + invalid-skipped). A shared type collapses §A7 and changes behavior. Details in Persistent context |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | pending_review | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03 |
 | T04 | Trailing-dot/space and path-key predicates | pending_review | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05 |
-| T05 | Canonicalize + `\\?\` stripping helpers | todo | | F8 |
+| T05 | Canonicalize + `\\?\` stripping helpers | in_progress | | F8 |
 | T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
