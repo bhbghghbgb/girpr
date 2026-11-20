@@ -99,14 +99,15 @@ impl Biz {
     /// The values come from `girpr-model::region`; the mapping itself is this
     /// tool's resolve policy and stays at this call site.
     pub const fn resolve(id: BizId) -> Self {
+        let region = id.region();
         Biz {
             id,
-            launcher_id: id.launcher_id(),
-            game_id: id.game_id(),
-            channel: id.channel(),
-            sub_channel: id.sub_channel(),
-            cps: id.cps(),
-            host: id.host(),
+            launcher_id: region.launcher_id(),
+            game_id: region.game_id(),
+            channel: region.channel(),
+            sub_channel: region.sub_channel(),
+            cps: region.cps(),
+            host: region.host(),
         }
     }
 

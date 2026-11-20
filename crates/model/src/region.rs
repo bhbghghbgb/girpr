@@ -57,16 +57,18 @@ impl Host {
 /// kebab-case. A bundle's documents name a region by its API id, so the flag
 /// and the id must have the same spelling. The derive is present only with the
 /// `clap` feature; the enum and its values are available without it.
+///
+/// No per-variant docs live here: they would render into every consumer's
+/// `--help` "Possible values" text, and the two programs pin different text
+/// for these same values. Each keeps its own clap-facing enum and its help
+/// bytes; only the values come from this leaf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Region {
-    /// Mainland China (`hk4e_cn`).
     #[cfg_attr(feature = "clap", value(name = "hk4e_cn"))]
     Hk4eCn,
-    /// International (`hk4e_global`).
     #[cfg_attr(feature = "clap", value(name = "hk4e_global"))]
     Hk4eGlobal,
-    /// Bilibili (`hk4e_bilibili`).
     #[cfg_attr(feature = "clap", value(name = "hk4e_bilibili"))]
     Hk4eBilibili,
 }

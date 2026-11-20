@@ -273,12 +273,50 @@ pub struct ListArgs {
 
 /// The three regions `gircap` knows how to address.
 ///
-/// The enum and its API-id spellings are defined once in `girpr-model::region`
-/// and shared with the repair binary, so the flag and the ids in a bundle's
-/// documents cannot drift apart. The launcher and game ids behind each are
-/// resolved in [`crate::biz`], never here, so the flag set stays the only place
-/// a region is named. The leaf's `clap` feature supplies the `ValueEnum` derive.
-pub use girpr_model::region::Region as Biz;
+/// The values behind each (ids, channel tuple, bases) come from
+/// `girpr-model::region`; only this flag-facing enum is local. It has to be:
+/// the per-variant docs render into `--help` "Possible values", and that text
+/// is this tool's byte contract, not the repair binary's. The launcher and
+/// game ids are resolved in [`crate::biz`], never written here.
+///
+/// The `value` spellings are the *API* ids (`hk4e_global`), not clap's derived
+/// kebab-case (`hk4e-global`). They have to match the ids the APIs return,
+/// because a bundle's documents name the region by API id and a reader joining
+/// a `--biz` flag to a `by_field` row must not have to learn a second spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum Biz {
+    /// Mainland China (`hk4e_cn`).
+    #[value(name = "hk4e_cn")]
+    Hk4eCn,
+    /// International (`hk4e_global`).
+    #[value(name = "hk4e_global")]
+    Hk4eGlobal,
+    /// Bilibili (`hk4e_bilibili`).
+    #[value(name = "hk4e_bilibili")]
+    Hk4eBilibili,
+}
+
+impl Biz {
+    /// The shared region value this flag selects.
+    pub const fn region(self) -> girpr_model::region::Region {
+        match self {
+            Biz::Hk4eCn => girpr_model::region::Region::Hk4eCn,
+            Biz::Hk4eGlobal => girpr_model::region::Region::Hk4eGlobal,
+            Biz::Hk4eBilibili => girpr_model::region::Region::Hk4eBilibili,
+        }
+    }
+
+    /// The id as the APIs spell it.
+    pub const fn as_str(self) -> &'static str {
+        self.region().as_str()
+    }
+}
+
+impl std::fmt::Display for Biz {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// How much of a decoded manifest to keep on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
