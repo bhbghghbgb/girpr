@@ -26,7 +26,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
 | T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
-| T15 | Ordered-JSON / `write_line` report core | in_progress | | F21, A3, A8; medium confidence, byte-critical |
+| T15 | Ordered-JSON / `write_line` report core | pending_review | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25 |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
@@ -74,6 +74,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-21 | Reconcile the three OutputFormat types only after confirming capture's FromStr error string and per-variant help are not program contracts | open | Raised by T12 (F-T12C): sled2redb convert.rs:832-859 pins --help against its own command definition — passes even after bytes change, not a guard |
 | FU-22 | Consider sharing girpr's exhaustive exit-variant list with its binary-target test instead of the duplicated documented_exit_codes! list | open | Raised by T13: non-blocking — deliberately duplicated to keep RunExit::ALL crate-internal; widening public API for one test was rejected |
 | FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | open | Raised by T14: lines 9-17 claim four display names written with unselected lines blanked; renderer actually writes only selected names (tests pin "English(US)\n"); predates T14, left scoped out |
+| FU-24 | Deduplicate the three report planes' text layout logic (bare/keyed/pair, quoting vs percent-encoding) | open | Raised by T15 (F-T15-01): blocked by A8 — would require normalizing value vocabularies and move bytes; raise only if a reviewer reopens the report boundary |
+| FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | open | Raised by T15 (F-T15-02): intentional per F21; only relevant if girsync's writer or JSON order changes |
 
 ## Persistent context
 
@@ -110,8 +112,8 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap leaf deps are now SEVEN after T14 (audio-language, digest, exit,
-  fs-names, log, retry, tempdir); any future leaf addition must update the five §A2 doc
+- gircap leaf deps are now EIGHT after T15 (audio-language, digest, exit,
+  fs-names, log, report-core, retry, tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
   and verbatim foreign names local (§A7).
@@ -283,7 +285,7 @@ Finding from T10 (217477de):
   pass. Full workspace: 2146 passed, 11 skipped.
 - gircap had FIVE leaf deps after T10 (log, digest, fs-names, retry, tempdir);
   all five A2 doc locations were updated in that commit. SIX after T13 (exit),
-  SEVEN after T14 (audio-language).
+  SEVEN after T14 (audio-language), EIGHT after T15 (report-core).
   Earlier "four leaf deps" references in this file are point-in-time. FU-15
   likely moot at cleanup.
 
@@ -291,7 +293,7 @@ Review D confirmation (no fix commit):
 
 - A7 three digest semantics confirmed distinct after T08; shared digest leaf
   carries only raw bytes/hex mechanics, never a program digest vocabulary.
-- gircap has five leaf deps as of Review D (seven after T14); five A2 doc locations
+- gircap has five leaf deps as of Review D (eight after T15); five A2 doc locations
   current (00-spec.md:42, README.md, tools/sync/README.md,
   tools/capture/README.md, docs/06-artifact-bridge-spec.md) — any new leaf must
   update all five.
@@ -344,8 +346,8 @@ Finding from T13 (3c691e58):
   non-contiguous exit literals (girsync/sled2redb) needs a parameterized pin,
   not a table change. No usage-error mapping moved into the leaf.
 - gircap had SIX leaf deps after T13 (log, digest, exit, fs-names, retry,
-  tempdir), all five A2 doc locations updated then; SEVEN after T14. FU-22 is
-  non-blocking.
+  tempdir), all five A2 doc locations updated then; SEVEN after T14, EIGHT after
+  T15. FU-22 is non-blocking.
 
 Finding from T14 (e67cf272):
 
@@ -355,9 +357,9 @@ Finding from T14 (e67cf272):
   lookup helpers. Alias map (girpr), none-sentinel (both), trim and
   field_component_problem validation (capture) stay local. Do NOT collapse the
   two CaseFold flavours — they are byte contracts (A3).
-- gircap now has SEVEN leaf deps (audio-language, digest, exit, fs-names, log,
-  retry, tempdir); all five A2 doc locations, capture manifest header and root
-  manifest comment updated. Audio bytes verified identical against baseline.
+- gircap had SEVEN leaf deps after T14 (audio-language, digest, exit, fs-names,
+  log, retry, tempdir), all five A2 doc locations + manifest header updated then;
+  EIGHT after T15. Audio bytes verified identical against baseline.
 - Unrelated stale doc FU-23 (gamedir.rs game/ scan-file module comment) left out
   of scope. Product lib 422 + capture lib 727 + leaf 2 tests pass.
 
@@ -371,10 +373,27 @@ Review E confirmation (no fix commit):
   (scoped prefix EnvFilter + rendered target bytes); a plain function in
   girpr-log changes log bytes. Capture's injected DateTime -> format_timestamp
   seam is a byte contract — never swap for wall-clock timestamp().
-- gircap has SEVEN leaf deps; five A2 doc locations + capture manifest header
-  current (any new leaf must update all in the same work). CaseFold Unicode vs
-  Ascii + caller-side trim are intentional A3 divergences. Exit codes remain
-  separate contracts (A9/N3); shared leaf holds mechanism only.
+- gircap has SEVEN leaf deps as of Review E (eight after T15); five A2 doc
+  locations + capture manifest header current (any new leaf must update all in
+  the same work). CaseFold Unicode vs Ascii + caller-side trim are intentional
+  A3 divergences. Exit codes remain separate contracts (A9/N3); shared leaf
+  holds mechanism only.
 - No cross-program coupling: crates/exit and crates/audio-language have empty
   [dependencies]; capture still declares no girpr dep. Full suite 2153 passed,
   11 skipped; clippy -D warnings clean.
+
+Finding from T15 (bcdbfa02):
+
+- girpr-report-core leaf has only write_json_object (ordered JSON via
+  serialize_entry, parameterised by EventFirst/Alphabetical + caller-supplied
+  event key/value) and write_line. NO shared Record and NO value-vocabulary
+  normalization; NO preserve_order anywhere. Three distinct vocabularies kept:
+  girpr Str/UInt/Int (no bool, 1/0 flags), girsync serde_json::Value incl. arrays
+  (event in sorted slot), gircap Str/Int/Bool with percent-encoded text (real
+  event field). sled2redb unchanged — still reuses girsync's writer (FU-25).
+- All named byte-level report oracles pass unchanged. F21 medium confidence on
+  the boundary confirmed viable: a narrow core works without normalizing values
+  (A8 satisfied). FU-24 (text layout dedup) is A8-blocked, non-blocking.
+- gircap now has EIGHT leaf deps; all five A2 doc locations + capture manifest
+  comment updated (00-spec table names eight). Full suite 2095 passed (4-core
+  selected crates), 11 skipped; clippy clean.
