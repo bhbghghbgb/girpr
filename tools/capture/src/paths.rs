@@ -150,14 +150,14 @@ fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> 
 /// `manifests/<tag>`, so a device name there is the same failure one directory
 /// up.
 pub(crate) fn is_windows_device_name(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or(component);
-    let stem = stem.to_ascii_uppercase();
-    matches!(
-        stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || (stem.len() == 4
-        && (stem.starts_with("COM") || stem.starts_with("LPT"))
-        && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+    // gircap's rule: no `CLOCK$`, and the raw stem is compared without the
+    // trailing-dot/space trim the repair binary applies. The shared crate owns
+    // only the mechanism; these parameters are this tool's rule.
+    girpr_fs_names::is_reserved_device_name(
+        component,
+        &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"],
+        false,
+    )
 }
 
 /// Escape one path component so it cannot name a Windows device.

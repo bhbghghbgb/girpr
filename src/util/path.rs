@@ -301,23 +301,14 @@ pub(crate) fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bo
 /// `NUL` device — and ignores case, which NTFS does for these names too. It is
 /// allocation-free: no uppercased copy of the component is made.
 fn is_windows_device_name(part: &str) -> bool {
-    let stem = part
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches([' ', '.']);
-    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
-        .iter()
-        .any(|name| stem.eq_ignore_ascii_case(name))
-    {
-        return true;
-    }
-    // `COM1`..`COM9` and `LPT1`..`LPT9`. Compare bytes, so a multi-byte UTF-8
-    // stem can never be sliced through a character boundary.
-    let bytes = stem.as_bytes();
-    bytes.len() == 4
-        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
-        && matches!(bytes[3], b'1'..=b'9')
+    // girpr's rule: the full reserved set (including `CLOCK$`) and trailing
+    // dot/space stripped before comparing. The shared crate owns only the
+    // mechanism; this call site owns the rule.
+    girpr_fs_names::is_reserved_device_name(
+        part,
+        &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"],
+        true,
+    )
 }
 
 /// A base path resolved once, for callers that join many rel paths under it.

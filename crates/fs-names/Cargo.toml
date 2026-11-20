@@ -1,0 +1,15 @@
+[package]
+name = "girpr-fs-names"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared Windows device-name predicate mechanism, parameterised by reserved set and trailing-character trimming"
+
+[lib]
+name = "girpr_fs_names"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

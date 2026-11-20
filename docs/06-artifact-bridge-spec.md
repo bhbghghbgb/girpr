@@ -707,6 +707,8 @@ the bridge actually reads.
 - **Sharing code with `gircap`.** A server that replays a bundle's bytes shares no
   knowledge of how the bundle was made. Sharing a crate that held either tool's
   program logic would make two tools that must stay independent depend on each
-  other to prove one of them works. A logic-free leaf such as `girpr-digest`
-  (hex spelling and fixed-width digest mechanics) is not that kind of sharing:
-  it carries no program behavior, and the bridge does not depend on `gircap`.
+  other to prove one of them works. Logic-free leaves such as `girpr-digest`
+  (hex spelling and fixed-width digest mechanics) and `girpr-fs-names` (the
+  Windows device-name predicate mechanism, parameterised by each caller's rule)
+  are not that kind of sharing: they carry no program behavior, and the bridge
+  does not depend on `gircap`.
