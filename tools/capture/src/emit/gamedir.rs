@@ -6,23 +6,15 @@
 //! scan file's path comes from `getGameConfigs.audio_pkg_scan_dir` - never
 //! hardcoded.
 //!
-//! ## Why the scan file's order is fixed
+//! ## Why the scan file's shape and order matter
 //!
-//! The game writes display names *positionally*: line 0 is Chinese, line 1 is
-//! English(US), line 2 Japanese, line 3 Korean, whatever languages are
-//! installed. So a file listing only `English(US)` would be read as
-//! "language 0 is English", and the tool under test would configure the wrong
-//! voice pack. The file is therefore written with all four lines and the
-//! unselected ones blanked, not truncated — a short file is a *different* file,
-//! not a smaller one.
-//!
-//! ## Why the scan file's shape matters
-//!
-//! The spec's wording is precise and it is a *selection*, not a positional
-//! table: "display names, one per line, in the order the game writes them...
-//! `--audio none` writes an empty file". An empty file could not be a
-//! positional table, so the file is the selected codes' names, one per line, in
-//! the game's canonical order rather than the caller's.
+//! The file is a *selection*, not a positional table: the renderer writes only
+//! the selected codes' display names, one per line, in the game's canonical
+//! order rather than the caller's, so two runs with the same selection produce
+//! the same file whatever order the flags arrived in. `--audio none` writes an
+//! empty body — a real "no voice pack" state, not a truncated file — and an
+//! unrecognised code is refused rather than written as a missing line. See
+//! [`audio_scan_file`].
 use std::path::Path;
 
 use girpr_audio_language::{display_name, display_name_position};

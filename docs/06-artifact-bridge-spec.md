@@ -711,11 +711,13 @@ the bridge actually reads.
   `girpr-report-core` (ordered-JSON and line-writing mechanics, parameterised by
   each caller's own field order, event placement, value types, escaping and
   boolean spelling), `girpr-digest`
-  (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (the
-  Windows device-name predicate mechanism, parameterised by each caller's rule)
-  and `girpr-retry` (the retry schedule factory and sleep driver, parameterised
-  by each caller's delay, jitter and cap), and `girpr-exit` (the exit-table
-  generation mechanism, parameterised by each caller's own codes and meanings),
+  (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (Windows
+  path-name and canonical-path mechanics — device names, trailing dot/space,
+  ASCII case fold, forward slash and verbatim-free canonicalization —
+  parameterised by each caller's rule) and `girpr-retry` (the retry schedule
+  factory and sleep driver, parameterised by each caller's delay, jitter and
+  cap), and `girpr-exit` (the exit-table generation mechanism, parameterised by
+  each caller's own codes and meanings),
   and `girpr-audio-language` (the token spelling and canonical code/display-name
   table, parameterised by each caller's case folding and kept beside each tool's
   own alias map and validation), and `girpr-proto` (the Sophon protobuf wire

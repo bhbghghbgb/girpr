@@ -59,7 +59,7 @@ machine rather than the code.
 | `src/repair/lock.rs` | the single-writer lock | `Lock::acquire` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
-| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
+| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics over the shared `girpr-filter` rules (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
@@ -393,9 +393,11 @@ supplies ordered-JSON and line-writing mechanics to all four: each tool keeps
 its own key order, event placement, value types, escaping and boolean spelling,
 so no report format is shared. `crates/digest/` supplies hex spelling and
 fixed-width digest mechanics to this binary, `gircap`
-and `sled2redb`, and `crates/fs-names/`, which supplies the Windows device-name
-predicate *mechanism* to this binary and `gircap` — each passes its own reserved
-set and trim flag, so no program rule is shared. `crates/retry/` supplies the
+and `sled2redb`, and `crates/fs-names/`, which supplies the Windows path-name and
+canonical-path mechanics — device names, trailing dot/space, ASCII case fold,
+forward slash and verbatim-free canonicalization — to this binary, `gircap` and
+`girsync`; each caller passes its own reserved set and rule flags, so no program
+rule is shared. `crates/retry/` supplies the
 retry schedule factory and injectable sleep driver to this binary and `gircap`;
 each passes its own delay, jitter and cap and keeps its own attempt loop, so
 neither retry policy is shared. `crates/exit/` supplies the exit-table generation
@@ -411,9 +413,11 @@ layout; each keeps its own decode boundary, dump format, validation and
 normalisation, so no program logic is shared. `crates/model/` supplies the region
 identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
-policy is shared. All four share the test-only scratch-directory policy in
-`crates/tempdir/`. None of these carries a program's flags, exit-code values or
-published shapes.
+policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
+glob-filter rules to this binary and `girsync`, pinning one glob version and one
+set of matching rules for both. All four share the test-only scratch-directory
+policy in `crates/tempdir/`. None of these carries a program's flags, exit-code
+values or published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is
@@ -520,10 +524,12 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `[lints.clippy] all = "warn"` themselves instead of inheriting the workspace
   table, and the command above checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
   deliberately absent: for a repair run a panic is a failed run, while for a
-  dev tool it is a failed developer run, and those paths may assert. The one
-  deliberate `unsafe` is the Windows handle call in `tools/sync/src/hardlink.rs`,
-  annotated at its item; the test that sets an environment variable in
-  `tools/sync/tests/cli_dispatch.rs` carries the same narrow annotation.
+  dev tool it is a failed developer run, and those paths may assert. There is no
+  `unsafe` in `tools/sync/src/hardlink.rs`: its link-count and file-identity
+  facts come from the shared `girpr-fs-identity` leaf, which uses the
+  `same-file`/`winapi-util` seams. The one deliberate `unsafe` is the test that
+  sets an environment variable in `tools/sync/tests/cli_dispatch.rs`, annotated
+  at its item.
 
 - **`cargo nextest run` is not `cargo test`.** It runs each test in its own
   process, which is what makes the suite's isolation real rather than
