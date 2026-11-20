@@ -28,7 +28,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | pending_review | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26 |
-| T17 | Region model leaf (`girpr-model::region`) | in_progress | | F25, A9 |
+| T17 | Region model leaf (`girpr-model::region`) | pending_review | 92292793 | F25, A9; leaf holds three ids + launcher/game ids + channel tuples + Host families + four base URLs + DOWNLOAD_MODE_CHUNK/CHANNEL_ENDPOINT; clap ValueEnum feature-gated (zero deps off); both tools re-export Region as Biz; override seam + resolve policies stay local; needs_channel now path()==CHANNEL_ENDPOINT (was const matches!), pinned by both suites; gircap 10 leaf deps, all five A2 tables + manifest header updated; test oracles keep literal region strings (A3). Non-blocking suggestions for reviewer: cosmetic Biz->Region rename at call sites; let girpr production_bases accept Host to drop local string->enum remap; stale "names two" guidance wording |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
 | T20 | Shared generic test helpers | todo | | F17, A5, A11; fake HTTP servers excluded (N7) |
@@ -113,8 +113,8 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap leaf deps are now NINE after T16 (audio-language, digest, exit,
-  fs-names, log, proto, report-core, retry, tempdir); any future leaf addition must update the five §A2 doc
+- gircap leaf deps are now TEN after T17 (audio-language, digest, exit,
+  fs-names, log, model, proto, report-core, retry, tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
   and verbatim foreign names local (§A7).
@@ -428,3 +428,27 @@ Finding from T16 (e377f50c):
   FU-01 — folded in, not re-added. gircap now NINE leaf deps; five A2 locations
   + capture Cargo.toml comment (eight -> nine) updated. Full suite 2158 passed,
   11 skipped.
+
+Finding from T17 (92292793):
+
+- crates/model (girpr-model) region module is logic-free: const accessors only
+  for the three region ids, launcher/game ids, channel tuples, Host families,
+  four production base URLs, and the byte-stable DOWNLOAD_MODE_CHUNK +
+  CHANNEL_ENDPOINT. No resolve policy, URL building or validation in the leaf.
+  clap ValueEnum derive is behind an optional `clap` feature — `cargo tree
+  -p girpr-model --no-default-features` has zero deps. Both programs re-export
+  `Region as Biz` and enable the feature.
+- girpr's production_bases string->Host mapping, capture's Biz::resolve, and the
+  full Endpoints<'a> override seam (incl. owned's Box::leak) stay at call sites.
+  The channel-only-on-deprecated rule moved from capture's `const fn matches!`
+  to a non-const `path() == CHANNEL_ENDPOINT` comparison, keyed off the shared
+  endpoint-name value; byte-identical, pinned by
+  only_the_deprecated_endpoint_carries_the_channel_tuple on both sides.
+- F25 pointers were stale (as expected); duplication premise validated against
+  current code. No byte contract changed; test oracles/fixture JSON deliberately
+  keep literal region strings (A3) and were NOT migrated.
+- gircap now has TEN leaf deps (model added); all five A2 doc locations + capture
+  manifest header updated (nine -> ten) in the same commit. The "table currently
+  names two" wording in CONVENTIONS/ORCHESTRATION is stale point-in-time, like
+  earlier tasks noted. Full suite 2162 passed, 11 skipped; clippy -D warnings
+  clean; fmt clean.
