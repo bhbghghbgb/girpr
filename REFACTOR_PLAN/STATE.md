@@ -28,7 +28,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | pending_review | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26 |
-| T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
+| T17 | Region model leaf (`girpr-model::region`) | in_progress | | F25, A9 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
 | T20 | Shared generic test helpers | todo | | F17, A5, A11; fake HTTP servers excluded (N7) |
