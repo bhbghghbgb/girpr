@@ -1,0 +1,15 @@
+[package]
+name = "girpr-audio-language"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared audio-language normalisation and display-name ordering mechanics, parameterised by each caller's own alias map, sentinel and validation policy"
+
+[lib]
+name = "girpr_audio_language"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

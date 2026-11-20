@@ -4,8 +4,9 @@
 with it — only logic-free leaf crates: the log policy, the digest hex mechanics,
 the Windows device-name predicate mechanism, the retry schedule/sleep driver
 (each tool passes its own rule, jitter and cap) and the exit-table generation
-mechanism (each tool supplies its own codes and meanings), plus the test
-scratch-directory policy.** It talks to the real HoYoPlay + Sophon
+mechanism (each tool supplies its own codes and meanings) and the audio-language
+mechanics (each tool keeps its own alias map, sentinel and validation), plus the
+test scratch-directory policy.** It talks to the real HoYoPlay + Sophon
 APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding one real file per test-matrix
 variant, every API response and manifest behind it, every chunk blob needed to
 materialize the old file, the current file, and the patch between them, and

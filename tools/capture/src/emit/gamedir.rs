@@ -25,6 +25,7 @@
 //! the game's canonical order rather than the caller's.
 use std::path::Path;
 
+use girpr_audio_language::{display_name, display_name_position};
 use ini_core::{Item, Parser};
 
 use crate::biz::Biz;
@@ -117,18 +118,6 @@ fn is_general_section(line: &str) -> bool {
     line.trim().trim_matches(|c| c == '[' || c == ']').trim() == "General"
 }
 
-/// The display name the game uses for an audio code, and its position in the
-/// game's canonical ordering.
-fn display_name(code: &str) -> Option<&'static str> {
-    match code {
-        "zh-cn" => Some("Chinese"),
-        "en-us" => Some("English(US)"),
-        "ja-jp" => Some("Japanese"),
-        "ko-kr" => Some("Korean"),
-        _ => None,
-    }
-}
-
 /// Render the audio scan file for the selected codes.
 ///
 /// Lines are the selected codes' display names, one per line, in the order
@@ -152,7 +141,7 @@ pub fn audio_scan_file(codes: &[String]) -> Result<String, String> {
         }
     }
     let mut selected: Vec<&str> = codes.iter().filter_map(|c| display_name(c)).collect();
-    selected.sort_by_key(|n| ORDER.iter().position(|o| o == n).unwrap_or(usize::MAX));
+    selected.sort_by_key(|n| display_name_position(n).unwrap_or(usize::MAX));
     selected.dedup();
     let mut out = String::new();
     for name in selected {
@@ -161,9 +150,6 @@ pub fn audio_scan_file(codes: &[String]) -> Result<String, String> {
     }
     Ok(out)
 }
-
-/// The game's canonical audio ordering.
-const ORDER: [&str; 4] = ["Chinese", "English(US)", "Japanese", "Korean"];
 
 /// One file to write into `game/` or `expected/`.
 pub struct VariantFile<'a> {

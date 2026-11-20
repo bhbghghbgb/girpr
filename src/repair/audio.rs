@@ -13,13 +13,10 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-/// Display names, in the order the game writes them.
-const DISPLAY: [(&str, &str); 4] = [
-    ("zh-cn", "Chinese"),
-    ("en-us", "English(US)"),
-    ("ja-jp", "Japanese"),
-    ("ko-kr", "Korean"),
-];
+// The code/display-name pairs and their order are shared with the capture
+// tool so both write the same scan-file bytes; the file's read/write policy
+// stays here.
+use girpr_audio_language::AUDIO_LANGUAGES;
 
 /// Decide the effective audio set for this run.
 ///
@@ -160,7 +157,7 @@ fn parse_scan_text(text: &str) -> (HashSet<String>, Vec<&str>) {
 /// file reads as an empty selection and would silently turn a configured
 /// language set into game-only.
 pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>) -> Result<()> {
-    let lines: Vec<&str> = DISPLAY
+    let lines: Vec<&str> = AUDIO_LANGUAGES
         .iter()
         .filter(|(code, _)| langs.contains(*code))
         .map(|(_, name)| *name)

@@ -684,6 +684,7 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "girpr-audio-language",
  "girpr-digest",
  "girpr-exit",
  "girpr-fs-names",
@@ -715,6 +716,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "girpr-audio-language",
  "girpr-digest",
  "girpr-exit",
  "girpr-filter",
@@ -737,6 +739,10 @@ dependencies = [
  "wiremock",
  "zstd",
 ]
+
+[[package]]
+name = "girpr-audio-language"
+version = "0.1.0"
 
 [[package]]
 name = "girpr-digest"

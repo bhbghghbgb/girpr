@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use girpr_audio_language::{CaseFold, normalize_audio_token};
+
 use crate::cli::{
     Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs,
 };
@@ -504,8 +506,13 @@ fn validate_audio(raw: &[String]) -> Result<AudioSelection> {
 }
 
 /// Lowercase, and accept `_` for `-`, so `EN_US` and `en-us` are the same language.
+///
+/// The lower + `_`→`-` step is shared with the repair binary. Trimming, ASCII
+/// folding, the `none` sentinel and the path-component check stay here, so the
+/// codes that reach the manifest pool and the fixture writer are byte-identical
+/// to before.
 fn normalize_audio(raw: &str) -> String {
-    raw.trim().to_ascii_lowercase().replace('_', "-")
+    normalize_audio_token(raw.trim(), CaseFold::Ascii)
 }
 
 /// Reject a path that cannot be a manifest-relative path, naming the flag.

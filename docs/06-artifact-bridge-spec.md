@@ -713,5 +713,8 @@ the bridge actually reads.
   and `girpr-retry` (the retry schedule factory and sleep driver, parameterised
   by each caller's delay, jitter and cap), and `girpr-exit` (the exit-table
   generation mechanism, parameterised by each caller's own codes and meanings),
-  are not that kind of sharing: they carry no program behavior, and the bridge
+  and `girpr-audio-language` (the token spelling and canonical code/display-name
+  table, parameterised by each caller's case folding and kept beside each tool's
+  own alias map and validation), are not that kind of sharing: they carry no
+  program behavior, and the bridge
   does not depend on `gircap`.

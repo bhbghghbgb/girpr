@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its six path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its seven path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-digest` (the hex spelling and fixed-width
@@ -17,7 +17,10 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # `girpr-retry` (the retry schedule factory and injectable sleep driver —
 # gircap keeps its own zero jitter and its own side-effectful attempt loop),
 # `girpr-exit` (the exit-table generation mechanism — the enum/`ALL`/code/pin
-# pattern only; gircap supplies its own codes and meanings) and
+# pattern only; gircap supplies its own codes and meanings),
+# `girpr-audio-language` (the lower + `_`→`-` token primitive and the four
+# code/display-name pairs — gircap keeps its own trim, none sentinel and
+# path-component validation) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
@@ -94,6 +97,11 @@ girpr-digest = { path = "../../crates/digest" }
 # A leaf crate that owns only the mechanism: gircap keeps its exact rule (no
 # `CLOCK$`, raw-stem comparison) by passing the reserved set and trim flag.
 girpr-fs-names = { path = "../../crates/fs-names" }
+# The shared lower + `_`→`-` audio-token primitive and the four canonical
+# code/display-name pairs. The leaf holds no audio policy: gircap keeps its own
+# trimming, ASCII folding, `none` sentinel and path-component validation, and
+# writes the same scan-file bytes as the repair binary for the same selection.
+girpr-audio-language = { path = "../../crates/audio-language" }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
 percent-encoding = "2.3.2"

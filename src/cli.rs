@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use girpr_audio_language::{CaseFold, normalize_audio_token};
 use girpr_log::Level;
 
 use crate::Biz;
@@ -409,8 +410,13 @@ pub fn is_audio_none(s: &str) -> bool {
 }
 
 /// Normalize user audio input ("English(US)", "en_us", ...) to sophon matching_field.
+///
+/// The lower + `_`→`-` step is shared with the capture tool; the alias map,
+/// the `none` sentinel and the unknown-code error stay local, so this tool's
+/// selection decisions do not change.
 pub fn normalize_audio_lang(s: &str) -> Option<String> {
-    match s.to_lowercase().replace('_', "-").as_str() {
+    let token = normalize_audio_token(s, CaseFold::Unicode);
+    match token.as_str() {
         "zh-cn" | "chinese" => Some("zh-cn".to_string()),
         "en-us" | "english" | "english(us)" => Some("en-us".to_string()),
         "ja-jp" | "japanese" => Some("ja-jp".to_string()),
