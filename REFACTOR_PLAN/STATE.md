@@ -17,7 +17,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | completed | db8c5e37 | F6, A10; parameterized predicate, both rules unchanged; §A2 tables updated (4 leaf deps); §A10 divergence → FU-03. Review B: no changes |
 | T04 | Trailing-dot/space and path-key predicates | completed | 0651c39b | F7; host policy explicit, both path_key kept; extended girpr-fs-names, girsync gained dep (no new gircap leaf); FU-04, FU-05. Review B: no code change |
 | T05 | Canonicalize + `\\?\` stripping helpers | completed | ebd758b9 | F8; canonical_no_verbatim in girpr-fs-names, all girsync dunce sites migrated; capture std::canonicalize sites + girpr fail-closed routine untouched; §F8 capture/dunce pointer stale; FU-06, FU-07. Review B: no code change |
-| T06 | File identity + link-count leaf | todo | | F9, A4; one deliberate `unsafe` to account for |
+| T06 | File identity + link-count leaf | in_progress | | F9, A4; one deliberate `unsafe` to account for |
 | T07 | Atomic temp-then-publish leaf | todo | | F10 |
 | T08 | Streaming hash-sink leaf | todo | | F3; ordering policies stay with owners |
 | T09 | Bounded zstd decode primitive | todo | | F28; medium confidence, may be skipped |
