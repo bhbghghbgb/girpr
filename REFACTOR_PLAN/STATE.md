@@ -27,7 +27,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | Exit-table mechanism macro | completed | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; A2 tables updated (6 deps then, 7 after T14); FU-22. Review E: no changes |
 | T14 | Audio-language normalisation primitive | completed | e67cf272 | F23; girpr-audio-language leaf, normalize_audio_token + CaseFold policy + AUDIO_LANGUAGES; alias/sentinel/validation stay local; gircap 7 leaf deps, §A2 updated; FU-23. Review E: no changes |
 | T15 | Ordered-JSON / `write_line` report core | completed | bcdbfa02 | F21, A3, A8; girpr-report-core leaf (write_json_object + write_line), three value vocabularies kept distinct, no preserve_order; gircap 8 leaf deps, A2 updated; FU-24, FU-25. Solo review: no changes |
-| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | in_progress | | F24; load-bearing field/JSON keys |
+| T16 | Sophon protobuf wire types leaf (`girpr-proto`) | pending_review | e377f50c | F24; three wire types in leaf, capture methods kept as local extension traits, chuncks/tag6/Serialize keys byte-identical; field-6 source name collapsed to unknown_field6 (source-only); gircap 9 leaf deps, A2 updated; FU-26 |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
 | T18 | API DTO leaf (keep both decoding strategies) | todo | | F26, A7 |
 | T19 | Shared log-capture test helper | todo | | F16, A5; helper must become public/re-exported |
@@ -76,6 +76,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-23 | Correct stale game/ scan-file module doc in tools/capture/src/emit/gamedir.rs | open | Raised by T14: lines 9-17 claim four display names written with unselected lines blanked; renderer actually writes only selected names (tests pin "English(US)\n"); predates T14, left scoped out |
 | FU-24 | Deduplicate the three report planes' text layout logic (bare/keyed/pair, quoting vs percent-encoding) | open | Raised by T15 (F-T15-01): blocked by A8 — would require normalizing value vocabularies and move bytes; raise only if a reviewer reopens the report boundary |
 | FU-25 | Record that sled2redb's conversion report remains coupled to girsync's Record contract | open | Raised by T15 (F-T15-02): intentional per F21; only relevant if girsync's writer or JSON order changes |
+| FU-26 | If source-level field-name parity ever matters, add a serde rename seam so product can keep `unknown` for field 6 | open | Raised by T16 (F-T16-02): no byte impact (prost keys by tag, product never serializes); current source-name collapse minimizes churn |
 
 ## Persistent context
 
@@ -112,8 +113,8 @@ Findings from T01 (e3a1bc08) that later tasks/reviewers depend on:
   Shared crate also supplies `encode_hex`/`decode_hex`, one-shot `md5_hex`/
   `sha256_hex`, `Md5`/`Sha256` newtypes, `EMPTY_SHA256` and public RFC/FIPS
   vector helpers. Direct `hex` deps removed from girpr, gircap, sled2redb.
-- gircap leaf deps are now EIGHT after T15 (audio-language, digest, exit,
-  fs-names, log, report-core, retry, tempdir); any future leaf addition must update the five §A2 doc
+- gircap leaf deps are now NINE after T16 (audio-language, digest, exit,
+  fs-names, log, proto, report-core, retry, tempdir); any future leaf addition must update the five §A2 doc
   locations (see CONVENTIONS.md) in the same commit. girsync began depending on
   girpr-digest in T08 for bytes/hex mechanics only — keep its DigestSet/AlgoSet
   and verbatim foreign names local (§A7).
@@ -285,7 +286,8 @@ Finding from T10 (217477de):
   pass. Full workspace: 2146 passed, 11 skipped.
 - gircap had FIVE leaf deps after T10 (log, digest, fs-names, retry, tempdir);
   all five A2 doc locations were updated in that commit. SIX after T13 (exit),
-  SEVEN after T14 (audio-language), EIGHT after T15 (report-core).
+  SEVEN after T14 (audio-language), EIGHT after T15 (report-core), NINE after T16
+  (proto).
   Earlier "four leaf deps" references in this file are point-in-time. FU-15
   likely moot at cleanup.
 
@@ -293,7 +295,7 @@ Review D confirmation (no fix commit):
 
 - A7 three digest semantics confirmed distinct after T08; shared digest leaf
   carries only raw bytes/hex mechanics, never a program digest vocabulary.
-- gircap has five leaf deps as of Review D (eight after T15); five A2 doc locations
+- gircap has five leaf deps as of Review D (nine after T16); five A2 doc locations
   current (00-spec.md:42, README.md, tools/sync/README.md,
   tools/capture/README.md, docs/06-artifact-bridge-spec.md) — any new leaf must
   update all five.
@@ -347,7 +349,7 @@ Finding from T13 (3c691e58):
   not a table change. No usage-error mapping moved into the leaf.
 - gircap had SIX leaf deps after T13 (log, digest, exit, fs-names, retry,
   tempdir), all five A2 doc locations updated then; SEVEN after T14, EIGHT after
-  T15. FU-22 is non-blocking.
+  T15, NINE after T16. FU-22 is non-blocking.
 
 Finding from T14 (e67cf272):
 
@@ -359,7 +361,7 @@ Finding from T14 (e67cf272):
   two CaseFold flavours — they are byte contracts (A3).
 - gircap had SEVEN leaf deps after T14 (audio-language, digest, exit, fs-names,
   log, retry, tempdir), all five A2 doc locations + manifest header updated then;
-  EIGHT after T15. Audio bytes verified identical against baseline.
+  EIGHT after T15, NINE after T16. Audio bytes verified identical against baseline.
 - Unrelated stale doc FU-23 (gamedir.rs game/ scan-file module comment) left out
   of scope. Product lib 422 + capture lib 727 + leaf 2 tests pass.
 
@@ -373,7 +375,7 @@ Review E confirmation (no fix commit):
   (scoped prefix EnvFilter + rendered target bytes); a plain function in
   girpr-log changes log bytes. Capture's injected DateTime -> format_timestamp
   seam is a byte contract — never swap for wall-clock timestamp().
-- gircap has SEVEN leaf deps as of Review E (eight after T15); five A2 doc
+- gircap has SEVEN leaf deps as of Review E (nine after T16); five A2 doc
   locations + capture manifest header current (any new leaf must update all in
   the same work). CaseFold Unicode vs Ascii + caller-side trim are intentional
   A3 divergences. Exit codes remain separate contracts (A9/N3); shared leaf
@@ -394,9 +396,9 @@ Finding from T15 (bcdbfa02):
 - All named byte-level report oracles pass unchanged. F21 medium confidence on
   the boundary confirmed viable: a narrow core works without normalizing values
   (A8 satisfied). FU-24 (text layout dedup) is A8-blocked, non-blocking.
-- gircap now has EIGHT leaf deps; all five A2 doc locations + capture manifest
-  comment updated (00-spec table names eight). Full suite 2095 passed (4-core
-  selected crates), 11 skipped; clippy clean.
+- gircap had EIGHT leaf deps after T15; all five A2 doc locations + capture
+  manifest comment updated then (00-spec table named eight). NINE after T16.
+  Full suite 2095 passed (4-core selected crates), 11 skipped; clippy clean.
 
 Solo review confirmation (no fix commit):
 
@@ -404,5 +406,25 @@ Solo review confirmation (no fix commit):
   normalizing the three value vocabularies; A3/A8 satisfied, no preserve_order
   enabled anywhere. All named byte oracles pass unchanged across all planes.
 - Full workspace suite 2157 passed, 11 skipped; clippy -D warnings clean. Leaf
-  deps: serde + dev serde_json only. gircap eight leaf deps; five A2 locations +
-  capture manifest comment current. sled2redb still reuses girsync writer (FU-25).
+  deps: serde + dev serde_json only. gircap eight leaf deps then (nine after T16);
+  five A2 locations + capture manifest comment current. sled2redb still reuses
+  girsync writer (FU-25).
+
+Finding from T16 (e377f50c):
+
+- girpr-proto leaf holds the three Sophon wire types + prost tags, chuncks and
+  tag 6 named unknown_field6, deriving serde::Serialize (field names ARE dump
+  JSON keys). Both programs re-export them; WantedManifest stays in product.
+  Byte gates: the_serialized_keys_are_the_documented_ones and
+  the_full_decode_carries_every_entry_verbatim_including_field_six + new tag-6
+  pin (0x30). F24 accurate; A2 "table names two" stale (was eight, now nine).
+- Capture's six methods + three normalise variants are public extension traits
+  (SophonChunkExt/SophonChunkFileExt/SophonChunkManifestExt) re-exported from
+  gircap::manifest; call sites must import the trait. No program logic in leaf.
+- Source-only change: product field 6 renamed unknown -> unknown_field6 (prost
+  keys by tag, product never serializes, so no wire/JSON byte changed). FU-26
+  tracks a possible serde-rename seam if source parity ever matters.
+- F-T16-01 (girpr-filter missing from doc tables) is a duplicate of existing
+  FU-01 — folded in, not re-added. gircap now NINE leaf deps; five A2 locations
+  + capture Cargo.toml comment (eight -> nine) updated. Full suite 2158 passed,
+  11 skipped.
