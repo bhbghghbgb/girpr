@@ -554,46 +554,10 @@ mod tests {
     /// `spawn_blocking_traced` call made from a spawned task captures the
     /// worker's dispatcher instead, and its blocking lines are lost the same
     /// way.
+    // Thin shim over the one public implementation in `girpr_log::test_support`;
+    // the precondition documented above and the buffer semantics hold there.
     async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
-        // See the precondition above: a multi-thread runtime would move the
-        // work `f` spawns to worker threads without the thread-local
-        // subscriber and lose their lines.
-        debug_assert_eq!(
-            tokio::runtime::Handle::current().runtime_flavor(),
-            tokio::runtime::RuntimeFlavor::CurrentThread,
-            "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
-        );
-
-        #[derive(Clone, Default)]
-        struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-
-        impl std::io::Write for Captured {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0
-                    .lock()
-                    .expect("captured log lock")
-                    .extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let buf = Captured::default();
-        let writer = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let out = f.await;
-        drop(guard);
-        let text = String::from_utf8(buf.0.lock().expect("captured log lock").clone())
-            .expect("tracing writes UTF-8");
-        (out, text)
+        girpr_log::test_support::logs_of_async(f).await
     }
 
     #[derive(Clone)]

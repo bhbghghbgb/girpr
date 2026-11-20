@@ -63,6 +63,14 @@ pub mod install;
 pub mod level;
 pub mod plan;
 
+/// Test-only log-capture helpers (the one `logs_of` implementation).
+///
+/// Public so every test binary can reach it under nextest's one-process-per-
+/// test model; off in shipped builds, enabled by each consumer's
+/// dev-dependencies. Each consumer keeps a thin `logs_of` shim of its own.
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 pub use filter::{console_filter, filter};
 pub use install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
 pub use level::Level;

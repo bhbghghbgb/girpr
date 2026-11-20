@@ -118,6 +118,11 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 tempfile = "3.27"
 
 [dev-dependencies]
+# The one shared log-capture helper, used by both unit and integration tests.
+# The `test-support` feature is off in the shipped build; nextest runs one
+# process per test and skips doctests, so the helper must be a public library
+# surface that every test binary can reach through a thin shim.
+girpr-log = { path = "crates/log", features = ["test-support"] }
 # The scratch-directory helper, shared with the two dev tools: one name, one
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.

@@ -836,50 +836,13 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
 /// site already carries the subscriber. The helper takes the dispatcher at
 /// **spawn time**, so a `spawn_blocking_traced` call made from a spawned task
 /// captures the worker's dispatcher instead, and its blocking lines are lost
-/// the same way. The async form is duplicated in the metadata tests: sharing
-/// it would require exporting a public test helper. The stdout data plane
+/// the same way. This is a thin shim over [`girpr_log::test_support::logs_of_async`],
+/// the one public implementation shared with the metadata unit tests; its
+/// precondition and buffer semantics live there. The stdout data plane
 /// (`REPORT`/`SUMMARY`) is separate and is asserted through the returned
 /// `Summary`, not through these lines.
 pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
-    // See the precondition above: a multi-thread runtime would move the work
-    // `f` spawns to worker threads without the thread-local subscriber and
-    // lose their lines.
-    debug_assert_eq!(
-        tokio::runtime::Handle::current().runtime_flavor(),
-        tokio::runtime::RuntimeFlavor::CurrentThread,
-        "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
-    );
-
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Captured {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("captured log lock")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let buf = Captured::default();
-    let writer = buf.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let guard = tracing::subscriber::set_default(subscriber);
-    let out = f.await;
-    drop(guard);
-    let text = String::from_utf8(buf.0.lock().expect("captured log lock").clone())
-        .expect("tracing writes UTF-8");
-    (out, text)
+    girpr_log::test_support::logs_of_async(f).await
 }
 
 // ---------------------------------------------------------------------------

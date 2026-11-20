@@ -12,6 +12,13 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+# The `test_support` module holds the one shared `logs_of` implementation. It
+# is a dev/test surface only: no shipped program links against it, and each
+# consumer opts in through a dev-dependency. `tokio` is needed only for the
+# async variant's current-thread debug assertion.
+test-support = ["dep:tokio"]
+
 [dependencies]
 # For the timestamp in a default log file name and in a caller-supplied instant
 # (a capture id or a manifest id).
@@ -24,3 +31,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # For the non-blocking file writer shared by the three installations. The
 # guard it returns is stored by each project, not by this crate.
 tracing-appender = "0.2.5"
+# Only the async `logs_of_async` test helper reads the current runtime's
+# flavor. Optional so shipped builds of this policy crate stay dependency-free.
+tokio = { version = "1.54.1", default-features = false, features = ["rt"], optional = true }
