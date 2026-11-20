@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its nine path deps are leaf crates holding a
+# the tree (docs/00-spec.md §2). Its ten path deps are leaf crates holding a
 # shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
@@ -26,7 +26,10 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # path-component validation),
 # `girpr-proto` (the Sophon protobuf wire types — tags, the misspelled `chuncks`
 # and opaque tag 6 only; gircap keeps its own dump format and all measurement,
-# validation and normalisation logic in this crate) and
+# validation and normalisation logic in this crate),
+# `girpr-model` (the region identity, ids, channel tuples, base URLs and the
+# chunk-mode/channel-endpoint values — gircap keeps its `Biz::resolve` policy,
+# its `Endpoints` override seam and every URL builder in this crate) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
@@ -97,6 +100,11 @@ prost = "0.14.6"
 # both programs decode. The leaf owns tags and field names only; gircap's dump
 # key names are preserved and every measurement/validation helper stays local.
 girpr-proto = { path = "../../crates/proto" }
+# The shared region values — the three ids, their launcher/game/channel tuples,
+# the four production bases and the two byte-stable constants. A logic-free
+# leaf: gircap keeps its own `Biz::resolve`, its `Endpoints` override seam and
+# its request builders. `clap` is on because `Biz` is the `--biz` flag type.
+girpr-model = { path = "../../crates/model", features = ["clap"] }
 zstd = "0.14.4"
 md-5 = "0.11.0"
 # Hex spelling of digests, shared with the repair binary and the converter. A

@@ -689,6 +689,7 @@ dependencies = [
  "girpr-exit",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-model",
  "girpr-proto",
  "girpr-report-core",
  "girpr-retry",
@@ -725,6 +726,7 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-fs-names",
  "girpr-log",
+ "girpr-model",
  "girpr-proto",
  "girpr-report-core",
  "girpr-retry",
@@ -793,6 +795,13 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "girpr-model"
+version = "0.1.0"
+dependencies = [
+ "clap",
 ]
 
 [[package]]

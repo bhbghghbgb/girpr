@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -75,6 +75,10 @@ prost = "0.14.6"
 # and opaque tag 6 as both programs decode them. The leaf owns only the byte
 # layout; this binary keeps its own wrapper and validation around it.
 girpr-proto = { path = "crates/proto" }
+# The shared region identity, ids and base URLs. The leaf holds only values;
+# this binary keeps its `Biz` resolve/request policy at its own call sites.
+# `clap` is enabled because `Biz` is this binary's `--biz` flag type.
+girpr-model = { path = "crates/model", features = ["clap"] }
 md-5 = "0.11.0"
 # Hex spelling and fixed-width digest mechanics, shared with the two dev tools
 # that cross the same digest/text boundary. A leaf crate with no program logic.

@@ -408,8 +408,10 @@ sentinel and validation, so no audio policy is shared. `crates/proto/` supplies
 the Sophon protobuf wire types to this binary and `gircap` — the three messages,
 their tags, the misspelled `chuncks` and opaque tag 6, so both decode one byte
 layout; each keeps its own decode boundary, dump format, validation and
-normalisation, so no program logic is shared. All four share the
-test-only scratch-directory policy in
+normalisation, so no program logic is shared. `crates/model/` supplies the region
+identity, ids, channel tuples and base URLs to this binary and `gircap`; each
+keeps its own resolve policy, override seam and URL builders, so no region
+policy is shared. All four share the test-only scratch-directory policy in
 `crates/tempdir/`. None of these carries a program's flags, exit-code values or
 published shapes.
 

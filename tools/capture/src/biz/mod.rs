@@ -2,7 +2,9 @@
 //!
 //! Every id this tool sends is *resolved* here rather than written into a URL,
 //! because the authoritative source is `getGameBranches` and the thing most
-//! worth recording is that the tool did not hardcode it.
+//! worth recording is that the tool did not hardcode it. The per-region values
+//! (launcher/game ids, channel tuple, bases) live in `girpr-model::region`; the
+//! resolution below is this tool's own policy.
 //!
 //! The measured global values — launcher `VYTpXlbWo8`, game `gopR6Cufr3`, cn
 //! channel `1/1`, global `1/0`, bili `14/0` — are the ones spec §3.4 pins.
@@ -30,35 +32,10 @@ pub use crate::encoding::percent;
 
 /// Which API/CDN family serves a region.
 ///
-/// `hk4e_cn` and `hk4e_bilibili` both live on the `mihoyo` family; the ids
-/// differ, the hosts do not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Host {
-    /// Mainland + Bilibili.
-    Mihoyo,
-    /// International.
-    Hoyoverse,
-}
-
-impl Host {
-    /// Base for the four HoYoPlay JSON endpoints.
-    pub const fn hyp_base(self) -> &'static str {
-        match self {
-            Host::Mihoyo => "https://hyp-api.mihoyo.com/hyp/hyp-connect/api",
-            Host::Hoyoverse => "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api",
-        }
-    }
-
-    /// Base for the Sophon `getBuild` JSON endpoint.
-    pub const fn sophon_base(self) -> &'static str {
-        match self {
-            Host::Mihoyo => "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api",
-            Host::Hoyoverse => {
-                "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api"
-            }
-        }
-    }
-}
+/// The families and their four production bases are defined once in
+/// `girpr-model::region`. The `Biz::resolve` policy and the `Endpoints` override
+/// seam stay here, at this tool's call site.
+pub use girpr_model::region::Host;
 
 /// The four HoYoPlay endpoints `gircap` addresses.
 ///
@@ -89,8 +66,11 @@ impl HypEndpoint {
     }
 
     /// Whether this endpoint carries the channel tuple.
-    pub const fn needs_channel(self) -> bool {
-        matches!(self, HypEndpoint::GameDeprecatedFileConfigs)
+    ///
+    /// The endpoint name that carries it is shared with the repair binary as
+    /// `girpr-model::region::CHANNEL_ENDPOINT`; the decision stays here.
+    pub fn needs_channel(self) -> bool {
+        self.path() == girpr_model::region::CHANNEL_ENDPOINT
     }
 }
 
@@ -115,35 +95,18 @@ pub struct Biz {
 
 impl Biz {
     /// Resolve a flag value into everything a request needs.
+    ///
+    /// The values come from `girpr-model::region`; the mapping itself is this
+    /// tool's resolve policy and stays at this call site.
     pub const fn resolve(id: BizId) -> Self {
-        match id {
-            BizId::Hk4eCn => Biz {
-                id,
-                launcher_id: "jGHBHlcOq1",
-                game_id: "1Z8W5NHUQb",
-                channel: "1",
-                sub_channel: "1",
-                cps: "hyp_mihoyo",
-                host: Host::Mihoyo,
-            },
-            BizId::Hk4eGlobal => Biz {
-                id,
-                launcher_id: "VYTpXlbWo8",
-                game_id: "gopR6Cufr3",
-                channel: "1",
-                sub_channel: "0",
-                cps: "hyp_hoyoverse",
-                host: Host::Hoyoverse,
-            },
-            BizId::Hk4eBilibili => Biz {
-                id,
-                launcher_id: "umfgRO5gh5",
-                game_id: "T2S0Gz4Dr2",
-                channel: "14",
-                sub_channel: "0",
-                cps: "hyp_mihoyo",
-                host: Host::Mihoyo,
-            },
+        Biz {
+            id,
+            launcher_id: id.launcher_id(),
+            game_id: id.game_id(),
+            channel: id.channel(),
+            sub_channel: id.sub_channel(),
+            cps: id.cps(),
+            host: id.host(),
         }
     }
 

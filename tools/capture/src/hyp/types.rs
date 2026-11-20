@@ -31,8 +31,9 @@ use crate::http::ApiError;
 /// `DOWNLOAD_MODE_FILE` and `DOWNLOAD_MODE_LDIFF` are whole-archive deliveries;
 /// they need the 7z and hdiff paths, and a manifest captured under either would
 /// describe an install that never chunk-repairs. Asserted at capture time — see
-/// [`GameConfigs::require_chunk_mode`].
-pub const DOWNLOAD_MODE_CHUNK: &str = "DOWNLOAD_MODE_CHUNK";
+/// [`GameConfigs::require_chunk_mode`]. The string itself is shared with the
+/// repair binary as `girpr-model::region::DOWNLOAD_MODE_CHUNK`.
+pub use girpr_model::region::DOWNLOAD_MODE_CHUNK;
 
 /// A number the API may send as an integer or as a decimal string.
 ///

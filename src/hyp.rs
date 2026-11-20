@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Biz;
 use crate::retry::{BackoffPolicy, Retry, retry};
+use girpr_model::region::{CHANNEL_ENDPOINT, Host};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
@@ -483,7 +484,7 @@ impl HypClient {
     }
 
     pub async fn deprecated_files(&self) -> Result<Vec<String>> {
-        let url = self.hyp_url("getGameDeprecatedFileConfigs", true);
+        let url = self.hyp_url(CHANNEL_ENDPOINT, true);
         let list: Vec<DeprecatedConfig> = self.get_node(&url, "deprecated_file_configs").await?;
         Ok(list
             .into_iter()
@@ -526,21 +527,21 @@ fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> S
 /// `DOWNLOAD_MODE_CHUNK`; the other two (`DOWNLOAD_MODE_FILE`,
 /// `DOWNLOAD_MODE_LDIFF`) need the 7z/hdiff paths that v1 does not implement.
 /// See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode`.
-pub const DOWNLOAD_MODE_CHUNK: &str = "DOWNLOAD_MODE_CHUNK";
+pub use girpr_model::region::DOWNLOAD_MODE_CHUNK;
 
 /// Production API bases for a host key (`mihoyo` vs overseas).
-/// Split out so [`HypClient::new`] and tests share one mapping.
+/// Split out so [`HypClient::new`] and the repair pipeline share one mapping.
+/// The base strings come from `girpr-model`; the key-to-family mapping stays
+/// here, so this binary keeps its own resolve policy for the host key.
 pub fn production_bases(host: &str) -> (String, String) {
-    match host {
-        "mihoyo" => (
-            "https://hyp-api.mihoyo.com/hyp/hyp-connect/api".to_string(),
-            "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api".to_string(),
-        ),
-        _ => (
-            "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api".to_string(),
-            "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api".to_string(),
-        ),
-    }
+    let family = match host {
+        "mihoyo" => Host::Mihoyo,
+        _ => Host::Hoyoverse,
+    };
+    (
+        family.hyp_base().to_string(),
+        family.sophon_base().to_string(),
+    )
 }
 
 fn urlencode(s: &str) -> String {
@@ -741,7 +742,7 @@ mod tests {
             (Biz::Hk4eBilibili, "umfgRO5gh5", "T2S0Gz4Dr2", "14", "0"),
         ] {
             let c = client_for(biz);
-            let url = c.hyp_url("getGameDeprecatedFileConfigs", true);
+            let url = c.hyp_url(CHANNEL_ENDPOINT, true);
             assert_eq!(
                 url,
                 format!(

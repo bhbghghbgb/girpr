@@ -6,6 +6,8 @@ mechanics (each tool keeps its own key order, event placement, value types,
 escaping and boolean spelling), the digest hex mechanics,
 the Sophon protobuf wire types (tags and field names only; every measurement,
 validation and normalisation helper stays here),
+the shared region values (ids, channel tuples and API bases only; every resolve
+policy, override seam and URL builder stays here),
 the Windows device-name predicate mechanism, the retry schedule/sleep driver
 (each tool passes its own rule, jitter and cap) and the exit-table generation
 mechanism (each tool supplies its own codes and meanings) and the audio-language

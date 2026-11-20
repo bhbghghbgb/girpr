@@ -273,42 +273,12 @@ pub struct ListArgs {
 
 /// The three regions `gircap` knows how to address.
 ///
-/// The launcher and game ids behind each are resolved in [`crate::biz`], never
-/// written here, so the flag set stays the only place a region is named.
-///
-/// The `value` spellings are the *API* ids (`hk4e_global`), not clap's derived
-/// kebab-case (`hk4e-global`). They have to match the ids the APIs return,
-/// because a bundle's documents name the region by API id and a reader joining a
-/// `--biz` flag to a `by_field` row must not have to learn a second spelling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
-pub enum Biz {
-    /// Mainland China (`hk4e_cn`).
-    #[value(name = "hk4e_cn")]
-    Hk4eCn,
-    /// International (`hk4e_global`).
-    #[value(name = "hk4e_global")]
-    Hk4eGlobal,
-    /// Bilibili (`hk4e_bilibili`).
-    #[value(name = "hk4e_bilibili")]
-    Hk4eBilibili,
-}
-
-impl Biz {
-    /// The id as the APIs spell it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Biz::Hk4eCn => "hk4e_cn",
-            Biz::Hk4eGlobal => "hk4e_global",
-            Biz::Hk4eBilibili => "hk4e_bilibili",
-        }
-    }
-}
-
-impl std::fmt::Display for Biz {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// The enum and its API-id spellings are defined once in `girpr-model::region`
+/// and shared with the repair binary, so the flag and the ids in a bundle's
+/// documents cannot drift apart. The launcher and game ids behind each are
+/// resolved in [`crate::biz`], never here, so the flag set stays the only place
+/// a region is named. The leaf's `clap` feature supplies the `ValueEnum` derive.
+pub use girpr_model::region::Region as Biz;
 
 /// How much of a decoded manifest to keep on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
