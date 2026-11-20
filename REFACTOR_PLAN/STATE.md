@@ -22,7 +22,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T08 | Streaming hash-sink leaf | completed | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13. Review D: no changes |
 | T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | completed | 217477de | F15, A6; jitter stays local (girpr 0.5 / gircap 0.0); backoff now leaf-only; gircap now 5 leaf deps, all five A2 doc tables updated; Review D: no changes |
-| T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
+| T11 | Log-install helpers + timestamp reuse | in_progress | | F18, F19; guard lifetime stays local |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
 | T13 | Exit-table mechanism macro | todo | | F22, A9; tables stay independent |
 | T14 | Audio-language normalisation primitive | todo | | F23 |
