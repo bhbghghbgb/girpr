@@ -20,7 +20,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | File identity + link-count leaf | completed | 57877cac | F9, A4; girpr-fs-identity leaf, no unsafe exists (A4/F9 claim stale), path-read policy stays local per N6; no gircap dep; FU-08, FU-09. Review C: no changes |
 | T07 | Atomic temp-then-publish leaf | skipped | | F10 premise contradicted by code: four sites share only tempfile; write mechanism (handle vs path), publish (persist vs claim+rename), durability, error type and lifecycle all differ; a single parameterized leaf would change behavior. girsync has no persist step. Details in Persistent context; FU-10..12 |
 | T08 | Streaming hash-sink leaf | pending_review | f84ec7b9 | F3; girpr-digest gains Sink/Algorithms/DigestBytes/hash_reader; ordering traps kept local; girsync now depends on girpr-digest (mechanics only); no gircap dep change; FU-13 |
-| T09 | Bounded zstd decode primitive | in_progress | | F28; medium confidence, may be skipped |
+| T09 | Bounded zstd decode primitive | skipped | | F28 medium-confidence claim contradicted by code: product decode is async write-side, capture sync read-side; ceilings/error text/result types deliberately distinct; only shared piece (hashing) already in girpr-digest. zstd_measure loops stay duplicated (N10). FU-14 |
 | T10 | Retry policy/schedule leaf (`girpr-retry`) | todo | | F15, A6; jitter divergence stays local |
 | T11 | Log-install helpers + timestamp reuse | todo | | F18, F19; guard lifetime stays local |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | todo | | F20 |
@@ -64,6 +64,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | open | Raised by T07 (F07-b): girsync uses tempdir_in/tempfile_in with kept path, no cleanup, claim publish — a different primitive, excluded from T07 |
 | FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | open | Raised by T07 (F07-c): report's static "high confidence" was wrong for the sync shape; F10 partly stale, not authoritative |
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | open | Raised by T08: N10 requires those loops stay duplicated for distinct error text, T09 owns bounded zstd decode; any change must preserve digest bytes + error messages exactly |
+| FU-14 | Consider using the shared digest sink in capture's measure path | open | Raised by T09 (FU-T09-B): zstd_measure/zstd_measure_from use raw md5::Md5 while DualDigest uses girpr_digest::Sink; low value, risks N10 error-text/byte contracts — flag only, do not implement without confirmation |
 
 ## Persistent context
 
@@ -242,3 +243,16 @@ Finding from T08 (f84ec7b9):
 - F3's src/util/md5.rs:365,397-402 pointer stale (now test code); real sink is
   md5_reader_digest_with_buf. FU-13 tracks a possible zstd_measure follow-up
   (must respect N10 duplication + distinct error text).
+
+Finding from T09 (skipped; no code change):
+
+- Bounded zstd decode has NO viable shared leaf (F28 medium confidence wrong).
+  Product path is async write-side (zstd write::Decoder into HashingWriter, blob
+  never held, compressed + decompressed ceilings, retry/consumed accounting,
+  finish() completeness); capture is sync read-side (read::Decoder, buffered Vec
+  via take(limit+1) or 16 KB measure loop). Opposite APIs, distinct byte-stable
+  error text, distinct result types (Md5 newtype vs hex String vs Vec) — no
+  forced wrapper. Ceilings/hash-order/restart are deliberately NOT in the
+  shared digest crate (T08 design); extracting them would change error messages.
+- zstd_measure / zstd_measure_from stay duplicated (N10). FU-14 is a flag-only
+  suggestion to consider the shared sink in capture's measure path.
