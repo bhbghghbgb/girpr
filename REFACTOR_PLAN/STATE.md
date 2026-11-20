@@ -25,7 +25,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T11 | Log-install helpers + timestamp reuse | pending_review | 7b4ff3be | F18, F19; girpr-log gains install mechanics + format_timestamp; guard/layer stay local; DateTime seam preserved; bare --log-file behavior changed (FU-16); no new gircap dep; FU-16..18 |
 | T12 | CLI leaf (`OutputFormat`, `LogArgs`, clap-error mapper) | skipped | | F20 premise contradicted by code + live --help: help text and OutputFormat variant docs differ substantively across the three tools, and variant docs render into --help Possible values — sharing changes CLI bytes (A3). Macros cannot expand to struct fields. Only byte-neutral piece is the clap-error mapper (FU-19). Details in Persistent context |
 | T13 | Exit-table mechanism macro | pending_review | 3c691e58 | F22, A9; girpr-exit leaf define_exit_table! generates mechanism only, tables/codes/strings unchanged; gircap now 6 leaf deps, §A2 updated; FU-22 |
-| T14 | Audio-language normalisation primitive | todo | | F23 |
+| T14 | Audio-language normalisation primitive | in_progress | | F23 |
 | T15 | Ordered-JSON / `write_line` report core | todo | | F21, A3, A8; medium confidence, byte-critical |
 | T16 | Sophon protobuf wire types leaf (`girpr-proto`) | todo | | F24; load-bearing field/JSON keys |
 | T17 | Region model leaf (`girpr-model::region`) | todo | | F25, A9 |
