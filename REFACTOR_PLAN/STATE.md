@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Digest newtypes + hex sweep (`girpr-digest`) | todo | | F2, F4, F5 |
+| T01 | Digest newtypes + hex sweep (`girpr-digest`) | in_progress | | F2, F4, F5 |
 | T02 | `ChunkIdentity` (md5, size) value type | todo | | F27; follows T01 |
 | T03 | Windows device-name predicate leaf (`girpr-fs-names`) | todo | | F6, A10; share the rule, do not change behavior |
 | T04 | Trailing-dot/space and path-key predicates | todo | | F7; host policy explicit, `path_key` not merged |
