@@ -59,14 +59,14 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-06 | Decide whether gircap's std::canonicalize containment sites should consolidate onto the shared helper | dropped | Raised by T05; coordinated root+child rewrite, byte-stability risk. Planning: "decide whether" with no safe implementation |
 | FU-07 | Migrate girsync test oracles off direct dunce so its direct dunce dep can be dropped | dropped | Raised by T05; optional cleanup. Planning: circular oracle risk (tests helper with itself), marginal value |
 | FU-08 | Correct README sentence claiming a deliberate unsafe Windows handle call in girsync's hardlink module | done | f054b3c8; replaced with verified facts (no unsafe in hardlink.rs; only env-var test). Review: verified |
-| FU-09 | Add Windows regression test for lock path swapped to symlink after open | batched (Batch T) | Raised by T06; existing swap test cfg(unix). Planning: kept, test-only, no byte risk |
+| FU-09 | Add Windows regression test for lock path swapped to symlink after open | done | 9d8524f4, cd1f4638; cfg(windows) test with GIRPR_TEST_REQUIRE_SYMLINK skip convention. Review fix: pin safety outcome (never Ok(true)) instead of assuming std reports a file symlink as a file — is_file() is false on current std, so reparse branch unreachable via swap |
 | FU-10 | Re-scope atomic publish as a parameterized temp-file publish guard leaf | dropped | Raised by T07 (F07-a). Planning: expands skipped T07; note itself questions thin-wrapper value |
 | FU-11 | Decide whether girsync's kept-path working-name creation should use any shared temp helper | dropped | Raised by T07 (F07-b). Planning: different primitive explicitly excluded from skipped T07 |
 | FU-12 | Re-validate F10 against code before opening any atomic-publish follow-up | dropped | Raised by T07 (F07-c). Planning: meta "re-validate report" task, moot at report deletion |
 | FU-13 | Consider using girpr-digest Sink/hash_reader as the digest core of capture's zstd_measure / zstd_measure_from loops | dropped | Raised by T08. Planning: §N10 keeps the loops duplicated for distinct error text; changing risks §A3 error bytes |
 | FU-14 | Consider using the shared digest sink in capture's measure path | dropped | Review D: duplicate of FU-13 (same N10 constraint) |
 | FU-15 | Correct report A2 claim that the capture spec table names two leaf crates | dropped | Review D: moot at final cleanup when report deleted |
-| FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | batched (Batch T) | Raised by T11, Review E accepted; no byte impact. Planning: kept, cheap regression test locking in accepted behavior |
+| FU-16 | Consider a cheap CLI regression test for bare --log-file <name> | done | 9d8524f4; asserts exit 1, stderr `log file: <name>`, file contents. open_log_file unchanged; no byte impact |
 | FU-17 | Consider splitting log-install mechanics into a separate leaf if girpr-log must stay minimal | dropped | Raised by T11. Planning: speculative "split if we must" with no trigger or concrete benefit |
 | FU-18 | Consider normalizing capture's env-warning prefix (gircap: vs WARN) only if uniform stderr wording desired | dropped | Raised by T11. Planning: changes observable stderr bytes (§A3) |
 | FU-19 | Extract only the clap-error -> usage-code mapper into a byte-neutral leaf parameterised by caller usage code (no shared exit table) | batched (Batch C) | Raised by T12 (F-T12A): preserve exit mechanics, verify codes 0/1/3 identical. Planning: kept, only byte-neutral piece of skipped T12 |
@@ -80,7 +80,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-27 | Decide whether the three region variant names duplicated in capture's local clap Biz enum are acceptable long-term | dropped | Raised by Review F. Planning: "decide/revisit if" with no action; safe state correct — do not reintroduce shared variant docs |
 | FU-28 | Consider having girpr's production_bases accept Host directly to drop its local string->enum remap | dropped | Raised by Review F. Planning: local call-site policy cleanup, no cross-program value |
 | FU-29 | Cosmetic: rename product's Biz alias to Region at call sites | dropped | Raised by Review F. Planning: cosmetic only |
-| FU-30 | Consider an always-on guard for logs_of_async's current-thread precondition | batched (Batch T) | Raised by Review G. Planning: kept, cheap one-line robustness fix preventing silent partial-log capture |
+| FU-30 | Consider an always-on guard for logs_of_async's current-thread precondition | done | 9d8524f4; debug_assert_eq! -> assert_eq!, message byte-identical, multi_thread #[should_panic] test; tokio dev-only, test-support off in shipped builds |
 | FU-31 | Optionally route sync/capture suites through the shared test_support::temp_dir helper | dropped | Raised by Review G. Planning: workspace-consistency-only test churn, low value, touches multiple suites |
 
 ## Persistent context
@@ -570,3 +570,25 @@ Batch D review confirmation (f054b3c8; all four FU done, no fix):
   points table exhaustiveness, a README wording nit). NOT reopened as follow-ups:
   same category the Phase 3 guard already dropped as doc-only cosmetic (FU-05,
   FU-29, FU-31); reopening would defeat the run-away guard.
+
+Batch T review confirmation (9d8524f4 + fix cd1f4638; all three FU done):
+
+- Fix needed because the Windows test assumed std reports a file symlink as a
+  regular file. On current std (1.100) path_meta.file_type().is_file() is FALSE
+  for a file symlink, so may_write_body returns Ok(false) at its guard before
+  identity comparison — the reparse-point branch of facts_at_path is NOT
+  reachable via a symlink swap on current std. The test now pins the safety
+  outcome (never Ok(true); an error, if reached, says "no longer names"; target
+  bytes untouched) and is correct on both old and current std. GIRPR_TEST_
+  REQUIRE_SYMLINK skip-or-fail convention unchanged (soft-skipped here with os
+  error 1314). Any future attempt to cover that reparse branch needs a separate
+  decision (production gate review or a non-name-surrogate reparse fixture).
+- Test-only confirmed: no production code/bytes changed; open_log_file empty
+  diff; always-on guard assertion message byte-identical; tokio dev-only (no
+  tokio in girpr-log's normal deps, test-support off in shipped builds); no new
+  gircap leaf dep / §A2 churn; no plan/report references. Full workspace
+  --all-features 2165 passed, 11 skipped; clippy/fmt clean.
+- Reviewer noted (not reopened as follow-ups, per Phase 3 guard): the pre-existing
+  Unix swap test's expect_err("no longer names") may similarly be unable to fire
+  behind the is_file guard; and the bare --log-file test could optionally assert
+  the `log file:` line inside the created file.
