@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use girpr::{Args, RunCtx, RunExit, flush_log, init_tracing, run as repair_run};
+use girpr::{
+    Args, RunCtx, RunExit, flush_log, init_tracing, log_file_announcement, run as repair_run,
+};
 // The binary is a direct consumer of the report plane, not just of the facade's
 // re-export: an edit to repair leaves this crate and its tests cached.
 use girpr_report::{emit, summary_record};
@@ -27,8 +29,8 @@ fn main() -> ExitCode {
     // a `tracing::info!` would be filtered out of stderr by the very
     // `--log-level` the caller chose, and an unfiltered run means a caller who
     // lost the log can still find it.
-    if let Some(path) = plan.named_file() {
-        eprintln!("log file: {}", path.display());
+    if let Some(line) = log_file_announcement(&plan) {
+        eprintln!("{line}");
     }
 
     let ctx = match args.into_ctx() {

@@ -22,8 +22,9 @@
 //!   [`summary_record`] — the run counters and the stdout automation contract;
 //! - [`Args`] plus the audio helpers — the command-line parser;
 //! - [`Biz`] — the game/channel selector;
-//! - [`init_tracing`], [`flush_log`], [`Level`] and [`girpr_log`] — the logging
-//!   entry points and the policy type `init_tracing` returns.
+//! - [`init_tracing`], [`flush_log`], [`log_file_announcement`], [`Level`] and
+//!   [`girpr_log`] — the logging entry points and the policy type `init_tracing`
+//!   returns.
 //!
 //! Everything else is an implementation detail. Integration tests reach the
 //! internal types they construct through [`test_support`], a hidden seam with
@@ -84,7 +85,7 @@ pub use girpr_log::Level;
 pub use girpr_report::{
     Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, summary_record,
 };
-pub use logging::{flush_log, init_tracing};
+pub use logging::{flush_log, init_tracing, log_file_announcement};
 pub use repair::run;
 pub use repair::scope::ledger::Meter;
 

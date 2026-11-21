@@ -54,6 +54,23 @@ use tracing_subscriber::prelude::*;
 /// environment variables that answer for the flags.
 pub const PROJECT: &str = "girpr";
 
+/// The raw-stderr line that acknowledges a caller-named log file.
+///
+/// [`init_tracing`] already announces the path into the file through
+/// [`girpr_log::announce_log_file!`]. A caller who *named* the file, however,
+/// never saw a timestamped default and may have silenced the console, so the
+/// binary repeats the path on stderr without going through a filter. This is
+/// that whole line as a value: the binary prints it and the tests assert it,
+/// so the bytes have exactly one definition.
+///
+/// `None` when the file was not named (the default, or no file at all): nobody
+/// asked for it, so there is nothing to acknowledge. Pure — the plan is already
+/// resolved, and nothing here touches a process, a sink or the environment.
+pub fn log_file_announcement(plan: &LogPlan) -> Option<String> {
+    plan.named_file()
+        .map(|path| format!("log file: {}", path.display()))
+}
+
 /// The guard that keeps the non-blocking file writer alive for the run.
 ///
 /// Dropping it drains the worker's queue and flushes the file. A static slot is
@@ -131,28 +148,18 @@ fn init_tracing_with(
     // the file; the guard is held separately and registered only if the
     // subscriber accepts the layer.
     let mut guard = None;
-    let file_layer = match plan.file_path() {
+    let file_layer = match open_or_warn(plan.file_path(), warnings) {
         None => None,
-        Some(path) => match open_log_file(path) {
-            Ok(f) => {
-                let (writer, worker_guard, filter) = file_sink(f, &plan);
-                guard = Some(worker_guard);
-                Some(
-                    tracing_subscriber::fmt::layer()
-                        .with_writer(writer)
-                        .with_ansi(false)
-                        .with_filter(filter),
-                )
-            }
-            Err(e) => {
-                let _ = writeln!(
-                    warnings,
-                    "WARN disabling file logging ({}): {e}",
-                    path.display()
-                );
-                None
-            }
-        },
+        Some(f) => {
+            let (writer, worker_guard, filter) = file_sink(f, &plan);
+            guard = Some(worker_guard);
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(writer)
+                    .with_ansi(false)
+                    .with_filter(filter),
+            )
+        }
     };
 
     // A subscriber that is already installed would swallow the file layer
@@ -176,6 +183,27 @@ fn init_tracing_with(
 
     girpr_log::announce_log_file!(plan, module_path!());
     plan
+}
+
+/// Open the plan's file, or warn and open nothing when it cannot be opened.
+///
+/// Split out of [`init_tracing_with`] so the degradation path is testable in
+/// process without installing the one-per-process subscriber. The warning
+/// bytes stay exactly as they were: a run must not end differently because of
+/// where it was asked to log.
+fn open_or_warn(path: Option<&Path>, warnings: &mut dyn Write) -> Option<std::fs::File> {
+    let path = path?;
+    match open_log_file(path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            let _ = writeln!(
+                warnings,
+                "WARN disabling file logging ({}): {e}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Register the guard the accepted subscriber's appender writes through.
@@ -209,9 +237,86 @@ pub fn flush_log() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use girpr_log::EnvOptions;
     use girpr_tempdir::TempDir;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The stderr echo has one definition, and rendering it is pure.
+    #[test]
+    fn log_file_announcement_renders_the_named_path() {
+        let scratch = TempDir::new("girpr_logging", "announcement");
+        let named = scratch.join("nested").join("run.log");
+        let plan = LogPlan::resolve(
+            "girpr",
+            LogOptions {
+                log_file: Some(named.clone()),
+                ..Default::default()
+            },
+            EnvOptions::default(),
+        );
+        assert_eq!(
+            log_file_announcement(&plan).as_deref(),
+            Some(format!("log file: {}", named.display()).as_str()),
+            "the echo is the whole raw-stderr line"
+        );
+
+        // A bare name keeps its spelling: there is no parent to resolve.
+        let bare = Path::new("girpr-bare.log");
+        let bare_plan = LogPlan::resolve(
+            "girpr",
+            LogOptions {
+                log_file: Some(bare.to_path_buf()),
+                ..Default::default()
+            },
+            EnvOptions::default(),
+        );
+        assert_eq!(
+            log_file_announcement(&bare_plan).as_deref(),
+            Some("log file: girpr-bare.log")
+        );
+
+        // The default is not named; nobody asked for it, so nothing is echoed.
+        let default = LogPlan::resolve("girpr", LogOptions::default(), EnvOptions::default());
+        assert_eq!(log_file_announcement(&default), None);
+    }
+
+    /// A file that cannot be opened degrades to a warning, not a failed run.
+    #[test]
+    fn an_unopenable_log_file_warns_and_keeps_the_plan() {
+        let scratch = TempDir::new("girpr_logging", "unopenable");
+        let blocker = scratch.join("not_a_dir");
+        std::fs::write(&blocker, b"x").expect("blocker file");
+        let bad = blocker.join("run.log");
+
+        let mut warnings = Vec::new();
+        assert!(open_or_warn(Some(&bad), &mut warnings).is_none());
+        let warnings = String::from_utf8(warnings).expect("the warnings are utf-8");
+        assert!(
+            warnings.contains("WARN disabling file logging"),
+            "an unopenable log file degrades to a warning:\n{warnings}"
+        );
+        assert!(
+            warnings.contains(bad.to_str().unwrap()),
+            "the warning names the file it could not open:\n{warnings}"
+        );
+
+        // The decision did not move: an unopenable path is still the named
+        // file, so the caller still gets the echo they asked for.
+        let plan = LogPlan::resolve(
+            "girpr",
+            LogOptions {
+                log_file: Some(bad.clone()),
+                ..Default::default()
+            },
+            EnvOptions::default(),
+        );
+        assert_eq!(plan.file_path(), Some(bad.as_path()));
+        assert_eq!(
+            log_file_announcement(&plan).as_deref(),
+            Some(format!("log file: {}", bad.display()).as_str())
+        );
+    }
 
     /// Serializes tests that touch the process-wide guard slot.
     ///
