@@ -2003,33 +2003,67 @@ fn seed_one_damaged_one_clean(dir: &std::path::Path) {
     write_game_file(dir, &fx.files[0].rel, &damaged);
 }
 
-/// A tiny repair pins the order and the one-record-per-event rule: `REPORT`
-/// once, then (if the run is long enough) any `PROGRESS` ticks, then exactly
-/// one `SUMMARY` last.
+/// Restore a fresh one-clean-one-damaged install before each plane of a merged
+/// test. The first plane's run bumps `config.ini` and repairs the damaged file;
+/// removing the version file and re-seeding keeps the second plane's report
+/// identical to what a standalone test saw.
+fn reseed_install(dir: &std::path::Path) {
+    let _ = std::fs::remove_file(dir.join("config.ini"));
+    seed_one_damaged_one_clean(dir);
+}
+
+/// A tiny repair pins the order and the one-record-per-event rule on both
+/// output planes: `REPORT` once, then (if the run is long enough) any
+/// `PROGRESS` ticks, then exactly one `SUMMARY` last. The two planes share one
+/// mock and install; the install is re-seeded between runs so each plane sees
+/// the same one-clean-one-damaged state.
 #[tokio::test]
-async fn a_tiny_repair_emits_report_then_exactly_one_summary() {
+async fn the_json_and_text_planes_agree_on_a_tiny_repair() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
     let dir = temp_dir("golden_repair");
-    // One clean file and one damaged file: the repair skips one and rebuilds
-    // the other, so the run is short and its `SUMMARY` is the base shape.
-    seed_one_damaged_one_clean(&dir);
 
+    // JSON plane: the script-parsed form. One clean file and one damaged file
+    // make the run short, so its `SUMMARY` is the base shape.
+    reseed_install(&dir);
     let run = run_data_plane(&dir, &mock, &[]).await;
     assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+
+    // Text plane: the same records rendered as `EVENT key=value …`, with the
+    // extra one-terminal-`SUMMARY` check the text plane carries.
+    reseed_install(&dir);
+    let run = run_text_plane(&dir, &mock, &[]).await;
+    assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
     assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
     mock.stop();
 }
 
 /// `--print-plan` adds exactly one `PLAN` between `REPORT` and the run's single
-/// `SUMMARY`, and writes nothing.
+/// `SUMMARY` on both output planes, and writes nothing.
 #[tokio::test]
-async fn print_plan_emits_one_plan_between_report_and_summary() {
+async fn the_json_and_text_planes_agree_on_print_plan() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
     let dir = temp_dir("golden_print_plan");
-    seed_one_damaged_one_clean(&dir);
 
+    // JSON plane.
+    reseed_install(&dir);
     let run = run_data_plane(&dir, &mock, &["--print-plan"]).await;
     assert_eq!(run.code, 0, "--print-plan exits 0:\n{}", run.stderr);
+    assert_golden(
+        &run,
+        &[
+            ("report", REPORT_KEYS),
+            ("plan", PLAN_KEYS),
+            ("summary", SUMMARY_KEYS),
+        ],
+    );
+
+    // Text plane: the `PLAN` sits in the same place, with the same field order.
+    reseed_install(&dir);
+    let run = run_text_plane(&dir, &mock, &["--print-plan"]).await;
+    assert_eq!(run.code, 0, "--print-plan exits 0:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
     assert_golden(
         &run,
         &[
@@ -2042,15 +2076,23 @@ async fn print_plan_emits_one_plan_between_report_and_summary() {
 }
 
 /// `--check-only` is `REPORT` and the single terminal `SUMMARY`, with no
-/// `PLAN`; a damaged install is exit `4`.
+/// `PLAN`, on both output planes; a damaged install is exit `4`.
 #[tokio::test]
-async fn check_only_emits_report_then_exactly_one_summary() {
+async fn the_json_and_text_planes_agree_on_check_only() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
     let dir = temp_dir("golden_check_only");
-    seed_one_damaged_one_clean(&dir);
 
+    // JSON plane.
+    reseed_install(&dir);
     let run = run_data_plane(&dir, &mock, &["--check-only"]).await;
     assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+
+    // Text plane.
+    reseed_install(&dir);
+    let run = run_text_plane(&dir, &mock, &["--check-only"]).await;
+    assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
     assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
     mock.stop();
 }
@@ -2074,60 +2116,6 @@ fn assert_one_terminal_summary(run: &DataPlaneRun) {
         "SUMMARY must be the final record:\n{}",
         run.stdout
     );
-}
-
-/// The text plane is the same records as the JSON plane, rendered as
-/// `EVENT key=value …`: same events, same field order, exactly one terminal
-/// `SUMMARY`. The keys come from the shared constants above rather than a
-/// second copy of the expectation.
-#[tokio::test]
-async fn a_tiny_repair_pins_the_text_plane_with_one_terminal_summary() {
-    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
-    let dir = temp_dir("text_plane_repair");
-    seed_one_damaged_one_clean(&dir);
-
-    let run = run_text_plane(&dir, &mock, &[]).await;
-    assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
-    assert_one_terminal_summary(&run);
-    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
-    mock.stop();
-}
-
-/// The text plane's `PLAN` sits between `REPORT` and the single terminal
-/// `SUMMARY`, with the same field order the JSON plane uses.
-#[tokio::test]
-async fn the_text_plane_pins_plan_between_report_and_summary() {
-    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
-    let dir = temp_dir("text_plane_print_plan");
-    seed_one_damaged_one_clean(&dir);
-
-    let run = run_text_plane(&dir, &mock, &["--print-plan"]).await;
-    assert_eq!(run.code, 0, "--print-plan exits 0:\n{}", run.stderr);
-    assert_one_terminal_summary(&run);
-    assert_golden(
-        &run,
-        &[
-            ("report", REPORT_KEYS),
-            ("plan", PLAN_KEYS),
-            ("summary", SUMMARY_KEYS),
-        ],
-    );
-    mock.stop();
-}
-
-/// `--check-only` on the text plane is the same `REPORT` and single terminal
-/// `SUMMARY` as the JSON plane, with no `PLAN`; a damaged install is exit `4`.
-#[tokio::test]
-async fn the_text_plane_check_only_emits_report_then_exactly_one_summary() {
-    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
-    let dir = temp_dir("text_plane_check_only");
-    seed_one_damaged_one_clean(&dir);
-
-    let run = run_text_plane(&dir, &mock, &["--check-only"]).await;
-    assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
-    assert_one_terminal_summary(&run);
-    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
-    mock.stop();
 }
 
 /// `--plan-out` alone writes its JSON document and adds nothing to the text
