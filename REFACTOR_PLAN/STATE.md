@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Break the `girpr-tempdir → girsync` inversion | in_progress | | |
+| T01 | Break the `girpr-tempdir → girsync` inversion | pending_review | 220ad882 | Dedicated `girpr-sync-test-support` leaf (deviation over feature/move options); §A2 payoff achieved — tempdir is tempfile-only, girpr/gircap dev graphs no longer pull girsync |
 | T02 | `girpr-util` leaf crate | todo | | |
 | T03 | Cheapest product leaves batch | todo | | |
 | T04 | Writer / file-repair crate | todo | | |
