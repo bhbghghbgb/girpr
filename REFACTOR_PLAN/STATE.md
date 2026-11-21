@@ -16,7 +16,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | Memory cache seam for girsync record/FS cases | completed | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
 | T03 | Structured repair diagnostics to drop log-only spawns | completed | aa970db2, 02ddeaaa | 2 commits (surface + migration); 13 spawns→1 (one process smoke kept); premise was 11 cases/13 calls not 10/10; structured diagnostics are thread-local, take_repair_diagnostics() needs current-thread runtime; Rig::logs now lazy OnceLock; no nextest filter change; CLI goldens/shipped bytes unchanged |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | completed | e41a134a, a627d4fd | 2 commits (helper + migration); 14 log-case spawns→1 smoke (separate from T03 repair smoke); contracts binary nextest 2.141s→1.235s; cases were not purely formatting — process-boundary assertions preserved via open_or_warn unit test, girpr_log::test_support::logs_of, pure plan assertions; no nextest filter change; announcement bytes/goldens unchanged; 0 girpr_<ts>.log under target/ |
-| T05 | Replace wiremock with a std-only loopback HTTP mock | pending_review | b5eba55d, c2fb8120, 6a375e6b, 5e7b2735, 8a8d077e, e1dee308, 80053a67 | 7 commits: dependency-free leaf + 4 site migrations + repair-server fold-in + manifest cleanup; wiremock gone from all 4 manifests; unique deps girpr 220→208, fetch 167→152, gircap 222→210, gircap-http 161→146; cargo tree -d 229→199; no wiremock smoke kept (wire compat not contractual); metadata.rs serve returns (TestServer,String), tests bind _origin to keep Drop-abort alive; capture malformed/probe/hyp/test-fixtures servers untouched (distinct contracts) |
+| T05 | Replace wiremock with a std-only loopback HTTP mock | completed | b5eba55d, c2fb8120, 6a375e6b, 5e7b2735, 8a8d077e, e1dee308, 80053a67, ab98c622 (review fix) | 7 commits: dependency-free leaf + 4 site migrations + repair-server fold-in + manifest cleanup; wiremock gone from all 4 manifests; unique deps girpr 220→208, fetch 167→152, gircap 222→210, gircap-http 161→146; cargo tree -d 229→199; no wiremock smoke kept (wire compat not contractual); metadata.rs serve returns (TestServer,String), tests bind _origin to keep Drop-abort alive; capture malformed/probe/hyp/test-fixtures servers untouched (distinct contracts) |
 | T06 | Trial rust-lld for the test profile | todo | | |
 | T07 | Pin the stable toolchain to an exact release | todo | | |
 | T08 | Narrow `girpr-util` rebuild edges | todo | | |
@@ -41,7 +41,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | A | T01 | done | |
 | B | T02 | done | |
 | C | T03, T04 | done | |
-| D | T05 | pending | |
+| D | T05 | done | Review fix ab98c622 added missing gircap leaf-crate doc table entries |
 | E | T06, T07 | pending | |
 | F | T08 | pending | |
 | G | T09, T10, T11 | pending | |
@@ -70,6 +70,8 @@ orchestrator records them here. Planning review (Phase 3) decides batching and d
 | FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration — rename or add nested-path existence assertion | open | Creation pinned by bare-name smoke + girpr-log test |
 | FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | open | LogLevel may collapse to Trace only |
 | FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | open | Rendered case covered by smoke + girpr-log unit tests |
+| FU13 | Record exact cargo tree command behind T05 dependency-count figures | open | Static/host-specific; deltas confirmed, absolute counts vary by cargo version |
+| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | open | Latent — current reqwest clients always send full request immediately |
 
 ## Persistent context
 
