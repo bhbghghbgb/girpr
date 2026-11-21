@@ -4,8 +4,9 @@
 //! `girpr` repair facade, so an edit to the repair, report or CLI modules
 //! cannot rebuild it, and a fetch edit cannot rebuild the facade on its way
 //! through here. (A root-package test would link the facade implicitly even
-//! when it names only fetch types.) It also pins the two byte spellings the
-//! fetch crate owns: `chuncks` on the wire and the opaque tag 6.
+//! when it names only fetch types.) It also exercises the two spellings the
+//! fetch crate owns — `chuncks` on the wire and the opaque tag 6 — through the
+//! fetch-side decode boundary.
 
 use girpr_fetch::sophon::stream::join_url;
 use girpr_fetch::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
@@ -38,9 +39,6 @@ fn the_fetch_crate_is_consumable_without_the_repair_facade() {
         }],
     };
     let bytes = manifest.encode_to_vec();
-    // Tag 6 is field 6, wire type 0 (`0x30`), and its value survives the
-    // fetch-side decode boundary the same way girpr-proto pins it.
-    assert!(bytes.windows(3).any(|w| w == [0x30, 0x96, 0x01]));
     let back = SophonChunkManifest::decode(bytes.as_slice()).expect("decode");
     assert_eq!(back.chuncks[0].chunks[0].unknown_field6, 150);
 }

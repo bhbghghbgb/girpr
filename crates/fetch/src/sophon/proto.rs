@@ -8,7 +8,7 @@
 //! The three wire types now live in `girpr-proto` so this binary and `gircap`
 //! decode one byte layout. The leaf owns only the protobuf tags and field names
 //! (`chuncks`, the opaque tag 6); this module keeps the repair binary's own
-//! wrapper and test. Nothing about how a manifest is fetched or used moved out.
+//! wrapper. Nothing about how a manifest is fetched or used moved out.
 
 use crate::hyp::ChunkManifestMeta;
 
@@ -20,35 +20,4 @@ pub struct WantedManifest {
     #[allow(dead_code)]
     pub meta: ChunkManifestMeta,
     pub files: Vec<SophonChunkFile>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use prost::Message;
-
-    #[test]
-    fn proto_roundtrip() {
-        let m = SophonChunkManifest {
-            chuncks: vec![SophonChunkFile {
-                file: "a/b.dat".into(),
-                chunks: vec![SophonChunk {
-                    id: "abc".into(),
-                    uncompressed_md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-                    offset: 0,
-                    compressed_size: 10,
-                    uncompressed_size: 20,
-                    unknown_field6: 0,
-                    compressed_md5: "x".into(),
-                }],
-                is_folder: false,
-                size: 20,
-                md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-            }],
-        };
-        let mut buf = Vec::new();
-        prost::Message::encode(&m, &mut buf).unwrap();
-        let back = SophonChunkManifest::decode(buf.as_slice()).unwrap();
-        assert_eq!(back.chuncks[0].file, "a/b.dat");
-    }
 }
