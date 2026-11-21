@@ -143,62 +143,93 @@ mod tests {
         ]
     }
 
+    /// The four report-core contracts, folded into one process so nextest spawns
+    /// one test instead of four. Every original assertion and message is kept;
+    /// a labelled subcase names the contract that failed.
     #[test]
-    fn event_first_keeps_declaration_order_and_the_callers_values() {
-        let event = "summary".to_string();
-        let line = serde_json::to_string(&EventFirstProbe(&event, fields())).expect("one object");
-        assert_eq!(
-            line,
-            r#"{"event":"summary","zulu":true,"alpha":"a \"quoted\" \\ path","middle":-1}"#
-        );
-    }
+    fn write_json_object_and_write_line_contracts() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            (
+                "event_first_keeps_declaration_order_and_the_callers_values",
+                &|| {
+                    let event = "summary".to_string();
+                    let line = serde_json::to_string(&EventFirstProbe(&event, fields()))
+                        .expect("one object");
+                    assert_eq!(
+                        line,
+                        r#"{"event":"summary","zulu":true,"alpha":"a \"quoted\" \\ path","middle":-1}"#,
+                        "event_first_keeps_declaration_order_and_the_callers_values"
+                    );
+                },
+            ),
+            (
+                "alphabetical_sorts_fields_and_places_event_among_them",
+                &|| {
+                    let event = "summary".to_string();
+                    let line = serde_json::to_string(&AlphabeticalProbe(&event, fields()))
+                        .expect("one object");
+                    assert_eq!(
+                        line,
+                        r#"{"alpha":"a \"quoted\" \\ path","event":"summary","middle":-1,"zulu":true}"#,
+                        "alphabetical_sorts_fields_and_places_event_among_them"
+                    );
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&line).expect("valid object");
+                    assert_eq!(
+                        parsed,
+                        json!({"event": "summary", "zulu": true,
+                                             "alpha": "a \"quoted\" \\ path", "middle": -1}),
+                        "alphabetical_sorts_fields_and_places_event_among_them"
+                    );
+                },
+            ),
+            (
+                "a_real_event_field_value_is_used_instead_of_a_derived_label",
+                &|| {
+                    // The event value is supplied by the caller in its own type;
+                    // here a boolean, to show the core never assumes it is a
+                    // lowercased label.
+                    let line = serde_json::to_string(&BoolEventProbe).expect("one object");
+                    assert_eq!(
+                        line, r#"{"event":true,"only":1}"#,
+                        "a_real_event_field_value_is_used_instead_of_a_derived_label"
+                    );
+                },
+            ),
+            (
+                "write_line_appends_exactly_one_newline_and_propagates_errors",
+                &|| {
+                    let mut out = Vec::new();
+                    write_line(&mut out, "SUMMARY total=1").expect("write");
+                    assert_eq!(
+                        out, b"SUMMARY total=1\n",
+                        "write_line appends exactly one newline"
+                    );
 
-    #[test]
-    fn alphabetical_sorts_fields_and_places_event_among_them() {
-        let event = "summary".to_string();
-        let line = serde_json::to_string(&AlphabeticalProbe(&event, fields())).expect("one object");
-        assert_eq!(
-            line,
-            r#"{"alpha":"a \"quoted\" \\ path","event":"summary","middle":-1,"zulu":true}"#
-        );
-        let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid object");
-        assert_eq!(
-            parsed,
-            json!({"event": "summary", "zulu": true,
-                                 "alpha": "a \"quoted\" \\ path", "middle": -1})
-        );
-    }
-
-    #[test]
-    fn a_real_event_field_value_is_used_instead_of_a_derived_label() {
-        // The event value is supplied by the caller in its own type; here a
-        // boolean, to show the core never assumes it is a lowercased label.
-        let line = serde_json::to_string(&BoolEventProbe).expect("one object");
-        assert_eq!(line, r#"{"event":true,"only":1}"#);
-    }
-
-    #[test]
-    fn write_line_appends_exactly_one_newline_and_propagates_errors() {
-        let mut out = Vec::new();
-        write_line(&mut out, "SUMMARY total=1").expect("write");
-        assert_eq!(out, b"SUMMARY total=1\n");
-
-        struct Fail;
-        impl Write for Fail {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "closed",
-                ))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+                    struct Fail;
+                    impl Write for Fail {
+                        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                "closed",
+                            ))
+                        }
+                        fn flush(&mut self) -> std::io::Result<()> {
+                            Ok(())
+                        }
+                    }
+                    assert_eq!(
+                        write_line(&mut Fail, "x").expect_err("propagated").kind(),
+                        std::io::ErrorKind::BrokenPipe,
+                        "write_line propagates the writer error"
+                    );
+                },
+            ),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
         }
-        assert_eq!(
-            write_line(&mut Fail, "x").expect_err("propagated").kind(),
-            std::io::ErrorKind::BrokenPipe
-        );
     }
 
     struct EventFirstProbe<'a>(&'a str, Vec<(&'static str, Probe)>);
