@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Break the `girpr-tempdir → girsync` inversion | todo | | |
+| T01 | Break the `girpr-tempdir → girsync` inversion | in_progress | | |
 | T02 | `girpr-util` leaf crate | todo | | |
 | T03 | Cheapest product leaves batch | todo | | |
 | T04 | Writer / file-repair crate | todo | | |
