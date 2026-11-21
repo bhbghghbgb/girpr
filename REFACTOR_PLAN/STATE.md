@@ -18,7 +18,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
 | T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
 | T06 | HTTP + Sophon fetch crate | pending_review | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged |
-| T07 | Report plane crate | todo | | |
+| T07 | Report plane crate | in_progress | | |
 | T08 | CLI / config crate for narrow tests | todo | | |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
 | T10 | Consolidate shared test seams and includes | todo | | |
