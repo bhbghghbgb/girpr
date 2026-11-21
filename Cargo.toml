@@ -180,10 +180,13 @@ girpr-test-fixtures = { path = "crates/test-fixtures" }
 # composes with stay in the facade-free crate above.
 girpr-test-support = { path = "crates/test-support" }
 # The one shared log-capture helper, used by both unit and integration tests.
-# The `test-support` feature is off in the shipped build; nextest runs one
+# The test-support features are off in the shipped build; nextest runs one
 # process per test and skips doctests, so the helper must be a public library
-# surface that every test binary can reach through a thin shim.
-girpr-log = { path = "crates/log", features = ["test-support"] }
+# surface that every test binary can reach through a thin shim. The repair
+# metadata tests capture across an `.await`, so this consumer enables the async
+# surface (which implies the synchronous one); sync-only consumers enable just
+# `test-support` and never compile tokio.
+girpr-log = { path = "crates/log", features = ["test-support-async"] }
 # The facade's unit tests build `FileReuse` values by hand and need the
 # `ReuseEntry` alias. The feature is off in the normal dependency above, so only
 # test builds see the extra alias on girpr-fetch's public surface.

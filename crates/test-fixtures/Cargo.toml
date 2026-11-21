@@ -30,7 +30,9 @@ girpr-lock = { path = "../lock" }
 girpr-tempdir = { path = "../tempdir" }
 # The one shared log-capture implementation, enabled only here and in the
 # repair binary's dev-dependency; no shipped program links the test surface.
-girpr-log = { path = "../log", features = ["test-support"] }
+# This crate's `logs_of` shim captures across an `.await`, so it enables the
+# async surface (which implies the synchronous one).
+girpr-log = { path = "../log", features = ["test-support-async"] }
 # The mock's canned JSON answers and their tweaks.
 serde_json = "1.0.154"
 # The manifest body is protobuf; `Message` is the encode trait the fixture needs.

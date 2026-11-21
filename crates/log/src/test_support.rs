@@ -13,18 +13,21 @@
 //! Each consumer keeps a thin `logs_of` shim (a re-export or a one-line
 //! delegate) so every call site is unchanged.
 //!
-//! The two entry points differ only in how they scope the subscriber:
+//! The two entry points differ only in how they scope the subscriber, and are
+//! gated by separate features so a sync-only consumer never compiles tokio:
 //!
-//! - [`logs_of`](crate::test_support::logs_of) uses `with_default` for a synchronous closure;
+//! - [`logs_of`](crate::test_support::logs_of) uses `with_default` for a synchronous closure and
+//!   needs nothing but the `test-support` feature;
 //! - [`logs_of_async`](crate::test_support::logs_of_async) uses `set_default` across an `.await` and asserts a
 //!   current-thread runtime on every build — a multi-thread runtime would
 //!   move spawned work onto threads with no subscriber and silently lose its
-//!   lines.
+//!   lines. It is behind `test-support-async`, which implies `test-support`.
 
 // Test helpers assert their invariants with `expect`; the lint is for code a
 // user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[cfg(feature = "test-support-async")]
 use std::future::Future;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -93,6 +96,7 @@ pub fn logs_of(f: impl FnOnce()) -> String {
 /// product's `spawn_blocking_traced`) are captured too — provided the spawn
 /// site already carries the subscriber; the dispatcher is taken at *spawn
 /// time*, so one spawned from another spawned task captures the worker's.
+#[cfg(feature = "test-support-async")]
 pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
     assert_eq!(
         tokio::runtime::Handle::current().runtime_flavor(),
@@ -107,7 +111,7 @@ pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
     (out, buffer.text())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support-async"))]
 mod tests {
     use super::*;
 

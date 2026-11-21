@@ -15,9 +15,14 @@ workspace = true
 [features]
 # The `test_support` module holds the one shared `logs_of` implementation. It
 # is a dev/test surface only: no shipped program links against it, and each
-# consumer opts in through a dev-dependency. `tokio` is needed only for the
-# async variant's always-on current-thread runtime assertion.
-test-support = ["dep:tokio"]
+# consumer opts in through a dev-dependency. The synchronous `logs_of` needs no
+# runtime at all; only the async variant reads the current runtime's flavor.
+test-support = []
+# `logs_of_async` and its always-on current-thread runtime assertion are
+# optional on top of the sync surface. Consumers that only capture synchronous
+# logs enable `test-support` alone and never compile tokio; the two callers
+# that capture across an `.await` enable this feature instead.
+test-support-async = ["test-support", "dep:tokio"]
 
 [dev-dependencies]
 # The runtime-flavor guard's regression test builds a multi-thread runtime;
