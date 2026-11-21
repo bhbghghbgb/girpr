@@ -1502,7 +1502,7 @@ mod tests {
                 audio: &self.audio,
                 fields: &self.fields,
                 gzip_threshold: 1024,
-                max_decompressed_bytes: hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+                max_decompressed_bytes: crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
                 diffs: &self.diffs,
                 selection: &self.selection,
                 index: &self.index,

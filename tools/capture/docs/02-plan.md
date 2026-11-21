@@ -147,12 +147,14 @@ does.
 
 ### Dependencies
 
-`clap`, `tokio`, `reqwest`, `serde`, `serde_json`, `prost`, `zstd`, `md5`,
+`clap`, `tokio`, `url`, `serde`, `serde_json`, `prost`, `zstd`, `md5`,
 `sha2`, `flate2`, `tracing`, `tracing-subscriber`, `tracing-appender`, `chrono`.
+`reqwest` is no longer a direct dependency: the transport is owned by the
+logic-free `gircap-http` crate, which gircap depends on directly.
 
 `tokio` is requested with only `rt-multi-thread`, `macros` and `time`, which
-also brings `rt`. `reqwest` resolves tokio with `net`, `io-util` and `sync`
-whatever this crate asks for, so those and their support features (`bytes`,
+also brings `rt`. `reqwest` (via `gircap-http`) resolves tokio with `net`,
+`io-util` and `sync` whatever this crate asks for, so those and their support features (`bytes`,
 `libc`, `mio`, `socket2`, `windows-sys`) arrive transitively. The direct
 request therefore omits `fs`, `io-std`, `process`, `signal` and
 `parking_lot`, which nothing in this crate uses: those are the features the

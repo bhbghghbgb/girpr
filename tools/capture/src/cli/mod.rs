@@ -218,7 +218,7 @@ pub struct CaptureArgs {
     /// manifest archive, a chunk blob, or the measurement of one — stops once
     /// it would produce more than this, so a small compressed bomb cannot reach
     /// the allocator as an abort. Recorded in `MANIFEST.json`.
-    #[arg(long, value_name = "BYTES", default_value_t = crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)]
+    #[arg(long, value_name = "BYTES", default_value_t = crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES)]
     pub max_decompressed_bytes: u64,
 
     /// Override the HoYoPlay base. Testing seam: points every endpoint at a

@@ -342,28 +342,14 @@ pub fn is_zstd(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[..4] == ZSTD_MAGIC
 }
 
-/// The default ceiling on one decompressed buffer.
-///
-/// **A declaration is not a permission slip.** The manifest's
-/// `uncompressed_size` and a chunk's `uncompressed_size` are document fields,
-/// and either may be absent or wrong; a frame that declares a small size but
-/// expands to gigabytes must still be refused. 256 MiB is far above anything
-/// this tool fetches (the reference manifest decodes to ~16.8 MiB and its
-/// largest chunk to 3.7 MiB) while keeping a decompression bomb from reaching
-/// the allocator as an abort.
-///
-/// **The ceiling is a flag, not a constant.** `--max-decompressed-bytes` sets
-/// it, and the effective value is recorded in `MANIFEST.json` so a decode can
-/// be reproduced. This name is only the flag's default.
-pub const DEFAULT_MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
-
 /// The output limit for a decode whose claimed length is `expected`.
 ///
 /// The limit is the declaration itself; the decoder is read through
 /// `take(limit + 1)` so the extra byte is what detects a frame longer than it
 /// claimed, without materialising the rest of a bomb. `ceiling` is the run's
-/// effective [`DEFAULT_MAX_DECOMPRESSED_BYTES`] and applies even when the
-/// declaration is missing or absurd.
+/// effective decompression ceiling (gircap's `--max-decompressed-bytes` flag)
+/// and applies even when the declaration is missing or absurd. This crate only
+/// enforces the ceiling it is handed; choosing the default is gircap policy.
 pub fn decompression_limit(expected: Option<u64>, ceiling: u64) -> u64 {
     expected.unwrap_or(ceiling).min(ceiling)
 }

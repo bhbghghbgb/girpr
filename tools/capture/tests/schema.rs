@@ -130,7 +130,7 @@ fn the_manifest_index_key_set_is_the_documented_one(b: &Path) {
     );
     assert_eq!(
         doc["max_decompressed_bytes"],
-        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+        gircap::config::DEFAULT_MAX_DECOMPRESSED_BYTES
     );
     assert_eq!(keys(&doc["versions"]), vec!["diff_tags", "new", "old"]);
     assert_eq!(

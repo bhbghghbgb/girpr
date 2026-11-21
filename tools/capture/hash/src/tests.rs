@@ -1,5 +1,10 @@
 use super::*;
 
+/// The ceiling the decode tests hand the mechanics. It is a test fixture, not
+/// gircap's flag default (which lives in the parent's config policy); any value
+/// comfortably above every frame built here would exercise the same bounds.
+const TEST_DECOMPRESSED_CEILING: u64 = 256 * 1024 * 1024;
+
 /// Content with the shape of a real manifest decode: JSON-ish and highly
 /// repetitive, so the deflate window is genuinely exercised, and sized in
 /// **bytes rather than entries** so the cost of this gate is visible in the
@@ -241,8 +246,7 @@ fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
     let payload = b"the quick brown fox jumps over the lazy dog".repeat(900);
     let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
 
-    let from_buffer =
-        zstd_decompress(&frame, "blob", DEFAULT_MAX_DECOMPRESSED_BYTES).expect("buffer");
+    let from_buffer = zstd_decompress(&frame, "blob", TEST_DECOMPRESSED_CEILING).expect("buffer");
     assert_eq!(from_buffer, payload);
 
     for expected in [None, Some(payload.len() as u64), Some(1 << 30)] {
@@ -250,7 +254,7 @@ fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
             Cursor::new(&frame),
             "blob",
             expected,
-            DEFAULT_MAX_DECOMPRESSED_BYTES,
+            TEST_DECOMPRESSED_CEILING,
         )
         .expect("reader");
         assert_eq!(
@@ -263,7 +267,7 @@ fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
         Cursor::new(&frame),
         "blob",
         Some(payload.len() as u64 - 1),
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
+        TEST_DECOMPRESSED_CEILING,
     )
     .expect_err("a declaration below the frame is refused, not truncated");
     assert!(e.contains("decode limit"), "{e}");
@@ -275,13 +279,8 @@ fn decompressing_from_a_reader_refuses_the_same_things_the_buffer_does() {
     // blob.
     use std::io::Cursor;
     let xml = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
-    let e = zstd_decompress_from(
-        Cursor::new(xml),
-        "blob",
-        None,
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
-    )
-    .expect_err("not a frame");
+    let e = zstd_decompress_from(Cursor::new(xml), "blob", None, TEST_DECOMPRESSED_CEILING)
+        .expect_err("not a frame");
     assert!(e.contains("no-zstd-magic"), "{e}");
     assert!(e.contains("blob"), "the message must name the blob: {e}");
 
@@ -291,7 +290,7 @@ fn decompressing_from_a_reader_refuses_the_same_things_the_buffer_does() {
         Cursor::new(&truncated),
         "blob",
         None,
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
+        TEST_DECOMPRESSED_CEILING,
     )
     .expect_err("half a frame");
     assert!(e.contains("has-zstd-magic"), "{e}");
@@ -317,7 +316,7 @@ fn a_decompression_bomb_is_refused_at_the_decode_limit_before_it_is_materialised
         Cursor::new(&frame),
         "chunk x",
         Some(1024),
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
+        TEST_DECOMPRESSED_CEILING,
     )
     .expect_err("a frame longer than its declaration must be refused");
     assert!(e.contains("decode limit"), "{e}");
@@ -335,7 +334,7 @@ fn a_decompression_bomb_is_refused_at_the_decode_limit_before_it_is_materialised
         Cursor::new(&frame),
         "chunk x",
         Some(payload.len() as u64),
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
+        TEST_DECOMPRESSED_CEILING,
     )
     .expect("an accurate declaration decodes");
     assert_eq!(ok.len(), payload.len());
@@ -346,7 +345,7 @@ fn a_decompression_bomb_is_refused_at_the_decode_limit_before_it_is_materialised
 /// probe, not part of the limit.
 #[test]
 fn the_decode_limit_is_the_declaration_and_never_above_the_ceiling() {
-    let ceiling = DEFAULT_MAX_DECOMPRESSED_BYTES;
+    let ceiling = TEST_DECOMPRESSED_CEILING;
     assert_eq!(decompression_limit(None, ceiling), ceiling);
     assert_eq!(decompression_limit(Some(0), ceiling), 0);
     assert_eq!(decompression_limit(Some(1024), ceiling), 1024);
@@ -372,10 +371,9 @@ fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
         b"the quick brown fox jumps over the lazy dog, repeatedly and at length".repeat(400);
     let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
 
-    let from_slice = zstd_measure(&frame, "blob", DEFAULT_MAX_DECOMPRESSED_BYTES).expect("slice");
+    let from_slice = zstd_measure(&frame, "blob", TEST_DECOMPRESSED_CEILING).expect("slice");
     let from_reader =
-        zstd_measure_from(Cursor::new(&frame), "blob", DEFAULT_MAX_DECOMPRESSED_BYTES)
-            .expect("reader");
+        zstd_measure_from(Cursor::new(&frame), "blob", TEST_DECOMPRESSED_CEILING).expect("reader");
     assert_eq!(from_slice, from_reader, "reader and slice must agree");
     assert_eq!(from_reader.len, payload.len() as u64);
     assert_eq!(from_reader.md5, crate::md5_hex(&payload));
@@ -384,8 +382,8 @@ fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
     // whether the magic was there.
     let cut = &frame[..frame.len() / 2];
     let e_slice =
-        zstd_measure(cut, "blob", DEFAULT_MAX_DECOMPRESSED_BYTES).expect_err("slice rejects it");
-    let e_reader = zstd_measure_from(Cursor::new(cut), "blob", DEFAULT_MAX_DECOMPRESSED_BYTES)
+        zstd_measure(cut, "blob", TEST_DECOMPRESSED_CEILING).expect_err("slice rejects it");
+    let e_reader = zstd_measure_from(Cursor::new(cut), "blob", TEST_DECOMPRESSED_CEILING)
         .expect_err("reader rejects it");
     for e in [&e_slice, &e_reader] {
         assert!(e.contains("has-zstd-magic"), "{e}");
@@ -395,7 +393,7 @@ fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
     // Not a frame at all: the reader version must still be able to say the
     // magic was missing, which is the reason `Sniffed` exists.
     let xml = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
-    let e_reader = zstd_measure_from(Cursor::new(xml), "blob", DEFAULT_MAX_DECOMPRESSED_BYTES)
+    let e_reader = zstd_measure_from(Cursor::new(xml), "blob", TEST_DECOMPRESSED_CEILING)
         .expect_err("reader rejects it");
     assert!(e_reader.contains("no-zstd-magic"), "{e_reader}");
 }
@@ -433,8 +431,8 @@ fn measuring_a_reader_streams_rather_than_buffering() {
     use std::io::Cursor;
     let payload = vec![7_u8; 400_000];
     let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
-    let m = zstd_measure_from(Cursor::new(&frame), "blob", DEFAULT_MAX_DECOMPRESSED_BYTES)
-        .expect("measure");
+    let m =
+        zstd_measure_from(Cursor::new(&frame), "blob", TEST_DECOMPRESSED_CEILING).expect("measure");
     assert_eq!(m.len, payload.len() as u64);
 }
 
@@ -496,8 +494,8 @@ fn a_streaming_measurement_agrees_with_decompressing_the_same_bytes() {
         .concat(),
     ];
     for raw in &cases {
-        let body = zstd_decompress(raw, "x", DEFAULT_MAX_DECOMPRESSED_BYTES).expect("decodes");
-        let m = zstd_measure(raw, "x", DEFAULT_MAX_DECOMPRESSED_BYTES).expect("measures");
+        let body = zstd_decompress(raw, "x", TEST_DECOMPRESSED_CEILING).expect("decodes");
+        let m = zstd_measure(raw, "x", TEST_DECOMPRESSED_CEILING).expect("measures");
         assert_eq!(m.len, body.len() as u64, "length");
         assert_eq!(m.md5, md5_hex(&body), "digest");
     }
@@ -505,8 +503,8 @@ fn a_streaming_measurement_agrees_with_decompressing_the_same_bytes() {
     // And on failure both refuse, with the same message.
     let mut truncated = zstd::encode_all(vec![7_u8; 4096].as_slice(), 1).expect("encode");
     truncated.truncate(truncated.len() / 2);
-    let a = zstd_decompress(&truncated, "blob X", DEFAULT_MAX_DECOMPRESSED_BYTES);
-    let b = zstd_measure(&truncated, "blob X", DEFAULT_MAX_DECOMPRESSED_BYTES);
+    let a = zstd_decompress(&truncated, "blob X", TEST_DECOMPRESSED_CEILING);
+    let b = zstd_measure(&truncated, "blob X", TEST_DECOMPRESSED_CEILING);
     assert!(a.is_err(), "a half frame does not decode");
     assert_eq!(
         a.unwrap_err(),
@@ -517,8 +515,8 @@ fn a_streaming_measurement_agrees_with_decompressing_the_same_bytes() {
     // Not a frame at all.
     let plain = b"just bytes".to_vec();
     assert_eq!(
-        zstd_decompress(&plain, "blob X", DEFAULT_MAX_DECOMPRESSED_BYTES).unwrap_err(),
-        zstd_measure(&plain, "blob X", DEFAULT_MAX_DECOMPRESSED_BYTES).unwrap_err()
+        zstd_decompress(&plain, "blob X", TEST_DECOMPRESSED_CEILING).unwrap_err(),
+        zstd_measure(&plain, "blob X", TEST_DECOMPRESSED_CEILING).unwrap_err()
     );
 }
 
@@ -610,8 +608,7 @@ fn zstd_is_sniffed_not_assumed() {
 #[test]
 fn a_zstd_failure_names_the_blob_and_whether_the_magic_was_there() {
     let raw = b"not zstd at all";
-    let e =
-        zstd_decompress(raw, "game manifest 7.1.0", DEFAULT_MAX_DECOMPRESSED_BYTES).unwrap_err();
+    let e = zstd_decompress(raw, "game manifest 7.1.0", TEST_DECOMPRESSED_CEILING).unwrap_err();
     assert!(e.contains("game manifest 7.1.0"), "{e}");
     assert!(e.contains("no-zstd-magic"), "{e}");
     assert!(e.contains(&format!("{} bytes", raw.len())), "{e}");
@@ -624,7 +621,7 @@ fn a_zstd_failure_names_the_blob_and_whether_the_magic_was_there() {
     let e = zstd_decompress(
         &[0x28, 0xB5, 0x2F, 0xFD],
         "game manifest",
-        DEFAULT_MAX_DECOMPRESSED_BYTES,
+        TEST_DECOMPRESSED_CEILING,
     )
     .unwrap_err();
     assert!(e.contains("has-zstd-magic"), "{e}");

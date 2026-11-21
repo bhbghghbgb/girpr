@@ -40,7 +40,7 @@ fn an_index_stored_path_that_escapes_the_bundle_is_refused() {
     let e = ChunkSource::from_index(
         std::path::Path::new("artifact"),
         &index,
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     )
     .decoded("x")
     .unwrap_err();

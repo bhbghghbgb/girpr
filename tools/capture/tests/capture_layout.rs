@@ -926,7 +926,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["gzip_threshold"], 1_048_576);
     assert_eq!(
         m["max_decompressed_bytes"],
-        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+        gircap::config::DEFAULT_MAX_DECOMPRESSED_BYTES
     );
     assert_eq!(
         m["selection_pool"]["fields"],

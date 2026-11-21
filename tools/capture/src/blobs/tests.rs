@@ -46,7 +46,7 @@ fn two_wants_for_one_chunk_id_would_not_share_a_temp_file() {
     let store = Store::new(
         &dir,
         Sources::from_pairs([]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let (a, at) = store.paths_for("chunks/blobs/dead_beef.zst", 0);
     let (b, bt) = store.paths_for("chunks/blobs/dead_beef.zst", 1);
@@ -607,7 +607,7 @@ fn an_unfilled_want_still_has_a_row_and_carries_the_fetch_failure() {
     let store = Store::new(
         &root,
         sources(),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let failure = FetchError {
         source: Some("7.1.0".into()),
@@ -653,7 +653,7 @@ async fn a_chunk_the_cdn_will_not_serve_is_one_failure_with_its_reason_in_the_ro
             ("7.0.0".to_string(), dead.clone()),
             ("7.1.0".to_string(), dead),
         ]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -800,7 +800,7 @@ async fn an_undecodable_body_is_stored_and_measured_rather_than_a_failed_fetch()
     let store = Store::new(
         &root,
         Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -922,7 +922,7 @@ async fn a_successful_empty_body_is_stored_and_measured_as_undecodable() {
     let store = Store::new(
         &root,
         Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1052,7 +1052,7 @@ async fn a_truncated_response_keeps_its_prefix_and_marks_the_row_partial() {
     let store = Store::new(
         &root,
         Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1134,7 +1134,7 @@ async fn a_complete_older_source_wins_over_a_truncated_newer_one() {
                 format!("http://127.0.0.1:{old_port}/cdn"),
             ),
         ]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1230,7 +1230,7 @@ async fn the_longest_prefix_wins_when_no_source_completes() {
                 format!("http://127.0.0.1:{old_port}/cdn"),
             ),
         ]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1323,7 +1323,7 @@ async fn a_shorter_later_prefix_keeps_the_newest_candidate() {
                 format!("http://127.0.0.1:{old_port}/cdn"),
             ),
         ]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1411,7 +1411,7 @@ async fn a_zero_byte_failure_after_a_prefix_keeps_the_prefix() {
             // Port 0 is never bound: an immediate refusal that writes nothing.
             ("7.0.0".to_string(), "http://127.0.0.1:0".to_string()),
         ]),
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     let fetcher = crate::http::Fetcher::new(
         crate::http::Transport::local(),
@@ -1562,7 +1562,7 @@ fn a_file_shorter_than_the_magic_is_undecodable_with_the_byte_count() {
         &path,
         &c,
         hash::md5_sha256(short),
-        hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     )
     .expect("a short body is recorded, not raised");
 

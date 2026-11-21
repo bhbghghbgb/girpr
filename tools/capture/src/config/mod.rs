@@ -29,6 +29,22 @@ pub const DEFAULT_AUDIO: &str = "en-us";
 /// The `--audio` spelling that means "game only, no voice packs".
 pub const AUDIO_NONE: &str = "none";
 
+/// The default ceiling on one decompressed buffer.
+///
+/// **A declaration is not a permission slip.** The manifest's
+/// `uncompressed_size` and a chunk's `uncompressed_size` are document fields,
+/// and either may be absent or wrong; a frame that declares a small size but
+/// expands to gigabytes must still be refused. 256 MiB is far above anything
+/// this tool fetches (the reference manifest decodes to ~16.8 MiB and its
+/// largest chunk to 3.7 MiB) while keeping a decompression bomb from reaching
+/// the allocator as an abort.
+///
+/// **The ceiling is a flag, not a constant.** `--max-decompressed-bytes` sets
+/// it, and the effective value is recorded in `MANIFEST.json` so a decode can
+/// be reproduced. This name is only the flag's default. The bounded-decode
+/// mechanics that enforce whatever ceiling they are handed live in `gircap-hash`.
+pub const DEFAULT_MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
 /// How `--new-tag` chose a tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewTagSelector<'a> {
@@ -283,7 +299,7 @@ pub struct CapturePlan {
 /// this has to earn the right to have.
 fn validate_base(raw: Option<&str>, flag: &str) -> Result<Option<String>> {
     let Some(raw) = raw else { return Ok(None) };
-    let url = reqwest::Url::parse(raw)
+    let url = url::Url::parse(raw)
         .map_err(|e| UsageError::new(format!("{flag} {raw:?} is not a URL: {e}")))?;
     if url.scheme() != "http" && url.scheme() != "https" {
         return Err(UsageError::new(format!(

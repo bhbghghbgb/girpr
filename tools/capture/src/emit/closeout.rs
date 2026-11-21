@@ -391,7 +391,7 @@ mod tests {
             audio: &[],
             fields: &fixture.fields,
             gzip_threshold: 1024,
-            max_decompressed_bytes: crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            max_decompressed_bytes: crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
             diffs: &[],
             selection: &fixture.selection,
             index: &fixture.index,

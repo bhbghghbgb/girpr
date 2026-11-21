@@ -1391,7 +1391,7 @@ fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
         check_blobs(
             Path::new("."),
             &index,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES
         )
         .is_empty()
     );
@@ -1413,7 +1413,7 @@ fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
     let rows = check_blobs(
         Path::new("."),
         &index,
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
     );
     assert_eq!(rows.len(), 1);
     assert!(
@@ -1451,7 +1451,7 @@ fn a_blob_whose_bytes_were_altered_turns_its_row_red() {
         sets: Vec::new(),
     }]);
     assert!(
-        check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0].ok,
+        check_blobs(&d, &index, crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES)[0].ok,
         "the good bundle's row is green"
     );
 
@@ -1460,7 +1460,7 @@ fn a_blob_whose_bytes_were_altered_turns_its_row_red() {
     let last = bad.len() - 1;
     bad[last] ^= 0xFF;
     std::fs::write(d.join("chunks/ab/cd"), &bad).unwrap();
-    let row = &check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0];
+    let row = &check_blobs(&d, &index, crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES)[0];
     assert!(!row.ok, "one altered byte turns the row red");
     assert_eq!(row.subject, "chunks/ab/cd", "and names the blob");
     assert!(row.id == "A6", "and the assertion: {}", row.id);

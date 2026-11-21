@@ -278,7 +278,7 @@ impl BlobProps {
     /// violation rather than a digest mismatch, and there is nothing here to
     /// measure.
     pub fn measure(raw: &[u8], chunk: &SophonChunk) -> Result<BlobProps, ApiError> {
-        Self::measure_with_ceiling(raw, chunk, hash::DEFAULT_MAX_DECOMPRESSED_BYTES)
+        Self::measure_with_ceiling(raw, chunk, crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES)
     }
 
     /// [`BlobProps::measure`] with an explicit decode ceiling.

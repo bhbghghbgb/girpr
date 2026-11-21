@@ -42,10 +42,6 @@ girpr-log = { path = "../../crates/log" }
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
 girpr-fs-names = { path = "../../crates/fs-names" }
-# The shared streaming digest mechanics: a byte-absorbing sink and a reader
-# helper parameterised by algorithm set and buffer size. This crate keeps its
-# own AlgoSet/DigestSet/HashAlg vocabulary and maps to the leaf at the call site.
-girpr-digest = { path = "../../crates/digest" }
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 # The redb cache (with `redb`, its positional `postcard` codec and `tempfile`
@@ -70,9 +66,9 @@ dunce = "1.0.5"
 # `tools/sled2redb` crate, so this package's graph is sled-free.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# The hashers themselves come from `girpr-digest` now; this crate keeps its own
-# algorithm vocabulary and maps it at the call site. `md-5` remains a
-# dev-dependency for the tests that build digests by hand.
+# The digest vocabulary and streaming sink live in `girpr-sync-cache` (above),
+# which pins them in its wire format; `md-5` remains a dev-dependency for the
+# tests that build digests by hand.
 # The shared --include/--exclude glob rules, used by this crate and by girpr.
 # Re-exported at the crate root so callers name the same `glob::Pattern` type.
 girpr-filter = { path = "../../crates/filter" }

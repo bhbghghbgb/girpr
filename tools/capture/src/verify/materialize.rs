@@ -534,7 +534,7 @@ mod tests {
             ChunkSource::from_index(
                 &self.root,
                 &self.index,
-                crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+                crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
             )
         }
 
@@ -947,7 +947,7 @@ mod tests {
             &f.root,
             &f.index,
             &maps,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
         .expect("rebuilds");
         assert_eq!(pairs.len(), 1);
@@ -963,7 +963,7 @@ mod tests {
             &f.root,
             &f.index,
             &wrong_maps,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
         .unwrap_err();
         assert!(
@@ -987,7 +987,7 @@ mod tests {
             &f.root,
             &f.index,
             &maps,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
         .unwrap_err();
         assert!(e.contains("A11"), "reports the layout check: {e}");
@@ -1102,7 +1102,7 @@ mod tests {
             &f.root,
             &f.index,
             &renamed_maps,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
         .unwrap_err();
         assert!(e.contains("references no chunks"), "{e}");
@@ -1117,7 +1117,7 @@ mod tests {
             &f.root,
             &f.index,
             &maps,
-            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
         .expect("rebuilds");
         assert!(pairs[0].old.is_none(), "no old side to rebuild");

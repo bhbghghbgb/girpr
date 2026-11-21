@@ -28,9 +28,10 @@ girpr-retry = { path = "../../../crates/retry" }
 # Hex spelling of bytes for the request log's header digests. Logic-free leaf:
 # no flag, no exit code, no published shape.
 girpr-digest = { path = "../../../crates/digest" }
-# The transport, the client and header maps. This crate is the sole owner of
-# reqwest for gircap's HTTP path; config still uses `reqwest::Url` directly, but
-# the fetcher/transport mechanics compile once here and stay cached across edits
+# The transport, the client and header maps. This crate is now the sole owner of
+# reqwest for gircap: the parent package used to take a direct reqwest dep only
+# for `config::validate_base`'s `Url`, which parses with the `url` crate itself.
+# The fetcher/transport mechanics compile once here and stay cached across edits
 # to emit/blobs/manifest in the parent package.
 reqwest = "0.13.5"
 # The runtime for the ordered-join loop and the injectable timers the backoff

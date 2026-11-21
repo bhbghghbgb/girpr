@@ -15,7 +15,7 @@ fn args_with(mutate: impl FnOnce(&mut CaptureArgs)) -> CaptureArgs {
         audio: vec![DEFAULT_AUDIO.to_string()],
         manifest_detail: ManifestDetail::Full,
         gzip_threshold: crate::cli::DEFAULT_GZIP_THRESHOLD,
-        max_decompressed_bytes: crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        max_decompressed_bytes: crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES,
         probe_tags: Vec::new(),
         no_chunk_blobs: false,
         jobs: 4,
@@ -124,7 +124,7 @@ fn the_default_request_resolves_to_a_usable_plan() {
     assert_eq!(p.gzip_threshold, crate::cli::DEFAULT_GZIP_THRESHOLD);
     assert_eq!(
         p.max_decompressed_bytes,
-        crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+        crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES
     );
     assert_eq!(
         p.argv.lossy,
