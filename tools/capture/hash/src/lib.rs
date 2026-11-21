@@ -3,8 +3,8 @@
 //! This crate owns the one-pass/one-shot digests, the hex spelling, the gzip
 //! rule and the bounded zstd helpers. It holds no program policy — no exit
 //! codes, no version pairs, no artifact writing — and depends on no program
-//! crate (only the shared logic-free leaves `girpr-digest`, `gircap-http` and,
-//! in tests, `girpr-tempdir`), and invokes no binary. `gircap` depends on it
+//! crate (only the shared logic-free leaf `girpr-digest` and, in tests,
+//! `girpr-tempdir`), and invokes no binary. `gircap` depends on it
 //! directly so an edit to `emit`/`blobs`/`manifest` leaves this crate (and its
 //! native `zstd` tree) cached.
 //!
