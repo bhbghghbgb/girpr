@@ -184,55 +184,76 @@ impl Sleep for RecordingSleep {
 mod tests {
     use super::*;
 
+    /// The three `Schedule` contract cases, folded into one process so nextest
+    /// spawns one test instead of three. Every original assertion and message is
+    /// kept; a labelled subcase names the schedule that failed.
     #[test]
-    fn zero_jitter_schedule_is_exact_and_capped() {
-        let mut delays = Schedule::exponential(
-            Duration::from_millis(500),
-            2.0,
-            0.0,
-            Duration::from_secs(10),
-        )
-        .build();
-        for expected in [
-            Duration::from_millis(500),
-            Duration::from_millis(1000),
-            Duration::from_millis(2000),
-            Duration::from_millis(4000),
-            Duration::from_millis(8000),
-            Duration::from_secs(10),
-        ] {
-            assert_eq!(delays.next_delay(), Some(expected));
-        }
-        for _ in 0..8 {
-            assert_eq!(delays.next_delay(), Some(Duration::from_secs(10)));
-        }
-    }
-
-    #[test]
-    fn jitter_spreads_each_delay_within_the_caller_range() {
-        let cap = Duration::from_secs(10);
-        let mut delays = Schedule::exponential(Duration::from_secs(1), 2.0, 0.5, cap).build();
-        // `backoff` spreads the *current* interval, which doubles each call up
-        // to the cap; the jitter is ±50 % of that interval, not of the base.
-        let mut current = Duration::from_secs(1);
-        for _ in 0..16 {
-            let d = delays.next_delay().expect("no elapsed-time cap");
-            let low = current.mul_f64(0.5);
-            let high = current.mul_f64(1.5) + Duration::from_nanos(1);
-            assert!(low <= d && d <= high, "±50 % of {current:?}: {d:?}");
-            current = if current >= cap.div_f64(2.0) {
-                cap
-            } else {
-                current * 2
-            };
-        }
-    }
-
-    #[test]
-    fn zero_schedule_never_waits() {
-        let mut delays = Schedule::zero().build();
-        for _ in 0..8 {
-            assert_eq!(delays.next_delay(), Some(Duration::ZERO));
+    fn schedule_contracts() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            ("zero_jitter_schedule_is_exact_and_capped", &|| {
+                let mut delays = Schedule::exponential(
+                    Duration::from_millis(500),
+                    2.0,
+                    0.0,
+                    Duration::from_secs(10),
+                )
+                .build();
+                for expected in [
+                    Duration::from_millis(500),
+                    Duration::from_millis(1000),
+                    Duration::from_millis(2000),
+                    Duration::from_millis(4000),
+                    Duration::from_millis(8000),
+                    Duration::from_secs(10),
+                ] {
+                    assert_eq!(
+                        delays.next_delay(),
+                        Some(expected),
+                        "zero jitter: expected {expected:?}"
+                    );
+                }
+                for _ in 0..8 {
+                    assert_eq!(
+                        delays.next_delay(),
+                        Some(Duration::from_secs(10)),
+                        "zero jitter: capped at 10 s"
+                    );
+                }
+            }),
+            ("jitter_spreads_each_delay_within_the_caller_range", &|| {
+                let cap = Duration::from_secs(10);
+                let mut delays =
+                    Schedule::exponential(Duration::from_secs(1), 2.0, 0.5, cap).build();
+                // `backoff` spreads the *current* interval, which doubles
+                // each call up to the cap; the jitter is ±50 % of that
+                // interval, not of the base.
+                let mut current = Duration::from_secs(1);
+                for _ in 0..16 {
+                    let d = delays.next_delay().expect("no elapsed-time cap");
+                    let low = current.mul_f64(0.5);
+                    let high = current.mul_f64(1.5) + Duration::from_nanos(1);
+                    assert!(low <= d && d <= high, "±50 % of {current:?}: {d:?}");
+                    current = if current >= cap.div_f64(2.0) {
+                        cap
+                    } else {
+                        current * 2
+                    };
+                }
+            }),
+            ("zero_schedule_never_waits", &|| {
+                let mut delays = Schedule::zero().build();
+                for _ in 0..8 {
+                    assert_eq!(
+                        delays.next_delay(),
+                        Some(Duration::ZERO),
+                        "the zero schedule never waits"
+                    );
+                }
+            }),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
         }
     }
 
