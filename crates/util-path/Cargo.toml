@@ -1,0 +1,34 @@
+[package]
+name = "girpr-util-path"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared server-path containment, atomic publish and path-test fixture mechanics the girpr workspace uses"
+
+[lib]
+name = "girpr_util_path"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+# The junction and symlink fixtures are unit-test support, not shipped code.
+# They are built for this crate's own tests and, through this feature, for the
+# tests of the crates and programs that need the same fixtures. No shipped
+# binary enables it.
+test-support = []
+
+[dependencies]
+# The error/context wrappers the path checks carry.
+anyhow = "1.0.104"
+# The Windows device-name predicate, slash folding and ASCII case folding the
+# server-path checks are spelled with. This crate keeps its own containment and
+# identity policies; the leaf owns only the platform primitives.
+girpr-fs-names = { path = "../fs-names" }
+# Temp-sibling-then-rename publishing for every artifact the product writes.
+tempfile = "3.27"
+
+[dev-dependencies]
+# The scratch directories the file and containment tests write into.
+girpr-tempdir = { path = "../tempdir" }

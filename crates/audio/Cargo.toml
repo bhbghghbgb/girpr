@@ -23,8 +23,9 @@ tracing = "0.1.44"
 girpr-audio-language = { path = "../audio-language" }
 # Server-controlled path containment and the atomic temp-then-rename publish.
 # These are low-level mechanics with no product policy, so an edit to the
-# repair, report or CLI modules leaves the whole audio boundary cached.
-girpr-util = { path = "../util" }
+# config writer, the hash or the counter leaves the whole audio boundary
+# cached. This boundary depends on the path mechanics directly.
+girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
 # The scratch directories the scan-file tests read and write through.
