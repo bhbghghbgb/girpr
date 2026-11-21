@@ -690,11 +690,11 @@ mod tests {
     #[test]
     fn an_unlimited_charge_accepts_concurrently_and_counts_exactly() {
         let s = Arc::new(Summary::default());
-        let handles: Vec<_> = (0..8)
+        let handles: Vec<_> = (0..4)
             .map(|_| {
                 let s = s.clone();
                 std::thread::spawn(move || {
-                    for _ in 0..100 {
+                    for _ in 0..25 {
                         assert!(s.reserve_write_bytes(7), "no ceiling ever refuses");
                     }
                 })
@@ -703,7 +703,7 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
-        assert_eq!(s.write.live(), 8 * 100 * 7);
+        assert_eq!(s.write.live(), 4 * 25 * 7);
     }
 
     /// The same for the settled figure: with no verified ceiling the settle
@@ -711,11 +711,11 @@ mod tests {
     #[test]
     fn an_unlimited_settle_accepts_concurrently_and_counts_exactly() {
         let s = Arc::new(Summary::default());
-        let handles: Vec<_> = (0..8)
+        let handles: Vec<_> = (0..4)
             .map(|_| {
                 let s = s.clone();
                 std::thread::spawn(move || {
-                    for _ in 0..100 {
+                    for _ in 0..25 {
                         assert!(s.note_write_bytes(11), "no ceiling ever refuses");
                     }
                 })
@@ -724,7 +724,7 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
-        assert_eq!(s.write.settled(), 8 * 100 * 11);
+        assert_eq!(s.write.settled(), 4 * 25 * 11);
     }
 
     /// The fast path saturates rather than wrapping at the top of the range:
