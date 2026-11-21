@@ -1277,25 +1277,20 @@ mod tests {
     /// caller's thread-local subscriber. Routing it through the traced helper
     /// keeps the operator's `audio cache -> res` line (and the move itself)
     /// intact under a scoped subscriber.
-    #[test]
-    fn a_blocking_audio_move_keeps_the_callers_subscriber() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocking_audio_move_keeps_the_callers_subscriber() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "traced");
         let base = &*dir;
         std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
         std::fs::write(base.join("Audio/cache/a.pck"), b"cache bytes").unwrap();
 
-        let logs = logs_of(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(spawn_audio_move(
-                base.to_path_buf(),
-                config("Audio/cache", "Audio/res"),
-                PathScope::default(),
-                false,
-            ));
-        });
+        let (_, logs) = girpr_log::test_support::logs_of_async(spawn_audio_move(
+            base.to_path_buf(),
+            config("Audio/cache", "Audio/res"),
+            PathScope::default(),
+            false,
+        ))
+        .await;
 
         assert!(
             logs.contains("audio cache -> res")
@@ -1473,15 +1468,15 @@ mod tests {
     /// A dry run with both purge flags names each candidate once: the before
     /// pass lists what is on disk, and the after pass adds only what changed
     /// since. Nothing is deleted, so the before candidates are still there.
-    #[test]
-    fn a_dry_run_after_pass_lists_only_candidates_the_before_pass_did_not() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dry_run_after_pass_lists_only_candidates_the_before_pass_did_not() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_post", "dry_purge_once");
         let base = &*dir;
         std::fs::write(base.join("orphan_before.dat"), b"a").unwrap();
         let keys = purge_keys();
         let before = purge::plan_purge(base, &keys, &PathScope::default());
 
-        let logs = logs_of(|| {
+        let (outcome, logs) = girpr_log::test_support::logs_of_async(async {
             purge::apply_purge(&before, true).unwrap();
             std::fs::write(base.join("orphan_after.dat"), b"bb").unwrap();
             let mut ctx = purge_ctx(base.to_path_buf());
@@ -1489,21 +1484,12 @@ mod tests {
             ctx.purge_before = true;
             ctx.purge_after = true;
             let summary = Summary::new();
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            let outcome = rt
-                .block_on(purge_after_pass(
-                    &ctx,
-                    base,
-                    Some(Arc::clone(&keys)),
-                    Some(&before),
-                    &summary,
-                ))
-                .unwrap();
-            assert_eq!(outcome, None, "the pass completed without a ceiling");
-        });
+            purge_after_pass(&ctx, base, Some(Arc::clone(&keys)), Some(&before), &summary)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(outcome, None, "the pass completed without a ceiling");
 
         assert_eq!(
             logs.matches("would purge extra").count(),

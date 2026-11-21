@@ -510,31 +510,24 @@ mod tests {
     /// Run one verify on a current-thread runtime and return its counters and
     /// captured log. The check tasks use the blocking pool; only the ordered
     /// fold logs, so the captured lines stay deterministic.
-    fn run_verify(
+    async fn run_verify(
         base: &Path,
         plan: &Arc<RepairPlan>,
         scan: &Option<Arc<ScanReport>>,
         jobs: usize,
     ) -> (u64, u64, u64, u64, String) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let summary = Arc::new(Summary::default());
-        let mut bad = 0u64;
-        let logs = crate::repair::test_support::logs_of(|| {
-            bad = runtime
-                .block_on(verify_plan(
-                    base,
-                    None,
-                    Arc::clone(plan),
-                    Arc::clone(&summary),
-                    report::OutputFormat::Text,
-                    scan.clone(),
-                    jobs,
-                ))
-                .expect("the check tasks finish");
-        });
+        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan(
+            base,
+            None,
+            Arc::clone(plan),
+            Arc::clone(&summary),
+            report::OutputFormat::Text,
+            scan.clone(),
+            jobs,
+        ))
+        .await;
+        let bad = bad.expect("the check tasks finish");
         (
             bad,
             summary.files_skipped.load(Ordering::Relaxed),
@@ -549,8 +542,8 @@ mod tests {
     /// The jobs flag bounds the checks without changing their answer: same
     /// clean/failed counts, same damaged-chunk total, same warnings in the same
     /// plan order, whether one file runs at a time or all of them do.
-    #[test]
-    fn parallel_checks_match_one_job_and_stay_in_plan_order() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn parallel_checks_match_one_job_and_stay_in_plan_order() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "parallel_parity");
         let base = &*dir;
         std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
@@ -573,8 +566,8 @@ mod tests {
             ],
         )));
 
-        let one = run_verify(base, &plan, &scan, 1);
-        let many = run_verify(base, &plan, &scan, 4);
+        let one = run_verify(base, &plan, &scan, 1).await;
+        let many = run_verify(base, &plan, &scan, 4).await;
 
         assert_eq!(
             (one.0, one.1, one.2, one.3),
@@ -621,8 +614,8 @@ mod tests {
 
     /// A clean pass records a measured zero, not the same "never measured"
     /// state a default `Summary` carries.
-    #[test]
-    fn a_clean_check_measures_zero() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_clean_check_measures_zero() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "clean_zero");
         let base = &*dir;
         std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
@@ -630,7 +623,7 @@ mod tests {
         let plan = Arc::new(plan_of(vec![planned("a.dat", 4, &md5)]));
         let scan = None;
 
-        let (bad, skipped, failed, damaged_chunks, _) = run_verify(base, &plan, &scan, 2);
+        let (bad, skipped, failed, damaged_chunks, _) = run_verify(base, &plan, &scan, 2).await;
 
         assert_eq!((bad, skipped, failed), (0, 1, 0));
         assert_eq!(
@@ -639,8 +632,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_panicked_check_task_fails_the_run_instead_of_reporting_damage() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_panicked_check_task_fails_the_run_instead_of_reporting_damage() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "task_panic");
         let base = &*dir;
         let plan = Arc::new(plan_of(vec![planned(
@@ -649,27 +642,22 @@ mod tests {
             "00000000000000000000000000000000",
         )]));
         let summary = Arc::new(Summary::default());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
 
-        let err = runtime
-            .block_on(verify_plan_with(
-                base,
-                None,
-                plan,
-                Arc::clone(&summary),
-                report::OutputFormat::Text,
-                None,
-                1,
-                None,
-                |_: &PlannedFile,
-                 _: &anyhow::Result<PathBuf>,
-                 _: DigestSource<'_>|
-                 -> CheckOutcome { panic!("injected check-task panic") },
-            ))
-            .expect_err("a panicked check task is a run failure");
+        let err = verify_plan_with(
+            base,
+            None,
+            plan,
+            Arc::clone(&summary),
+            report::OutputFormat::Text,
+            None,
+            1,
+            None,
+            |_: &PlannedFile, _: &anyhow::Result<PathBuf>, _: DigestSource<'_>| -> CheckOutcome {
+                panic!("injected check-task panic")
+            },
+        )
+        .await
+        .expect_err("a panicked check task is a run failure");
 
         assert_eq!(
             err.exit_code,
@@ -686,8 +674,8 @@ mod tests {
     /// The test-double failure shape is logged by the same warn site as a real
     /// damage verdict. Injecting the outcome exercises that branch without
     /// waiting for a gate to expire.
-    #[test]
-    fn an_expired_gate_outcome_is_logged_as_a_test_double() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_expired_gate_outcome_is_logged_as_a_test_double() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "test_double_log");
         let base = &*dir;
         let rel = "a.dat";
@@ -697,33 +685,27 @@ mod tests {
             "00000000000000000000000000000000",
         )]));
         let summary = Arc::new(Summary::default());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let why = "injected gate expiry";
 
-        let logs = crate::repair::test_support::logs_of(|| {
-            let bad = runtime
-                .block_on(verify_plan_with(
-                    base,
-                    None,
-                    plan,
-                    Arc::clone(&summary),
-                    report::OutputFormat::Text,
-                    None,
-                    1,
-                    None,
-                    move |_: &PlannedFile,
-                          _: &anyhow::Result<PathBuf>,
-                          _: DigestSource<'_>|
-                          -> CheckOutcome {
-                        CheckOutcome::failed(CheckFailure::TestGateExpired(why))
-                    },
-                ))
-                .expect("the check task finishes");
-            assert_eq!(bad, 1, "the injected failure is counted as damage");
-        });
+        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan_with(
+            base,
+            None,
+            plan,
+            Arc::clone(&summary),
+            report::OutputFormat::Text,
+            None,
+            1,
+            None,
+            move |_: &PlannedFile,
+                  _: &anyhow::Result<PathBuf>,
+                  _: DigestSource<'_>|
+                  -> CheckOutcome {
+                CheckOutcome::failed(CheckFailure::TestGateExpired(why))
+            },
+        ))
+        .await;
+        let bad = bad.expect("the check task finishes");
+        assert_eq!(bad, 1, "the injected failure is counted as damage");
 
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
         let expected = format!("CHECK fail: test double: {why} file={rel}");
@@ -766,8 +748,8 @@ mod tests {
     /// the lines come from the one production warn site and not from a copy of
     /// it. The plan's rels name the arms, and an unknown rel is a bug in the
     /// plan rather than a silent clean file.
-    #[test]
-    fn every_failure_shape_is_logged_with_its_own_line() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_failure_shape_is_logged_with_its_own_line() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "warn_arms");
         let base = &*dir;
         let plan = Arc::new(plan_of(vec![
@@ -781,41 +763,32 @@ mod tests {
             planned("clean.dat", 37, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ]));
         let summary = Arc::new(Summary::default());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
 
-        let logs = crate::repair::test_support::logs_of(|| {
-            let bad = runtime
-                .block_on(verify_plan_with(
-                    base,
-                    None,
-                    plan,
-                    Arc::clone(&summary),
-                    report::OutputFormat::Text,
-                    None,
-                    1,
-                    None,
-                    |f: &PlannedFile,
-                     _: &anyhow::Result<PathBuf>,
-                     _: DigestSource<'_>|
-                     -> CheckOutcome {
-                        match injected_failure(&f.rel) {
-                            Some(failure) => CheckOutcome::failed(failure),
-                            None => {
-                                assert_eq!(
-                                    f.rel, "clean.dat",
-                                    "the plan holds the injected arms and one clean file"
-                                );
-                                CheckOutcome::clean()
-                            }
-                        }
-                    },
-                ))
-                .expect("the check tasks finish");
-            assert_eq!(bad, 7, "every injected failure counts as damage");
-        });
+        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan_with(
+            base,
+            None,
+            plan,
+            Arc::clone(&summary),
+            report::OutputFormat::Text,
+            None,
+            1,
+            None,
+            |f: &PlannedFile, _: &anyhow::Result<PathBuf>, _: DigestSource<'_>| -> CheckOutcome {
+                match injected_failure(&f.rel) {
+                    Some(failure) => CheckOutcome::failed(failure),
+                    None => {
+                        assert_eq!(
+                            f.rel, "clean.dat",
+                            "the plan holds the injected arms and one clean file"
+                        );
+                        CheckOutcome::clean()
+                    }
+                }
+            },
+        ))
+        .await;
+        let bad = bad.expect("the check tasks finish");
+        assert_eq!(bad, 7, "every injected failure counts as damage");
 
         assert_eq!(
             check_warnings(&logs).expect("every captured line is a record with a level"),

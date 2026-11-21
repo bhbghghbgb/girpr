@@ -1293,19 +1293,14 @@ mod tests {
     /// A blocking task still reaches the caller's scoped subscriber: the pool
     /// thread has no thread-local dispatcher, and the cleanup passes log the
     /// deletes they perform.
-    #[test]
-    fn a_blocking_task_keeps_the_callers_subscriber() {
-        let logs = crate::repair::test_support::logs_of(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocking_task_keeps_the_callers_subscriber() {
+        let (_, logs) = girpr_log::test_support::logs_of_async(async {
+            spawn_blocking_traced(|| tracing::info!("blocking line"))
+                .await
                 .unwrap();
-            rt.block_on(async {
-                spawn_blocking_traced(|| tracing::info!("blocking line"))
-                    .await
-                    .unwrap();
-            });
-        });
+        })
+        .await;
         assert!(logs.contains("blocking line"), "{logs}");
     }
 
