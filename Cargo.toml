@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -48,11 +48,12 @@ girpr-log = { path = "crates/log" }
 # pairs, used by this binary's CLI and scan-file writer. The capture tool borrows
 # the same mechanics but keeps its own trim, alias map, sentinel and validation.
 girpr-audio-language = { path = "crates/audio-language" }
-# Ordered-JSON and line-writing mechanics shared by the three report planes.
-# The leaf owns no field order, value vocabulary, escaping or boolean spelling:
-# this binary keeps its event-first declaration order, unsigned counts and
-# 1/0 flags, while girsync and gircap keep theirs.
-girpr-report-core = { path = "crates/report-core" }
+# The run counters, the record data plane, every stdout line and the phase
+# timer. They live in their own crate so an edit to the repair modules below
+# leaves the whole report plane cached. This binary consumes the crate directly
+# under module aliases; the begin report borrows scalar provenance values, so
+# no fetch DTO leaks into it. The ordered-JSON leaf is reused inside it.
+girpr-report = { path = "crates/report" }
 # The exit-table generation mechanism, shared with the capture tool. The leaf
 # owns only the enum/`ALL`/code/pin pattern; this binary supplies its own codes,
 # meanings and helper methods, so no exit-code value is shared.

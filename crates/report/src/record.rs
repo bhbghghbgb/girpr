@@ -16,8 +16,8 @@
 //! without a subscriber installed.
 //!
 //! Diagnostics are a different channel and do not come through here: they are
-//! `tracing` events on stderr (and optionally a `TRACE` log file — see
-//! [`crate::logging`]).
+//! `tracing` events on stderr (and optionally a `TRACE` log file — see the
+//! consuming binary's `logging` module).
 
 use std::borrow::Cow;
 

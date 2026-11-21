@@ -1138,7 +1138,7 @@ async fn run_post(
 /// Every key here is emitted **only when its flag was passed**: the
 /// `is_some` / `explicit` checks are the whole rule, kept in one function so
 /// it can be read against the rendering order in
-/// [`crate::report::summary::conditional_extras`]. Returns
+/// `girpr_report::summary::conditional_extras`. Returns
 /// [`RunExit::Limit`] when a runtime ceiling bound, after recording it in
 /// `stopped=`; the caller must return that code without running the post-phase.
 fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<RunExit> {

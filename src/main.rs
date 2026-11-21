@@ -5,9 +5,10 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use girpr::{
-    Args, RunCtx, RunExit, emit, flush_log, init_tracing, run as repair_run, summary_record,
-};
+use girpr::{Args, RunCtx, RunExit, flush_log, init_tracing, run as repair_run};
+// The binary is a direct consumer of the report plane, not just of the facade's
+// re-export: an edit to repair leaves this crate and its tests cached.
+use girpr_report::{emit, summary_record};
 
 fn main() -> ExitCode {
     let args = parse_args();

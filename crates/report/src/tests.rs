@@ -3,12 +3,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
-use crate::report::emit::{
+use crate::emit::{
     ProgressGuard, ReportProvenance, progress_record, report_record, summary_record, write_line,
 };
-use crate::report::record::{OutputFormat, Record};
-use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
+use crate::record::{OutputFormat, Record};
+use crate::summary::{Extra, Summary, SummaryFlags, conditional_extras};
 
 /// The two planes are two renderings of one field list. This is the
 /// property the whole module exists to guarantee, so it is pinned on a
@@ -98,7 +97,7 @@ fn progress_record_counts_done_as_the_three_outcomes() {
 /// Paused time makes the cadence deterministic instead of sleeping.
 #[test]
 fn the_progress_guard_ticks_once_per_interval_and_never_emits_a_summary() {
-    let logs = crate::repair::test_support::logs_of(|| {
+    let logs = girpr_log::test_support::logs_of(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -136,7 +135,7 @@ fn the_progress_guard_ticks_once_per_interval_and_never_emits_a_summary() {
 /// Nothing may keep ticking into the next phase.
 #[test]
 fn dropping_the_progress_guard_stops_the_ticker() {
-    let logs = crate::repair::test_support::logs_of(|| {
+    let logs = girpr_log::test_support::logs_of(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -390,46 +389,23 @@ fn an_unmeasured_check_tally_is_not_zero() {
     );
 }
 
-fn cfg_full() -> GameConfig {
-    GameConfig {
-        exe_file_name: "YuanShen.exe".into(),
-        audio_pkg_scan_dir: "scan.txt".into(),
-        audio_pkg_res_dir: "res".into(),
-        audio_pkg_cache_dir: "cache".into(),
-        default_download_mode: "DOWNLOAD_MODE_CHUNK".into(),
-        res_category_dir: "rc.txt".into(),
-        blacklist_dir: "bl.txt".into(),
-        enable_resource_blacklist: true,
-        game: None,
-    }
-}
-
+/// The report crate borrows scalars, not DTOs: the caller extracts the same
+/// strings and the renderer emits the same bytes. Keeping the fixtures here as
+/// literals is what keeps this crate independent of `girpr-fetch`.
 #[test]
 fn report_record_reports_versions_and_api_fields() {
-    let pkg = GameBranchPackage {
-        package_id: "pkg1".into(),
-        branch: "main".into(),
-        password: String::new(),
-        tag: "5.1.0".into(),
-        diff_tags: vec!["5.0.0".into(), "5.1.0".into()],
-    };
-    let build = ChunkBuild {
-        build_id: "build42".into(),
-        tag: "5.1.0".into(),
-        manifests: Vec::new(),
-    };
+    let diff_tags = vec!["5.0.0".to_string(), "5.1.0".to_string()];
     let audio: HashSet<String> = ["ja-jp".into(), "en-us".into()].into_iter().collect();
-    let cfg = cfg_full();
     let rec = report_record(&ReportProvenance {
         local_version: &Some("4.0.0".to_string()),
         latest_version: "5.1.0",
         biz: "hk4e_global",
-        exe_file_name: cfg.exe_file_name.as_str(),
-        default_download_mode: cfg.default_download_mode.as_str(),
-        branch: pkg.branch.as_str(),
-        package_id: pkg.package_id.as_str(),
-        build_id: build.build_id.as_str(),
-        diff_tags: pkg.diff_tags.as_slice(),
+        exe_file_name: "YuanShen.exe",
+        default_download_mode: "DOWNLOAD_MODE_CHUNK",
+        branch: "main",
+        package_id: "pkg1",
+        build_id: "build42",
+        diff_tags: &diff_tags,
         audio_langs: &audio,
     });
     let line = rec.text();
@@ -448,27 +424,18 @@ fn report_record_reports_versions_and_api_fields() {
 
 #[test]
 fn report_record_says_none_for_an_absent_local_version() {
-    let cfg = GameConfig {
-        exe_file_name: "GenshinImpact.exe".into(),
-        ..cfg_full()
-    };
-    let pkg = GameBranchPackage::default();
-    let build = ChunkBuild {
-        build_id: "b1".into(),
-        tag: "3.0.0".into(),
-        manifests: Vec::new(),
-    };
+    let diff_tags: Vec<String> = Vec::new();
     let audio: HashSet<String> = HashSet::new();
     let rec = report_record(&ReportProvenance {
         local_version: &None,
         latest_version: "3.0.0",
         biz: "hk4e_cn",
-        exe_file_name: cfg.exe_file_name.as_str(),
-        default_download_mode: cfg.default_download_mode.as_str(),
-        branch: pkg.branch.as_str(),
-        package_id: pkg.package_id.as_str(),
-        build_id: build.build_id.as_str(),
-        diff_tags: pkg.diff_tags.as_slice(),
+        exe_file_name: "GenshinImpact.exe",
+        default_download_mode: "DOWNLOAD_MODE_CHUNK",
+        branch: "",
+        package_id: "",
+        build_id: "b1",
+        diff_tags: &diff_tags,
         audio_langs: &audio,
     });
     let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();

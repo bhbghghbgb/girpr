@@ -732,7 +732,7 @@ dependencies = [
  "girpr-log",
  "girpr-model",
  "girpr-proto",
- "girpr-report-core",
+ "girpr-report",
  "girpr-retry",
  "girpr-tempdir",
  "girpr-util",
@@ -854,6 +854,20 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "serde",
+]
+
+[[package]]
+name = "girpr-report"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "girpr-log",
+ "girpr-report-core",
+ "girpr-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

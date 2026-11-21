@@ -45,7 +45,7 @@ machine rather than the code.
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
-| `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
+| `crates/report/` | run counters + every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
@@ -422,7 +422,14 @@ glob-filter rules to this binary and `girsync`, pinning one glob version and one
 set of matching rules for both. `crates/util/` holds this binary's low-level
 scan, digest, path, atomic-publish and config.ini mechanics; the repair, report
 and CLI code depend on it directly, so an edit there leaves it cached for them.
-`crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
+`crates/report/` holds this binary's run counters, record data plane, every
+stdout line and the phase timer. It also owns the mutually recursive
+`Summary`/`Meter`/`StoppedBy` group, so the old `report::summary` ↔
+`repair::scope::ledger` cycle is inside one crate; the repair code and the
+binary depend on it directly, so an edit to repair leaves it cached. It reuses
+`crates/report-core/` for the ordered-JSON and line-writing mechanics and keeps
+this binary's event-first order, unsigned counts and 1/0 flags distinct from
+the other two report planes. `crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
 chunk streaming, manifest filter, local chunk map and attempt loop; the repair
 code depends on it directly, so an edit to the repair, report or CLI leaves the
 whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire

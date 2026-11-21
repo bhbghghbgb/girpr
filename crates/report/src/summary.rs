@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
+use super::ledger::Meter;
 use super::record::Record;
-use crate::repair::scope::ledger::Meter;
-use crate::util::counter::add_saturating;
+use girpr_util::counter::add_saturating;
 
 /// A byte ceiling whose "no ceiling" sentinel is `u64::MAX`.
 ///
@@ -43,7 +43,7 @@ impl Ceiling {
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
 ///
 /// The types of the public counter fields — [`SummaryFlags`], [`Meter`] and
-/// [`Ceiling`] — are re-exported alongside [`Summary`](crate::Summary), so a
+/// [`Ceiling`] — are re-exported alongside [`Summary`], so a
 /// caller outside the crate can name every value it can read.
 #[derive(Debug, Default)]
 pub struct Summary {
@@ -189,7 +189,7 @@ impl Summary {
     /// the volume itself could. Saturation keeps that unreachable case from
     /// wrapping, on the same rule the per-entry sums inside the passes follow.
     /// For every reachable input the result is the exact sum.
-    pub(crate) fn add_deleted_bytes(&self, bytes: u64) {
+    pub fn add_deleted_bytes(&self, bytes: u64) {
         add_saturating(&self.deleted_extra_bytes, bytes);
     }
 
@@ -198,7 +198,7 @@ impl Summary {
     /// The store order is the point: a reader that observes the measured flag
     /// through [`Summary::check_damaged_chunks`] also observes the tally it
     /// publishes.
-    pub(crate) fn publish_check_damaged_chunks(&self, chunks: u64) {
+    pub fn publish_check_damaged_chunks(&self, chunks: u64) {
         self.check_damaged_chunks.store(chunks, Ordering::Relaxed);
         self.check_damaged_chunks_measured
             .store(true, Ordering::Release);

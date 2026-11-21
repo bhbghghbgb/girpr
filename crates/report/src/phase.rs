@@ -31,7 +31,7 @@ use std::time::Instant;
 ///
 /// `saturating_duration_since` keeps a clock that is not perfectly monotonic
 /// from wrapping into an enormous duration.
-pub(crate) fn millis_between(start: Instant, end: Instant) -> u64 {
+pub fn millis_between(start: Instant, end: Instant) -> u64 {
     end.saturating_duration_since(start).as_millis() as u64
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn millis_between(start: Instant, end: Instant) -> u64 {
 /// explicitly an **incomplete** phase rather than a completion. A phase whose
 /// existing completion line already carries the duration calls
 /// [`disarm`](Self::disarm) instead, so the value is not logged twice.
-pub(crate) struct PhaseTimer {
+pub struct PhaseTimer {
     phase: &'static str,
     start: Instant,
     logged: bool,
@@ -50,7 +50,7 @@ pub(crate) struct PhaseTimer {
 
 impl PhaseTimer {
     /// Start timing `phase`.
-    pub(crate) fn start(phase: &'static str) -> Self {
+    pub fn start(phase: &'static str) -> Self {
         Self {
             phase,
             start: Instant::now(),
@@ -59,18 +59,18 @@ impl PhaseTimer {
     }
 
     /// Whole milliseconds since this phase started.
-    pub(crate) fn elapsed_ms(&self) -> u64 {
+    pub fn elapsed_ms(&self) -> u64 {
         millis_between(self.start, Instant::now())
     }
 
     /// Emit this phase's own completion line and stop the timer.
-    pub(crate) fn finish(mut self) {
+    pub fn finish(mut self) {
         self.log_completion();
     }
 
     /// Keep the duration out of a separate line: the phase's existing
     /// completion line already carries [`elapsed_ms`](Self::elapsed_ms).
-    pub(crate) fn disarm(mut self) {
+    pub fn disarm(mut self) {
         self.logged = true;
     }
 
@@ -132,7 +132,7 @@ mod tests {
     /// The stable field name is what a reader greps; the value is not asserted.
     #[test]
     fn the_timer_logs_phase_and_duration() {
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             PhaseTimer::start("unit").finish();
         });
         assert!(logs.contains("phase=unit"), "{logs}");
@@ -144,7 +144,7 @@ mod tests {
     /// it keeps the phase name and a duration, but under the incomplete shape.
     #[test]
     fn a_dropped_timer_does_not_claim_completion() {
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             let _timer = PhaseTimer::start("unit");
         });
         assert!(logs.contains("phase=unit"), "{logs}");

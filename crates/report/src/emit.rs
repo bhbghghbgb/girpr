@@ -3,7 +3,7 @@
 //! The record order is fixed: `REPORT` once the metadata is known, `PLAN` when
 //! the run asked for it, zero or more `PROGRESS` ticks from the phase's single
 //! [`ProgressGuard`], and `SUMMARY` last, emitted once by the caller after
-//! [`crate::repair::run`] returns. No phase emits `SUMMARY`.
+//! the consuming pipeline's `run` returns. No phase emits `SUMMARY`.
 //!
 //! Ownership rule: a phase that has long-running work starts **one**
 //! [`ProgressGuard`] for its shared [`Summary`] and drops it when the phase
@@ -127,35 +127,38 @@ impl Drop for ProgressGuard {
 /// The provenance fields of the one-time begin report.
 ///
 /// The field order is the report's field order: the caller names every value
-/// once, and the formatter turns the group into the `REPORT` record. The fields
-/// are crate-visible rather than public: the pipeline is the only constructor,
-/// and [`report_record`] is the only reader.
+/// once, and the formatter turns the group into the `REPORT` record.
+/// [`report_record`] is the only reader.
 ///
 /// The API-derived values are borrowed as scalars rather than as the HoYoPlay
 /// DTOs that carry them. That is the seam between the two planes: the report
 /// plane renders whatever the caller extracts and does not depend on the
 /// fetch crate or the shape of its DTOs. The rendered bytes are unchanged.
+///
+/// The fields are public because the pipeline that constructs this value lives
+/// in the consuming crate; the value stays a thin borrowed view, so no field
+/// order or value vocabulary leaks into `girpr-fetch`.
 pub struct ReportProvenance<'a> {
     /// The on-disk `config.ini` version, or `None` when absent.
-    pub(crate) local_version: &'a Option<String>,
+    pub local_version: &'a Option<String>,
     /// The version the run is moving to.
-    pub(crate) latest_version: &'a str,
+    pub latest_version: &'a str,
     /// The game/business channel.
-    pub(crate) biz: &'a str,
+    pub biz: &'a str,
     /// The launcher's executable name (`GameConfig::exe_file_name`).
-    pub(crate) exe_file_name: &'a str,
+    pub exe_file_name: &'a str,
     /// The launcher's default download mode (`GameConfig::default_download_mode`).
-    pub(crate) default_download_mode: &'a str,
+    pub default_download_mode: &'a str,
     /// The selected branch (`GameBranchPackage::branch`).
-    pub(crate) branch: &'a str,
+    pub branch: &'a str,
     /// The selected package id (`GameBranchPackage::package_id`).
-    pub(crate) package_id: &'a str,
+    pub package_id: &'a str,
     /// The target build id (`ChunkBuild::build_id`).
-    pub(crate) build_id: &'a str,
+    pub build_id: &'a str,
     /// The branch's declared diff tags (`GameBranchPackage::diff_tags`).
-    pub(crate) diff_tags: &'a [String],
+    pub diff_tags: &'a [String],
     /// The effective audio language set.
-    pub(crate) audio_langs: &'a HashSet<String>,
+    pub audio_langs: &'a HashSet<String>,
 }
 
 /// The one-time begin report, written right after the metadata calls. Parsers

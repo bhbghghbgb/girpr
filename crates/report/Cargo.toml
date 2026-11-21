@@ -1,0 +1,39 @@
+[package]
+name = "girpr-report"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared run counters and stdout report plane the girpr repair pipeline reads with"
+
+[lib]
+name = "girpr_report"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The ordered-JSON and line-writing mechanics below the plane. This crate keeps
+# girpr's own event-first order, unsigned counts and 1/0 flags; the core owns no
+# field order, value vocabulary or boolean spelling, and no `preserve_order`.
+girpr-report-core = { path = "../report-core" }
+# The saturating atomic counter used by the byte and RAM reservations.
+girpr-util = { path = "../util" }
+# The `event` field is emitted through `Serialize`; this crate owns the value
+# vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
+serde = "1.0.229"
+serde_json = "1.0.154"
+# `OutputFormat` is the binary's `--output` flag type. The flag spelling stays
+# here; the shared leaf carries no CLI policy.
+clap = { version = "4.6.8", features = ["derive"] }
+# The stdout/log mirror, the meter's refund warning and the phase lines.
+tracing = "0.1.44"
+# The one `PROGRESS` ticker and its interval. `test-util` is dev-only below.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "time"] }
+
+[dev-dependencies]
+# The shared log-capture helper, reached through this crate's own tests. The
+# `test-support` feature is off in every shipped build.
+girpr-log = { path = "../log", features = ["test-support"] }
+# Paused time makes the progress-guard cadence and stop-on-drop deterministic.
+tokio = { version = "1.54.1", default-features = false, features = ["test-util"] }

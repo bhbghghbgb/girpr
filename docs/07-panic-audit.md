@@ -87,7 +87,7 @@ says which.
 | `src/repair/file/inplace.rs` `staged_payload` | chunk `uncompressed_size` | server | **Saturating**, so a corrupt sum falls back to the ordered tier instead of bypassing the RAM budget. |
 | `src/repair/mod.rs` `estimate_download` fold | per-file estimates | server-derived | **Saturating**. |
 | `src/repair/purge.rs` `finish_plan` (`total_bytes`) | on-disk sizes | local | **Saturating**; `apply_purge` counters are local file sizes, not server values. |
-| `src/repair/scope/ledger.rs` `Meter` counters | counters | local | **Saturating compare-and-swap**. |
+| `crates/report/src/ledger.rs` `Meter` counters | counters | local | **Saturating compare-and-swap**. |
 
 ---
 

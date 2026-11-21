@@ -32,13 +32,14 @@
 //! The modules behind the seam are private: `cli` / `config` (the argument
 //! surface and validated per-run configuration), `logging` (console + file
 //! `tracing` layers over the shared `girpr-log` policy), `repair` (the
-//! pipeline, split into phases), `biz` (biz → launcher id / game id /
-//! channel tuple), `report` (run counters, the record data plane and every
-//! stdout line) and `phase` (the monotonic phase timer). The HoYoPlay/Sophon
-//! fetch path (`hyp`, `sophon`) and the attempt loop (`retry`) live in
-//! `girpr-fetch`, and the low-level scan/hash/path helpers in `girpr-util`;
-//! this crate depends on both directly under those module aliases, so edits
-//! here leave their heavy code cached.
+//! pipeline, split into phases) and `biz` (biz → launcher id / game id /
+//! channel tuple). The run counters, the record data plane, every stdout line
+//! and the monotonic phase timer live in `girpr-report`, which also owns the
+//! `Meter`/`StoppedBy` group that was mutually recursive with `Summary`; the
+//! HoYoPlay/Sophon fetch path (`hyp`, `sophon`) and the attempt loop (`retry`)
+//! live in `girpr-fetch`, and the low-level scan/hash/path helpers in
+//! `girpr-util`. This crate depends on all three directly under module aliases,
+//! so edits here leave their code cached.
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
 //! run config → [`run`] → print `SUMMARY` → flush the log → return the exit
@@ -48,12 +49,17 @@ mod biz;
 mod cli;
 mod config;
 mod logging;
-mod phase;
 mod repair;
-mod report;
 // The canned-reply loopback origin the unit tests share.
 #[cfg(test)]
 mod test_http;
+// The report plane lives in its own crate so an edit to the repair modules
+// below leaves the counters, the record data plane, every stdout line and the
+// phase timer cached. These aliases keep every existing `crate::report::…` and
+// `crate::phase::…` call site pointing at the same names, while this facade
+// depends on the crate directly rather than only re-exporting it.
+use girpr_report as phase;
+use girpr_report as report;
 // The fetch path lives in its own crate so an edit to `repair`, `report` or
 // `cli` leaves the whole reqwest/zstd/prost tree cached. These aliases keep
 // every existing `crate::hyp::…`, `crate::sophon::…` and `crate::retry::…`
@@ -75,10 +81,12 @@ pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang, parse_audio_selection};
 pub use config::{RunCtx, RunExit, RunFailure};
 pub use girpr_log::Level;
+pub use girpr_report::{
+    Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, summary_record,
+};
 pub use logging::{flush_log, init_tracing};
 pub use repair::run;
 pub use repair::scope::ledger::Meter;
-pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, summary_record};
 
 /// The tests' seam.
 ///

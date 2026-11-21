@@ -748,7 +748,7 @@ branch:
 | `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
 | `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move |
 | `src/repair/file/mod.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
-| `src/report.rs` | the conditional `SUMMARY` keys |
+| `crates/report/src/summary.rs` | the conditional `SUMMARY` keys |
 | `README.md` | flag table, machine-contract table, exit-code table |
 
 ---
