@@ -66,11 +66,11 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-13 | Add `girpr-sync-leaves` to §F39 doc seams (README table/prose, docs/03 tree) | done | Batch D, 0051e2aa; review clean |
 | FU-14 | Drop unused `girpr-digest` direct dep from `tools/sync/Cargo.toml` | batched:H | From review F; dependency hygiene |
 | FU-15 | Replace `config::validate_base`'s `reqwest::Url` with `url` crate so reqwest is owned solely by `gircap-http` | batched:H | From review G1; §A5 boundary |
-| FU-16 | Relocate mechanics-only http tests into `tools/capture/http/tests/` (keep probe/negative local) | batched:G | From review G1; §A2 test-link payoff |
+| FU-16 | Relocate mechanics-only http tests into `tools/capture/http/tests/` (keep probe/negative local) | done | Batch G, 78d8a143; review clean; 47 mechanics tests into gircap-http (in-crate `src/tests.rs` per gircap-hash precedent), probe/negative + URL/exit-code/HashingFile policy keepers local; §A2 link payoff verified empirically (gircap-http Fresh after gircap production edit); no nextest filter edits; canned/malformed mocks + fetcher helpers duplicated by design (§A5/§A7/§F40), accepted |
 | FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy) in crate/independence-table notes | done | Batch D, 0051e2aa; review clean |
 | FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` default into gircap policy (strict logic-free leaf) | batched:H | From review G2; §A5 |
-| FU-19 | Relocate mechanics-only gzip/zstd tests into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) | batched:G | From review G2; §A2 test-link payoff |
-| FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` (do after FU-16/FU-19) | batched:G | From review G2; doc accuracy |
+| FU-19 | Relocate mechanics-only gzip/zstd tests into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) | dropped | Batch G; premise pre-satisfied by T17 (07dcd08e) — all mechanics gzip/zstd/digest tests already in gircap-hash, only policy-dependent keepers remain local; stop independently confirmed by review |
+| FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` (do after FU-16/FU-19) | done | Batch G, 78d8a143; README refreshed to measured 772 tests / 769 run, note names gircap-http as home of HTTP mechanics tests |
 | NF-1 | Mechanically enforce the gircap leaf-only dependency boundary (guard against girpr/program-logic deps) | open | NEW from Phase 3 planning review; HELD — infrastructure, no new rebuild edge; revisit if boundary churn recurs |
 | FU-21 | Audit remaining §F39 seams (docs/06-artifact-bridge-spec.md, tools/sled2redb/README.md) for new crates | open | From Batch D review; unbatched, doc-only, low priority |
 | FU-22 | Refresh stale line-number pointers in follow-up descriptions/report §F39 | open | From Batch D review; unbatched, code authoritative |
@@ -78,6 +78,7 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-24 | Fully hide `ReuseEntry` in shipped girpr-fetch by gating the struct/`pub mod map` path, not just the convenience alias | open | From Batch P review; FU-09 only removed the alias |
 | FU-25 | Add a comment/guard to the two facade cfg(test) modules importing `crate::sophon::ReuseEntry` explaining the test-support dev-feature dependency | open | From Batch P review; unbatched, doc-only |
 | FU-26 | Guard that `cargo build -p girpr` never enables test-support on girpr-fetch (CI assertion) | open | From Batch P review; unbatched, overlaps held NF-1 |
+| FU-27 | De-duplicate canned/malformed mock servers + fetcher helpers now copied across `gircap/src/http/tests.rs` and `gircap-http/src/tests.rs` | open | From Batch G review; low priority, non-blocking; mirror fixes meanwhile; removal shape = `test-support` feature on gircap-http via thin shim (§A7), keep gircap's bundle mock distinct (§F40) |
 
 ## Persistent context
 
@@ -219,3 +220,10 @@ that in the relevant task's `note` instead of silently proceeding):
   `RunCtx`/`Limits`/`PathScope`/`RepairMode` from the config↔repair SCC. T10 is
   the place to finish that seam; only then would T08's narrow CLI tests be
   unblocked (and still only with the SCC addressed).
+- **Batch G accepted a deliberate test-helper duplication (FU-16 review).** The
+  `canned`/`malformed` mock servers and `fetcher` helpers are now copied in both
+  `gircap/src/http/tests.rs` and `gircap-http/src/tests.rs`. This is unavoidable
+  under §A5 (gircap independence) and §A7 (one process per test, no cross-program
+  test helpers); gircap's bundle mock must stay distinct (§F40). Do not treat the
+  duplication as a defect to fix by sharing helpers — see FU-27 for the only
+  viable removal shape (`test-support` feature + thin shim).
