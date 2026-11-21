@@ -26,7 +26,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T12 | girsync: extract the acyclic leaves | completed | a6503f7e | New `girpr-sync-leaves` holds rw/filter/link/hardlink verbatim; girsync direct dep + old-name re-exports; direct consumer `crates/sync-leaves/tests/direct.rs`; §A2 verified empirically (cache+leaves Fresh after planner edit). Dev: hash not extracted (T11 already moved to sync-cache); scan.rs left local — imports crate::util + crate::link, extracting would invert dep via util→cache (§A10/§A2); gate/policy unchanged. Review F clean |
 | T13 | girsync: planner + effective cycle crate | skipped | | planner/effective not a standalone 2-node SCC — sit in 6-module girsync SCC {cli,config,diff,effective,planner,report}; a legal whole-group move needs scan/util/hash too (broad, not narrow interface), §A2 fails; stop per task instruction |
 | T14 | gircap: extract the http subsystem crate | pending_review | b8b31045 | New logic-free `gircap-http` (tools/capture/http) owns reqwest/thiserror mechanics; gircap direct dep, src/http/mod.rs thin facade (probe/negative/tests kept local as policy). §A2 verified empirically (emit edit leaves gircap-http/reqwest/retry Fresh). Dev: §F25 SCC actually 11 modules (http↔manifest via negative, http↔failure, biz↔cli↔config) — carved acyclic leaf instead; doc seams updated in same work; wiremock stays gircap dev-dep |
-| T15 | gircap: emit + verify subsystem crates | in_progress | | |
+| T15 | gircap: emit + verify subsystem crates | skipped | | emit/verify not logic-free leaves: emit in SCC with manifest/assemble/http (manifest→emit, assemble→emit back-edges); verify depends on emit policy types; no direct consumer, no heavy dep isolatable (flate2/ini_core stay, ini=§A13 keeper). Legal extraction needs whole-SCC move + byte-contract rewrite (§A6) |
 | T16 | gircap: blobs + manifest crates | todo | | |
 | T17 | gircap: small production leaves | todo | | |
 | T18 | Split the disjoint halves of `girpr-digest` | todo | | |
@@ -160,7 +160,13 @@ that in the relevant task's `note` instead of silently proceeding):
   T14 extracted only the acyclic mechanics leaf (`gircap-http`); `probe`/
   `negative` and their manifest/failure edges stay inside gircap's SCC.
   T15–T17 must account for this rather than assuming a 2-node cycle. A whole-SCC
-  move would leave gircap a re-exporting facade (§A2 fail).
+  move would leave gircap a re-exporting facade (§A2 fail). T15 found emit is
+  also in this SCC (manifest→emit via dump.rs, assemble→emit via types.rs, plus
+  emit→http), and verify depends one-way on emit's policy types (selfcheck/
+  index). Any legal emit/verify extraction needs those back-edges severed by
+  moving shared schema/policy types down — a whole-SCC move that rewrites §A6
+  byte contracts. T16/T17 should expect the same SCC unless they find a
+  T14-style acyclic mechanics leaf.
 - **girsync planner/effective sit in a 6-module SCC (T13 validation, §A10).**
   Production `use crate::` edges put `{planner, effective, config, cli, report,
   diff}` in one strongly-connected group (§A10 also names `cli↔config` and
