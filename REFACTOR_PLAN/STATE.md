@@ -12,7 +12,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Consolidate root integration test binaries | pending_review | 080a0d45 | 4 root targets; kept artifact_bridge & repair_post standalone (pinned filters/host-skip/log-capture) so no nextest.toml edit; consolidated FQNs gained module prefix (repair::/contracts::); run_lock uses crate::common |
+| T01 | Consolidate root integration test binaries | completed | 080a0d45 | 4 root targets; kept artifact_bridge & repair_post standalone (pinned filters/host-skip/log-capture) so no nextest.toml edit; consolidated FQNs gained module prefix (repair::/contracts::); run_lock uses crate::common |
 | T02 | Memory cache seam for girsync record/FS cases | todo | | |
 | T03 | Structured repair diagnostics to drop log-only spawns | todo | | |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | todo | | |
@@ -38,7 +38,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| A | T01 | pending | |
+| A | T01 | done | |
 | B | T02 | pending | |
 | C | T03, T04 | pending | Split if the batch proves too heavy |
 | D | T05 | pending | |
@@ -58,7 +58,9 @@ orchestrator records them here. Planning review (Phase 3) decides batching and d
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-|    |             |       |      |
+| FU01 | Re-measure clean-build wall time on CI with a fresh target dir | open | Report figure is host-specific; 14→4 link reduction verified structurally |
+| FU02 | Merging repair_post into repair needs pinned binary(=repair_post) overrides updated in same change | open | Correctly left separate in T01 |
+| FU03 | Narrow blanket allow(dead_code, unused_imports) in tests/common/mod.rs to per-item allows | open | Cosmetic only |
 
 ## Persistent context
 
