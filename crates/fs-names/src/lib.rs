@@ -156,106 +156,119 @@ mod tests {
     // gircap's rule: the set without CLOCK$, compared on the raw stem.
     const RAW_SET: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
 
+    /// The five pure policy cases, folded into one process so nextest spawns one
+    /// test instead of five. Every original assertion and message is kept; a
+    /// labelled subcase names the policy that failed. The canonical-path case
+    /// stays separate because it resolves a host filesystem path.
     #[test]
-    fn trimming_rule_reserves_clock_and_strips_trailing_characters() {
-        for name in [
-            "NUL",
-            "nul",
-            "con.dat",
-            "PRN.txt",
-            "AUX",
-            "CONIN$",
-            "CONOUT$",
-            "CLOCK$",
-            "clock$.txt",
-            "COM1",
-            "com9.dat",
-            "lpt1.tar.gz",
-            "NUL ",
-            "NUL.",
-        ] {
-            assert!(
-                is_reserved_device_name(name, TRIMMING_SET, true),
-                "{name:?} must be reserved by the trimming rule"
-            );
+    fn pure_policy_contracts() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            (
+                "trimming_rule_reserves_clock_and_strips_trailing_characters",
+                &|| {
+                    for name in [
+                        "NUL",
+                        "nul",
+                        "con.dat",
+                        "PRN.txt",
+                        "AUX",
+                        "CONIN$",
+                        "CONOUT$",
+                        "CLOCK$",
+                        "clock$.txt",
+                        "COM1",
+                        "com9.dat",
+                        "lpt1.tar.gz",
+                        "NUL ",
+                        "NUL.",
+                    ] {
+                        assert!(
+                            is_reserved_device_name(name, TRIMMING_SET, true),
+                            "{name:?} must be reserved by the trimming rule"
+                        );
+                    }
+                    for name in ["conifer.dat", "nullable.bin", "com10.dat", "lpt", "COM0"] {
+                        assert!(
+                            !is_reserved_device_name(name, TRIMMING_SET, true),
+                            "{name:?} must be ordinary under the trimming rule"
+                        );
+                    }
+                },
+            ),
+            (
+                "raw_rule_omits_clock_and_keeps_trailing_characters",
+                &|| {
+                    for name in [
+                        "CON",
+                        "con",
+                        "aux.txt",
+                        "Prn.log",
+                        "NUL.",
+                        "CONIN$",
+                        "conout$.txt",
+                        "COM1",
+                        "com9.bin",
+                        "LPT3",
+                    ] {
+                        assert!(
+                            is_reserved_device_name(name, RAW_SET, false),
+                            "{name:?} must be reserved by the raw rule"
+                        );
+                    }
+                    // CLOCK$ and a trailing space in the stem are ordinary under
+                    // this rule. (A trailing dot is already dropped by the
+                    // extension split, so it is the trailing *space* that
+                    // separates the two callers' trim policies.)
+                    for name in [
+                        "CLOCK$",
+                        "clock$.txt",
+                        "NUL ",
+                        "CONSOLE",
+                        "COM0",
+                        "LPT10",
+                        ".con",
+                    ] {
+                        assert!(
+                            !is_reserved_device_name(name, RAW_SET, false),
+                            "{name:?} must be ordinary under the raw rule"
+                        );
+                    }
+                },
+            ),
+            ("trailing_dot_or_space_is_a_pure_mechanic", &|| {
+                for name in ["x.", "x ", "x...", "x   ", ".", " "] {
+                    assert!(has_trailing_dot_or_space(name), "{name:?}");
+                }
+                for name in ["x", "x.y", "x y", ".hidden", ""] {
+                    assert!(!has_trailing_dot_or_space(name), "{name:?}");
+                }
+            }),
+            ("ascii_fold_follows_the_callers_policy_flag", &|| {
+                assert_eq!(fold_ascii_case("ReadMe.TXT", true), "readme.txt");
+                assert_eq!(fold_ascii_case("ReadMe.TXT", false), "ReadMe.TXT");
+                // The fold is ASCII-only on both settings: a Unicode case
+                // mapping would merge the Kelvin sign with `k`, which the
+                // filesystem keeps apart.
+                for fold in [true, false] {
+                    assert_eq!(
+                        fold_ascii_case("\u{212A}/\u{00C4}", fold),
+                        "\u{212A}/\u{00C4}"
+                    );
+                }
+            }),
+            ("forward_slash_follows_the_callers_policy_flag", &|| {
+                assert_eq!(forward_slash("dir\\sub\\f.txt", true), "dir/sub/f.txt");
+                assert_eq!(forward_slash("dir\\sub\\f.txt", false), "dir\\sub\\f.txt");
+                // A leading backslash becomes a root only when the caller
+                // asks for the rewrite; on the other host it stays a
+                // literal character.
+                assert_eq!(forward_slash("\\lead.txt", true), "/lead.txt");
+                assert_eq!(forward_slash("\\lead.txt", false), "\\lead.txt");
+            }),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
         }
-        for name in ["conifer.dat", "nullable.bin", "com10.dat", "lpt", "COM0"] {
-            assert!(
-                !is_reserved_device_name(name, TRIMMING_SET, true),
-                "{name:?} must be ordinary under the trimming rule"
-            );
-        }
-    }
-
-    #[test]
-    fn raw_rule_omits_clock_and_keeps_trailing_characters() {
-        for name in [
-            "CON",
-            "con",
-            "aux.txt",
-            "Prn.log",
-            "NUL.",
-            "CONIN$",
-            "conout$.txt",
-            "COM1",
-            "com9.bin",
-            "LPT3",
-        ] {
-            assert!(
-                is_reserved_device_name(name, RAW_SET, false),
-                "{name:?} must be reserved by the raw rule"
-            );
-        }
-        // CLOCK$ and a trailing space in the stem are ordinary under this rule.
-        // (A trailing dot is already dropped by the extension split, so it is
-        // the trailing *space* that separates the two callers' trim policies.)
-        for name in [
-            "CLOCK$",
-            "clock$.txt",
-            "NUL ",
-            "CONSOLE",
-            "COM0",
-            "LPT10",
-            ".con",
-        ] {
-            assert!(
-                !is_reserved_device_name(name, RAW_SET, false),
-                "{name:?} must be ordinary under the raw rule"
-            );
-        }
-    }
-
-    #[test]
-    fn trailing_dot_or_space_is_a_pure_mechanic() {
-        for name in ["x.", "x ", "x...", "x   ", ".", " "] {
-            assert!(has_trailing_dot_or_space(name), "{name:?}");
-        }
-        for name in ["x", "x.y", "x y", ".hidden", ""] {
-            assert!(!has_trailing_dot_or_space(name), "{name:?}");
-        }
-    }
-
-    #[test]
-    fn ascii_fold_follows_the_callers_policy_flag() {
-        assert_eq!(fold_ascii_case("ReadMe.TXT", true), "readme.txt");
-        assert_eq!(fold_ascii_case("ReadMe.TXT", false), "ReadMe.TXT");
-        // The fold is ASCII-only on both settings: a Unicode case mapping would
-        // merge the Kelvin sign with `k`, which the filesystem keeps apart.
-        for fold in [true, false] {
-            assert_eq!(
-                fold_ascii_case("\u{212A}/\u{00C4}", fold),
-                "\u{212A}/\u{00C4}"
-            );
-        }
-    }
-
-    #[test]
-    fn forward_slash_follows_the_callers_policy_flag() {
-        assert_eq!(forward_slash("dir\\sub\\f.txt", true), "dir/sub/f.txt");
-        assert_eq!(forward_slash("dir\\sub\\f.txt", false), "dir\\sub\\f.txt");
-        // A leading backslash becomes a root only when the caller asks for the
-        // rewrite; on the other host it stays a literal character.
-        assert_eq!(forward_slash("\\lead.txt", true), "/lead.txt");
-        assert_eq!(forward_slash("\\lead.txt", false), "\\lead.txt");
     }
 }
