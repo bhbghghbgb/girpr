@@ -4,9 +4,7 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
-use common::{
+use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, GameFixture, LATEST_TAG, Lies, MockOpts, MockServer,
     build_fixture, build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
 };
@@ -28,7 +26,7 @@ async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (
     let mut child = cmd.spawn().expect("spawn girpr");
     drop(child.stdout.take());
     let out = child.wait_with_output().await.expect("wait for girpr");
-    common::remove_run_lock_for_args(args);
+    crate::common::remove_run_lock_for_args(args);
     (
         out.status.code().expect("process must exit normally"),
         String::from_utf8_lossy(&out.stderr).into_owned(),

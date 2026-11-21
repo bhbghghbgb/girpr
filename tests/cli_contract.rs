@@ -32,15 +32,13 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
 use clap::Parser;
 use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use common::{
+use crate::common::{
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
     remove_run_lock_for_args, temp_dir, write_game_file,
 };

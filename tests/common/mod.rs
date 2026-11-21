@@ -30,9 +30,12 @@ pub use girpr_test_support::{
 
 mod run_lock;
 
-// Each test binary uses one of the two helpers, so the other is unused here.
+// A given binary uses only part of this surface, so the rest are unused here.
 #[allow(unused_imports)]
-pub use run_lock::{remove_run_lock, remove_run_lock_for_args};
+pub use run_lock::{
+    args_take_lock, game_path_arg, lock_key_path, mode_takes_lock, remove_run_lock,
+    remove_run_lock_for_args,
+};
 
 mod digest;
 

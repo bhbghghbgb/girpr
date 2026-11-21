@@ -542,8 +542,8 @@ defaults.
 cargo nextest run             # this package's offline suite (ignored tests excluded)
 cargo nextest run --workspace # the whole workspace
 cargo check -p girsync -p gircap -p sled2redb # the dev tools, which a root command does not build
-cargo nextest run --test repair_offline
-cargo nextest run --test repair_machinery
+cargo nextest run --test repair                       # the consolidated repair binary
+cargo nextest run -E 'test(repair_offline::)'          # one module's cases within it
 cargo clippy -p girpr --all-targets -- -D warnings
 cargo clippy -p girsync -p gircap -p sled2redb --all-targets -- -D warnings
 

@@ -1,26 +1,23 @@
 //! Tests for the shared run-lock cleanup helpers.
 //!
-//! `tests/common/run_lock.rs` reaches the test binaries in two ways:
-//! `tests/artifact_bridge.rs` and this file include it directly with `#[path]`,
-//! while the other binaries that need it reach it through `tests/common`, whose
-//! `mod.rs` declares it as a plain child module. Its tests live here rather
-//! than in a `#[cfg(test)]` module in that file: such a module would run once
-//! per including binary.
+//! The helpers live in `tests/common/run_lock.rs`. `tests/artifact_bridge.rs`
+//! includes that file directly with `#[path]` because its binary has no
+//! `common` module; this binary reaches the same helpers through the crate-root
+//! `common` module, so the file is loaded once per crate. The tests live here
+//! rather than in a `#[cfg(test)]` module beside the helpers: such a module
+//! would run once per including binary.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "common/run_lock.rs"]
-mod run_lock;
-
+use crate::common::{
+    args_take_lock, game_path_arg, lock_key_path, mode_takes_lock, remove_run_lock,
+    remove_run_lock_for_args,
+};
 use clap::{CommandFactory, Parser};
 use girpr::{Args, RunCtx};
 use girpr_lock::{Lock, lock_path, takes_lock};
 use girpr_tempdir::TempDir;
-use run_lock::{
-    args_take_lock, game_path_arg, lock_key_path, mode_takes_lock, remove_run_lock,
-    remove_run_lock_for_args,
-};
 
 const MODE_FLAGS: [&str; 4] = ["--dry-run", "--check-only", "--print-plan", "--purge-only"];
 

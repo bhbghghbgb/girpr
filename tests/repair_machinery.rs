@@ -46,14 +46,12 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-use common::{
+use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, ctx_for,
     field, lay_out, md5hex, scope, stamp_ago, stamp_ahead, temp_dir,
 };
@@ -186,7 +184,7 @@ impl Rig {
         let dir = temp_dir("machinery");
         // The description's bytes on disk are the install's starting state.
         for (rel, bytes) in &spec.disk {
-            common::write_game_file(&dir, rel, bytes);
+            crate::common::write_game_file(&dir, rel, bytes);
         }
         Rig {
             mock,
@@ -203,12 +201,13 @@ impl Rig {
 
     /// Write a file into the scratch install.
     fn write(&self, rel: &str, bytes: &[u8]) {
-        common::write_game_file(&self.dir, rel, bytes);
+        crate::common::write_game_file(&self.dir, rel, bytes);
     }
 
     /// Read a file out of the scratch install.
     fn read(&self, rel: &str) -> Vec<u8> {
-        common::read_game_file(&self.dir, rel).unwrap_or_else(|| panic!("{rel} is not there"))
+        crate::common::read_game_file(&self.dir, rel)
+            .unwrap_or_else(|| panic!("{rel} is not there"))
     }
 
     /// Say that the install is at the local build, so the local manifest is
@@ -216,7 +215,7 @@ impl Rig {
     fn at_local_version(&self) {
         std::fs::write(
             self.dir.join("config.ini"),
-            format!("[General]\ngame_version={}\n", common::LOCAL_TAG),
+            format!("[General]\ngame_version={}\n", crate::common::LOCAL_TAG),
         )
         .expect("write config.ini");
     }
@@ -263,7 +262,7 @@ impl Rig {
             .output()
             .await
             .expect("spawn girpr");
-        common::remove_run_lock_for_args(&all);
+        crate::common::remove_run_lock_for_args(&all);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let mut records = BTreeMap::new();
@@ -335,7 +334,7 @@ impl Rig {
             }
             i += 1;
         }
-        let (summary, code) = common::run(ctx).await.expect("in-process run");
+        let (summary, code) = crate::common::run(ctx).await.expect("in-process run");
         LibRun::new(&summary, code)
     }
 }

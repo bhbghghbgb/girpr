@@ -4,9 +4,7 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
-use common::{
+use crate::common::{
     LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer, UNSERVED_TAG, build_fixture,
     build_fixture_with_lies, build_moved_fixture, ctx_for, field, load_counters, read_game_file,
     run, scope, temp_dir, write_game_file,
@@ -665,7 +663,9 @@ async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.limits.write_bytes = Some(live);
         ctx.limits.verified_write_bytes = Some(verified);
-        let (summary, code) = common::run(ctx).await.expect("a stop is not an error");
+        let (summary, code) = crate::common::run(ctx)
+            .await
+            .expect("a stop is not an error");
         assert_eq!(code, RunExit::Limit, "a ceiling bound");
         mock.stop();
         summary
@@ -764,7 +764,7 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
         // The key is emitted only when the flag was passed.
         ctx.repair_mode_explicit = true;
         ctx.path_scope = scope(&["game/foo.dat"], &[]);
-        let (summary, code) = common::run(ctx).await.expect("run");
+        let (summary, code) = crate::common::run(ctx).await.expect("run");
         assert_eq!(
             code,
             RunExit::Success,
@@ -885,7 +885,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
     // it before a single decoded byte landed — and the write meter would have
     // nothing to count. The corrupt body still has to pass its decode to fail
     // its digest, which is the case this test names.
-    fn lying_fixture() -> common::GameFixture {
+    fn lying_fixture() -> crate::common::GameFixture {
         build_fixture_with_lies(Lies {
             wrong_chunk_size: vec![
                 "chunk_foo0".to_string(),
@@ -904,7 +904,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }
-        let (summary, code) = common::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        let (summary, code) = crate::common::run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect("run");
         assert_eq!(code, RunExit::Success, "the repair recovered");

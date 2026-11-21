@@ -2,6 +2,10 @@
 name = "girpr"
 version = "0.1.0"
 edition = "2024"
+# Integration tests are declared explicitly below. One root per group shares
+# a single `common` module and one link of the workspace tree; auto-discovery
+# would bring back a separate binary for every file under `tests/`.
+autotests = false
 # The workspace standardizes on the stable Rust toolchain (see
 # `rust-toolchain.toml` at the repository root). There is deliberately no
 # `rust-version` floor: edition 2024 and the stable compiler are the only
@@ -12,6 +16,26 @@ description = "Genshin Impact low-disk repair patcher (Starward chunk-repair cor
 [[bin]]
 name = "girpr"
 path = "src/main.rs"
+
+# Four integration roots replace the fourteen auto-discovered files. The two
+# bridge/post roots stay separate because their cases are named by nextest
+# overrides (host-dependent skips whose lines must stay visible); grouping
+# those would move their fully-qualified paths out from under pinned filters.
+[[test]]
+name = "artifact_bridge"
+path = "tests/artifact_bridge.rs"
+
+[[test]]
+name = "repair_post"
+path = "tests/repair_post.rs"
+
+[[test]]
+name = "repair"
+path = "tests/repair.rs"
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
 
 [workspace]
 members = [".", "crates/audio", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]

@@ -3,9 +3,7 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
-use common::{
+use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, build_fixture, build_fixture_spec,
     ctx_for, load_counters, logs_of, read_game_file, run, scope, temp_dir, write_game_file,
 };
