@@ -64,11 +64,11 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-11 | Update `tools/sync/README.md` (fixtures now from `girpr-sync-test-support` via shim) | done | Batch D, 0051e2aa; review clean |
 | FU-12 | Narrow facade-coupled `girpr-test-support` glue | open | HELD by planning review: blocked by config↔repair SCC; compile-once win only, no rebuild edge until severed |
 | FU-13 | Add `girpr-sync-leaves` to §F39 doc seams (README table/prose, docs/03 tree) | done | Batch D, 0051e2aa; review clean |
-| FU-14 | Drop unused `girpr-digest` direct dep from `tools/sync/Cargo.toml` | batched:H | From review F; dependency hygiene |
-| FU-15 | Replace `config::validate_base`'s `reqwest::Url` with `url` crate so reqwest is owned solely by `gircap-http` | batched:H | From review G1; §A5 boundary |
+| FU-14 | Drop unused `girpr-digest` direct dep from `tools/sync/Cargo.toml` | done | Batch H, 1df897d6; review clean; genuinely unused (hash vocabulary transitive via sync-cache), stale manifest comments corrected; no boundary/byte change |
+| FU-15 | Replace `config::validate_base`'s `reqwest::Url` with `url` crate so reqwest is owned solely by `gircap-http` | done | Batch H, 1df897d6; review clean; reqwest gone from gircap direct deps (url 2.5.8, same parser/behavior), all four §F39 seams updated (00-spec.md table, both Cargo.toml comments, 02-plan.md); §A5/§A6 preserved |
 | FU-16 | Relocate mechanics-only http tests into `tools/capture/http/tests/` (keep probe/negative local) | done | Batch G, 78d8a143; review clean; 47 mechanics tests into gircap-http (in-crate `src/tests.rs` per gircap-hash precedent), probe/negative + URL/exit-code/HashingFile policy keepers local; §A2 link payoff verified empirically (gircap-http Fresh after gircap production edit); no nextest filter edits; canned/malformed mocks + fetcher helpers duplicated by design (§A5/§A7/§F40), accepted |
 | FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy) in crate/independence-table notes | done | Batch D, 0051e2aa; review clean |
-| FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` default into gircap policy (strict logic-free leaf) | batched:H | From review G2; §A5 |
+| FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` default into gircap policy (strict logic-free leaf) | done | Batch H, 1df897d6; review clean; const moved to gircap::config (same 256 MiB), all call sites repointed, gircap-hash strictly logic-free with local test fixture, zstd_measure duplication kept (§A13), README/00-spec.md seams updated; §A6 bytes unchanged |
 | FU-19 | Relocate mechanics-only gzip/zstd tests into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) | dropped | Batch G; premise pre-satisfied by T17 (07dcd08e) — all mechanics gzip/zstd/digest tests already in gircap-hash, only policy-dependent keepers remain local; stop independently confirmed by review |
 | FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` (do after FU-16/FU-19) | done | Batch G, 78d8a143; README refreshed to measured 772 tests / 769 run, note names gircap-http as home of HTTP mechanics tests |
 | NF-1 | Mechanically enforce the gircap leaf-only dependency boundary (guard against girpr/program-logic deps) | open | NEW from Phase 3 planning review; HELD — infrastructure, no new rebuild edge; revisit if boundary churn recurs |
@@ -79,6 +79,8 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-25 | Add a comment/guard to the two facade cfg(test) modules importing `crate::sophon::ReuseEntry` explaining the test-support dev-feature dependency | open | From Batch P review; unbatched, doc-only |
 | FU-26 | Guard that `cargo build -p girpr` never enables test-support on girpr-fetch (CI assertion) | open | From Batch P review; unbatched, overlaps held NF-1 |
 | FU-27 | De-duplicate canned/malformed mock servers + fetcher helpers now copied across `gircap/src/http/tests.rs` and `gircap-http/src/tests.rs` | open | From Batch G review; low priority, non-blocking; mirror fixes meanwhile; removal shape = `test-support` feature on gircap-http via thin shim (§A7), keep gircap's bundle mock distinct (§F40) |
+| FU-28 | Revalidate the "same crate" claim behind `reqwest::Url ≡ url::Url` when reqwest is next upgraded | open | From Batch H review; low priority; direct `url = "2.5.8"` pin matches reqwest 0.13.5's resolved url; a future reqwest bump using a different url major could coexist two Url types (parsing still correct, manifest comment would need revalidation) |
+| FU-29 | Tidy orphaned/duplicated digest comment in `tools/sync/Cargo.toml` (lines 69-71 vs 51-52) | open | From Batch H review; doc-only, cosmetic; no correctness impact |
 
 ## Persistent context
 
