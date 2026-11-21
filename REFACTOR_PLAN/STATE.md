@@ -51,27 +51,30 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| FU-01 | Update `tools/sync/README.md:10` shared-crate inventory to include `girpr-sync-test-support` | batched:D | From review A; §F39 doc seam |
-| FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md:25` | batched:D | From review A; §F39 inventory |
+| FU-01 | Update `tools/sync/README.md` shared-crate inventory to include `girpr-sync-test-support` | done | Batch D, 0051e2aa; review clean |
+| FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md` | done | Batch D, 0051e2aa; review clean |
 | FU-03 | Extract `repair/audio.rs` into a leaf crate (clean leaf: girpr-audio-language/anyhow/tracing); verify §A2 with a narrow consumer, stop if no edge shrinks | batched:A | From review B; conditional, highest risk, do last |
 | FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning | dropped | Planning review: §F37 names retry a keeper, T19 showed logging is a program-wide facade ancestor — no §A2 edge |
 | FU-05 | Narrow audio/lock-only consumer test target so §A2 win shows in link count (current `tests/run_lock.rs` links full facade) | batched:A | From review B; makes FU-03 payoff observable |
 | FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` for the §A2 test-link win | batched:P | From review D |
-| FU-07 | Add `girpr-report` to nextest crate-list comment in `.config/nextest.toml` | batched:D | From review D; docs-only |
-| FU-08 | Restore README paragraph break around crate inventory | batched:D | From review D; docs-only |
+| FU-07 | Add `girpr-report` to nextest crate-list comment in `.config/nextest.toml` | done | Batch D, 0051e2aa; comment only, no filter changed |
+| FU-08 | Restore README paragraph break around crate inventory | done | Batch D, 0051e2aa; review clean |
 | FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` | batched:P | From review D; same surface as FU-06 |
-| FU-10 | Refresh `tools/capture/docs/02-plan.md:124` layout tree (mock now in gircap-only `test-support/`) | batched:D | From review E; remaining §F39 gap |
-| FU-11 | Update `tools/sync/README.md:1754` (fixtures now from `girpr-sync-test-support` via shim) | batched:D | From review E; same file as FU-01 |
+| FU-10 | Refresh `tools/capture/docs/02-plan.md` layout tree (mock now in gircap-only `test-support/`) | done | Batch D, 0051e2aa; review clean |
+| FU-11 | Update `tools/sync/README.md` (fixtures now from `girpr-sync-test-support` via shim) | done | Batch D, 0051e2aa; review clean |
 | FU-12 | Narrow facade-coupled `girpr-test-support` glue | open | HELD by planning review: blocked by config↔repair SCC; compile-once win only, no rebuild edge until severed |
-| FU-13 | Add `girpr-sync-leaves` to §F39 doc seams (README table/prose, docs/03 tree) | batched:D | From review F; docs-only |
+| FU-13 | Add `girpr-sync-leaves` to §F39 doc seams (README table/prose, docs/03 tree) | done | Batch D, 0051e2aa; review clean |
 | FU-14 | Drop unused `girpr-digest` direct dep from `tools/sync/Cargo.toml` | batched:H | From review F; dependency hygiene |
 | FU-15 | Replace `config::validate_base`'s `reqwest::Url` with `url` crate so reqwest is owned solely by `gircap-http` | batched:H | From review G1; §A5 boundary |
 | FU-16 | Relocate mechanics-only http tests into `tools/capture/http/tests/` (keep probe/negative local) | batched:G | From review G1; §A2 test-link payoff |
-| FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy) in crate/independence-table notes | batched:D | From review G1; §A4 deliberate deviation, docs-only |
+| FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy) in crate/independence-table notes | done | Batch D, 0051e2aa; review clean |
 | FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` default into gircap policy (strict logic-free leaf) | batched:H | From review G2; §A5 |
 | FU-19 | Relocate mechanics-only gzip/zstd tests into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) | batched:G | From review G2; §A2 test-link payoff |
 | FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` (do after FU-16/FU-19) | batched:G | From review G2; doc accuracy |
 | NF-1 | Mechanically enforce the gircap leaf-only dependency boundary (guard against girpr/program-logic deps) | open | NEW from Phase 3 planning review; HELD — infrastructure, no new rebuild edge; revisit if boundary churn recurs |
+| FU-21 | Audit remaining §F39 seams (docs/06-artifact-bridge-spec.md, tools/sled2redb/README.md) for new crates | open | From Batch D review; unbatched, doc-only, low priority |
+| FU-22 | Refresh stale line-number pointers in follow-up descriptions/report §F39 | open | From Batch D review; unbatched, code authoritative |
+| FU-23 | Consider mechanical check that every workspace crate appears in README table, layout tree, nextest crate-list comment | open | From Batch D review; unbatched, overlaps held NF-1 |
 
 ## Persistent context
 
