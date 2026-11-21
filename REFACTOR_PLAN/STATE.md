@@ -28,7 +28,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | gircap: extract the http subsystem crate | completed | b8b31045, 0670b7c9 | New logic-free `gircap-http` (tools/capture/http) owns reqwest/thiserror mechanics; gircap direct dep, src/http/mod.rs thin facade (probe/negative/tests kept local as policy). §A2 verified empirically (emit edit leaves gircap-http/reqwest/retry Fresh). Dev: §F25 SCC actually 11 modules (http↔manifest via negative, http↔failure, biz↔cli↔config) — carved acyclic leaf instead; doc seams updated in same work; wiremock stays gircap dev-dep. Review G1 clean; 0670b7c9 removed 6 superseded dead-duplicate mechanics files |
 | T15 | gircap: emit + verify subsystem crates | skipped | | emit/verify not logic-free leaves: emit in SCC with manifest/assemble/http (manifest→emit, assemble→emit back-edges); verify depends on emit policy types; no direct consumer, no heavy dep isolatable (flate2/ini_core stay, ini=§A13 keeper). Legal extraction needs whole-SCC move + byte-contract rewrite (§A6) |
 | T16 | gircap: blobs + manifest crates | skipped | | §F25/F27 premise stale: wire types already in girpr-proto, zstd helpers in acyclic `hash` leaf; blobs/manifest deep in gircap SCC (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no T14-style acyclic logic-free leaf; §A2 fails |
-| T17 | gircap: small production leaves | pending_review | 07dcd08e | New logic-free `gircap-hash` (tools/capture/hash) owns zstd/flate2/md-5 mechanics; gircap direct dep + `pub use gircap_hash as hash`; zstd_measure pair stays duplicated (§A13); gzip test seam behind test-support feature. §A2 verified empirically (emit edit leaves hash+http Fresh). Other candidates skipped (tasks=shim, exit/log/report=§F37 keepers, encoding/paths no heavy dep, pathmap/rejections use SCHEMA_VERSION). §A5/§F39 seams updated; no nextest filter changes |
+| T17 | gircap: small production leaves | completed | 07dcd08e, bfe9c2d2 | New logic-free `gircap-hash` (tools/capture/hash) owns zstd/flate2/md-5 mechanics; gircap direct dep + `pub use gircap_hash as hash`; zstd_measure pair stays duplicated (§A13); gzip test seam behind test-support feature. §A2 verified empirically (emit edit leaves hash+http Fresh). Other candidates skipped (tasks=shim, exit/log/report=§F37 keepers, encoding/paths no heavy dep, pathmap/rejections use SCHEMA_VERSION). §A5/§F39 seams updated; no nextest filter changes. Review G2 clean; bfe9c2d2 added gircap-hash to nextest inventory comment |
 | T18 | Split the disjoint halves of `girpr-digest` | todo | | |
 | T19 | `girpr-log` split payoff assessment | todo | | |
 
@@ -42,6 +42,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | E | T09, T10 | done | Checkpoint E. Both completed, no fix/revert; public-lib + thin-shim, nextest filters, cross-tool independence, four-fake-server and §F32 skip all verified. 3 follow-ups raised |
 | F | T11, T12 | done | Checkpoint F (T13 skipped, not reviewed). Both completed, no fix/revert; byte contracts, redb pin, util↔cache SCC, policies, direct consumers all verified; §A2 confirmed empirically. 2 follow-ups raised |
 | G1 | T14 | done | Checkpoint G1 (T15 skipped, not reviewed). T14 completed; §A2/§A5/§F40/§F39 verified; one cleanup fix (0670b7c9 removed dead duplicate mechanics files). 3 follow-ups raised |
+| G2 | T17 | done | Checkpoint G2 (T16 skipped, not reviewed). T17 completed; §A2/§A5/§A6/§F40 verified; one doc fix (bfe9c2d2 nextest inventory comment). 3 follow-ups raised |
 
 ## Follow-ups
 
@@ -64,6 +65,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-15 | Drop gircap's direct `reqwest` dep by replacing `config::validate_base`'s `reqwest::Url` with the `url` crate, leaving reqwest owned solely by `gircap-http` | open | From review G1; §F25 http split alone cannot remove reqwest |
 | FU-16 | Relocate mechanics-only tests from `tools/capture/src/http/tests.rs` into `tools/capture/http/tests/` so HTTP edits re-link only the gircap-http test binary (keep probe/negative policy tests local) | open | From review G1; §A2 test-link payoff |
 | FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy instead of girpr-<policy>/[lints] workspace = true) in crate/independence-table notes so a future session does not "correct" them | open | From review G1; §A4 deliberate deviation |
+| FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` flag default into gircap policy — pass the ceiling in rather than owning a run-policy constant in the logic-free leaf (§A5) | open | From review G2; strict logic-free boundary |
+| FU-19 | Relocate mechanics-only gzip/zstd tests from `src/emit`/`src/manifest` into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) for the §A2 test-link payoff | open | From review G2; analogous to FU-16 |
+| FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` after tests moved between crates | open | From review G2; doc accuracy only |
 
 ## Persistent context
 
