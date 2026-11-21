@@ -30,7 +30,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T16 | gircap: blobs + manifest crates | skipped | | §F25/F27 premise stale: wire types already in girpr-proto, zstd helpers in acyclic `hash` leaf; blobs/manifest deep in gircap SCC (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no T14-style acyclic logic-free leaf; §A2 fails |
 | T17 | gircap: small production leaves | completed | 07dcd08e, bfe9c2d2 | New logic-free `gircap-hash` (tools/capture/hash) owns zstd/flate2/md-5 mechanics; gircap direct dep + `pub use gircap_hash as hash`; zstd_measure pair stays duplicated (§A13); gzip test seam behind test-support feature. §A2 verified empirically (emit edit leaves hash+http Fresh). Other candidates skipped (tasks=shim, exit/log/report=§F37 keepers, encoding/paths no heavy dep, pathmap/rejections use SCHEMA_VERSION). §A5/§F39 seams updated; no nextest filter changes. Review G2 clean; bfe9c2d2 added gircap-hash to nextest inventory comment |
 | T18 | Split the disjoint halves of `girpr-digest` | skipped | | Named §A2 payoff impossible: sled2redb no longer hex-only — it reaches the streaming sink via girpr-sync-cache (stream.rs imports Algorithms/Sink) → girsync; editing stream still rebuilds sled2redb through a real dep, not a facade. §F34 premise stale post-T11/T06 |
-| T19 | `girpr-log` split payoff assessment | todo | | |
+| T19 | `girpr-log` split payoff assessment | in_progress | | |
 
 ## Reviews
 
