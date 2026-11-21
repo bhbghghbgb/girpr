@@ -1,0 +1,46 @@
+[package]
+name = "girpr-sync-cache"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared redb-backed hash cache the girsync mirror and its sled converter read with"
+
+[lib]
+name = "girpr_sync_cache"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Native and binary-heavy dependencies live here, below girsync's lib: an edit
+# to a planner, command or other subsystem leaves this crate — and `redb`,
+# `postcard` and `tempfile` — cached instead of recompiling them.
+# The hash cache file itself; pinned to the version the byte contract was
+# validated against (the sidecar lock keeps fail-fast open behaviour on 4.x).
+redb = "=4.6.0"
+# The positional wire codec for the two cache rows. Only the serde-based
+# `to_extend` / `take_from_bytes` helpers are used, so the default heapless/cobs
+# surface is not needed; serde's `std` supplies String/Vec.
+postcard = { version = "1.1.3", default-features = false }
+# Unique, atomically-created working names for cache copies. The publish
+# protocol still owns the copy/flush/publish steps and its record protocol.
+tempfile = "3.27"
+anyhow = "1.0.104"
+# `FileRec` and `Meta` derive their serde impls; the hash vocabulary's own
+# serde impl is the cache wire format and must not change.
+serde = { version = "1.0.229", features = ["derive"] }
+# Backup and snapshot names use the workspace's one timestamp format.
+girpr-log = { path = "../log" }
+# The cache's name-claim identity is the same handle-backed identity the plan
+# side uses; the leaf owns only the platform mechanics.
+girpr-fs-identity = { path = "../fs-identity" }
+# The streaming hash sink behind the row-digest vocabulary.
+girpr-digest = { path = "../digest" }
+# Structured narration from open/publish/write.
+tracing = "0.1.44"
+
+[dev-dependencies]
+# The cache's unit tests build fixture trees with the workspace's one scratch
+# directory helper.
+girpr-tempdir = { path = "../tempdir" }

@@ -23,7 +23,7 @@
 //! comparison and the cache prefix. They are how a rule is written, not rules
 //! of their own.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
@@ -36,33 +36,6 @@ use crate::cache::CACHE_PREFIX;
 /// Seconds since `t0`, for `elapsed_s` span fields.
 pub fn elapsed_s(t0: std::time::Instant) -> f64 {
     t0.elapsed().as_secs_f64()
-}
-
-/// UTC stamp in the shared ISO format, used to name backups and snapshots.
-///
-/// The format itself lives in `girpr_log::timestamp`; this shim keeps girsync's
-/// internal call sites short while leaving one definition of the stamp.
-pub fn ts_now() -> String {
-    girpr_log::timestamp()
-}
-
-/// Recursive plain-file copy, used only for legacy sled-directory cache
-/// backups/snapshots. Live redb caches are single files copied with
-/// `std::fs::copy` (see [`crate::cache::backup_db`]).
-pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
-    for ent in std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {
-        let ent = ent?;
-        let ft = ent.file_type()?;
-        let d = dst.join(ent.file_name());
-        if ft.is_dir() {
-            copy_dir_all(&ent.path(), &d)?;
-        } else {
-            std::fs::copy(ent.path(), &d)
-                .with_context(|| format!("copy {} -> {}", ent.path().display(), d.display()))?;
-        }
-    }
-    Ok(())
 }
 
 /// The crate's `/`-separated form of a relative path.

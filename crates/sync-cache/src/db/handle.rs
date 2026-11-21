@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// the two have to be matched on. Read-only handles *share* the file with each
 /// other; only a read/write handle excludes everyone, which is what makes the
 /// one-handle-per-file rule below about writers.
-pub(in crate::cache) enum Handle {
+pub(crate) enum Handle {
     /// `Arc` because a test memory cache is shared between the commands that open
     /// it by the same path; a file cache has exactly one owner and the extra
     /// indirection costs nothing measurable.

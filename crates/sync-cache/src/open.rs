@@ -133,8 +133,8 @@ use std::sync::{Mutex, OnceLock};
 use tracing::{info, trace, warn};
 
 #[cfg(test)]
-use crate::hardlink;
-use crate::util::ts_now;
+use crate::helpers;
+use crate::helpers::ts_now;
 
 use super::db::{CacheDb, redb_builder};
 use super::lock::{TryLock, acquire as acquire_lock};
@@ -1955,7 +1955,7 @@ mod tests {
         std::fs::write(&cand, b"").unwrap();
         let file = std::fs::File::open(&cand).unwrap();
         let claim = NameClaim {
-            id: hardlink::identity_of(&file).expect("the claim can be named"),
+            id: helpers::identity_of(&file).expect("the claim can be named"),
             is_dir: false,
             _file: Some(file),
         };

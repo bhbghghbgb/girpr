@@ -1,4 +1,12 @@
-//! The redb-backed hash cache: schema, open/rebuild, and backup snapshots.
+//! The shared redb-backed hash cache that girsync (and its sled converter) read
+//! with: schema, open/rebuild, and backup snapshots.
+//!
+//! This is its own crate so the cache, its byte codec and its native dependency
+//! tree are an acyclic leaf below girsync. An edit to girsync's planner,
+//! commands or other subsystems rebuilds only that lib; this crate and `redb`,
+//! `postcard` and `tempfile` stay cached. The hash vocabulary lives here too —
+//! `FileRec` embeds a [`hash::DigestSet`] and its serde impl *is* the wire
+//! format — so the cache never has to depend back on girsync's lib.
 //!
 //! A cache is `<root>/girpr-cache`, a redb **file** (backups and `old-*`
 //! snapshots are files too). Keys are `/`-separated relative paths (UTF-8,
@@ -38,9 +46,13 @@
 //! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
 //! | `backup` | the partial-write/link/claim mechanics behind the backups and snapshots |
 //! | `lock` | the sidecar lock that marks a run in progress for a folder |
+//! | `hash` | the digest vocabulary (algorithm names and row storage) the wire format pins |
+//! | `helpers` | the timestamp, copy and file-identity helpers the subsystems share |
 
 mod backup;
 mod db;
+pub mod hash;
+mod helpers;
 mod lock;
 mod open;
 mod schema;
@@ -63,7 +75,7 @@ const META_KEY: &str = "meta";
 /// `GIRSYNC_TEST_DURABILITY=none` on the process (the test runner does it in
 /// `.config/nextest-test-env`; a developer does not) to skip the per-commit
 /// fsync. It is the sibling of the `GIRSYNC_TEST_CACHE` switch in
-/// [`crate::config`], and like it the default is off:
+/// the resolved options, and like it the default is off:
 /// an unset variable — or any value other than exactly `none` — keeps durable
 /// commits, so a real run is unaffected unless someone deliberately opts in.
 ///

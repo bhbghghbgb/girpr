@@ -36,6 +36,10 @@ anyhow = "1.0.104"
 # Hex decoding of legacy digest strings, with the bad-row context kept here in
 # the caller. The shared crate supplies only the decode primitive.
 girpr-digest = { path = "../../crates/digest" }
+# The cache and its wire vocabulary are read from the upstream crate directly,
+# not through girsync's lib facade: an unrelated girsync edit leaves this
+# converter's cache code and its redb/postcard/tempfile tree cached.
+girpr-sync-cache = { path = "../../crates/sync-cache" }
 # The clap-error to usage-code mapping mechanics, shared with the repair
 # binary and `gircap`. The leaf only decides help/version -> 0, else the usage
 # code passed in; this binary keeps its `e.exit()` and literal `3` boundary.

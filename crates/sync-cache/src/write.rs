@@ -87,7 +87,7 @@ impl CommitLimits {
 
     /// [`Some`] with the environment's overrides when any `GIRSYNC_TEST_COMMIT_*`
     /// variable is set, and [`None`] when none is. This lets a resolved
-    /// [`TestHooks`](crate::config::TestHooks) leave the commit policy to the
+    /// a caller's TestHooks leave the commit policy to the
     /// environment (its `None`) while still carrying an explicit policy when a
     /// caller injects one.
     pub fn from_env_opt() -> Option<Self> {
@@ -119,7 +119,7 @@ impl CommitLimits {
 /// a handle keeps the policy it opened with, and every transaction it
 /// commits — including the ones it opens after a threshold trips — commits
 /// under it.
-pub(in crate::cache) struct CommitPolicy {
+pub(crate) struct CommitPolicy {
     /// The thresholds a batched write commits on.
     limits: CommitLimits,
     /// The durability every transaction of the write commits with.
@@ -130,7 +130,7 @@ impl CommitPolicy {
     /// The policy of a write, with the test-only overrides applied.
     ///
     /// The thresholds and the durability are read here, together, once.
-    pub(in crate::cache) fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         Self {
             limits: CommitLimits::from_env(),
             durability: super::write_durability(),
@@ -141,7 +141,7 @@ impl CommitPolicy {
     ///
     /// The durability is still the process's: it is read here, with the
     /// thresholds, so a write's whole policy is decided in one place.
-    pub(in crate::cache) fn with_limits(limits: CommitLimits) -> Self {
+    pub(crate) fn with_limits(limits: CommitLimits) -> Self {
         Self {
             limits,
             durability: super::write_durability(),
@@ -149,7 +149,7 @@ impl CommitPolicy {
     }
 
     /// The durability every transaction of this write commits with.
-    pub(in crate::cache) fn durability(&self) -> redb::Durability {
+    pub(crate) fn durability(&self) -> redb::Durability {
         self.durability
     }
 }
@@ -266,7 +266,7 @@ impl<'a> CacheWrite<'a> {
 
     /// Every key in this transaction, decoding nothing.
     ///
-    /// The batched counterpart of [`CacheDb::load_keys`](crate::cache::CacheDb::load_keys),
+    /// The batched counterpart of [`CacheDb::load_keys`](crate::CacheDb::load_keys),
     /// and it exists for the same reason: a caller asking "which rows exist?"
     /// should not pay to rebuild every `FileRec` to find out. It sees this
     /// transaction's own pending writes, exactly as `load_all` does, because
@@ -304,7 +304,7 @@ impl<'a> CacheWrite<'a> {
     pub fn visit_keys(&self, f: impl FnMut(&str) -> Result<()>) -> Result<()> {
         let txn = self.txn.as_ref().context("write txn gone")?;
         let tbl = txn.open_table(ENTRIES).context("open entries table")?;
-        crate::cache::db::visit_entry_keys(&tbl, f)
+        crate::db::visit_entry_keys(&tbl, f)
     }
 
     fn maybe_commit(&mut self) -> Result<()> {
@@ -368,7 +368,7 @@ impl<'a> CacheWrite<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::CacheDb;
+    use crate::CacheDb;
     use std::collections::HashSet;
 
     fn file_rec() -> FileRec {
@@ -419,7 +419,7 @@ mod tests {
     fn a_write_reads_the_durability_switch_once_and_keeps_it() {
         let c = CacheDb::open_temp(true).unwrap();
 
-        let before = crate::cache::durability_reads();
+        let before = crate::durability_reads();
         let mut w = c
             .begin_write_with(CommitLimits {
                 max_ops: 1,
@@ -427,7 +427,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            crate::cache::durability_reads() - before,
+            crate::durability_reads() - before,
             1,
             "the handle reads the switch once, when it opens"
         );
@@ -436,7 +436,7 @@ mod tests {
         // opens another transaction.
         w.put("a", &file_rec()).unwrap();
         assert_eq!(
-            crate::cache::durability_reads() - before,
+            crate::durability_reads() - before,
             1,
             "the transaction the handle opened after the threshold does not read the switch again"
         );

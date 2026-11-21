@@ -33,7 +33,7 @@ pub struct Meta {
 /// sha256 — never hex), under an algorithm this build may or may not recognise.
 ///
 /// `PartialEq` is what lets a wire round-trip be asserted as a whole, and what
-/// `crate::effective::merge_row`'s rule is checked against.
+/// the effective-merge rule is checked against.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileRec {
     /// "file" or "dir". A closed registry on the wire: an unknown value is an

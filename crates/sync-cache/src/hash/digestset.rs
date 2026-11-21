@@ -7,7 +7,7 @@
 //! row may hold `MD5` where the request says `md5`, and the lookup has to find
 //! it.
 //!
-//! **It is not one of the crate's path folds.** Those live in `crate::util`,
+//! **It is not one of the tool's path folds.** Those live in girsync's util module,
 //! and each of them answers a question about paths: `path_key` is the key
 //! every relative-path index uses and answers which bucket of a run's map a
 //! path belongs to, `component_eq` asks whether two spellings open the same
@@ -68,7 +68,7 @@ fn same_spelling(a: &str, b: &str) -> bool {
 ///
 /// `HashAlg` is a closed enum, and this is where that stops being the whole truth. A
 /// cache written by a newer build may carry a digest under a name this one has never
-/// heard of, and `crate::cache::wire` keeps names inline precisely so that row stays
+/// heard of, and `crate::wire` keeps names inline precisely so that row stays
 /// readable. `foreign` is where such a name lives in memory, and it is **carried,
 /// merged and written back** rather than merely decoded — a scan that dropped it would
 /// lose the row's contents on the next write.
@@ -201,7 +201,7 @@ impl DigestSet {
     ///
     /// The fold is over that name alone — it answers *does this stored name name
     /// this algorithm?* — and it never touches a path. The crate's path folds
-    /// are elsewhere, in `crate::util`.
+    /// are elsewhere, in girsync's util module.
     pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
         self.get(a).or_else(|| self.foreign_known(a))
     }
@@ -239,10 +239,10 @@ impl DigestSet {
     /// **The fold is over an algorithm name, and it answers one question:**
     /// *does this stored name name this algorithm?* It is not one of the
     /// crate's path folds, and it answers no question about paths: the path
-    /// key (`crate::util::path_key`) asks which bucket of a run's map a path
-    /// belongs to, the identity rule (`crate::util::component_eq`) asks whether
+    /// key (the path key) asks which bucket of a run's map a path
+    /// belongs to, the identity rule (the component-identity rule) asks whether
     /// two spellings open the same place on disk, and the cache reservation's
-    /// comparison (`crate::util::ascii_case_eq`) asks whether a component is
+    /// comparison (the cache-reservation comparison) asks whether a component is
     /// one of the tool's own names. This one has no path in it.
     ///
     /// The comparison allocates nothing. It is the resolver's, and the
@@ -324,7 +324,7 @@ impl DigestSet {
     /// it clones the prior row into `self` and hands this run's computed digests
     /// over as `other`, so a recomputed digest replaces the prior one while
     /// everything the prior row held that this run did not compute rides along.
-    /// See `crate::effective::merge_row`.
+    /// See the merge-row rule in girsync's effective module.
     ///
     /// **`other` is taken over, not borrowed.** The arm owns its entries — a
     /// name is a boxed string and a digest a byte vector, both heap buffers —

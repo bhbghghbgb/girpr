@@ -4,7 +4,6 @@
 use redb::{Builder, Database};
 use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(test)]
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
@@ -14,7 +13,7 @@ use tracing::warn;
 /// redb's default page cache is 1 GiB per handle. Tests run one process per
 /// test case (nextest), so parallel tests each reserve that much virtual
 /// memory and exhaust this machine's commit limit. Keep it small so they fit.
-pub(in crate::cache) const DEFAULT_CACHE_SIZE_MIB: usize = 64;
+pub(crate) const DEFAULT_CACHE_SIZE_MIB: usize = 64;
 
 /// The environment variable that names the page-cache size, in MiB.
 const CACHE_SIZE_ENV: &str = "GIRSYNC_CACHE_SIZE_MIB";
@@ -29,7 +28,7 @@ const CACHE_SIZE_ENV: &str = "GIRSYNC_CACHE_SIZE_MIB";
 /// [`DEFAULT_CACHE_SIZE_MIB`] and says so, once, through the tracing
 /// subscriber if one is listening. An unset variable is not a mistake and is
 /// not reported.
-pub(in crate::cache) fn cache_size_mib() -> usize {
+pub(crate) fn cache_size_mib() -> usize {
     static SIZE: OnceLock<usize> = OnceLock::new();
     *SIZE.get_or_init(|| {
         let raw = std::env::var(CACHE_SIZE_ENV).ok();
@@ -79,7 +78,7 @@ fn parse_cache_size_mib(raw: Option<&str>) -> Option<usize> {
 /// A [`redb::Database`] builder with the page-cache size applied, so every redb
 /// open in this crate sets the cache size from one place instead of repeating
 /// `.set_cache_size` at each call site.
-pub(in crate::cache) fn redb_builder() -> Builder {
+pub(crate) fn redb_builder() -> Builder {
     let mut b = Database::builder();
     b.set_cache_size(cache_size_mib() * 1024 * 1024);
     b
@@ -92,13 +91,14 @@ pub(in crate::cache) fn redb_builder() -> Builder {
 /// for the same reason: the count belongs to the **cache**, so a handle
 /// opened later can say what an earlier one did.
 #[derive(Clone)]
-pub(in crate::cache) struct SharedCache {
+pub(crate) struct SharedCache {
     /// The database every open of this path talks to.
     pub db: Arc<Database>,
     /// The entries-table reads this cache has served.
     ///
-    /// Test-only: the count answers "how many reads did this cache serve?",
-    /// which is a question a test asks and a production caller does not.
+    /// The count answers "how many reads did this cache serve?" — the seam a
+    /// test uses to tell a single batched read from one transaction per key.
+    /// Public because girsync's own tests reach it through the crate boundary.
     ///
     /// **One counter, shared by every handle on this path.** That is what
     /// makes the figure the *cache's* count: a handle opened after a run can
@@ -115,7 +115,6 @@ pub(in crate::cache) struct SharedCache {
     ///
     /// A handle on the shared backend holds this very counter; the handle's
     /// side of it is `CacheDb::reads`.
-    #[cfg(test)]
     pub reads: Arc<AtomicU64>,
 }
 
@@ -123,7 +122,7 @@ pub(in crate::cache) struct SharedCache {
 ///
 /// One process is one test under `cargo nextest`, so this grows to at most the
 /// caches a single test opened and is released with the process.
-pub(in crate::cache) fn memory_registry() -> &'static Mutex<HashMap<PathBuf, SharedCache>> {
+pub(crate) fn memory_registry() -> &'static Mutex<HashMap<PathBuf, SharedCache>> {
     static CACHES: OnceLock<Mutex<HashMap<PathBuf, SharedCache>>> = OnceLock::new();
     CACHES.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -136,7 +135,7 @@ pub(in crate::cache) fn memory_registry() -> &'static Mutex<HashMap<PathBuf, Sha
 /// results — not the cache file itself — pay no 1 MB create + fsync per
 /// command. Deliberately not exposed on the CLI; the `GIRSYNC_TEST_CACHE`
 /// variable is read once, at command start, by
-/// [`crate::config::CommonOpts::try_from`], and only there.
+/// the option parser, and only there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TestCacheBackend {
     #[default]

@@ -23,8 +23,8 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use tracing::{info, trace, warn};
 
-use crate::hardlink::{self, FileId};
-use crate::util::copy_dir_all;
+use crate::helpers::copy_dir_all;
+use crate::helpers::{self, FileId};
 
 use super::super::open::{CacheHooks, Claim, PublishHooks};
 
@@ -47,7 +47,7 @@ use super::super::open::{CacheHooks, Claim, PublishHooks};
 /// prevent. So a working name left behind — a run killed mid-copy, or a
 /// removal that failed after the copy was published — stays in the folder
 /// until it is removed by hand.
-pub(in crate::cache) const WORK_PREFIX: &str = "girpr-cache-partial-";
+pub(crate) const WORK_PREFIX: &str = "girpr-cache-partial-";
 
 impl<H: PublishHooks> FsPublisher<H> {
     /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
@@ -249,7 +249,7 @@ impl<H: PublishHooks> FsPublisher<H> {
 }
 
 /// Why a copy did not land on the name it was published under.
-pub(in crate::cache) enum PublishError {
+pub(crate) enum PublishError {
     /// The name is taken: another run has it, and the next name is ours.
     Taken,
     /// The publish itself failed.
@@ -335,7 +335,7 @@ fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
             // handle names the claim this run created even if the name has
             // been taken away since, so the answer cannot be another run's
             // file.
-            let claim = match hardlink::identity_of(&file) {
+            let claim = match helpers::identity_of(&file) {
                 Ok(id) => NameClaim {
                     id,
                     is_dir: false,
@@ -411,7 +411,7 @@ fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// holds. It is checked again before the claim is dropped, because dropping
 /// it takes whatever is at the name with it: a name another run has taken
 /// over holds that run's copy, and that copy is not this run's to remove.
-pub(in crate::cache) fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
+pub(crate) fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
     match std::fs::create_dir(cand) {
         Ok(()) => {}
         // The name is taken: it is another run's.
@@ -480,7 +480,7 @@ pub(in crate::cache) fn publish_dir(work: &Path, cand: &Path) -> Result<(), Publ
 /// A claim that was taken away fails the publish, like every other claim
 /// that is no longer this run's: the copy is not landed on a name this run
 /// no longer holds.
-pub(in crate::cache) fn publish_onto_the_claimed_name(
+pub(crate) fn publish_onto_the_claimed_name(
     work: &Path,
     cand: &Path,
     claim: &NameClaim,
@@ -523,13 +523,13 @@ fn rename_onto(work: &Path, cand: &Path) -> std::io::Result<()> {
 // rename fails the way it fails on such a filesystem.
 #[cfg(test)]
 std::thread_local! {
-    pub(in crate::cache) static RENAME_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static RENAME_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // The test-only switch that makes linking a file fail.
 #[cfg(test)]
 std::thread_local! {
-    pub(in crate::cache) static LINKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static LINKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // The test-only switch that makes removing the working copy fail.
@@ -539,7 +539,7 @@ std::thread_local! {
 // removal fails the way it fails when the file will not go.
 #[cfg(test)]
 std::thread_local! {
-    pub(in crate::cache) static REMOVAL_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static REMOVAL_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // The test-only gate that pauses a publish once the name is there.
@@ -562,14 +562,14 @@ std::thread_local! {
 /// channel and unblocks the paused publisher anyway, so a failure cannot
 /// turn into a hang.
 #[cfg(test)]
-pub(in crate::cache) struct PublishGate {
+pub(crate) struct PublishGate {
     tx: Option<std::sync::mpsc::Sender<()>>,
 }
 
 #[cfg(test)]
 impl PublishGate {
     /// Let the paused publisher continue.
-    pub(in crate::cache) fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(());
         }
@@ -579,14 +579,14 @@ impl PublishGate {
 /// Create a one-shot gate. The receiver arms the publishing thread; the
 /// returned sender is kept by the test to release it once the claim is seen.
 #[cfg(test)]
-pub(in crate::cache) fn publish_gate() -> (std::sync::mpsc::Receiver<()>, PublishGate) {
+pub(crate) fn publish_gate() -> (std::sync::mpsc::Receiver<()>, PublishGate) {
     let (tx, rx) = std::sync::mpsc::channel();
     (rx, PublishGate { tx: Some(tx) })
 }
 
 /// Install the receive half of a publish gate in this (publishing) thread.
 #[cfg(test)]
-pub(in crate::cache) fn arm_publish_gate(rx: std::sync::mpsc::Receiver<()>) {
+pub(crate) fn arm_publish_gate(rx: std::sync::mpsc::Receiver<()>) {
     PUBLISH_GATE.with(|f| *f.borrow_mut() = Some(rx));
 }
 
@@ -623,14 +623,14 @@ fn claim_name(path: &Path) -> std::io::Result<File> {
 /// weaker answer: a bound cannot tell a claim from a published copy, so on a
 /// filesystem that cannot lock a file the claim can be taken away, and
 /// another run can take the name and publish there.
-pub(in crate::cache) struct NameClaim {
+pub(crate) struct NameClaim {
     /// The identity of the object the claim created.
-    pub(in crate::cache) id: FileId,
+    pub(crate) id: FileId,
     /// Whether the claim is a directory.
     ///
     /// A file copy is claimed with an empty file and a directory copy with
     /// an empty directory, and the two are dropped with different calls.
-    pub(in crate::cache) is_dir: bool,
+    pub(crate) is_dir: bool,
     /// The handle on the claim, kept open while the publish is in flight.
     ///
     /// It names the object even after the name has gone, so the identity
@@ -638,12 +638,12 @@ pub(in crate::cache) struct NameClaim {
     /// whether the claim is still in place. A directory claim has no portable
     /// handle — `File::open` refuses a directory on Windows — and is named by
     /// the path alone there.
-    pub(in crate::cache) _file: Option<File>,
+    pub(crate) _file: Option<File>,
 }
 
 /// The identity of the object at `path`, if the platform can name it.
-pub(in crate::cache) fn identity_at(path: &Path) -> Option<FileId> {
-    hardlink::info(path).ok().map(|info| info.id)
+pub(crate) fn identity_at(path: &Path) -> Option<FileId> {
+    helpers::identity_at(path).ok()
 }
 
 /// Whether the claim on a published name is still this run's.
@@ -658,7 +658,7 @@ pub(in crate::cache) fn identity_at(path: &Path) -> Option<FileId> {
 /// call: a claim taken away in between is still in reach. Nothing portable
 /// makes the call that follows conditional on this answer.
 fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
-    hardlink::info(cand).is_ok_and(|info| info.id == claim.id)
+    helpers::identity_at(cand).is_ok_and(|id| id == claim.id)
 }
 
 /// Drop the claim at a published name, and say whether the name still held
@@ -683,7 +683,7 @@ fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
 /// It is reachable only where the filesystem cannot lock a file: a record a
 /// live run holds keeps a bound off the name until the run opens the
 /// folder's cache.
-pub(in crate::cache) fn drop_the_claim(cand: &Path, claim: &NameClaim) -> bool {
+pub(crate) fn drop_the_claim(cand: &Path, claim: &NameClaim) -> bool {
     if !claim_is_in_place(cand, claim) {
         return false;
     }
@@ -730,7 +730,7 @@ fn name_is_taken(e: &std::io::Error) -> bool {
 /// that collided on the same microsecond, so the bound is generous on
 /// purpose: it is there so a pathological directory cannot spin the loop
 /// forever, not because the number is expected to be reached.
-pub(in crate::cache) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
+pub(crate) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 
 /// Claim a free `<parent>/<prefix><ts>` sibling and return it.
 ///
@@ -751,7 +751,7 @@ pub(in crate::cache) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 /// the published name itself is still claimed by [`publish_copy`], once the
 /// copy is complete.
 #[cfg(test)]
-pub(in crate::cache) fn claim_sibling(
+pub(crate) fn claim_sibling(
     parent: &Path,
     prefix: &str,
     stamp: &str,
@@ -799,7 +799,7 @@ pub(in crate::cache) fn claim_sibling(
 
 /// The `n`th candidate name for a prefix and a timestamp: the plain one, then
 /// `_2`, `_3`, and so on.
-pub(in crate::cache) fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
+pub(crate) fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
     if n == 1 {
         format!("{prefix}{stamp}")
     } else {
@@ -812,7 +812,7 @@ pub(in crate::cache) fn candidate_name(prefix: &str, stamp: &str, n: u32) -> Str
 /// The cross-process record protocol is supplied by the caller through
 /// [`PublishHooks`]; this trait is only the partial-write and publish
 /// mechanics that can be exercised against a plain filesystem.
-pub(in crate::cache) trait Publisher {
+pub(crate) trait Publisher {
     /// Copy `db_path` beside itself under `prefix`, returning the published
     /// path, or `None` when there was nothing to copy.
     fn copy_aside(
@@ -826,12 +826,12 @@ pub(in crate::cache) trait Publisher {
 
 /// The default [`Publisher`]: real filesystem operations, with the
 /// cross-process record protocol reached through [`PublishHooks`].
-pub(in crate::cache) struct FsPublisher<H: PublishHooks> {
+pub(crate) struct FsPublisher<H: PublishHooks> {
     hooks: H,
 }
 
 impl<H: PublishHooks> FsPublisher<H> {
-    pub(in crate::cache) fn new(hooks: H) -> Self {
+    pub(crate) fn new(hooks: H) -> Self {
         Self { hooks }
     }
 }
@@ -855,7 +855,7 @@ impl<H: PublishHooks> Publisher for FsPublisher<H> {
 /// nothing there. This is the copy mechanic's own copy of the helper the
 /// cache layer re-exports, so the publish mechanics do not depend on the
 /// registries' module.
-pub(in crate::cache) fn remove_cache_path(db_path: &Path) -> Result<()> {
+pub(crate) fn remove_cache_path(db_path: &Path) -> Result<()> {
     if db_path.is_dir() {
         match std::fs::remove_dir_all(db_path) {
             Ok(()) => {}
@@ -907,7 +907,7 @@ fn working_name(parent: &Path, is_dir: bool, stamp: &str) -> Result<PathBuf> {
 /// testable against a plain filesystem; production supplies the cache layer's
 /// real hooks. The `stamp` closure is called once for the working name and
 /// once, later, for the published name — the two stamps say different things.
-pub(in crate::cache) fn copy_aside(
+pub(crate) fn copy_aside(
     db_path: &Path,
     prefix: &str,
     label: &str,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::ascii_case_eq;
+use crate::helpers::ascii_case_eq;
 
 fn write(dir: &girpr_tempdir::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let p = dir.join(name);
@@ -127,7 +127,7 @@ fn a_name_answers_for_its_own_algorithm_and_for_no_other() {
 // would follow `std` instead of catching it.
 //
 // The crate's ASCII-case comparison is that oracle, and it is written out
-// rather than borrowed: `crate::util::ascii_case_eq` folds the bytes itself
+// rather than borrowed: `helpers::ascii_case_eq` folds the bytes itself
 // and classifies them itself, so a `std` that changed which bytes fold shows
 // up here instead of being followed by both sides at once.
 

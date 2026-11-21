@@ -45,6 +45,7 @@ machine rather than the code.
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
+| `crates/sync-cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
 | `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
@@ -439,6 +440,12 @@ whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
 types and keeps the original `chuncks` / opaque-tag-6 spellings. An interface
 seam in the report plane takes scalar provenance values, so the report does not
 depend on the fetch crate.
+`crates/sync-cache/` holds the dev tools' redb hash cache: the schema, the
+positional `postcard` codec, the open/backup/publish protocol and the digest
+vocabulary that codec stores. `girsync` consumes it directly under a module
+alias and the sled converter names it directly too, so an edit to a planner,
+command or other girsync subsystem leaves the cache and its `redb`/`postcard`/
+`tempfile` tree cached; the cache wire format is pinned by literal-byte tests.
 `crates/lock/` holds this binary's single-writer
 run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
 repair and the lock-only integration tests depend on it directly, while the dev

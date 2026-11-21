@@ -67,8 +67,8 @@ pub(super) fn decode_meta(bytes: &[u8]) -> Result<Meta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::schema::CACHE_VERSION;
     use crate::hash::{DigestSet, HashAlg};
+    use crate::schema::CACHE_VERSION;
 
     /// One digest per name: `byte` repeated to that algorithm's length, or to 32
     /// for a name this build does not know.

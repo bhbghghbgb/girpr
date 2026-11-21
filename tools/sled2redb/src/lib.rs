@@ -6,10 +6,11 @@
 //!
 //! The conversion itself is unchanged. It reads a legacy `<root>/girpr-cache`
 //! sled directory (JSON values, hex digests under the `\0meta` reservation)
-//! and writes a new redb file through girsync's **public** cache API; hex
+//! and writes a new redb file through the cache crate's **public** API; hex
 //! digests are decoded to raw bytes and unknown algorithms pass through
-//! untouched. The only thing that moved is the crate boundary: `crate::cache`,
-//! `crate::hash` and `crate::util` paths became `girsync::…` paths.
+//! untouched. The only thing that moved is the crate boundary: `crate::cache`
+//! and `crate::hash` paths became `girpr_sync_cache::…` paths, while
+//! `crate::util` became `girsync::util`.
 //!
 //! ## The binary's arguments and its one conversion record
 //!

@@ -10,17 +10,16 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Handle, SharedCache, memory_registry, redb_builder};
-use crate::cache::open::{
+use crate::open::{
     is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
 };
-use crate::cache::schema::{CACHE_VERSION, FileRec, Meta};
-use crate::cache::wire::{decode_meta, decode_rec, encode_meta};
-use crate::cache::write::{CacheWrite, CommitLimits, CommitPolicy};
-use crate::cache::{ENTRIES, META_KEY, META_TBL};
+use crate::schema::{CACHE_VERSION, FileRec, Meta};
+use crate::wire::{decode_meta, decode_rec, encode_meta};
+use crate::write::{CacheWrite, CommitLimits, CommitPolicy};
+use crate::{ENTRIES, META_KEY, META_TBL};
 
 /// The `meta` row, decoded, in the read/write path's words.
 ///
@@ -118,14 +117,14 @@ fn read_row(
 ///
 /// The same walk for a read handle and for a write handle, so a caller cannot
 /// get a different answer from [`CacheDb::visit_keys`] and
-/// [`CacheWrite::visit_keys`](crate::cache::CacheWrite::visit_keys) by
+/// [`CacheWrite::visit_keys`](crate::CacheWrite::visit_keys) by
 /// accident: the batch is not a second reading of the table, it is the same
 /// reading of it.
 ///
 /// **The key is borrowed, not copied.** It lives only as long as the call, so
 /// a caller that wants to keep one has to copy it — which is the point: the
 /// streaming read exists for the caller that does not want to keep any.
-pub(in crate::cache) fn visit_entry_keys(
+pub(crate) fn visit_entry_keys(
     tbl: &impl ReadableTable<&'static str, &'static [u8]>,
     mut f: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
@@ -185,7 +184,6 @@ pub struct CacheDb {
     /// with every other handle on the path. A file-backed cache has none to
     /// share, so this handle starts a fresh one; what a fresh count means
     /// for the cache is `with_handle`'s to say.
-    #[cfg(test)]
     reads: Arc<AtomicU64>,
 }
 
@@ -223,7 +221,6 @@ impl CacheDb {
         Self {
             db,
             _lock: lock,
-            #[cfg(test)]
             reads: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -240,7 +237,6 @@ impl CacheDb {
     /// only handle on it, and that handle's own fresh counter is already the
     /// cache's count — for the reads it has made since it opened, and where
     /// the filesystem can lock a file at all (see `with_handle`).
-    #[cfg(test)]
     fn with_shared_reads(db: Handle, reads: Arc<AtomicU64>) -> Self {
         Self {
             db,
@@ -254,15 +250,12 @@ impl CacheDb {
     /// The only place a [`Handle::Writable`] is built, so "who may create one"
     /// has one answer rather than one per caller. `lock` is `None` for a
     /// filesystem that cannot lock a file and for in-memory caches.
-    pub(in crate::cache) fn open_writable_locked(db: Database, lock: Option<File>) -> Self {
+    pub(crate) fn open_writable_locked(db: Database, lock: Option<File>) -> Self {
         Self::with_handle_and_lock(Handle::Writable(Arc::new(db)), lock)
     }
 
     /// Wrap an observer handle and the shared sidecar lock this run holds.
-    pub(in crate::cache) fn open_read_only_locked(
-        db: redb::ReadOnlyDatabase,
-        lock: Option<File>,
-    ) -> Self {
+    pub(crate) fn open_read_only_locked(db: redb::ReadOnlyDatabase, lock: Option<File>) -> Self {
         Self::with_handle_and_lock(Handle::ReadOnly(db), lock)
     }
 
@@ -277,7 +270,7 @@ impl CacheDb {
     /// The read is an optimisation, not a second source of truth: the write
     /// path below re-reads the row inside its own transaction, so a row
     /// that changed in between is still reconciled there.
-    pub(in crate::cache) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
+    pub(crate) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
         match preflight(db)? {
             // No row at all: a fresh cache. The write path below creates
             // both tables and writes the row.
@@ -372,7 +365,7 @@ impl CacheDb {
         Ok(())
     }
 
-    pub(in crate::cache) fn open_file(db_path: &Path) -> Result<Database> {
+    pub(crate) fn open_file(db_path: &Path) -> Result<Database> {
         if db_path.is_dir() {
             bail!(
                 "cache {} is a directory (sled format): use --ignore-cache to rebuild or sled2redb to convert",
@@ -434,7 +427,6 @@ impl CacheDb {
                     Self::init_meta(&db, case_sensitive)?;
                     let shared = SharedCache {
                         db: Arc::new(db),
-                        #[cfg(test)]
                         reads: Arc::new(AtomicU64::new(0)),
                     };
                     caches.insert(db_path.to_path_buf(), shared.clone());
@@ -444,11 +436,8 @@ impl CacheDb {
         };
         // The counter belongs to the cache, so every handle on this path
         // counts into the same one.
-        #[cfg(test)]
         let handle =
             Self::with_shared_reads(Handle::Writable(shared.db.clone()), shared.reads.clone());
-        #[cfg(not(test))]
-        let handle = Self::with_handle(Handle::Writable(shared.db.clone()));
         Ok(handle)
     }
 
@@ -464,12 +453,7 @@ impl CacheDb {
             let caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
             caches.get(db_path).cloned()
         };
-        #[cfg(test)]
-        let handle =
-            shared.map(|shared| Self::with_shared_reads(Handle::Writable(shared.db), shared.reads));
-        #[cfg(not(test))]
-        let handle = shared.map(|shared| Self::with_handle(Handle::Writable(shared.db)));
-        handle
+        shared.map(|shared| Self::with_shared_reads(Handle::Writable(shared.db), shared.reads))
     }
 
     /// Forget the shared in-memory cache at `db_path`, so the next open is cold.
@@ -518,7 +502,7 @@ impl CacheDb {
     }
 
     /// True when this handle cannot write, i.e. it was opened
-    /// [`CacheOpen::ReadOnly`](crate::cache::CacheOpen::ReadOnly).
+    /// [`CacheOpen::ReadOnly`](crate::CacheOpen::ReadOnly).
     pub fn is_read_only(&self) -> bool {
         matches!(self.db, Handle::ReadOnly(_))
     }
@@ -546,7 +530,6 @@ impl CacheDb {
     /// its reads run in its own write transaction — so they are not counted.
     /// The count is what the read handles cost.
     fn begin_entries_read(&self) -> Result<ReadTransaction> {
-        #[cfg(test)]
         self.reads.fetch_add(1, Ordering::Relaxed);
         self.db.begin_read().context("begin read")
     }
@@ -577,8 +560,7 @@ impl CacheDb {
     /// read that costs one per key, and only a count says which one a caller
     /// got. It counts the entries table's reads, so a read of another table
     /// leaves it where it was.
-    #[cfg(test)]
-    pub(crate) fn entries_read_count(&self) -> u64 {
+    pub fn entries_read_count(&self) -> u64 {
         self.reads.load(Ordering::Relaxed)
     }
 
@@ -803,11 +785,11 @@ impl CacheDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::open::{CacheOpen, open_db, read_meta};
-    use crate::cache::schema::CACHE_PREFIX;
-    use crate::cache::wire::encode_meta;
-    use crate::cache::write::CommitLimits;
-    use crate::cache::{CACHE_VERSION, ENTRIES, FileRec, META_KEY, META_TBL, Meta};
+    use crate::open::{CacheOpen, open_db, read_meta};
+    use crate::schema::CACHE_PREFIX;
+    use crate::wire::encode_meta;
+    use crate::write::CommitLimits;
+    use crate::{CACHE_VERSION, ENTRIES, FileRec, META_KEY, META_TBL, Meta};
     use redb::TableHandle;
     use std::path::PathBuf;
 

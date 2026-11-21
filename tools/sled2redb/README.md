@@ -104,6 +104,11 @@ digests in the legacy JSON rows are decoded to raw bytes on the way in.
 | `tests/convert.rs` | end-to-end cases (build a legacy sled DB, convert, read the redb cache back) |
 | `tests/common/mod.rs` | the shared test fixtures, copied from `girsync` so the cases run unchanged |
 
+The cache API and its digest vocabulary come from `crates/sync-cache/`
+(`girpr-sync-cache`) directly, not through `girsync`'s lib facade: an unrelated
+girsync edit leaves this converter's cache code and its `redb`/`postcard`/
+`tempfile` tree cached.
+
 ## Logging
 
 The log policy is the workspace's and lives in `crates/log/`, shared with the

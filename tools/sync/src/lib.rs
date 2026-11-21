@@ -41,7 +41,12 @@
 //! environment variable answers for which flag — is the workspace's and lives
 //! in the `girpr-log` crate, shared with the repair binary and with `gircap`.
 
-pub mod cache;
+// The cache is now an upstream crate rather than a module of this lib: the
+// heavy `redb`/`postcard`/`tempfile` tree and the cache's byte codec stay
+// cached when a planner, command or other subsystem below changes. The alias
+// keeps every `crate::cache::X` call site and the public `girsync::cache::X`
+// surface unchanged.
+pub use girpr_sync_cache as cache;
 pub mod cli;
 pub mod commands;
 pub mod config;

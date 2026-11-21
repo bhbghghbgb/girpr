@@ -2,7 +2,7 @@
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
 # `girpr-fetch`, `girpr-lock`, `girpr-util`, `girpr-log`, `girpr-tempdir`,
-# `gircap`, `girsync` and `sled2redb`.
+# `girpr-sync-cache`, `gircap`, `girsync` and `sled2redb`.
 # This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
@@ -31,7 +31,7 @@ experimental = ["setup-scripts"]
 #
 # * `GIRSYNC_TEST_DURABILITY=none` — cache write transactions skip their
 #   per-commit fsync. Production always commits with `Durability::Immediate`
-#   (see `tools/sync/src/cache/mod.rs::write_durability`); redb still flushes on
+#   (see `crates/sync-cache/src/lib.rs::write_durability`); redb still flushes on
 #   a clean `Database` drop, so a test that reopens the cache file sees every
 #   row.
 # * `GIRSYNC_TEST_NO_FSYNC=1` — `copy_one` skips its per-file `sync_all` after
