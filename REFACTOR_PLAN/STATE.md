@@ -13,7 +13,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Consolidate root integration test binaries | completed | 080a0d45 | 4 root targets; kept artifact_bridge & repair_post standalone (pinned filters/host-skip/log-capture) so no nextest.toml edit; consolidated FQNs gained module prefix (repair::/contracts::); run_lock uses crate::common |
-| T02 | Memory cache seam for girsync record/FS cases | pending_review | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
+| T02 | Memory cache seam for girsync record/FS cases | completed | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
 | T03 | Structured repair diagnostics to drop log-only spawns | todo | | |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | todo | | |
 | T05 | Replace wiremock with a std-only loopback HTTP mock | todo | | |
@@ -39,7 +39,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01 | done | |
-| B | T02 | pending | |
+| B | T02 | done | |
 | C | T03, T04 | pending | Split if the batch proves too heavy |
 | D | T05 | pending | |
 | E | T06, T07 | pending | |
@@ -61,6 +61,10 @@ orchestrator records them here. Planning review (Phase 3) decides batching and d
 | FU01 | Re-measure clean-build wall time on CI with a fresh target dir | open | Report figure is host-specific; 14→4 link reduction verified structurally |
 | FU02 | Merging repair_post into repair needs pinned binary(=repair_post) overrides updated in same change | open | Correctly left separate in T01 |
 | FU03 | Narrow blanket allow(dead_code, unused_imports) in tests/common/mod.rs to per-item allows | open | Cosmetic only |
+| FU04 | Exercise or remove the unused forget_memory_cache wrapper | open | No migrated test needs it; add focused test or drop |
+| FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | open | Leave return-rows-on-RunOutcome work to T18 |
+| FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | open | Pre-existing vestigial param |
+| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | open | Behavior predates T02; only if coverage matters |
 
 ## Persistent context
 
