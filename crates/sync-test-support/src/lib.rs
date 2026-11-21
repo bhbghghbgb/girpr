@@ -527,6 +527,33 @@ pub fn run_cli(cli: Cli) -> RunOutcome {
     run_cli_with_hooks(cli, TestHooks::from_env())
 }
 
+/// [`run_cli`] against the shared in-memory test cache.
+///
+/// The narrow seam for cases that assert the records a command reported or the
+/// files it wrote, not the `girpr-cache` file itself: each command opens a
+/// path-keyed in-memory cache instead of creating, fsyncing and reopening a
+/// 1 MB redb file. Rows a command writes stay visible to the next command on
+/// the same path in this process, just as a file cache would — call
+/// [`forget_memory_cache`] between two runs that must start cold.
+#[allow(unsafe_code, dead_code)] // `set_var` is unsafe in edition 2024; nextest isolates each test process
+pub fn run_cli_mem(cli: Cli) -> RunOutcome {
+    run_cli_with_hooks_mem(cli, TestHooks::from_env())
+}
+
+/// [`run_cli_with_hooks`] against the shared in-memory test cache.
+#[allow(unsafe_code, dead_code)] // `set_var` is unsafe in edition 2024; nextest isolates each test process
+pub fn run_cli_with_hooks_mem(cli: Cli, hooks: TestHooks) -> RunOutcome {
+    unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "memory") };
+    girsync::run_captured_with_hooks(cli, &capture_plan(), hooks).expect("run_captured")
+}
+
+/// Drop the shared in-memory cache at `dir`, so the next memory-backed command
+/// on that folder starts cold — the counterpart of deleting `girpr-cache` on
+/// disk. Returns whether an entry was there.
+pub fn forget_memory_cache(dir: &Path) -> bool {
+    CacheDb::forget_memory_cache(&dir.join(CACHE_PREFIX))
+}
+
 /// Run a parsed CLI in-process with the given hooks injected, capturing records,
 /// exit code and error string exactly as [`run_cli`] does.
 ///
@@ -550,6 +577,30 @@ where
     let argv = std::iter::once(std::ffi::OsString::from("girsync"))
         .chain(args.into_iter().map(Into::into));
     run_cli(Cli::try_parse_from(argv).expect("valid CLI args"))
+}
+
+/// [`run_args`] against the shared in-memory test cache.
+#[allow(dead_code)]
+pub fn run_args_mem<I, S>(args: I) -> RunOutcome
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    run_cli_mem(Cli::try_parse_from(argv).expect("valid CLI args"))
+}
+
+/// [`run_args_with_hooks`] against the shared in-memory test cache.
+#[allow(dead_code)]
+pub fn run_args_mem_with_hooks<I, S>(args: I, hooks: TestHooks) -> RunOutcome
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    run_cli_with_hooks_mem(Cli::try_parse_from(argv).expect("valid CLI args"), hooks)
 }
 
 /// [`run_args`] with hooks injected through [`run_cli_with_hooks`].
@@ -579,6 +630,24 @@ where
         Err(e) => (2, e.to_string()),
         Ok(cli) => {
             let out = run_cli(cli);
+            (out.code, out.error.unwrap_or_default())
+        }
+    }
+}
+
+/// [`run_error_text`] against the shared in-memory test cache.
+#[allow(dead_code)]
+pub fn run_error_text_mem<I, S>(args: I) -> (i32, String)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    match Cli::try_parse_from(argv) {
+        Err(e) => (2, e.to_string()),
+        Ok(cli) => {
+            let out = run_cli_mem(cli);
             (out.code, out.error.unwrap_or_default())
         }
     }
@@ -616,6 +685,21 @@ where
     let cli = Cli::try_parse_from(argv).expect("valid CLI args");
     let format = cli.output;
     let out = run_cli(cli);
+    (out.code, rendered(&out, format))
+}
+
+/// [`run_text`] against the shared in-memory test cache.
+#[allow(dead_code)]
+pub fn run_text_mem<I, S>(args: I) -> (i32, String)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
+        .chain(args.into_iter().map(Into::into));
+    let cli = Cli::try_parse_from(argv).expect("valid CLI args");
+    let format = cli.output;
+    let out = run_cli_mem(cli);
     (out.code, rendered(&out, format))
 }
 
