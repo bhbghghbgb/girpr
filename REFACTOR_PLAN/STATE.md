@@ -14,7 +14,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Break the `girpr-tempdir → girsync` inversion | completed | 220ad882 | Dedicated `girpr-sync-test-support` leaf (deviation over feature/move options); §A2 payoff achieved — tempdir is tempfile-only, girpr/gircap dev graphs no longer pull girsync; review A clean, no fixes |
 | T02 | `girpr-util` leaf crate | pending_review | 1665a69f | Facade uses `use girpr_util as util` direct dep; §A2 payoff verified empirically (repair edit leaves util Fresh). Deviation: leaf also needs fs-names/tracing + dev log/tempdir beyond §F14; §F31 filters updated by content (stale line numbers) |
-| T03 | Cheapest product leaves batch | todo | | |
+| T03 | Cheapest product leaves batch | in_progress | | |
 | T04 | Writer / file-repair crate | todo | | |
 | T05 | Plan / purge / scope decision crate | todo | | |
 | T06 | HTTP + Sophon fetch crate | todo | | |
