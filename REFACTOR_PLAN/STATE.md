@@ -20,9 +20,9 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | Trial rust-lld for the test profile | completed | c603441b | Adopted: 1 config line in .cargo/config.toml (linker = rust-lld for x86_64-pc-windows-msvc) + comment; A/B/A/B clean nextest wall 436.4s→408.5s (~4-7%); all workspace targets linked, 2175 passed/11 skipped; profile.test debug/codegen untouched; host-dependent per §F4/§A7, revalidate per host/CI |
 | T07 | Pin the stable toolchain to an exact release | completed | 08d799c5 | 1 commit; channel=1.100.0 (exact rustc already in use, no compiler change, only one-time cache invalidation); README, tests/scripts/io-profile/README.md and rust-toolchain.toml comment updated; build + nextest 2175 passed/11 skipped; no MSRV floor; Cargo.toml [package] "stable" comment kept (accurate, avoids manifest-body change); .cargo/config.toml untouched; host-specific pointer §F3/§A8 |
 | T08 | Narrow `girpr-util` rebuild edges | completed | 3b502ee5, 70083a25, 33931270, 1f5dff56, 2e5b1ea9 | 5 commits: split into girpr-util-path/hash/ini/counter, facade deleted; ini.rs edit now leaves audio/fetch/report/lock Fresh (warmed state per §A11); isolated leaves 82 passed/2 skipped; full 2175 passed/11 skipped; fetch uses hash+path (report's "disjoint" claim slightly off); atomic lives in path, counter its own leaf; junction fixtures + FixtureRefusal behind girpr-util-path test-support, md5 slices behind girpr-util-hash test-support — preserve these seams; 3 visibility promotions for ini fixture helpers; nextest filters + doc tables updated |
-| T09 | Narrow the small rebuild-locality edges | pending_review | db43c5a6, 02081be2, e9039e69 | 3 commits, all 3 sub-items implemented: BodyFile moved to girpr-digest (re-export kept as gircap_http::BodyFile — removing it later needs gircap fetcher import + README update); logs_of_async behind test-support-async feature (2 consumers, report's "sole consumer" claim stale; util-ini no tokio); clap ValueEnum behind clap feature in girpr-report (kebab-case preserved, root enables); gircap-hash no gircap-http dep; 2175 passed/11 skipped; no nextest filter change |
-| T10 | Gate the fully-ignored `bundle_shapes` binary | pending_review | 1ed90f21 | 1 commit; empty manual-tests feature + crate-level cfg guard + docs; normal gircap build/test lists 0 bundle_shapes, manual nextest command runs all 3 ignored tests; no nextest filter named it (no change needed); artifact-bridge feature-gating rejection left untouched |
-| T11 | Root dev-dependency hygiene and frozen manifest bodies | pending_review | e57340a9 | 1 commit; froze 3 deterministic bodies as const &[u8] with pinned length/body MD5/manifest checksum; removed root prost dev-dep + tokio test-util feature (unused); zstd KEPT — premise contradicted, zstd_bytes() in tests/artifact_server.rs compiled via contracts binary; prost/zstd already in normal tree via girpr-fetch so declaration hygiene, not crate-count win; 2176 passed/8 skipped |
+| T09 | Narrow the small rebuild-locality edges | completed | db43c5a6, 02081be2, e9039e69, 1aa50d2c (review fix) | 3 commits, all 3 sub-items implemented: BodyFile moved to girpr-digest (re-export kept as gircap_http::BodyFile — removing it later needs gircap fetcher import + README update); logs_of_async behind test-support-async feature (2 consumers, report's "sole consumer" claim stale; util-ini no tokio); clap ValueEnum behind clap feature in girpr-report (kebab-case preserved, root enables); gircap-hash no gircap-http dep; 2175 passed/11 skipped; no nextest filter change |
+| T10 | Gate the fully-ignored `bundle_shapes` binary | completed | 1ed90f21 | 1 commit; empty manual-tests feature + crate-level cfg guard + docs; normal gircap build/test lists 0 bundle_shapes, manual nextest command runs all 3 ignored tests; no nextest filter named it (no change needed); artifact-bridge feature-gating rejection left untouched |
+| T11 | Root dev-dependency hygiene and frozen manifest bodies | completed | e57340a9 | 1 commit; froze 3 deterministic bodies as const &[u8] with pinned length/body MD5/manifest checksum; removed root prost dev-dep + tokio test-util feature (unused); zstd KEPT — premise contradicted, zstd_bytes() in tests/artifact_server.rs compiled via contracts binary; prost/zstd already in normal tree via girpr-fetch so declaration hygiene, not crate-count win; 2176 passed/8 skipped |
 | T12 | Root `src/` unit-test cleanups | todo | | |
 | T13 | Collapse duplicated root integration fixtures | todo | | |
 | T14 | Group `artifact_server.rs` bundle tests | todo | | |
@@ -44,7 +44,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | D | T05 | done | Review fix ab98c622 added missing gircap leaf-crate doc table entries |
 | E | T06, T07 | done | |
 | F | T08 | done | |
-| G | T09, T10, T11 | pending | |
+| G | T09, T10, T11 | done | Review fix 1aa50d2c removed stale gircap-http edge from hash crate docs |
 | H | T12, T13 | pending | |
 | I | T14, T15 | pending | |
 | J | T16, T17 | pending | |
@@ -78,6 +78,8 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU17 | Re-trial and scope linker config for other MSVC triples if support widens | dropped | Conditional future scope |
 | FU18 | Narrow the root's private mod util glob alias to per-leaf aliases | open | Clarity only; no rebuild-graph effect — likely drop at Phase 3 |
 | FU19 | Clarify the 3 promoted junction test-helper visibilities as test-only | open | No behavior/byte change; already behind test-support feature — likely drop |
+| FU20 | Strengthen frozen-body pin test to verify body↔checksum relation via zstd decode + md5 | open | Byte contract self-containment; functional tests already cover it |
+| FU21 | Consider dropping the unused gircap_http::BodyFile compatibility re-export | open | Needs out-of-tree caller check; trait canonical path is girpr_digest::BodyFile |
 
 ## Persistent context
 
