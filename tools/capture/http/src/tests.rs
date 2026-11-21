@@ -659,47 +659,37 @@ fn the_buffered_file_write_equals_the_string() {
 
 // Two test servers with deliberately different jobs.
 //
-// `canned` delegates to a mock library: it feeds `reqwest` a scripted
-// status/body pair and lets the library own the listener, the invocation
+// `canned` feeds `reqwest` a scripted status/body pair through the
+// dependency-free loopback leaf, which owns the listener, the invocation
 // counts and the request journal. `malformed` stays a small raw-socket
 // helper, because a well-behaved mock server cannot announce a
 // `Content-Length` larger than the body it sends, or omit the header
 // entirely — and those two shapes are the whole point of those tests.
 
-/// Canned replies, served by a real HTTP mock library.
+/// Canned replies, served on a dependency-free loopback server.
 mod canned {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use wiremock::matchers::method;
-    use wiremock::{Mock as Reply, MockServer, Request, ResponseTemplate};
+    use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 
-    /// A scripted reply: the status line and body for one attempt.
-    struct Answer {
-        status: u16,
-        body: &'static [u8],
-    }
-
-    /// A canned server. The library's request journal is the only record;
-    /// there is no hand-rolled accept loop or response writer here.
+    /// A canned server. The loopback leaf owns the listener, the reply writer
+    /// and the request journal; this module keeps gircap-http's own scripting
+    /// contract (which headers are sent and which counts are pinned).
     pub struct Mock {
-        server: MockServer,
+        server: ScriptedServer,
     }
 
     impl Mock {
-        /// How many requests reached the server, from the library's journal.
+        /// How many requests reached the server.
         pub async fn hits(&self) -> usize {
-            self.requests().await.len()
+            self.server.hits()
         }
 
-        /// The requests the library recorded, for asserting what went on the wire.
-        pub async fn requests(&self) -> Vec<Request> {
-            self.server
-                .received_requests()
-                .await
-                .expect("the request journal is enabled")
+        /// The requests recorded, for asserting what went on the wire.
+        pub async fn requests(&self) -> Vec<RecordedRequest> {
+            self.server.requests()
         }
 
-        /// `http://127.0.0.1:<port>`, from the library.
+        /// `http://127.0.0.1:<port>`.
         pub fn uri(&self) -> String {
             self.server.uri()
         }
@@ -708,9 +698,8 @@ mod canned {
     /// Serve `statuses` in order, one reply per request, on any path.
     ///
     /// `extra` are response headers the product records (`content-range`,
-    /// `set-cookie`, ...) but that are not part of the canned body. The
-    /// library sends the incidental headers (`date`, `transfer-encoding`,
-    /// `server`); the tests assert only the ones the product reads.
+    /// `set-cookie`, ...) but that are not part of the canned body. Every
+    /// reply also carries the `content-type` and `etag` the tests pin.
     pub async fn spawn(
         statuses: Vec<(u16, &'static [u8])>,
         extra: &[(&'static str, &'static str)],
@@ -719,41 +708,29 @@ mod canned {
         spawn_expect(statuses, expected, extra).await
     }
 
-    /// [`spawn`] with an explicit expected request count. Used by the two
-    /// tests that deliberately script an answer they must **not** consume:
-    /// `expect(n)` is verified when the server is dropped.
+    /// [`spawn`] with an explicit expected request count. Used by the tests
+    /// that deliberately script an answer they must **not** consume: the
+    /// count is verified when the server is dropped.
     pub async fn spawn_expect(
         statuses: Vec<(u16, &'static [u8])>,
         expect: u64,
         extra: &[(&'static str, &'static str)],
     ) -> Mock {
-        let answers: Vec<Answer> = statuses
+        let replies = statuses
             .into_iter()
-            .map(|(status, body)| Answer { status, body })
-            .collect();
-        assert!(
-            !answers.is_empty(),
-            "a canned server needs at least one answer"
-        );
-        let cursor = Arc::new(AtomicUsize::new(0));
-        let server = MockServer::start().await;
-        let next = Arc::clone(&cursor);
-        let headers: Vec<(&'static str, &'static str)> = extra.to_vec();
-        Reply::given(method("GET"))
-            .respond_with(move |_req: &Request| {
-                let i = next.fetch_add(1, Ordering::SeqCst).min(answers.len() - 1);
-                let mut response = ResponseTemplate::new(answers[i].status)
-                    .insert_header("content-type", "application/octet-stream")
-                    .insert_header("etag", "\"abc\"");
-                for (name, value) in &headers {
-                    response = response.append_header(*name, *value);
+            .map(|(status, body)| {
+                let mut reply = Reply::new(status, body)
+                    .header("content-type", "application/octet-stream")
+                    .header("etag", "\"abc\"");
+                for (name, value) in extra {
+                    reply = reply.header(name, value);
                 }
-                response.set_body_bytes(answers[i].body)
+                reply
             })
-            .expect(expect)
-            .mount(&server)
-            .await;
-        Mock { server }
+            .collect();
+        Mock {
+            server: ScriptedServer::start_expecting(replies, expect),
+        }
     }
 }
 
@@ -1660,8 +1637,8 @@ async fn response_headers_are_lowercased_and_kept_verbatim() {
             .keys()
             .all(|k| k.chars().all(|c| !c.is_ascii_uppercase()))
     );
-    // `server` and `date` are the mock library's, not the product's; only the
-    // headers it actually reads are pinned here.
+    // Incidental transport headers, when present, are not the product's; only
+    // the headers it actually reads are pinned here.
     assert_eq!(got.resp_headers["etag"], "\"abc\"", "quotes are kept");
     assert_eq!(
         got.resp_headers["content-type"], "application/octet-stream",

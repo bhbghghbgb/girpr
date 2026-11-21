@@ -48,7 +48,7 @@ tracing = "0.1.44"
 [dev-dependencies]
 # The mechanics tests build scratch directories and script canned replies on a
 # loopback server. Neither is needed by a shipped build of this crate; gircap's
-# own copy of the mock encodes different contracts and is deliberately not
-# borrowed here (docs/00-spec.md §2).
+# own canned mock encodes different contracts and is deliberately not borrowed
+# here (docs/00-spec.md §2).
 girpr-tempdir = { path = "../../../crates/tempdir" }
-wiremock = "0.6"
+girpr-loopback-mock = { path = "../../../crates/loopback-mock" }
