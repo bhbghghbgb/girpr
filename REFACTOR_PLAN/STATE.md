@@ -16,7 +16,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | Memory cache seam for girsync record/FS cases | completed | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
 | T03 | Structured repair diagnostics to drop log-only spawns | completed | aa970db2, 02ddeaaa | 2 commits (surface + migration); 13 spawns→1 (one process smoke kept); premise was 11 cases/13 calls not 10/10; structured diagnostics are thread-local, take_repair_diagnostics() needs current-thread runtime; Rig::logs now lazy OnceLock; no nextest filter change; CLI goldens/shipped bytes unchanged |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | completed | e41a134a, a627d4fd | 2 commits (helper + migration); 14 log-case spawns→1 smoke (separate from T03 repair smoke); contracts binary nextest 2.141s→1.235s; cases were not purely formatting — process-boundary assertions preserved via open_or_warn unit test, girpr_log::test_support::logs_of, pure plan assertions; no nextest filter change; announcement bytes/goldens unchanged; 0 girpr_<ts>.log under target/ |
-| T05 | Replace wiremock with a std-only loopback HTTP mock | todo | | |
+| T05 | Replace wiremock with a std-only loopback HTTP mock | in_progress | | |
 | T06 | Trial rust-lld for the test profile | todo | | |
 | T07 | Pin the stable toolchain to an exact release | todo | | |
 | T08 | Narrow `girpr-util` rebuild edges | todo | | |
