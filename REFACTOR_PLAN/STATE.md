@@ -13,8 +13,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Break the `girpr-tempdir → girsync` inversion | completed | 220ad882 | Dedicated `girpr-sync-test-support` leaf (deviation over feature/move options); §A2 payoff achieved — tempdir is tempfile-only, girpr/gircap dev graphs no longer pull girsync; review A clean, no fixes |
-| T02 | `girpr-util` leaf crate | pending_review | 1665a69f | Facade uses `use girpr_util as util` direct dep; §A2 payoff verified empirically (repair edit leaves util Fresh). Deviation: leaf also needs fs-names/tracing + dev log/tempdir beyond §F14; §F31 filters updated by content (stale line numbers) |
-| T03 | Cheapest product leaves batch | pending_review | 46ede904 | Split only `girpr-lock` (true leaf, direct consumers); other 6 candidates left local: biz=re-export, logging=keeper §A5, retry=thin shim §F37, audio=uses crate::util, filter/phase=no direct consumer (§A2). §A2 payoff verified empirically |
+| T02 | `girpr-util` leaf crate | completed | 1665a69f, dd8c6d13 | Facade uses `use girpr_util as util` direct dep; §A2 payoff verified empirically (repair edit leaves util Fresh). Deviation: leaf also needs fs-names/tracing + dev log/tempdir beyond §F14; §F31 filters updated by content. Review B clean; dd8c6d13 fixed doc seams only |
+| T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | todo | | |
 | T05 | Plan / purge / scope decision crate | todo | | |
 | T06 | HTTP + Sophon fetch crate | todo | | |
@@ -37,6 +37,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01 | done | Checkpoint A (solo). Review clean, no fix/revert commits; §A2 payoff confirmed, all 2167 tests pass. 2 follow-ups raised |
+| B | T02, T03 | done | Checkpoint B. Both completed; §A2 payoff confirmed empirically for util+lock; one doc-seam fix (dd8c6d13). 3 follow-ups raised |
 
 ## Follow-ups
 
@@ -44,6 +45,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------------|-------|------|
 | FU-01 | Update `tools/sync/README.md:10` shared-crate inventory to include `girpr-sync-test-support` (fixtures no longer from `girpr-tempdir`) | open | From review A; §F39 doc-seam consistency |
 | FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md:25` | open | From review A; §F39 shared-crate inventory consistency |
+| FU-03 | Extract `repair/audio.rs` into a leaf crate — now a true leaf since util is external; same §A2 argument as `girpr-lock` | open | From review B; T03's "uses crate::util" reason no longer holds |
+| FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning (cited §A5/§F37 do not apply to product-only files); decide with a concrete rebuild-edge argument or drop | open | From review B |
+| FU-05 | Consider a narrow audio/lock-only consumer test target so the §A2 win shows in link count, not just compile caching (current `tests/run_lock.rs` links the full facade) | open | From review B |
 
 ## Persistent context
 
