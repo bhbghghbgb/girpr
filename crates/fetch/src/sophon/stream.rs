@@ -7,7 +7,7 @@ use std::io::Write;
 use crate::hyp::ChunkManifestMeta;
 use crate::retry::{BackoffPolicy, Retry, RetryState, retry_state};
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
-use crate::util::Md5;
+use girpr_util::Md5;
 
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(digest.bytes, buffered.len() as u64);
         assert_eq!(
             digest.md5.to_hex(),
-            crate::util::md5::md5_digest(&buffered).to_hex(),
+            girpr_util::md5::md5_digest(&buffered).to_hex(),
             "the same digest as the buffered path"
         );
         assert_eq!(
@@ -744,7 +744,7 @@ mod tests {
         assert_eq!(digest.bytes, DECODED as u64, "the whole body was decoded");
         assert_eq!(
             digest.md5.to_hex(),
-            crate::util::md5::md5_digest(&payload).to_hex(),
+            girpr_util::md5::md5_digest(&payload).to_hex(),
             "and the sink hashed the right bytes"
         );
         assert!(
@@ -789,7 +789,7 @@ mod tests {
         );
         assert_ne!(
             digest.md5.to_hex(),
-            crate::util::md5::md5_digest(&payload).to_hex(),
+            girpr_util::md5::md5_digest(&payload).to_hex(),
             "a corrupt payload must not carry the wanted digest"
         );
     }
@@ -928,7 +928,7 @@ mod tests {
         );
         assert_eq!(
             digest.md5.to_hex(),
-            crate::util::md5::md5_digest(&raw).to_hex(),
+            girpr_util::md5::md5_digest(&raw).to_hex(),
             "the checksum is of the decompressed bytes"
         );
         assert_eq!(digest.bytes, raw.len() as u64);

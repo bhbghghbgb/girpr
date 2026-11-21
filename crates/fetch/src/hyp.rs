@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::Biz;
 use crate::retry::{BackoffPolicy, Retry, retry};
+use girpr_model::region::Region as Biz;
 use girpr_model::region::{CHANNEL_ENDPOINT, Host};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
@@ -129,7 +129,7 @@ impl GameConfig {
     ///
     /// The field is optional and may be empty; either way there is no identity
     /// to refuse.
-    pub(crate) fn biz_mismatch(&self, biz: &str) -> Option<&str> {
+    pub fn biz_mismatch(&self, biz: &str) -> Option<&str> {
         identity_mismatch(self.game.as_ref().map(|g| g.biz.as_str()), biz)
     }
 }
@@ -138,7 +138,7 @@ impl ChunkBuild {
     /// The `tag` this response declares, when it disagrees with `tag`.
     ///
     /// An empty response tag carries no identity.
-    pub(crate) fn tag_mismatch(&self, tag: &str) -> Option<&str> {
+    pub fn tag_mismatch(&self, tag: &str) -> Option<&str> {
         identity_mismatch(Some(self.tag.as_str()), tag)
     }
 }

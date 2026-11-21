@@ -687,7 +687,7 @@ tests/
   repair_machinery.rs           the repair's own decisions, on crafted fixtures
 ```
 
-All are **test-only**; nothing under `src/` changes. `src/sophon.rs` carries a
+All are **test-only**; nothing under `src/` changes. `crates/fetch/src/sophon/` carries a
 note that a trace log can be parsed for `chunk downloaded chunk=<id>` — that note
 stays accurate, and that line remains the documented last resort rather than what
 the bridge actually reads.

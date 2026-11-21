@@ -25,8 +25,8 @@ crates/log/           # the shared log policy: log file path, log levels, env va
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
 src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formatting and emission
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
-src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
-src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
+crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
+crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
 crates/util/          # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, server-path containment
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
@@ -99,7 +99,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Summary | `report::format_summary_line`, emitted by `main` (8) | — |
 
 Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fixed
-`pool_max_idle_per_host(16)` (see `src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
+`pool_max_idle_per_host(16)` (see `crates/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
 (512 KiB bufs). Retries: 5× linear backoff on manifest/chunk/file ops.
 
 ## 4. Testing
@@ -129,7 +129,7 @@ Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fix
   `#[ignore]`d, and it drives the real binary over a captured bundle — each
   capture twice, once per write mode, asserting that the two produce the same
   file and that the in-place one writes less.
-- **The streaming invariant** (`src/sophon/stream.rs`): an always-on unit test
+- **The streaming invariant** (`crates/fetch/src/sophon/stream.rs`): an always-on unit test
   (`the_streamed_decode_writes_in_pieces_not_one_buffer`) asserts that a decoded
   chunk reaches the sink in more than one write, every byte arrives, and no single
   write holds the whole body. It fails if streaming is replaced by a buffered
@@ -183,7 +183,7 @@ the same whole-file MD5, and `config.ini` advances only when every planned file 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
 decoded as it arrives and the decoded bytes are written into the target as they are
 produced, so the peak per active chunk is one read window plus the decoder's buffer,
-not the chunk — a scale-free invariant in `src/sophon/stream.rs` fails if a buffered
+not the chunk — a scale-free invariant in `crates/fetch/src/sophon/stream.rs` fails if a buffered
 decode ever writes the whole body in one piece. The
 only RAM that scales with the file is the in-place tier's staging, and that is what
 `--max-ram-bytes` bounds. A manifest is streamed too, into a buffer the API's

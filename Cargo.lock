@@ -724,6 +724,7 @@ dependencies = [
  "girpr-cli",
  "girpr-digest",
  "girpr-exit",
+ "girpr-fetch",
  "girpr-filter",
  "girpr-fs-identity",
  "girpr-fs-names",
@@ -773,6 +774,27 @@ dependencies = [
 [[package]]
 name = "girpr-exit"
 version = "0.1.0"
+
+[[package]]
+name = "girpr-fetch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "girpr-digest",
+ "girpr-model",
+ "girpr-proto",
+ "girpr-retry",
+ "girpr-util",
+ "prost",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+ "zstd",
+]
 
 [[package]]
 name = "girpr-filter"

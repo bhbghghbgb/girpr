@@ -47,8 +47,8 @@ machine rather than the code.
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
-| `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `src/sophon/` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
+| `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
+| `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -422,6 +422,13 @@ glob-filter rules to this binary and `girsync`, pinning one glob version and one
 set of matching rules for both. `crates/util/` holds this binary's low-level
 scan, digest, path, atomic-publish and config.ini mechanics; the repair, report
 and CLI code depend on it directly, so an edit there leaves it cached for them.
+`crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
+chunk streaming, manifest filter, local chunk map and attempt loop; the repair
+code depends on it directly, so an edit to the repair, report or CLI leaves the
+whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
+types and keeps the original `chuncks` / opaque-tag-6 spellings. An interface
+seam in the report plane takes scalar provenance values, so the report does not
+depend on the fetch crate.
 `crates/lock/` holds this binary's single-writer
 run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
 repair and the lock-only integration tests depend on it directly, while the dev
@@ -595,7 +602,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;
-  `HypClient::new_with_bases` in `src/hyp.rs`).
+  `HypClient::new_with_bases` in `crates/fetch/src/hyp.rs`).
 - **One scratch-directory policy, three projects.** A test that needs a tree of
   its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,
   `gircap` and `girsync` alike. Each tree gets a fresh random name (with a

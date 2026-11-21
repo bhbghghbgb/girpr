@@ -32,13 +32,13 @@
 //! The modules behind the seam are private: `cli` / `config` (the argument
 //! surface and validated per-run configuration), `logging` (console + file
 //! `tracing` layers over the shared `girpr-log` policy), `repair` (the
-//! pipeline, split into phases), `hyp` (HoYoPlay + Sophon `getBuild` JSON
-//! APIs), `sophon` (chunk-manifest protobuf, fetch/verify/parse, manifest
-//! filter, local chunk-reuse map), `biz` (biz → launcher id / game id /
+//! pipeline, split into phases), `biz` (biz → launcher id / game id /
 //! channel tuple), `report` (run counters, the record data plane and every
-//! stdout line), `retry` (the shared attempt loop and its backoff policy),
-//! `phase` (the monotonic phase timer) and `util` (MD5, `config.ini`,
-//! ignore/blacklist files, server-path containment).
+//! stdout line) and `phase` (the monotonic phase timer). The HoYoPlay/Sophon
+//! fetch path (`hyp`, `sophon`) and the attempt loop (`retry`) live in
+//! `girpr-fetch`, and the low-level scan/hash/path helpers in `girpr-util`;
+//! this crate depends on both directly under those module aliases, so edits
+//! here leave their heavy code cached.
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
 //! run config → [`run`] → print `SUMMARY` → flush the log → return the exit
@@ -47,16 +47,19 @@
 mod biz;
 mod cli;
 mod config;
-mod hyp;
 mod logging;
 mod phase;
 mod repair;
 mod report;
-mod retry;
-mod sophon;
 // The canned-reply loopback origin the unit tests share.
 #[cfg(test)]
 mod test_http;
+// The fetch path lives in its own crate so an edit to `repair`, `report` or
+// `cli` leaves the whole reqwest/zstd/prost tree cached. These aliases keep
+// every existing `crate::hyp::…`, `crate::sophon::…` and `crate::retry::…`
+// call site pointing at the same names, while the facade depends on the crate
+// directly rather than only re-exporting it.
+use girpr_fetch::{hyp, retry, sophon};
 // The low-level mechanics live in a separate crate so an edit to `repair`,
 // `report` or `cli` leaves them cached. The alias keeps every existing
 // `crate::util::…` call site pointing at the same names.

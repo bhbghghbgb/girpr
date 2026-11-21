@@ -22,7 +22,6 @@ use std::time::Duration;
 
 use super::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
 use super::summary::{Summary, conditional_extras};
-use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 
 // The newline-appending writer is shared with the other two report planes; it
 // stays nameable here because `emit` and the writer tests name it directly.
@@ -131,6 +130,11 @@ impl Drop for ProgressGuard {
 /// once, and the formatter turns the group into the `REPORT` record. The fields
 /// are crate-visible rather than public: the pipeline is the only constructor,
 /// and [`report_record`] is the only reader.
+///
+/// The API-derived values are borrowed as scalars rather than as the HoYoPlay
+/// DTOs that carry them. That is the seam between the two planes: the report
+/// plane renders whatever the caller extracts and does not depend on the
+/// fetch crate or the shape of its DTOs. The rendered bytes are unchanged.
 pub struct ReportProvenance<'a> {
     /// The on-disk `config.ini` version, or `None` when absent.
     pub(crate) local_version: &'a Option<String>,
@@ -138,12 +142,18 @@ pub struct ReportProvenance<'a> {
     pub(crate) latest_version: &'a str,
     /// The game/business channel.
     pub(crate) biz: &'a str,
-    /// The launcher's game configuration.
-    pub(crate) cfg: &'a GameConfig,
-    /// The selected branch package.
-    pub(crate) pkg: &'a GameBranchPackage,
-    /// The target build.
-    pub(crate) build: &'a ChunkBuild,
+    /// The launcher's executable name (`GameConfig::exe_file_name`).
+    pub(crate) exe_file_name: &'a str,
+    /// The launcher's default download mode (`GameConfig::default_download_mode`).
+    pub(crate) default_download_mode: &'a str,
+    /// The selected branch (`GameBranchPackage::branch`).
+    pub(crate) branch: &'a str,
+    /// The selected package id (`GameBranchPackage::package_id`).
+    pub(crate) package_id: &'a str,
+    /// The target build id (`ChunkBuild::build_id`).
+    pub(crate) build_id: &'a str,
+    /// The branch's declared diff tags (`GameBranchPackage::diff_tags`).
+    pub(crate) diff_tags: &'a [String],
     /// The effective audio language set.
     pub(crate) audio_langs: &'a HashSet<String>,
 }
@@ -165,16 +175,13 @@ pub fn report_record(provenance: &ReportProvenance<'_>) -> Record {
         .put("local_version", local)
         .put("latest_version", provenance.latest_version)
         .put("biz", provenance.biz)
-        .put("exe", provenance.cfg.exe_file_name.as_str())
-        .put(
-            "download_mode",
-            provenance.cfg.default_download_mode.as_str(),
-        )
-        .put("branch", provenance.pkg.branch.as_str())
-        .put("package_id", provenance.pkg.package_id.as_str())
-        .put("build_id", provenance.build.build_id.as_str())
+        .put("exe", provenance.exe_file_name)
+        .put("download_mode", provenance.default_download_mode)
+        .put("branch", provenance.branch)
+        .put("package_id", provenance.package_id)
+        .put("build_id", provenance.build_id)
         .put("audio_langs", audio_joined.join(","))
-        .put("diff_tags", provenance.pkg.diff_tags.join(","))
+        .put("diff_tags", provenance.diff_tags.join(","))
 }
 
 /// The final `SUMMARY`, ending every non-fatal run.

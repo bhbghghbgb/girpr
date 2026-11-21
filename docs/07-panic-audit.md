@@ -22,7 +22,8 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 1. Enumerated every `.unwrap()`, `.expect()`, `panic!`, `unreachable!`, direct
    `[]` index or slice, and arithmetic/integer-width `as` conversion in the
    production regions of:
-   `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
+   `crates/fetch/src/sophon/{stream,proto,map,filter}.rs`,
+   `crates/fetch/src/hyp.rs`, `crates/fetch/src/retry.rs`,
    `crates/util/src/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
    `src/repair/{scan,reuse,purge,audio,mod}.rs`, `crates/lock/src/lib.rs`,
@@ -61,11 +62,11 @@ says which.
 
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
-| `src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: `clamp(0, 64 MiB)` before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
-| `src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
-| `src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
-| `src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
-| `src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
+| `crates/fetch/src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: `clamp(0, 64 MiB)` before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
+| `crates/fetch/src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
+| `crates/fetch/src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
+| `crates/fetch/src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
+| `crates/fetch/src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
 | `src/repair/phases/plan.rs` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
 | `src/repair/phases/plan.rs` `PlannedFile::layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
 | `src/repair/phases/plan.rs` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |

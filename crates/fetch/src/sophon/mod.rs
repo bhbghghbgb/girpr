@@ -16,7 +16,8 @@ pub mod proto;
 pub mod stream;
 
 pub use self::filter::select_manifests;
-#[cfg(test)]
+// Facade unit tests construct reuse entries directly, so this stays public in
+// the shipped crate (a dependency's `cfg(test)` is not on for its consumers).
 pub use self::map::ReuseEntry;
 pub use self::map::{FileReuse, build_local_chunk_map};
 pub use self::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest, WantedManifest};

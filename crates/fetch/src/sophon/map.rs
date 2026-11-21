@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
-use crate::util::{self, Md5};
+use girpr_util::{self as util, Md5};
 
 /// One reuse candidate: a slice of the local file that may hold a chunk's
 /// bytes, so it can be copied instead of downloaded.

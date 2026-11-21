@@ -419,13 +419,17 @@ fn report_record_reports_versions_and_api_fields() {
         manifests: Vec::new(),
     };
     let audio: HashSet<String> = ["ja-jp".into(), "en-us".into()].into_iter().collect();
+    let cfg = cfg_full();
     let rec = report_record(&ReportProvenance {
         local_version: &Some("4.0.0".to_string()),
         latest_version: "5.1.0",
         biz: "hk4e_global",
-        cfg: &cfg_full(),
-        pkg: &pkg,
-        build: &build,
+        exe_file_name: cfg.exe_file_name.as_str(),
+        default_download_mode: cfg.default_download_mode.as_str(),
+        branch: pkg.branch.as_str(),
+        package_id: pkg.package_id.as_str(),
+        build_id: build.build_id.as_str(),
+        diff_tags: pkg.diff_tags.as_slice(),
         audio_langs: &audio,
     });
     let line = rec.text();
@@ -459,9 +463,12 @@ fn report_record_says_none_for_an_absent_local_version() {
         local_version: &None,
         latest_version: "3.0.0",
         biz: "hk4e_cn",
-        cfg: &cfg,
-        pkg: &pkg,
-        build: &build,
+        exe_file_name: cfg.exe_file_name.as_str(),
+        default_download_mode: cfg.default_download_mode.as_str(),
+        branch: pkg.branch.as_str(),
+        package_id: pkg.package_id.as_str(),
+        build_id: build.build_id.as_str(),
+        diff_tags: pkg.diff_tags.as_slice(),
         audio_langs: &audio,
     });
     let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
