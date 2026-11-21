@@ -5,33 +5,26 @@
 //! logic: the tests that need per-target replies or a gated response own those
 //! servers themselves, because that routing is the thing they exercise.
 //!
-//! The listener, response writer and request journal belong to `wiremock`;
-//! these helpers only script the status/body sequence and read back what the
-//! library recorded.
+//! The listener, response writer and request journal come from the
+//! dependency-free loopback leaf; these helpers only script the status/body
+//! sequence and read back the hit count. This contract stays local to fetch —
+//! the product's and both capture mocks script different replies and pin
+//! different parts of the journal.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use girpr_loopback_mock::{Reply, ScriptedServer};
 
-use wiremock::matchers::any;
-use wiremock::{Mock as Reply, MockServer, Request, ResponseTemplate};
-
-/// A canned server. The library's request journal is the only record of what
-/// was served; there is no hand-rolled accept loop or response writer here.
+/// A canned server. The hit count is the only record fetch's tests read.
 pub(crate) struct Mock {
-    server: MockServer,
+    server: ScriptedServer,
 }
 
 impl Mock {
-    /// How many requests reached the server, from the library's journal.
+    /// How many requests reached the server.
     pub(crate) async fn hits(&self) -> usize {
-        self.server
-            .received_requests()
-            .await
-            .expect("the request journal is enabled")
-            .len()
+        self.server.hits()
     }
 
-    /// `http://127.0.0.1:<port>`, from the library.
+    /// `http://127.0.0.1:<port>`.
     pub(crate) fn uri(&self) -> String {
         self.server.uri()
     }
@@ -55,27 +48,13 @@ pub(crate) async fn serve_status(status: u16) -> Mock {
 
 /// The canned-response setup the two servers above share.
 ///
-/// The responder walks `bodies` in order, repeating the last one once the
-/// script runs out. The count is kept only to advance that cursor; the
-/// authoritative request log is the library's journal.
+/// The script walks `bodies` in order, repeating the last one once it runs out.
 async fn serve(status: u16, bodies: Vec<&'static str>) -> Mock {
-    let answers: Vec<Vec<u8>> = bodies
+    let replies = bodies
         .into_iter()
-        .map(|body| body.as_bytes().to_vec())
+        .map(|body| Reply::new(status, body))
         .collect();
-    assert!(
-        !answers.is_empty(),
-        "a canned server needs at least one body"
-    );
-    let cursor = Arc::new(AtomicUsize::new(0));
-    let server = MockServer::start().await;
-    let next = Arc::clone(&cursor);
-    Reply::given(any())
-        .respond_with(move |_req: &Request| {
-            let i = next.fetch_add(1, Ordering::SeqCst).min(answers.len() - 1);
-            ResponseTemplate::new(status).set_body_bytes(answers[i].clone())
-        })
-        .mount(&server)
-        .await;
-    Mock { server }
+    Mock {
+        server: ScriptedServer::start(replies),
+    }
 }

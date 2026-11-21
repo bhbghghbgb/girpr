@@ -43,10 +43,10 @@ girpr-retry = { path = "../retry" }
 girpr-util = { path = "../util" }
 
 [dev-dependencies]
-# The canned-reply loopback origin the fetch tests share. This is a local
-# helper kept deliberately separate from the product's and both capture
-# mocks: each encodes a different contract (see the four fake HTTP servers).
-wiremock = "0.6"
+# The dependency-free loopback server the canned-reply helper scripts. This
+# fetch-side helper stays local and keeps its own contract: the product's and
+# both capture mocks script different replies and read different journals.
+girpr-loopback-mock = { path = "../loopback-mock" }
 # The `#[tokio::test]` driver. `reqwest` enables the network surface in every
 # build; naming it here keeps the tests' own requirement explicit.
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }
