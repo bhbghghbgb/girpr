@@ -657,7 +657,6 @@ name = "gircap-hash"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "gircap-http",
  "girpr-digest",
  "girpr-tempdir",
  "md-5",

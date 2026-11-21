@@ -90,11 +90,11 @@ pub fn user_agent() -> String {
 
 /// The narrow view of a caller-owned file that the fetcher streams a body into.
 ///
-/// Implemented by gircap's digesting file. This crate writes through
-/// [`std::io::Write`] and calls [`BodyFile::restart`] before a retry; the owner
-/// keeps the path, the digests and the rename. Keeping the trait here means the
-/// mechanics crate depends on no gircap type while the byte path is unchanged.
-pub trait BodyFile: std::io::Write + Send {
-    /// Discard everything written so far before the next attempt starts.
-    fn restart(&mut self) -> std::io::Result<()>;
-}
+/// The trait is defined in the logic-free `girpr-digest` leaf, which both this
+/// crate and the digesting-file owner already depend on. Keeping it there lets
+/// the owner implement it without depending on this crate (and rebuilding when
+/// this crate changes); it is re-exported here so fetcher call sites keep one
+/// name. This crate writes through [`std::io::Write`] and calls
+/// [`BodyFile::restart`] before a retry; the owner keeps the path, the digests
+/// and the rename. The byte path is unchanged.
+pub use girpr_digest::BodyFile;

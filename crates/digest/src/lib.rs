@@ -21,6 +21,21 @@ pub use stream::{Algorithms, DigestBytes, Sink, hash_reader};
 
 use std::fmt;
 
+/// The narrow view of a caller-owned file that an HTTP fetcher streams a body
+/// into.
+///
+/// The owner keeps the file, the path and its digests; a fetcher only writes
+/// bytes through [`std::io::Write`] and calls [`BodyFile::restart`] before a
+/// retry. The trait lives in this logic-free leaf because both the fetcher and
+/// the digesting-file owner already depend on it: keeping it in either of those
+/// crates would make the other depend on it and rebuild whenever it changes. No
+/// program policy crosses the boundary — this is one byte-sink method, not a
+/// repair-path type.
+pub trait BodyFile: std::io::Write + Send {
+    /// Discard everything written so far before the next attempt starts.
+    fn restart(&mut self) -> std::io::Result<()>;
+}
+
 use anyhow::{Result, anyhow, bail};
 // md-5 and sha2 re-export the same `digest::Digest` trait, so one import
 // brings `digest()` into scope for both hashers.

@@ -49,8 +49,9 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # fetcher, the request log and the error-body budget. gircap depends on it
 # directly so an edit to emit/blobs/manifest leaves it cached; it owns no exit
 # code, version pair, region value, probe decision or artifact writer, depends
-# on no program crate, and invokes no binary. The digesting-file trait, the fixed
-# User-Agent and the ordered-join loop's consumers stay in this package.
+# on no program crate, and invokes no binary. The digesting-file trait lives in
+# the shared `girpr-digest` leaf (re-exported here); the fixed User-Agent and the
+# ordered-join loop's consumers stay in this package.
 # `reqwest` is a direct dependency of `gircap-http` only: gircap parses the two
 # API base overrides with the `url` crate directly, with no transport dependency.
 #
@@ -60,7 +61,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # depends on it directly so an edit to emit/blobs/manifest leaves it and its
 # native zstd tree cached. It owns no exit code, version pair, region value,
 # probe decision or artifact writer, depends on no program crate (only the
-# logic-free `girpr-digest` and `gircap-http` leaves), and invokes no binary.
+# logic-free `girpr-digest` leaf), and invokes no binary.
 # The zstd_measure/zstd_measure_from pair stays deliberately duplicated there.
 #
 # The three gircap-owned crates below (`gircap-http`, `gircap-hash`,
