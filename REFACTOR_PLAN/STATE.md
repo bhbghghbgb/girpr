@@ -12,7 +12,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Break the `girpr-tempdir → girsync` inversion | pending_review | 220ad882 | Dedicated `girpr-sync-test-support` leaf (deviation over feature/move options); §A2 payoff achieved — tempdir is tempfile-only, girpr/gircap dev graphs no longer pull girsync |
+| T01 | Break the `girpr-tempdir → girsync` inversion | completed | 220ad882 | Dedicated `girpr-sync-test-support` leaf (deviation over feature/move options); §A2 payoff achieved — tempdir is tempfile-only, girpr/gircap dev graphs no longer pull girsync; review A clean, no fixes |
 | T02 | `girpr-util` leaf crate | todo | | |
 | T03 | Cheapest product leaves batch | todo | | |
 | T04 | Writer / file-repair crate | todo | | |
@@ -36,13 +36,14 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| (none yet) | | | |
+| A | T01 | done | Checkpoint A (solo). Review clean, no fix/revert commits; §A2 payoff confirmed, all 2167 tests pass. 2 follow-ups raised |
 
 ## Follow-ups
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| (none yet) | | | |
+| FU-01 | Update `tools/sync/README.md:10` shared-crate inventory to include `girpr-sync-test-support` (fixtures no longer from `girpr-tempdir`) | open | From review A; §F39 doc-seam consistency |
+| FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md:25` | open | From review A; §F39 shared-crate inventory consistency |
 
 ## Persistent context
 
