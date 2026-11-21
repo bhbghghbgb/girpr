@@ -20,8 +20,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | HTTP + Sophon fetch crate | completed | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged. Review D clean |
 | T07 | Report plane crate | completed | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged. Review D clean |
 | T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
-| T09 | De-duplicate root `tests/common/mod.rs` inlining | pending_review | b6fe1c4d | New facade-free `girpr-test-fixtures` lib (~1400 lines); `tests/common/mod.rs` shrank 1521→~145-line shim; all 11 inline + 3 #[path] consumers unchanged; §A2 verified empirically (fixtures Fresh after repair edit). Dev: small glue (RunCtx/Limits/PathScope/RepairMode) still needs facade SCC — left for T10; §F29 counts stale |
-| T10 | Consolidate shared test seams and includes | pending_review | ee2066fd | Root facade-glue → `girpr-test-support` lib (compile-once, not rebuild-edge; T08 still SCC-blocked); artifact replay server → `girpr-test-fixtures`; gircap mock → `gircap-test-support` (independence table + manifest comment updated); girsync runner glue → sync-test-support. Six-harness merge skipped per §F32 (unfavourable trade-off). nextest filters unchanged; all suites pass |
+| T09 | De-duplicate root `tests/common/mod.rs` inlining | completed | b6fe1c4d | New facade-free `girpr-test-fixtures` lib (~1400 lines); `tests/common/mod.rs` shrank 1521→~145-line shim; all 11 inline + 3 #[path] consumers unchanged; §A2 verified empirically (fixtures Fresh after repair edit). Dev: small glue (RunCtx/Limits/PathScope/RepairMode) still needs facade SCC — left for T10; §F29 counts stale. Review E clean |
+| T10 | Consolidate shared test seams and includes | completed | ee2066fd | Root facade-glue → `girpr-test-support` lib (compile-once, not rebuild-edge; T08 still SCC-blocked); artifact replay server → `girpr-test-fixtures`; gircap mock → `gircap-test-support` (independence table + manifest comment updated); girsync runner glue → sync-test-support. Six-harness merge skipped per §F32 (unfavourable trade-off). nextest filters unchanged; all suites pass. Review E clean |
 | T11 | girsync: extract the cache crate | todo | | |
 | T12 | girsync: extract the acyclic leaves | todo | | |
 | T13 | girsync: planner + effective cycle crate | todo | | |
@@ -39,6 +39,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | A | T01 | done | Checkpoint A (solo). Review clean, no fix/revert commits; §A2 payoff confirmed, all 2167 tests pass. 2 follow-ups raised |
 | B | T02, T03 | done | Checkpoint B. Both completed; §A2 payoff confirmed empirically for util+lock; one doc-seam fix (dd8c6d13). 3 follow-ups raised |
 | D | T06, T07 | done | Checkpoint D (T08 skipped, not reviewed). Both completed, no fix/revert; §A2 payoff confirmed empirically for fetch+report, bytes/SCC/fake-servers checks pass. 4 follow-ups raised |
+| E | T09, T10 | done | Checkpoint E. Both completed, no fix/revert; public-lib + thin-shim, nextest filters, cross-tool independence, four-fake-server and §F32 skip all verified. 3 follow-ups raised |
 
 ## Follow-ups
 
@@ -53,6 +54,9 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-07 | Add `girpr-report` to the nextest crate-list comment in `.config/nextest.toml` (T06 added girpr-fetch; T07 did not add girpr-report) | open | From review D; docs-only, no filter affected |
 | FU-08 | Restore the README paragraph break around the crate inventory (report paragraph runs into the fetch sentence) | open | From review D; docs-only |
 | FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` (was `#[cfg(test)]` in facade; now public only for facade unit tests) | open | From review D |
+| FU-10 | Refresh `tools/capture/docs/02-plan.md:124` layout tree — labels `common/mod.rs` as local mock; mock now in gircap-only `test-support/`, common is a thin shim | open | From review E; remaining §F39 doc-seam gap |
+| FU-11 | Update `tools/sync/README.md:1754` — still says shared fixtures live in `tests/common/mod.rs`; now from `girpr-sync-test-support` via shim (see FU-01) | open | From review E; §F39 inventory consistency |
+| FU-12 | Revisit narrowing facade-coupled `girpr-test-support` glue — still normal-depends on full `girpr` facade; compile-once win, no rebuild edge; T08 narrow CLI tests remain blocked | open | From review E; §A2, tied to config↔repair SCC |
 
 ## Persistent context
 
