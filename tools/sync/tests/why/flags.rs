@@ -11,7 +11,7 @@ use super::*;
 /// be right while `--why` fails to reach the printer. The text is produced from
 /// the captured `Record`s by the same renderer the binary uses.
 fn bin(args: &[String]) -> (i32, String) {
-    common::run_text(args)
+    common::run_text_mem(args)
 }
 
 /// A src/dst pair with one of every difference class, so a report has something to
@@ -236,7 +236,7 @@ fn compare_self_reports_a_reason_too() {
     cmd_update(
         girsync::UpdateOpts {
             dir: dir.clone(),
-            common: common::opts(),
+            common: common::opts_mem(),
         },
         &common::log(),
     )
@@ -261,10 +261,10 @@ fn compare_self_reports_a_reason_too() {
             "--case-sensitive".to_string(),
         ];
         args.extend(extra.iter().map(|s| s.to_string()));
-        // `compare-self` reads the cache `cmd_update` wrote above. The file
-        // backend is pinned by `common::run_text`, so it sees the same file the
-        // in-process `cmd_update` wrote.
-        common::run_text(&args)
+        // `compare-self` reads the cache `cmd_update` wrote above. Both runs use
+        // the shared in-memory cache, so it sees the same rows the in-process
+        // `cmd_update` wrote.
+        common::run_text_mem(&args)
     };
     let (off_code, off) = run(&[]);
     let (on_code, on) = run(&["--why"]);

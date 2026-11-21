@@ -679,7 +679,9 @@ fn a_case_only_pair_exits_four_with_total_diff_zero() {
     wfile(&dst, "A.txt", b"identical bytes");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let out = common::run_args([
+    // Records and exit code are the subject; no cache file is asserted, so the
+    // shared in-memory backend keeps this case off the 1 MB redb file.
+    let out = common::run_args_mem([
         "compare",
         "--src",
         &src.display().to_string(),

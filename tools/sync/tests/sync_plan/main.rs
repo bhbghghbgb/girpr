@@ -70,8 +70,27 @@ use serde_json::Value;
 /// The whole CLI journey — clap, dispatch, the rename pass and the reporter — runs
 /// here, so the `rename` record (from the rename pass, not the plan builder) is
 /// still covered. The records are the ones the binary would have printed: one
-/// definition, captured from the same `Report` the process path uses.
+/// definition, captured from the same `Report` the process path uses. These cases
+/// assert records and files, so they use the shared in-memory cache backend.
 fn run(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
+    let mut args: Vec<String> = vec![
+        "sync".into(),
+        "--src".into(),
+        src.display().to_string(),
+        "--dst".into(),
+        dst.display().to_string(),
+        "--output".into(),
+        "json".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let out = common::run_args_mem(args);
+    assert_eq!(out.code, 0, "sync failed: {:?}", out.error);
+    common::values(&out)
+}
+
+/// [`run`] on the real file cache, for the one case that snapshots cache bytes
+/// to prove a dry run leaves them untouched.
+fn run_file(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
     let mut args: Vec<String> = vec![
         "sync".into(),
         "--src".into(),

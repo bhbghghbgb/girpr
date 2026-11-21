@@ -100,7 +100,7 @@ fn parallel_copies_actually_land_on_disk() {
     // A real run in-process: the point is that the files arrive, and that the
     // COPY records emitted from the rayon workers are captured too (the Arc<Mutex>
     // sink exists for exactly this case).
-    let out = common::run_args([
+    let out = common::run_args_mem([
         "sync",
         "--src",
         &src.display().to_string(),

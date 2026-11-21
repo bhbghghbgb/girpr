@@ -57,30 +57,13 @@ fn md5_in_file(path: &Path, rel: &str) -> Vec<u8> {
         .to_vec()
 }
 
-/// Run `girsync sync` in-process and return the records it reported.
-///
-/// `--output json` throughout, so what a test reads is the records a machine
-/// would parse off stdout. The alternative — matching rendered text lines —
-/// makes every case a second, quieter statement of the vocabulary.
-fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
-    let out = run_binary_raw(src, dst, extra, envs);
-    assert!(
-        out.status.success(),
-        "sync failed: {}\n{}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
-    );
-    parse_ndjson(&out.stdout)
-}
-
 /// Run `girsync sync` in-process and return its exit status, records and error
 /// string, without asserting success.
 ///
-/// `run_binary` above is the happy-path form; a case whose point is the exit
-/// code or the error text needs the raw output, because the assertion is on
-/// what was (or was not) reported. `envs` is kept in the signature for the
-/// process-based helpers below; the in-process path pins the file cache, which
-/// is what the on-disk-cache cases want anyway.
+/// A case whose point is the exit code or the error text needs the raw output,
+/// because the assertion is on what was (or was not) reported. `envs` is kept in
+/// the signature for the process-based helpers below; this in-process path keeps
+/// the file cache for the cases that read the cache file the run left.
 fn run_binary_raw(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]) -> RawRun {
     // The environment fallback keeps the runner's inherited hooks (NO_FSYNC,
     // DURABILITY) for every case that does not inject its own.
@@ -103,6 +86,59 @@ fn run_binary_raw_with_hooks(src: &Path, dst: &Path, extra: &[&str], hooks: Test
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let out = common::run_args_with_hooks(args, hooks);
+    let stdout = common::values(&out)
+        .iter()
+        .map(|r| format!("{r}\n"))
+        .collect::<String>()
+        .into_bytes();
+    let stderr = out.error.map(|e| e.into_bytes()).unwrap_or_default();
+    RawRun {
+        status: Status { code: out.code },
+        stdout,
+        stderr,
+    }
+}
+
+/// Run `girsync sync` against the shared in-memory cache, returning its records.
+///
+/// The in-memory counterpart of the raw runner, for cases that assert the
+/// records a run reported or the files it wrote rather than the `girpr-cache`
+/// file itself. `--output json` throughout, so what a test reads is the records
+/// a machine would parse off stdout.
+fn run_binary_mem(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
+    let out = run_binary_raw_mem(src, dst, extra, envs);
+    assert!(
+        out.status.success(),
+        "sync failed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    parse_ndjson(&out.stdout)
+}
+
+/// [`run_binary_raw`] against the shared in-memory cache.
+fn run_binary_raw_mem(src: &Path, dst: &Path, extra: &[&str], _envs: &[(&str, &str)]) -> RawRun {
+    run_binary_raw_with_hooks_mem(src, dst, extra, TestHooks::from_env())
+}
+
+/// [`run_binary_raw_with_hooks`] against the shared in-memory cache.
+fn run_binary_raw_with_hooks_mem(
+    src: &Path,
+    dst: &Path,
+    extra: &[&str],
+    hooks: TestHooks,
+) -> RawRun {
+    let mut args: Vec<String> = vec![
+        "sync".into(),
+        "--src".into(),
+        src.display().to_string(),
+        "--dst".into(),
+        dst.display().to_string(),
+        "--output".into(),
+        "json".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let out = common::run_args_mem_with_hooks(args, hooks);
     let stdout = common::values(&out)
         .iter()
         .map(|r| format!("{r}\n"))
@@ -318,7 +354,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
-    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let dry = run_binary_mem(&src, &dst, &["--dry-run"], &[]);
     assert!(
         !paths(&dry, "rmdir").iter().any(|p| p.starts_with("clash")),
         "the subtree is wiped by the copy, not removed by the rmdir pass: {dry:?}"
@@ -330,7 +366,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     );
 
     // And the real run agrees.
-    let real = run_binary(&src, &dst, &[], &[]);
+    let real = run_binary_mem(&src, &dst, &[], &[]);
     assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
@@ -352,7 +388,7 @@ fn a_backslash_in_a_posix_filename_stays_literal_and_the_copy_stays_under_dst() 
     // Read the plan before the real run: an absolute `/lead.txt` would copy
     // outside dst, so the dry run is where that must be caught, before a byte is
     // written anywhere.
-    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let dry = run_binary_mem(&src, &dst, &["--dry-run"], &[]);
     let copies = paths(&dry, "copy");
     assert!(copies.contains(&"\\lead.txt"), "{dry:?}");
     assert!(copies.contains(&"a\\b.txt"), "{dry:?}");
@@ -412,7 +448,7 @@ fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
     wfile(&src, "a/b/x.txt", b"x");
     wfile(&dst, "a", b"blocking file");
 
-    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let dry = run_binary_mem(&src, &dst, &["--dry-run"], &[]);
     let order: Vec<&str> = dry
         .iter()
         .filter_map(|r| r["event"].as_str())
@@ -430,7 +466,7 @@ fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
         "the dry run changes nothing: {dry:?}"
     );
 
-    let real = run_binary(&src, &dst, &[], &[]);
+    let real = run_binary_mem(&src, &dst, &[], &[]);
     assert!(
         dst.join("a").is_dir(),
         "the blocking file became a directory: {real:?}"
@@ -461,7 +497,7 @@ fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
         &["--include", "*.txt", "--dry-run"][..],
         &["--include", "*.txt"][..],
     ] {
-        let out = run_binary_raw(&src, &dst, extra, &[]);
+        let out = run_binary_raw_mem(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -519,7 +555,7 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
         &["--exclude", "b.txt"][..],
         &["--exclude", "b.txt", "--hash-all-of", "none"][..],
     ] {
-        let out = run_binary_raw(&src, &dst, extra, &[]);
+        let out = run_binary_raw_mem(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -579,7 +615,7 @@ fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
     }
 
     for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
-        let out = run_binary_raw(&src, &dst, extra, &[]);
+        let out = run_binary_raw_mem(&src, &dst, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -639,12 +675,12 @@ fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
     let dst2 = t2.subdir("dst");
     seed_dst_hard_link_pair(&src2, &dst2, "a.txt", "a.txt", "shared.txt");
 
-    let dry = run_binary(&src2, &dst2, &["--dry-run"], &[]);
+    let dry = run_binary_mem(&src2, &dst2, &["--dry-run"], &[]);
     assert_eq!(paths(&dry, "delete"), ["shared.txt"], "{dry:?}");
     assert_eq!(paths(&dry, "copy"), ["a.txt"], "{dry:?}");
     assert_eq!(rfile(&dst2, "a.txt"), b"OLD", "the dry run changed nothing");
 
-    let real = run_binary(&src2, &dst2, &[], &[]);
+    let real = run_binary_mem(&src2, &dst2, &[], &[]);
     assert_eq!(paths(&real, "delete"), ["shared.txt"], "{real:?}");
     assert_eq!(paths(&real, "copy"), ["a.txt"], "{real:?}");
     assert_eq!(rfile(&dst2, "a.txt"), b"NEW");
@@ -755,7 +791,7 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     wfile(&dst, ".girsync_case_tmp.1/keep.txt", b"KEEP");
     wfile(&dst, ".girsync_case_tmp.2", b"PRECIOUS-DIR");
 
-    let recs = run_binary(&src, &dst, &["--keep-extra"], &[]);
+    let recs = run_binary_mem(&src, &dst, &["--keep-extra"], &[]);
 
     let renames: Vec<&str> = recs
         .iter()
@@ -924,7 +960,7 @@ fn a_case_rename_of_a_very_long_name_succeeds() {
     wfile(&dst, &lower, b"payload");
     sync_mtime(&src.join(&upper), &dst.join(&lower));
 
-    let recs = run_binary(&src, &dst, &[], &[]);
+    let recs = run_binary_mem(&src, &dst, &[], &[]);
     let renames: Vec<&str> = recs
         .iter()
         .filter(|r| r["event"] == "rename")
@@ -952,7 +988,7 @@ fn a_failed_case_rename_leaves_no_record() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_with_hooks(
+    let out = run_binary_raw_with_hooks_mem(
         &src,
         &dst,
         &[],
@@ -997,7 +1033,7 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_with_hooks(
+    let out = run_binary_raw_with_hooks_mem(
         &src,
         &dst,
         &[],
@@ -1046,7 +1082,7 @@ fn a_failed_case_rename_step2_rolls_back() {
     wfile(&dst, "data.txt", b"payload");
     sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
 
-    let out = run_binary_raw_with_hooks(
+    let out = run_binary_raw_with_hooks_mem(
         &src,
         &dst,
         &[],
@@ -1098,7 +1134,7 @@ fn a_dst_file_link_at_a_src_directory_is_replaced_not_refused() {
         common::file_link(&outside.join("target.txt"), &dst.join("a"))
     );
 
-    let recs = run_binary(&src, &dst, &[], &[]);
+    let recs = run_binary_mem(&src, &dst, &[], &[]);
 
     assert_eq!(paths(&recs, "fix-dir"), ["a"], "{recs:?}");
     assert_eq!(paths(&recs, "mkdir"), ["a/b"], "{recs:?}");
@@ -1219,7 +1255,7 @@ fn a_copied_file_carries_the_sources_timestamp() {
     // Both flush shapes are asked for explicitly through the injected hook,
     // rather than by setting a process-global variable on a child.
     for no_fsync in [false, true] {
-        let out = run_binary_raw_with_hooks(
+        let out = run_binary_raw_with_hooks_mem(
             &src,
             &dst,
             &[],
@@ -1770,7 +1806,7 @@ fn run_sync_refuses_nested_roots_before_touching_anything() {
     wfile(&sub, "x.txt", b"SRC-SUB-X");
 
     for extra in [&[][..], &["--dry-run"][..]] {
-        let out = run_binary_raw(&root, &sub, extra, &[]);
+        let out = run_binary_raw_mem(&root, &sub, extra, &[]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -1784,7 +1820,7 @@ fn run_sync_refuses_nested_roots_before_touching_anything() {
         );
     }
 
-    let out = run_binary_raw(&sub, &root, &[], &[]);
+    let out = run_binary_raw_mem(&sub, &root, &[], &[]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -1808,7 +1844,7 @@ fn run_sync_refuses_nested_roots_before_touching_anything() {
 
     // Component-wise containment, not a string prefix: `root2` is a sibling.
     let sibling = t.subdir("root2");
-    let out = run_binary_raw(&root, &sibling, &[], &[]);
+    let out = run_binary_raw_mem(&root, &sibling, &[], &[]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -1904,7 +1940,7 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     wfile(&src, "mmm.bin", b"fails first");
     wfile(&src, "zzz.bin", b"the control");
 
-    let out = run_binary_raw_with_hooks(
+    let out = run_binary_raw_with_hooks_mem(
         &src,
         &dst,
         &["--rw-threads", "2"],
@@ -1968,7 +2004,7 @@ fn a_reported_copy_failure_is_the_copy_and_the_cause() {
     let dst = t.subdir("dst");
     wfile(&src, "mmm.bin", b"payload");
 
-    let out = run_binary_raw_with_hooks(
+    let out = run_binary_raw_with_hooks_mem(
         &src,
         &dst,
         &[],
@@ -2034,7 +2070,7 @@ fn run_sync_refuses_case_only_spellings_of_one_root() {
     wfile(&root, "a.txt", b"payload");
     let upper = t.subdir("ROOT");
 
-    let out = run_binary_raw(&root, &upper, &[], &[]);
+    let out = run_binary_raw_mem(&root, &upper, &[], &[]);
     assert_eq!(
         out.status.code(),
         Some(3),

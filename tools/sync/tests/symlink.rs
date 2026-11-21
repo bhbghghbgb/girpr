@@ -53,7 +53,9 @@ impl Status {
 
 /// Run `girsync sync` in-process and capture what a spawned binary would have
 /// written: the records on stdout and the `fatal` error string on stderr. The
-/// whole CLI journey — clap, dispatch, the plan guards — still runs.
+/// whole CLI journey — clap, dispatch, the plan guards — still runs. These cases
+/// assert records and filesystem state, never the cache file, so they use the
+/// shared in-memory cache backend.
 fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> RawRun {
     let mut args: Vec<String> = vec![
         "sync".into(),
@@ -65,7 +67,7 @@ fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> RawRun {
         "json".into(),
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
-    let out = common::run_args(args);
+    let out = common::run_args_mem(args);
     let records = common::values(&out);
     let stdout = records
         .iter()

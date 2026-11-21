@@ -62,7 +62,7 @@ fn sync_reports_the_diff_as_its_plan_before_it_acts() {
 fn sync_still_exits_zero_with_a_non_empty_plan() {
     let t = temp_root("plan_exit");
     let (src, dst) = build(&t);
-    let out = common::run_args([
+    let out = common::run_args_mem([
         "sync",
         "--src",
         &src.display().to_string(),

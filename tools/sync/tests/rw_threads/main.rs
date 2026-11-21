@@ -213,15 +213,14 @@ fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
     run_env(args, &[])
 }
 
-/// Like [`run`], in-process. `extra` used to put the child on the in-memory
-/// cache; the actions a run reports do not depend on the cache's storage
-/// backend, and the shared helper pins the file backend for every run, so the
-/// equivalence under test is unaffected.
+/// Like [`run`], in-process, on the shared in-memory cache. The actions a run
+/// reports do not depend on the cache's storage backend, so moving these cases
+/// off the file-backed redb cache leaves the equivalence under test unchanged.
 fn run_env(args: &[&str], _extra: &[(&str, &str)]) -> (i32, Vec<serde_json::Value>) {
     let mut argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     argv.push("--output".into());
     argv.push("json".into());
-    let out = common::run_args(argv);
+    let out = common::run_args_mem(argv);
     (out.code, common::values(&out))
 }
 

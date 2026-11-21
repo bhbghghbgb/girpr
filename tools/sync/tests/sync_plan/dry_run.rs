@@ -30,7 +30,10 @@ fn dry_run_changes_nothing() {
     let before = snapshot(&src);
     let dst_before = snapshot(&dst);
 
-    let _ = run(&src, &dst, &["--dry-run"]);
+    // The cache file is the subject here: `cmd_update` wrote real file caches
+    // and the snapshot below compares their bytes, so keep this run on the file
+    // backend while the rest of the suite uses the shared in-memory cache.
+    let _ = run_file(&src, &dst, &["--dry-run"]);
 
     assert_eq!(snapshot(&src), before, "src is byte-identical");
     assert_eq!(

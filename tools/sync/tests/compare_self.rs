@@ -158,7 +158,10 @@ fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
 /// the same argv the binary took keeps `--case-sensitive` defaulting to **off**,
 /// so this is insensitive mode.
 fn records(dir: &Path) -> Vec<serde_json::Value> {
-    let out = common::run_args([
+    // This one case asserts the records a `compare-self` run reported, not the
+    // cache file. Its fixture warms with `update_mem` so the rows `recs_of` reads
+    // are the same shared in-memory entry this run sees.
+    let out = common::run_args_mem([
         "compare-self",
         "--dir",
         &dir.display().to_string(),
@@ -203,7 +206,7 @@ fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched
     let t = temp_root("cs_case");
     let dir = t.subdir("w");
     wfile(&dir, "case.txt", b"payload");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     let before = recs_of(&dir);
 
     // A rename on disk plus a same-length rewrite, with the stat put back, so the
