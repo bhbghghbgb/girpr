@@ -50,6 +50,12 @@ pub use run_lock::{
     remove_run_lock_for_args,
 };
 
+// A second, deliberately distinct fake HTTP server: the artifact-bundle replay
+// server the bridge tests use. It shares nothing with the offline mock above —
+// different routes, different request log, different contract — and lives here
+// only so the two binaries that need it compile it once behind thin shims.
+pub mod artifact_server;
+
 // ---------------------------------------------------------------------------
 // small facade-free helpers used by the fixture builders and their callers
 // ---------------------------------------------------------------------------

@@ -45,7 +45,9 @@ machine rather than the code.
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
-| `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock` |
+| `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
+| `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
+| `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
 | `crates/report/` | run counters + every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -69,11 +71,11 @@ machine rather than the code.
 | `crates/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
-| `tests/common/mod.rs` | mock server + the fixture *description* | `MockServer`, `FixtureSpec`, `build_fixture_spec`, `MockOpts` |
+| `tests/common/mod.rs` | thin shims over the two shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
 | `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | one case per decision (D1–D9) |
 | `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, one test per capture |
 | `tests/artifact_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
-| `tests/artifact_bridge/server.rs` | the loopback replay server | `Bridge`, `Bundle`, `Hit` |
+| `crates/test-fixtures/src/artifact_server.rs` | the loopback replay server, a module distinct from the offline mock and reached through one-line `use` shims | `Bridge`, `Bundle`, `Hit` |
 | `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | one case per route family |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
@@ -450,8 +452,12 @@ into the repair binary's or `gircap`'s test builds. This package's integration
 fixtures — the offline HoYoPlay/Sophon mock, the manifest/chunk builders and
 the run-lock cleanup — live in `crates/test-fixtures/`, reached through thin
 shims under `tests/common/`; the crate borrows only narrow leaves, never the
-repair facade, so a repair edit leaves the mock cached. None of the shared
-crates carries a program's flags, exit-code values or published shapes.
+repair facade, so a repair edit leaves the mock cached. The facade-coupled run
+glue that builds a `RunCtx` and drives the pipeline lives in
+`crates/test-support/`, and gircap's independent mock lives in the gircap-only
+`tools/capture/test-support/`; both are reached through thin per-binary shims so
+each compiles once instead of being inlined into every test binary. None of the
+shared crates carries a program's flags, exit-code values or published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is
@@ -546,12 +552,13 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   Test allowances stay in the code. On this toolchain (clippy 0.1.99 / rustc
   1.99.1) `clippy.toml`'s `allow-unwrap-in-tests` and `allow-expect-in-tests`
   exempt only code inside a `#[cfg(test)]` module or a `#[test]` function. The
-  shared helpers in `tests/common/mod.rs` are ordinary functions compiled into
-  every integration target, so the options miss them, while a crate-level
-  `allow` at the target root covers that whole module tree; the library's
-  `#[cfg_attr(test, allow(...))]` covers its unit tests without a second lint
-  policy file. Re-test the options before moving these allowances to a config
-  file.
+  shared helpers now live in library crates (`crates/test-fixtures`,
+  `crates/test-support`, `tools/capture/test-support`), where each crate's own
+  `allow` covers them; only the tiny binary-runner shim in `tests/common/mod.rs`
+  is still compiled straight into every integration target, and its target-root
+  `allow` covers that module tree. The library's `#[cfg_attr(test, allow(...))]`
+  covers its unit tests without a second lint policy file. Re-test the options
+  before moving these allowances to a config file.
 
 - **The three dev tools opt into a smaller lint subset.** `girsync`, `gircap`
   and `sled2redb` set `[lints.rust] unsafe_code = "deny"` and
@@ -649,7 +656,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   the trace log's download records agree with the server's request log). They
   run the **real binary** against the mock, because several of those decisions
   are only visible on the `--output json` records.
-  The fixtures are **described**, not hardcoded: `tests/common/mod.rs` takes a
+  The fixtures are **described**, not hardcoded: `crates/test-fixtures` takes a
   `FixtureSpec` — the new side, the old side and the bytes on disk — so a
   uniform shift, a mixed shift, a shrinking file, a file with a hole in its
   coverage and a path with a space in it are all a description rather than a

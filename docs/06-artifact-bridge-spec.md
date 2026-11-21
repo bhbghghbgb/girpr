@@ -112,31 +112,31 @@ nothing about the surface.
 | `src/bin/*.rs` | same discovery problem, inside the shipping package |
 | feature-gated test (`#![cfg(feature)]`) | a broken bridge would stop compiling with no default build noticing; compile-time coverage of the harness is worth more than a few hundred lines of test compilation |
 
-### 2.1 The server is its own module
+### 2.1 The server is its own library module
 
 ```rust
 // tests/artifact_bridge.rs
-#[path = "artifact_bridge/server.rs"]
-mod server;
+use girpr_test_fixtures::artifact_server as server;
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
 ```
 
-That `#[path]` is **required**, not decorative. For a crate root at
-`tests/artifact_bridge.rs`, `mod server;` resolves relative to `tests/` — so it
-looks for `tests/server.rs` or `tests/server/mod.rs`, and
-`tests/artifact_bridge/server.rs` is not on that path. Both alternatives fail
-with `E0583: file not found for module 'server'`.
+The replay server used to be a `#[path = "artifact_bridge/server.rs"] mod server;`
+in both this binary and `tests/artifact_server.rs`, compiling the several-hundred-
+line module into each. It now lives once in
+`crates/test-fixtures/src/artifact_server.rs` as a public library module, reached
+through a one-line `use` shim in both binaries so the replay mechanics compile
+once. The `#[path]` on `bundle.rs` stays: that module has only one consumer, so
+there is nothing to share it with.
 
-The point of the module being its own is compilation isolation: `mod server;` in
-`repair_offline.rs` or `cli_contract.rs` would put a several-hundred-line replay
-server into both of those compilation units, where it would be recompiled on
-every change to either and whose warnings would land on files that do not use it.
-`tests/common/` is already shared by those two, which is fine — it is a mock, and
-it is small. This one is not small and neither test wants it.
+The server remains a **distinct** fake HTTP server from the offline HoYoPlay/
+Sophon mock in the same crate — different route family, different request log,
+different contract — and shares no code with it. Keeping it a library module (not
+an inlined `mod server;`) is what keeps it out of `repair_offline.rs` and
+`cli_contract.rs`, which never want a replay server in their compilation units.
 
-**The split is a split of concerns, not of convenience.** `server.rs` knows the
-**routes**: it serves bytes and answers requests. `bundle.rs` knows the
+**The split is a split of concerns, not of convenience.** `artifact_server` knows
+the **routes**: it serves bytes and answers requests. `bundle.rs` knows the
 **records**: it reads the matrix and the patchmaps. The server's own tests
 (`tests/artifact_server.rs`) run against a synthetic mini-bundle and must not
 depend on the reader — so the reader is not what they use.

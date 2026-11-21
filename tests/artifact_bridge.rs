@@ -106,19 +106,16 @@
 
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
-#[path = "common/digest.rs"]
-mod digest;
 #[path = "common/run_lock.rs"]
 mod run_lock;
-#[path = "artifact_bridge/server.rs"]
-mod server;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
-use digest::md5hex;
 use girpr_tempdir::TempDir;
+use girpr_test_fixtures::artifact_server as server;
+use girpr_test_fixtures::md5hex;
 use server::{Bridge, Bundle, Origins};
 
 // ---------------------------------------------------------------------------

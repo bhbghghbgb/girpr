@@ -1,11 +1,13 @@
 //! The loopback replay server.
 //!
-//! Spec: [`docs/06-artifact-bridge-spec.md`](../../../docs/06-artifact-bridge-spec.md)
+//! Spec: [`docs/06-artifact-bridge-spec.md`](../../../../docs/06-artifact-bridge-spec.md)
 //! §4. This module is reached from `tests/artifact_bridge.rs` (the cross-tool
-//! claim) and from `tests/artifact_server.rs` (the server's own tests), and
-//! from nowhere else: `mod server;` in `repair_offline.rs` / `cli_contract.rs`
-//! would put a several-hundred-line replay server into both of those
-//! compilation units for tests that never use it.
+//! claim) and from `tests/artifact_server.rs` (the server's own tests), through
+//! thin `use girpr_test_fixtures::artifact_server as server;` shims, so the
+//! several-hundred-line replay server compiles once instead of being inlined
+//! into both binaries. It is deliberately a module of its own, with its own
+//! route family and request log: it is a different fake HTTP server from the
+//! offline HoYoPlay/Sophon mock in this crate's root, and the two stay distinct.
 //!
 //! **What it does.** Opens one `gircap` artifact bundle **read-only** and serves
 //! its bytes on ephemeral `127.0.0.1` ports, so the real `girpr` binary can be
@@ -60,7 +62,7 @@
 //!
 //! **What this module does not know about.** The bundle's *records* — the
 //! capture matrix and the patchmaps — are read by
-//! [`bundle`](super::bundle), which is the artifact suite's business. The
+//! `bundle` module in `tests/artifact_bridge.rs`, the artifact suite's business. The
 //! server serves bytes and answers routes; it does not know what a patch is.
 
 // The module is reached from two test binaries and each of them uses a
@@ -134,7 +136,7 @@ impl std::fmt::Display for Hit {
 ///
 /// This is the **fixture** half of a bundle: the versions, the API bodies and
 /// the blobs. The bundle's *records* — the capture matrix and the patchmaps —
-/// are read by [`bundle`](super::bundle), and the server does not need them:
+/// are read by the artifact suite's `bundle` module, and the server does not need them:
 /// it serves bytes and answers routes.
 ///
 /// Nothing in this struct is a cache of a live server: every path points into
@@ -773,7 +775,7 @@ fn xml_escape(s: &str) -> String {
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    super::digest::md5hex(key.as_bytes())
+    crate::md5hex(key.as_bytes())
         .to_uppercase()
         .chars()
         .take(24)

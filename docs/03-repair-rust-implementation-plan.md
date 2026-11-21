@@ -24,6 +24,7 @@ src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log
 crates/log/           # the shared log policy: log file path, log levels, env vars (also used by tools/)
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
 crates/test-fixtures/ # facade-free offline HoYoPlay/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
+crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
 crates/report/src/    # Summary/Meter/StoppedBy counters + REPORT / PROGRESS / SUMMARY formatting and emission, phase timer
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
@@ -45,7 +46,9 @@ src/repair/audio.rs   # audio scan-file read/write + effective selection
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
 tests/artifact_bridge.rs  # the bundle-backed end-to-end suite (docs/06)
-tests/common/mod.rs       # mock HoYoPlay+Sophon server and the deterministic fixtures
+tests/common/mod.rs       # thin shims over the shared test libraries below
+crates/test-fixtures/     # facade-free offline mock, artifact replay server and deterministic fixtures
+crates/test-support/      # facade-coupled run glue (RunCtx construction, pipeline driver)
 ```
 
 No build.rs (prost `derive` only, no protoc). No SQLite, no GUI, no speed limiter.
@@ -114,7 +117,8 @@ Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fix
   REPORT/PROGRESS/SUMMARY formatting, HoYoPlay wrapper and int-or-string parsing.
 - **Integration tests** (`tests/repair_offline.rs`): one `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`
-  on `127.0.0.1:<ephemeral>` (`tests/common/mod.rs`) injected through
+  on `127.0.0.1:<ephemeral>` (`crates/test-fixtures`, reached through the thin
+  `tests/common/mod.rs` shim) injected through
   `RunCtx::hyp_base_override` / `sophon_base_override`. Covers repair, check-only
   clean/dirty, dry-run, both purge timings, deprecated deletes, the non-chunk
   `default_download_mode` refusal, the per-launcher channel on the deprecated

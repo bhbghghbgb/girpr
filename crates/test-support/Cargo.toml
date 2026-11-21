@@ -1,0 +1,24 @@
+[package]
+name = "girpr-test-support"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The facade-coupled run glue shared by the girpr integration tests"
+
+[lib]
+name = "girpr_test_support"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The run pipeline and the config types a test builds a `RunCtx` from. This is
+# a test-only inversion: the glue depends on the facade so the ~120 lines that
+# construct a run and drive it compile once, instead of being inlined by
+# `mod common;` into every integration binary. Nothing that ships links it.
+girpr = { path = "../.." }
+# The facade-free mock/fixture mechanics the glue composes with (the lock
+# cleanup a real run leaves behind). Kept separate so a product edit still
+# leaves the bulk fixture crate cached.
+girpr-test-fixtures = { path = "../test-fixtures" }

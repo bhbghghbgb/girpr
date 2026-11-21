@@ -1,0 +1,38 @@
+[package]
+name = "gircap-test-support"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The self-contained offline capture mock and fixture builders shared by the gircap integration tests"
+
+[lib]
+name = "gircap_test_support"
+path = "src/lib.rs"
+
+# The same tools-only policy gircap itself uses: the mock asserts with
+# `unwrap`/`expect` throughout, so the workspace's `unwrap_used`/`expect_used`
+# warnings would be noise for a test-only crate.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+# A test-only inversion: the mock drives gircap's own public run/HTTP seams so it
+# agrees with the code under test by construction, never by borrowing the repair
+# binary's mock (docs/00-spec.md §2: no shared fixtures, no coupling).
+gircap = { path = ".." }
+# The scratch-directory policy, shared with the other two programs' tests only
+# as a naming/cleanup leaf; no program logic crosses with it.
+girpr-tempdir = { path = "../../../crates/tempdir" }
+# The shared bundle is published under a cross-process file lock; every test
+# process must agree on the one on-disk tree.
+fs2 = "0.4.3"
+serde_json = "1.0.154"
+# The canned manifest bodies are protobuf frames the mock encodes by hand.
+prost = "0.14.6"
+# `block_on` drives gircap's async command dispatch on a current-thread runtime.
+tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
+# Chunk and manifest bodies are zstd frames on the wire.
+zstd = "0.14.4"

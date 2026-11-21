@@ -35,6 +35,11 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects).
+#
+# The offline mock is **not** a twelfth shared leaf: `gircap-test-support` below
+# is a gircap-only dev library that inverts onto this package's public seams. It
+# borrows nothing from the repair binary, so the "no shared fixtures" rule in
+# docs/00-spec.md §2 is unchanged.
 
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for
@@ -160,6 +165,11 @@ serde_json = "1.0.154"
 # bundle once and then all read the same on-disk tree. Already in the lock file
 # through `sled`; no new dependency is fetched.
 fs2 = "0.4.3"
+# The self-contained offline capture mock and fixture builders, reached through
+# the thin `tests/common/mod.rs` shim so they compile once for all integration
+# binaries. A gircap-only dev library: it depends on this package's public
+# seams, not on the repair binary's mock.
+gircap-test-support = { path = "test-support" }
 # The scratch-directory helper, shared with the repair binary and with
 # `girsync`: one name, one construction and one cleanup for every test in the
 # workspace. A dev-dependency, because nothing that ships creates a scratch

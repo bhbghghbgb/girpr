@@ -22,15 +22,10 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "artifact_bridge/server.rs"]
-mod server;
-
-#[path = "common/digest.rs"]
-mod digest;
-
 use std::path::{Path, PathBuf};
 
 use girpr_tempdir::TempDir;
+use girpr_test_fixtures::artifact_server as server;
 use server::{Bridge, Bundle, HitKind};
 
 // ---------------------------------------------------------------------------

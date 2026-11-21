@@ -684,6 +684,7 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "gircap-test-support",
  "girpr-audio-language",
  "girpr-cli",
  "girpr-digest",
@@ -713,6 +714,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gircap-test-support"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "gircap",
+ "girpr-tempdir",
+ "prost",
+ "serde_json",
+ "tokio",
+ "zstd",
+]
+
+[[package]]
 name = "girpr"
 version = "0.1.0"
 dependencies = [
@@ -736,6 +750,7 @@ dependencies = [
  "girpr-retry",
  "girpr-tempdir",
  "girpr-test-fixtures",
+ "girpr-test-support",
  "girpr-util",
  "prost",
  "reqwest",
@@ -891,9 +906,12 @@ dependencies = [
 name = "girpr-sync-test-support"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "girpr-tempdir",
  "girsync",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -917,6 +935,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "zstd",
+]
+
+[[package]]
+name = "girpr-test-support"
+version = "0.1.0"
+dependencies = [
+ "girpr",
+ "girpr-test-fixtures",
 ]
 
 [[package]]

@@ -20,7 +20,8 @@ Which gate to reach for is in
 ## 1. What is compared
 
 A bundle is captured twice from one commit, against the crate's own loopback
-mock (`tests/common/mod.rs`, `World::all_shapes()`). Each capture is walked,
+mock (the gircap-only `test-support/` library, reached through the thin
+`tests/common/mod.rs` shim as `common::World::all_shapes()`). Each capture is walked,
 every file read, and:
 
 | step | what |
