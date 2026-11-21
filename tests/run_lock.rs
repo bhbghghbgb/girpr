@@ -14,8 +14,8 @@
 mod run_lock;
 
 use clap::{CommandFactory, Parser};
-use girpr::test_support::{Lock, lock_path, takes_lock};
 use girpr::{Args, RunCtx};
+use girpr_lock::{Lock, lock_path, takes_lock};
 use girpr_tempdir::TempDir;
 use run_lock::{
     args_take_lock, game_path_arg, lock_key_path, mode_takes_lock, remove_run_lock,

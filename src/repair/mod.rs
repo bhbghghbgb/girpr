@@ -40,7 +40,6 @@
 
 mod audio;
 mod file;
-pub mod lock;
 pub mod phases;
 pub mod purge;
 pub mod reuse;
@@ -58,6 +57,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use anyhow::Context;
+
+// The single-writer lock lives in its own leaf crate, so a repair-phase edit
+// leaves it cached and a lock-only test target can skip the product facade.
+use girpr_lock as lock;
 
 use crate::config::{RunCtx, RunExit, RunFailure};
 use crate::hyp::HypClient;

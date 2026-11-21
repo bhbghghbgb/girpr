@@ -385,13 +385,11 @@ fn field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
-    use crate::util::symlink_support::require_symlink;
+    use girpr_util::symlink_support::require_symlink;
     #[cfg(unix)]
-    use crate::util::symlink_support::{
-        require_symlink, symlink_fixture_decision, try_symlink_dir,
-    };
+    use girpr_util::symlink_support::{require_symlink, symlink_fixture_decision, try_symlink_dir};
+    use girpr_util::test_support::FixtureRefusal;
 
     /// Removes a lock file when the case ends.
     ///
@@ -712,7 +710,7 @@ mod tests {
             // cannot make the link. Anything else is a broken environment and
             // must fail rather than pass having checked nothing.
             if matches!(e.raw_os_error(), Some(1314) | Some(1201)) {
-                crate::test_support::skip_fixture_refusal(
+                girpr_util::test_support::skip_fixture_refusal(
                     FixtureRefusal::Host,
                     "a file symlink",
                     "GIRPR_TEST_REQUIRE_SYMLINK",

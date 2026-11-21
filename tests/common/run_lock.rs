@@ -11,7 +11,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use girpr::test_support::{Lock, lock_path};
+use girpr_lock::{Lock, lock_path};
 
 /// The spelling whose canonical form names the run's lock key.
 ///

@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -109,6 +109,11 @@ girpr-fs-names = { path = "crates/fs-names" }
 # leaf owns the platform wrappers and the error/option shapes; the guard here
 # keeps its own fail-closed policy and its no-follow path check.
 girpr-fs-identity = { path = "crates/fs-identity" }
+# The single-writer run lock. It lives in its own crate so a repair-phase edit
+# leaves it cached, and a lock-only integration test can depend on the lock
+# directly instead of linking this whole facade. The lock policy and its FNV
+# key are unchanged; the leaf owns only the file/identity mechanics it reads.
+girpr-lock = { path = "crates/lock" }
 # The low-level scan/hash/path/ini/atomic mechanics. They live in their own
 # crate so an edit to the repair, report or CLI modules above leaves them
 # cached; this binary (and every test that links it) depends on the crate

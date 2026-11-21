@@ -395,7 +395,7 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// bookkeeping. The lock is the other root-level file that is not in the
 /// manifest: older runs wrote `girpr.lock` there, and a leftover is preserved
 /// rather than deleted behind the user's back. The run's own lock lives
-/// outside the install ([`crate::repair::lock`]), so a live run never depends
+/// outside the install ([`girpr_lock`]), so a live run never depends
 /// on this rule; it exists only for the legacy file.
 ///
 /// Everything else in this set's sense (exe, res-category / audio-scan
@@ -429,7 +429,7 @@ pub fn keep_set() -> &'static HashSet<String> {
             // it is not in the manifest. A leftover must not be eaten by the
             // sweep: this run's lock is outside the install, so the keep rule
             // preserves the legacy file without carrying its exclusion.
-            crate::repair::lock::LOCK_FILE.to_string(),
+            girpr_lock::LOCK_FILE.to_string(),
         ])
     })
 }
@@ -870,7 +870,7 @@ mod tests {
             ("game.dat", &open, PurgeVerdict::Keep),
             ("dir/manifest.dat", &open, PurgeVerdict::Keep),
             ("config.ini", &open, PurgeVerdict::Keep),
-            (crate::repair::lock::LOCK_FILE, &open, PurgeVerdict::Keep),
+            (girpr_lock::LOCK_FILE, &open, PurgeVerdict::Keep),
             ("mods/blacklisted.dat", &open, PurgeVerdict::Keep),
             ("audio_lang_14", &open, PurgeVerdict::Keep),
             ("Audio_English_pkg_version", &open, PurgeVerdict::Keep),
@@ -1146,7 +1146,7 @@ mod tests {
         // outside the install.
         let keep = keep_set();
         assert!(keep.contains("config.ini"));
-        assert!(keep.contains(crate::repair::lock::LOCK_FILE));
+        assert!(keep.contains(girpr_lock::LOCK_FILE));
         assert_eq!(keep.len(), 2);
     }
 

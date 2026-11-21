@@ -1,7 +1,8 @@
 # The workspace's test runner.
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
-# `girpr-util`, `girpr-log`, `girpr-tempdir`, `gircap`, `girsync` and `sled2redb`.
+# `girpr-lock`, `girpr-util`, `girpr-log`, `girpr-tempdir`, `gircap`, `girsync`
+# and `sled2redb`.
 # This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
@@ -167,8 +168,20 @@ filter = """
     and (
         test(=repair::scope::report::tests::publishing_over_a_symlink_replaces_the_link_not_its_target)
         or test(=repair::file::tests::a_symlink_resolves_to_the_temp_mode)
-        or test(=repair::lock::tests::a_preexisting_symlink_target_is_not_truncated)
-        or test(=repair::lock::tests::a_path_swapped_after_open_is_not_written_through_the_old_handle)
+    )
+"""
+success-output = "immediate"
+
+# The two lock cases moved with the single-writer lock into its own crate, so
+# they now live in `girpr-lock`'s own binary under the shorter `tests::` path.
+# The binary and package are pinned for the same reason as the groups above.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr-lock)
+    and binary(=girpr_lock)
+    and (
+        test(=tests::a_preexisting_symlink_target_is_not_truncated)
+        or test(=tests::a_path_swapped_after_open_is_not_written_through_the_old_handle)
     )
 """
 success-output = "immediate"

@@ -117,7 +117,6 @@ pub mod test_support {
 
     pub use crate::config::RepairMode;
     pub use crate::hyp::terminal_retcode;
-    pub use crate::repair::lock::{Lock, lock_path, takes_lock};
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
     pub use crate::retry::BackoffPolicy;
@@ -126,6 +125,7 @@ pub mod test_support {
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };
     pub use crate::util::EMPTY_MD5;
+    pub use girpr_lock::{Lock, lock_path, takes_lock};
 
     // One refusal type across the product's tests and the util crate's
     // unit-test-only fixture helpers, so a test can pass its seam value

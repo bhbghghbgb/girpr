@@ -1,0 +1,30 @@
+[package]
+name = "girpr-lock"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The single-writer run lock and its key policy, shared by the product and its integration tests"
+
+[lib]
+name = "girpr_lock"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+# The RFC 3339 `started` field in the lock body names the run to look at.
+chrono = "0.4.45"
+# The link-count and file-identity facts the no-follow body guard reads. This
+# crate keeps its own fail-closed policy; the leaf owns only the platform facts.
+girpr-fs-identity = { path = "../fs-identity" }
+
+[dev-dependencies]
+# The scratch dirs the lock tests take two locks in without touching the global
+# temp directory's key namespace.
+girpr-tempdir = { path = "../tempdir" }
+# The fixture refusal type and the symlink classifiers the host-dependent lock
+# cases use, so a host that cannot create a link skips out loud. The feature is
+# off in shipped builds.
+girpr-util = { path = "../util", features = ["test-support"] }

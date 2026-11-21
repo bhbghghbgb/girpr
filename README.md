@@ -42,6 +42,7 @@ machine rather than the code.
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
+| `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
@@ -57,7 +58,6 @@ machine rather than the code.
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
-| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics over the shared `girpr-filter` rules (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
@@ -419,8 +419,12 @@ identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
 glob-filter rules to this binary and `girsync`, pinning one glob version and one
-set of matching rules for both. All four share the test-only scratch-directory
-policy in `crates/tempdir/`, whose `test_support` holds only program-free
+set of matching rules for both. `crates/lock/` holds this binary's single-writer
+run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
+repair and the lock-only integration tests depend on it directly, while the dev
+tools never take it, so a repair edit leaves the lock cached. All four share the
+test-only scratch-directory policy in `crates/tempdir/`, whose `test_support`
+holds only program-free
 fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
 `crates/sync-test-support/` and are taken only by `girsync` and `sled2redb`,
 which already depend on girsync — so a scratch directory never drags girsync
