@@ -10,7 +10,7 @@
 //! crate supplies the spelling and the fixed-width mechanics they share — it
 //! is deliberately not a single semantic `Digest` type used by all three.
 //!
-//! [`stream`] adds the byte-absorbing sink shared by the three programs' hash
+//! The `stream` module adds the byte-absorbing sink shared by the three programs' hash
 //! readers and writers. It runs a caller-chosen set of algorithms and yields
 //! raw digest bytes; byte ceilings, accepted-byte rules and restart policies
 //! stay with each owner.

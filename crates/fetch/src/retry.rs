@@ -3,9 +3,9 @@
 //! The caller owns the classifier — a retcode table, an HTTP status rule, a
 //! file-level failure — and answers [`Retry`] (or [`RetryState`], when work must
 //! be carried across attempts) per attempt. This module maps a transient answer
-//! onto a wait from the [`Schedule`](girpr_retry::Schedule) and a fatal answer
+//! onto a wait from the [`Schedule`] and a fatal answer
 //! onto an immediate return, then drives the attempts itself so the wait goes
-//! through the injected [`Sleep`](girpr_retry::Sleep) hook.
+//! through the injected [`Sleep`] hook.
 //!
 //! A retry may need to keep work across attempts (a scratch buffer, a byte
 //! counter, a partially written file). [`RetryState`] and [`retry_state`] hand

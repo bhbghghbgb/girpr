@@ -22,7 +22,7 @@ workspace = true
 girsync = { path = "../../tools/sync" }
 serde_json = "1.0.154"
 # The in-process CLI runner glue parses argv through clap's `Parser` trait.
-clap = "4.6.8"
+clap = "4.6.9"
 # The logged runner installs girsync's subscriber and renders the console into a
 # shared buffer, so it names `tracing`/`tracing-subscriber` directly. These are
 # already in girsync's graph; naming them here only makes the dependency real.

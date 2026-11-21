@@ -540,7 +540,7 @@ pub fn run_cli_with_hooks(cli: Cli, hooks: TestHooks) -> RunOutcome {
 }
 
 /// Parse arguments (as passed to `Command::args`, without a program name) and
-/// run the CLI in-process. The binary name is supplied as argv[0] for clap.
+/// run the CLI in-process. The binary name is supplied as `argv[0]` for clap.
 #[allow(dead_code)]
 pub fn run_args<I, S>(args: I) -> RunOutcome
 where

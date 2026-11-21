@@ -38,7 +38,7 @@ expect_used = "warn"
 workspace = true
 
 [dependencies]
-clap = { version = "4.6.8", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 chrono = "0.4.45"
 # The log-file and log-level policy, shared with the two dev tools so that
 # `--log-file`, the env vars and the default levels mean the same thing in
@@ -101,7 +101,7 @@ anyhow = "1.0.104"
 # `backoff` and the ±50 % jitter is this program's choice, passed in as a
 # parameter, so its retry waits stay exactly as before.
 girpr-retry = { path = "crates/retry" }
-walkdir = "2.5.0"
+walkdir = "2.5.1"
 # The shared --include/--exclude glob rules, used by this crate's repair scope
 # and by girsync. One glob version and one set of matching rules for both.
 girpr-filter = { path = "crates/filter" }

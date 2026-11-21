@@ -28,7 +28,7 @@ use std::path::Path;
 /// code: `symlink(2)` on Unix and `CreateSymbolicLinkW` on Windows. A
 /// platform with neither call refuses with an `Unsupported` error of its own,
 /// which carries no raw code and is the one refusal
-/// [`platform_cannot_create_symlinks`] can name.
+/// `platform_cannot_create_symlinks` can name.
 ///
 /// A junction is not a symlink and needs no privilege, so this is the
 /// directory-symlink fixture only: the junction support owns that one.

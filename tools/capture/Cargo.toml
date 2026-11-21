@@ -102,7 +102,7 @@ gircap-http = { path = "http" }
 # gzip threshold flag, the report bytes and every call site here; it depends on
 # no program crate and invokes no binary (docs/00-spec.md §2).
 gircap-hash = { path = "hash" }
-clap = { version = "4.6.8", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
 thiserror = "2"
@@ -148,7 +148,7 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 # hyper tree are owned solely by `gircap-http`; gircap no longer takes a direct
 # `reqwest` dependency. No `json` and no `stream` were requested here either:
 # every body is decoded with `serde_json::from_slice` or handed on as raw bytes.
-url = "2.5.8"
+url = "2.5.9"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 prost = "0.14.6"
@@ -187,7 +187,7 @@ percent-encoding = "2.3.2"
 flate2 = "1.1.11"
 # Directory walks in the index and inventory passes. Already in the shared
 # lockfile through the other workspace members; no new dependency is fetched.
-walkdir = "2.5.0"
+walkdir = "2.5.1"
 # The `game/config.ini` version probe. A streaming parser is used rather than a
 # map-building one (`configparser`/`ini`) because gircap takes the FIRST
 # `game_version` in `[General]`; a hash map keeps only the last. This keeps that

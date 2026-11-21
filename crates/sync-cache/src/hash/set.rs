@@ -36,7 +36,7 @@ impl AlgoSet {
     /// No algorithms at all: `--hash-all-of none`, or a path that needs no read.
     pub const NONE: AlgoSet = AlgoSet(0);
 
-    /// A one-algorithm set. [`crate::planner::HashMode::AnyOf`] settles every pair
+    /// A one-algorithm set. `girsync::planner::HashMode::AnyOf` settles every pair
     /// with exactly one, so this is what the planner's pick becomes.
     pub const fn one(a: HashAlg) -> AlgoSet {
         AlgoSet(a.bit())
@@ -63,7 +63,7 @@ impl AlgoSet {
     /// `self` minus `other`: what this side still owes.
     ///
     /// The set-arithmetic form of "everything requested, minus what the row
-    /// already holds", which is how [`crate::planner::HashPlan`] decides what to
+    /// already holds", which is how `girsync::planner::HashPlan` decides what to
     /// compute. An `other` holding an algorithm outside `self` cannot widen the
     /// result, so a caller need not pre-intersect.
     pub const fn difference(self, other: AlgoSet) -> AlgoSet {

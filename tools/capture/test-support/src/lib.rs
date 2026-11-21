@@ -66,7 +66,7 @@ use girpr_tempdir::TempDir;
 
 /// What a gircap command produced, in the shape `main.rs` would have printed.
 ///
-/// The four public [`run::*`] APIs are async and return a [`Record`] plus an
+/// The four public APIs in [`run`] are async and return a [`Record`] plus an
 /// exit code; on failure they return a [`Failure`] that carries both its own
 /// summary and — for a run that measured before failing — the run's own summary
 /// in `preceded_by`. A harness that spawns the binary learns all of this by
@@ -659,7 +659,7 @@ static BLOBS: OnceLock<Mutex<HashMap<(u64, usize), Blob>>> = OnceLock::new();
 ///
 /// Deterministic so a test's expectations are stable, and distinct per `seed` so
 /// two files cannot collide by accident. Zstd-encoding and hashing happen once
-/// per distinct `(seed, len)` per process; see [`BLOBS`].
+/// per distinct `(seed, len)` per process.
 pub fn blob(seed: u64, len: usize) -> Blob {
     let cache = BLOBS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().expect("the blob cache is not poisoned");
@@ -1267,8 +1267,8 @@ impl Mock {
 
     /// Build the same world with **no listener and no threads**.
     ///
-    /// The in-memory transport answers from the very same [`Table`] the TCP
-    /// server uses ([`respond`], [`no_such_key`], [`content_type`] and the
+    /// The in-memory transport answers from the very same `Table` the TCP
+    /// server uses (`respond`, `no_such_key`, `content_type` and the
     /// fail-once map are shared, not reimplemented), so byte-exact bodies,
     /// status codes and content types are identical. The only difference is the
     /// HTTP framing layer, which is exactly what the injected transport

@@ -176,7 +176,7 @@ impl DigestSet {
     /// The digest for a known algorithm.
     ///
     /// `None` means "this row has no digest under that name", **not** "the digest is
-    /// zero". That distinction is load-bearing: [`crate::diff::hashes_differ`] is
+    /// zero". That distinction is load-bearing: `girsync::diff::hashes_differ` is
     /// silent on a missing digest, and a zero digest substituted for `None` would turn
     /// a false clean back on. A known name sitting in `foreign` also reads as `None`
     /// here — see [`Self::get_algo`] for the typed lookup that finds it.

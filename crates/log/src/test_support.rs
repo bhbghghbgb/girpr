@@ -15,8 +15,8 @@
 //!
 //! The two entry points differ only in how they scope the subscriber:
 //!
-//! - [`logs_of`] uses `with_default` for a synchronous closure;
-//! - [`logs_of_async`] uses `set_default` across an `.await` and asserts a
+//! - [`logs_of`](crate::test_support::logs_of) uses `with_default` for a synchronous closure;
+//! - [`logs_of_async`](crate::test_support::logs_of_async) uses `set_default` across an `.await` and asserts a
 //!   current-thread runtime on every build — a multi-thread runtime would
 //!   move spawned work onto threads with no subscriber and silently lose its
 //!   lines.

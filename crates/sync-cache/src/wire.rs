@@ -51,6 +51,7 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
 
 /// Encode the `meta` row. Serializing these two fixed fields into a growable
 /// `Vec` cannot fail.
+#[allow(clippy::expect_used)] // serializing two fixed fields into a Vec cannot fail
 pub(super) fn encode_meta(m: &Meta) -> Vec<u8> {
     postcard::to_extend(m, Vec::with_capacity(8)).expect("serialize cache meta")
 }

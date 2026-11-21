@@ -108,7 +108,7 @@ impl RequestRecord {
     /// The headers every request carries, lowercased, for the record.
     ///
     /// Built once per `Fetcher` and cloned per record; see
-    /// [`Fetcher::base_req_headers`].
+    /// `Fetcher::base_req_headers`.
     ///
     /// **The record and the client must agree.** reqwest sends an
     /// `accept-encoding` only when its `gzip` feature is on, and it is not, so the
