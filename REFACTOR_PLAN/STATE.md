@@ -17,8 +17,8 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
 | T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
-| T06 | HTTP + Sophon fetch crate | pending_review | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged |
-| T07 | Report plane crate | pending_review | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged |
+| T06 | HTTP + Sophon fetch crate | completed | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged. Review D clean |
+| T07 | Report plane crate | completed | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged. Review D clean |
 | T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
 | T10 | Consolidate shared test seams and includes | todo | | |
@@ -38,6 +38,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01 | done | Checkpoint A (solo). Review clean, no fix/revert commits; §A2 payoff confirmed, all 2167 tests pass. 2 follow-ups raised |
 | B | T02, T03 | done | Checkpoint B. Both completed; §A2 payoff confirmed empirically for util+lock; one doc-seam fix (dd8c6d13). 3 follow-ups raised |
+| D | T06, T07 | done | Checkpoint D (T08 skipped, not reviewed). Both completed, no fix/revert; §A2 payoff confirmed empirically for fetch+report, bytes/SCC/fake-servers checks pass. 4 follow-ups raised |
 
 ## Follow-ups
 
@@ -48,6 +49,10 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | FU-03 | Extract `repair/audio.rs` into a leaf crate — now a true leaf since util is external; same §A2 argument as `girpr-lock` | open | From review B; T03's "uses crate::util" reason no longer holds |
 | FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning (cited §A5/§F37 do not apply to product-only files); decide with a concrete rebuild-edge argument or drop | open | From review B |
 | FU-05 | Consider a narrow audio/lock-only consumer test target so the §A2 win shows in link count, not just compile caching (current `tests/run_lock.rs` links the full facade) | open | From review B |
+| FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` so the §A2 win shows in link count (currently a girpr-package target re-linked on repair edits) | open | From review D |
+| FU-07 | Add `girpr-report` to the nextest crate-list comment in `.config/nextest.toml` (T06 added girpr-fetch; T07 did not add girpr-report) | open | From review D; docs-only, no filter affected |
+| FU-08 | Restore the README paragraph break around the crate inventory (report paragraph runs into the fetch sentence) | open | From review D; docs-only |
+| FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` (was `#[cfg(test)]` in facade; now public only for facade unit tests) | open | From review D |
 
 ## Persistent context
 
