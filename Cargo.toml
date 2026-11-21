@@ -81,8 +81,10 @@ girpr-audio = { path = "crates/audio" }
 # timer. They live in their own crate so an edit to the repair modules below
 # leaves the whole report plane cached. This binary consumes the crate directly
 # under module aliases; the begin report borrows scalar provenance values, so
-# no fetch DTO leaks into it. The ordered-JSON leaf is reused inside it.
-girpr-report = { path = "crates/report" }
+# no fetch DTO leaks into it. The ordered-JSON leaf is reused inside it. `clap`
+# is enabled because this binary defines `--output` with `OutputFormat` as its
+# value type; other report consumers do not pull in the CLI framework.
+girpr-report = { path = "crates/report", features = ["clap"] }
 # The exit-table generation mechanism, shared with the capture tool. The leaf
 # owns only the enum/`ALL`/code/pin pattern; this binary supplies its own codes,
 # meanings and helper methods, so no exit-code value is shared.

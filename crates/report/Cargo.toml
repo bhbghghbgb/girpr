@@ -12,6 +12,13 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+# `OutputFormat` is this crate's own value type; only a CLI-facing consumer
+# needs it as a clap flag. The derive is opt-in so a consumer that just renders
+# records does not pull clap into its graph. The root repair binary, which
+# defines `--output`, enables this feature.
+clap = ["dep:clap"]
+
 [dependencies]
 # The ordered-JSON and line-writing mechanics below the plane. This crate keeps
 # girpr's own event-first order, unsigned counts and 1/0 flags; the core owns no
@@ -24,9 +31,10 @@ girpr-util-counter = { path = "../util-counter" }
 # vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
 serde = "1.0.229"
 serde_json = "1.0.154"
-# `OutputFormat` is the binary's `--output` flag type. The flag spelling stays
-# here; the shared leaf carries no CLI policy.
-clap = { version = "4.6.9", features = ["derive"] }
+# Only the `clap` feature's `ValueEnum` derive on `OutputFormat` needs this; the
+# flag spelling stays here and the shared leaf carries no CLI policy. Optional
+# so the default build of the report plane compiles no CLI framework.
+clap = { version = "4.6.9", features = ["derive"], optional = true }
 # The stdout/log mirror, the meter's refund warning and the phase lines.
 tracing = "0.1.44"
 # The one `PROGRESS` ticker and its interval. `test-util` is dev-only below.
