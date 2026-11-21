@@ -14,7 +14,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Consolidate root integration test binaries | completed | 080a0d45 | 4 root targets; kept artifact_bridge & repair_post standalone (pinned filters/host-skip/log-capture) so no nextest.toml edit; consolidated FQNs gained module prefix (repair::/contracts::); run_lock uses crate::common |
 | T02 | Memory cache seam for girsync record/FS cases | completed | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
-| T03 | Structured repair diagnostics to drop log-only spawns | todo | | |
+| T03 | Structured repair diagnostics to drop log-only spawns | in_progress | | |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | todo | | |
 | T05 | Replace wiremock with a std-only loopback HTTP mock | todo | | |
 | T06 | Trial rust-lld for the test profile | todo | | |
