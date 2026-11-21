@@ -27,8 +27,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | Collapse duplicated root integration fixtures | completed | 81344b48, 7e312de9, 37610881 | 3 commits: F19 JSON/text pairs→3 merged tests with reseed_install helper (config bump contaminates second plane otherwise); F20 phase/precedence tables (process tests 11→8, premise partly pre-satisfied); F23 Clone derives at call sites (30 duplicate builds removed, no wall saving expected); process spawns/messages/bytes preserved; no pinned filter affected; 425 passed/6 skipped |
 | T14 | Group `artifact_server.rs` bundle tests | completed | fe0fea6b | 1 commit; 5 with_shapes tests→1 grouped test (one bundle + one bridge), 3 other shape tests untouched; tests 8→4, bundles 8→4, listeners 32→16; all 87 assertions preserved verbatim incl HTTP status/body/zstd; full TCP end-to-end case unchanged; no nextest filter named them; no OnceLock/sleeps/fixture growth; zstd_bytes intact; contracts 44 passed |
 | T15 | Remove cross-file duplicate process-level assertions | completed | a94eac24 | 1 commit; removed 1 duplicate process case after folding its only process-only assertion (getBuild via endpoint overrides) into base_precedence_and_env_fallback smoke; spawns 14→13, process tests 8→7; coverage verified in-process first (REPORT/SUMMARY via cli_contract goldens, scope via repair_scope); no nextest filter change; pinned repair_post + host-skips untouched; 420 passed/6 skipped; F22 premises partly stale (already reduced by earlier work) |
-| T16 | Fold tiny pure-test clusters | pending_review | 4e8d728c, 97a7cd34, 5588b71f, f2ae25b8, 09b8f468, 0301c15c | 6 commits (one per cluster), none skipped; measured report-core isolated 0.070s→0.043s (~38% saved by 3 fewer spawns); 45→24 test fns (21 fewer spawns); every assertion/message preserved with labelled subcases; pinned junction/symlink, clock and artifact-bridge cases untouched; no nextest filter change; 79 passed |
-| T17 | Leaf-crate test cleanups | pending_review | f90cb5ef, 98740650 | 2 commits: ledger barrier-free exact-sum tests 8×100→4×25 (sums 700/1100 retained), Barrier race test kept at 8, ceiling-overshoot race tests untouched; redundant tag-6 byte assertion removed from fetch_direct (binary + compile check kept) and value-0 proto_roundtrip duplicate removed; authoritative girpr-proto byte pin unchanged; no nextest filter change; report 40/40, fetch 34/34, proto 1/1 |
+| T16 | Fold tiny pure-test clusters | completed | 4e8d728c, 97a7cd34, 5588b71f, f2ae25b8, 09b8f468, 0301c15c | 6 commits (one per cluster), none skipped; measured report-core isolated 0.070s→0.043s (~38% saved by 3 fewer spawns); 45→24 test fns (21 fewer spawns); every assertion/message preserved with labelled subcases; pinned junction/symlink, clock and artifact-bridge cases untouched; no nextest filter change; 79 passed |
+| T17 | Leaf-crate test cleanups | completed | f90cb5ef, 98740650 | 2 commits: ledger barrier-free exact-sum tests 8×100→4×25 (sums 700/1100 retained), Barrier race test kept at 8, ceiling-overshoot race tests untouched; redundant tag-6 byte assertion removed from fetch_direct (binary + compile check kept) and value-0 proto_roundtrip duplicate removed; authoritative girpr-proto byte pin unchanged; no nextest filter change; report 40/40, fetch 34/34, proto 1/1 |
 | T18 | Reduce row-reading redb reopens | todo | | |
 | T19 | Shrink the sync-cache digest fixture and add `dirs()` | todo | | |
 | T20 | Merge pure gircap test clusters | todo | | |
@@ -47,7 +47,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | G | T09, T10, T11 | done | Review fix 1aa50d2c removed stale gircap-http edge from hash crate docs |
 | H | T12, T13 | done | |
 | I | T14, T15 | done | |
-| J | T16, T17 | pending | |
+| J | T16, T17 | done | |
 | K | T18, T19 | pending | Split if T18 is pre-satisfied by T02 |
 | L | T20, T21 | pending | |
 
@@ -85,6 +85,8 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU24 | Extend T13 reseed_install if the binary persists new local-state files | open | Maintenance note; currently resets config.ini + two fixture files |
 | FU25 | Finish F22 in-process rig dedup in repair_post/scan/plan | open | Constraint-blocked: repair_post host-skip/log-capture cases must stay untouched |
 | FU26 | Consider splitting the ~324-line merged T14 test | open | Only if failure triage proves painful; labels/messages already preserved |
+| FU27 | Fold remaining tiny pure-test clusters beyond the six named | open | Broad rewrite, modest sampled benefit; re-measure per-test overhead first |
+| FU28 | Remove label/match-arm duplication in retry_driver_contracts | open | Cosmetic only |
 
 ## Persistent context
 
