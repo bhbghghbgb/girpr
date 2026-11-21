@@ -499,10 +499,9 @@ mod tests {
     use crate::repair::scope::{Limits, PathScope};
     use crate::report::OutputFormat;
     use crate::retry::BackoffPolicy;
+    use crate::test_origin::{Reply, TestServer};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     /// A `RunCtx` pointed at one loopback base, with every flag at its
     /// default so only the metadata phase is exercised.
@@ -560,17 +559,12 @@ mod tests {
         girpr_log::test_support::logs_of_async(f).await
     }
 
-    #[derive(Clone)]
-    enum Reply {
-        Body(&'static str),
-        Status(&'static str),
-    }
-
     const NOT_FOUND: Reply = Reply::Status("404 Not Found");
 
     /// Serve `getGameConfigs` and `getGameBranches` on an ephemeral loopback
-    /// port; any other target is a `404`.
-    async fn serve(config: Reply, branch: Reply) -> String {
+    /// port; any other target is a `404`. The returned origin must be kept
+    /// alive for the test: its Drop aborts the driver and the listener.
+    async fn serve(config: Reply, branch: Reply) -> (TestServer, String) {
         serve_metadata(config, branch, NOT_FOUND, None).await
     }
 
@@ -581,68 +575,25 @@ mod tests {
         branch: Reply,
         latest: Reply,
         local: Option<Reply>,
-    ) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("addr"));
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    continue;
-                };
-                let config = config.clone();
-                let branch = branch.clone();
-                let latest = latest.clone();
-                let local = local.clone();
-                tokio::spawn(async move {
-                    let mut buf = vec![0u8; 8192];
-                    let mut got = 0;
-                    while got < buf.len() {
-                        match socket.read(&mut buf[got..]).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                got += n;
-                                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
-                                    break;
-                                }
-                            }
-                            Err(_) => return,
-                        }
-                    }
-                    let head = String::from_utf8_lossy(&buf[..got]).to_string();
-                    let target = head
-                        .lines()
-                        .next()
-                        .and_then(|l| l.split_whitespace().nth(1))
-                        .unwrap_or("/");
-                    let reply = if target.contains("getGameBranches") {
-                        &branch
-                    } else if target.contains("getGameConfigs") {
-                        &config
-                    } else if target.contains("getBuild") {
-                        match (&local, target.contains("tag=")) {
-                            (Some(local), true) => local,
-                            _ => &latest,
-                        }
-                    } else {
-                        &NOT_FOUND
-                    };
-                    let (status, body) = match reply {
-                        Reply::Body(body) => ("200 OK", body.as_bytes()),
-                        Reply::Status(status) => (*status, &[][..]),
-                    };
-                    let head = format!(
-                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = socket.write_all(head.as_bytes()).await;
-                    let _ = socket.write_all(body).await;
-                    let _ = socket.flush().await;
-                });
-            }
-        });
-        base
+    ) -> (TestServer, String) {
+        let server = crate::test_origin::serve(move |target| {
+            Some(if target.contains("getGameBranches") {
+                branch.clone()
+            } else if target.contains("getGameConfigs") {
+                config.clone()
+            } else if target.contains("getBuild") {
+                match (&local, target.contains("tag=")) {
+                    (Some(local), true) => local.clone(),
+                    _ => latest.clone(),
+                }
+            } else {
+                NOT_FOUND.clone()
+            })
+        })
+        .await;
+        let base = server.base().to_owned();
+        (server, base)
     }
-
     /// Each local read's class table names the class its join failure takes,
     /// and `join_failure` goes through that class rather than choosing one
     /// itself.
@@ -764,8 +715,8 @@ mod tests {
     /// branch call is still retrying; the branch answer is never substituted.
     #[tokio::test]
     async fn a_config_failure_is_authoritative_over_a_retrying_branch() {
-        let base = serve(
-            Reply::Body(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
+        let (_origin, base) = serve(
+            Reply::text(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
             Reply::Status("500 Internal Server Error"),
         )
         .await;
@@ -795,11 +746,11 @@ mod tests {
     /// after the config answer.
     #[tokio::test]
     async fn a_branch_error_is_reported_when_the_config_call_succeeds() {
-        let base = serve(
-            Reply::Body(
+        let (_origin, base) = serve(
+            Reply::text(
                 r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#,
             ),
-            Reply::Body(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
+            Reply::text(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
         )
         .await;
         let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "branch_failure");
@@ -828,10 +779,10 @@ mod tests {
     /// its identity reaches the caller unchanged.
     #[tokio::test]
     async fn matching_biz_and_tag_are_accepted() {
-        let base = serve_metadata(
-            Reply::Body(CHUNK_CONFIG),
-            Reply::Body(BRANCH),
-            Reply::Body(LATEST_BUILD),
+        let (_origin, base) = serve_metadata(
+            Reply::text(CHUNK_CONFIG),
+            Reply::text(BRANCH),
+            Reply::text(LATEST_BUILD),
             None,
         )
         .await;
@@ -850,10 +801,10 @@ mod tests {
     #[tokio::test]
     async fn a_config_response_for_another_biz_is_refused_as_metadata() {
         const WRONG_BIZ: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"game":{"id":"1Z8W5NHUQb","biz":"hk4e_cn"},"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
-        let base = serve_metadata(
-            Reply::Body(WRONG_BIZ),
-            Reply::Body(BRANCH),
-            Reply::Body(LATEST_BUILD),
+        let (_origin, base) = serve_metadata(
+            Reply::text(WRONG_BIZ),
+            Reply::text(BRANCH),
+            Reply::text(LATEST_BUILD),
             None,
         )
         .await;
@@ -881,10 +832,10 @@ mod tests {
     #[tokio::test]
     async fn a_wrong_biz_response_is_refused_before_its_download_mode() {
         const WRONG_BIZ_FILE_MODE: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"game":{"id":"1Z8W5NHUQb","biz":"hk4e_cn"},"default_download_mode":"DOWNLOAD_MODE_FILE"}]}}"#;
-        let base = serve_metadata(
-            Reply::Body(WRONG_BIZ_FILE_MODE),
-            Reply::Body(BRANCH),
-            Reply::Body(LATEST_BUILD),
+        let (_origin, base) = serve_metadata(
+            Reply::text(WRONG_BIZ_FILE_MODE),
+            Reply::text(BRANCH),
+            Reply::text(LATEST_BUILD),
             None,
         )
         .await;
@@ -911,10 +862,10 @@ mod tests {
     async fn a_latest_build_for_another_tag_is_refused_as_metadata() {
         const WRONG_BUILD: &str =
             r#"{"retcode":0,"message":"OK","data":{"build_id":"b","tag":"5.0.0","manifests":[]}}"#;
-        let base = serve_metadata(
-            Reply::Body(CHUNK_CONFIG),
-            Reply::Body(BRANCH),
-            Reply::Body(WRONG_BUILD),
+        let (_origin, base) = serve_metadata(
+            Reply::text(CHUNK_CONFIG),
+            Reply::text(BRANCH),
+            Reply::text(WRONG_BUILD),
             None,
         )
         .await;
@@ -942,10 +893,10 @@ mod tests {
         const CONFIG_WITHOUT_GAME: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
         const BUILD_WITHOUT_TAG: &str =
             r#"{"retcode":0,"message":"OK","data":{"build_id":"b","manifests":[]}}"#;
-        let base = serve_metadata(
-            Reply::Body(CONFIG_WITHOUT_GAME),
-            Reply::Body(BRANCH),
-            Reply::Body(BUILD_WITHOUT_TAG),
+        let (_origin, base) = serve_metadata(
+            Reply::text(CONFIG_WITHOUT_GAME),
+            Reply::text(BRANCH),
+            Reply::text(BUILD_WITHOUT_TAG),
             None,
         )
         .await;
@@ -968,11 +919,11 @@ mod tests {
             .expect("write config.ini");
 
         const LOCAL_FOR_ANOTHER_TAG: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"4.9.0","manifests":[]}}"#;
-        let base = serve_metadata(
-            Reply::Body(CHUNK_CONFIG),
-            Reply::Body(BRANCH),
-            Reply::Body(LATEST_BUILD),
-            Some(Reply::Body(LOCAL_FOR_ANOTHER_TAG)),
+        let (_origin, base) = serve_metadata(
+            Reply::text(CHUNK_CONFIG),
+            Reply::text(BRANCH),
+            Reply::text(LATEST_BUILD),
+            Some(Reply::text(LOCAL_FOR_ANOTHER_TAG)),
         )
         .await;
         let ref_ctx = ctx(dir.to_path_buf(), base);
@@ -995,11 +946,11 @@ mod tests {
         );
 
         const LOCAL_BUILD: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"5.0.0","manifests":[]}}"#;
-        let base = serve_metadata(
-            Reply::Body(CHUNK_CONFIG),
-            Reply::Body(BRANCH),
-            Reply::Body(LATEST_BUILD),
-            Some(Reply::Body(LOCAL_BUILD)),
+        let (_origin, base) = serve_metadata(
+            Reply::text(CHUNK_CONFIG),
+            Reply::text(BRANCH),
+            Reply::text(LATEST_BUILD),
+            Some(Reply::text(LOCAL_BUILD)),
         )
         .await;
         let second_ctx = ctx(dir.to_path_buf(), base);

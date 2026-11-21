@@ -54,6 +54,9 @@ mod repair;
 // The canned-reply loopback origin the unit tests share.
 #[cfg(test)]
 mod test_http;
+// The shared loopback origin behind the repair phases' route-based tests.
+#[cfg(test)]
+mod test_origin;
 // The report plane lives in its own crate so an edit to the repair modules
 // below leaves the counters, the record data plane, every stdout line and the
 // phase timer cached. These aliases keep every existing `crate::report::…` and
