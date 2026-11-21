@@ -391,157 +391,164 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
 }
 
 #[tokio::test]
-async fn an_explicit_base_beats_the_env_var() {
-    // The env seams are pointed at a **dead** port, so if the env won the run
-    // would fail with exit 2 instead of exiting 0.
+async fn base_precedence_and_env_fallback() {
+    // Two rows over one mock and install. The first points the env seams at a
+    // **dead** port, so an env win would fail with exit 2 instead of 0; the
+    // second drops the flags so the seam every offline e2e run uses is still
+    // exercised. Each row keeps its own assertion message as the label.
     let (mock, _dir, _, game) = start_standard_install("base_precedence").await;
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--check-only",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[
-            ("GIRPR_HYP_BASE", "http://127.0.0.1:1"),
-            ("GIRPR_SOPHON_BASE", "http://127.0.0.1:1"),
-        ],
-    )
-    .await;
-    assert_eq!(code, 0, "the flag must win over the env var: {stderr}");
+    let rows: &[(&str, Vec<&str>, Vec<(&str, &str)>)] = &[
+        (
+            "the flag must win over the env var",
+            vec![
+                "--game-path",
+                &game,
+                "--biz",
+                "hk4e_global",
+                "--check-only",
+                "--hyp-base",
+                &mock.hyp_base,
+                "--sophon-base",
+                &mock.sophon_base,
+            ],
+            vec![
+                ("GIRPR_HYP_BASE", "http://127.0.0.1:1"),
+                ("GIRPR_SOPHON_BASE", "http://127.0.0.1:1"),
+            ],
+        ),
+        (
+            "env overrides must still work",
+            vec!["--game-path", &game, "--biz", "hk4e_global", "--check-only"],
+            vec![
+                ("GIRPR_HYP_BASE", &mock.hyp_base),
+                ("GIRPR_SOPHON_BASE", &mock.sophon_base),
+            ],
+        ),
+    ];
+    for (message, args, env) in rows {
+        let (code, _, stderr) = run_binary(args, env).await;
+        assert_eq!(code, 0, "{message}: {stderr}");
+    }
     mock.stop();
 }
 
+/// Every phase that runs reports one `duration_ms` line, and a phase that did
+/// not run reports nothing. One table over flag sets shares a single mock and
+/// install; each row keeps its own log file and its own labelled assertions.
 #[tokio::test]
-async fn the_env_seam_still_works_without_the_flags() {
-    // The env seam every offline e2e run already uses must keep working.
-    let (mock, _dir, _, game) = start_standard_install("base_env").await;
-    let (code, _, stderr) = run_binary(
-        &["--game-path", &game, "--biz", "hk4e_global", "--check-only"],
-        &[
-            ("GIRPR_HYP_BASE", &mock.hyp_base),
-            ("GIRPR_SOPHON_BASE", &mock.sophon_base),
-        ],
-    )
-    .await;
-    assert_eq!(code, 0, "env overrides must still work: {stderr}");
-    mock.stop();
-}
+async fn phase_completion_timings_follow_the_flags() {
+    let (mock, _dir, fx, game) = start_standard_install("phase_durations").await;
+    // Logs live outside the install: `--purge-before` treats the game tree as
+    // its candidate set.
+    let log_dir = temp_dir("phase_durations_log");
 
-#[tokio::test]
-async fn the_phase_completion_lines_carry_a_duration_field() {
-    let (mock, dir, fx, game) = start_standard_install("phase_durations").await;
+    fn full_phases(body: &str, fx: &GameFixture) {
+        for phase in [
+            "metadata", "manifest", "plan", "scan", "repair", "post", "run",
+        ] {
+            let marker = format!("phase={phase}");
+            let line = body
+                .lines()
+                .find(|line| line.contains(&marker))
+                .unwrap_or_else(|| panic!("no {marker} completion line:\n{body}"));
+            assert!(line.contains("duration_ms="), "{line}");
+        }
 
-    let log = dir.join("run.log");
-    let log_arg = log.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--scan",
-            "--log-file",
-            &log_arg,
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-
-    let body = std::fs::read_to_string(&log).expect("the log file was written");
-    for phase in [
-        "metadata", "manifest", "plan", "scan", "repair", "post", "run",
-    ] {
-        let marker = format!("phase={phase}");
+        // The per-file total is at debug and names the file.
+        let rel = &fx.files[0].rel;
         let line = body
             .lines()
-            .find(|line| line.contains(&marker))
-            .unwrap_or_else(|| panic!("no {marker} completion line:\n{body}"));
+            .find(|line| {
+                line.contains("file repair finished")
+                    && line.contains(&format!("file={rel}"))
+                    && line.contains("duration_ms=")
+            })
+            .unwrap_or_else(|| panic!("no per-file duration for {rel}:\n{body}"));
         assert!(line.contains("duration_ms="), "{line}");
+
+        // A phase that did not run must not log a duration.
+        assert!(
+            !body.contains("phase=check"),
+            "check-only did not run:\n{body}"
+        );
     }
 
-    // The per-file total is at debug and names the file.
-    let rel = &fx.files[0].rel;
-    let line = body
-        .lines()
-        .find(|line| {
-            line.contains("file repair finished")
-                && line.contains(&format!("file={rel}"))
-                && line.contains("duration_ms=")
-        })
-        .unwrap_or_else(|| panic!("no per-file duration for {rel}:\n{body}"));
-    assert!(line.contains("duration_ms="), "{line}");
+    fn check_only_phase(body: &str, _fx: &GameFixture) {
+        let line = body
+            .lines()
+            .find(|line| line.contains("phase=check"))
+            .unwrap_or_else(|| panic!("no check completion line:\n{body}"));
+        assert!(line.contains("duration_ms="), "{line}");
+        assert!(
+            !body.contains("phase=repair"),
+            "the repair loop did not run:\n{body}"
+        );
+        assert!(
+            !body.contains("phase=post"),
+            "the post-phase did not run:\n{body}"
+        );
+    }
 
-    // A phase that did not run must not log a duration.
-    assert!(
-        !body.contains("phase=check"),
-        "check-only did not run:\n{body}"
-    );
+    fn unscanned_phase(body: &str, _fx: &GameFixture) {
+        assert!(
+            !body.contains("phase=scan"),
+            "an unscanned run must not log a scan phase:\n{body}"
+        );
+        assert!(
+            body.contains("phase=repair"),
+            "the repair phase still ran:\n{body}"
+        );
+    }
 
-    // The check-only path reports its own phase and neither later phase.
-    let check_log = dir.join("check.log");
-    let check_log_arg = check_log.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
+    fn publish_phase(body: &str, _fx: &GameFixture) {
+        let line = body
+            .lines()
+            .find(|line| line.contains("phase=publish"))
+            .unwrap_or_else(|| panic!("no publish completion line:\n{body}"));
+        assert!(line.contains("duration_ms="), "{line}");
+        assert!(
+            !body.contains("phase=repair"),
+            "print-plan stops before the repair loop:\n{body}"
+        );
+    }
+
+    fn purge_before_phase(body: &str, _fx: &GameFixture) {
+        let line = body
+            .lines()
+            .find(|line| line.contains("phase=purge-before"))
+            .unwrap_or_else(|| panic!("no purge-before completion line:\n{body}"));
+        assert!(line.contains("duration_ms="), "{line}");
+        // The scan and publish steps did not run in this invocation.
+        assert!(!body.contains("phase=scan"), "no --scan:\n{body}");
+        assert!(!body.contains("phase=publish"), "no --print-plan:\n{body}");
+    }
+
+    let rows: &[(&str, &[&str], &str, fn(&str, &GameFixture))] = &[
+        ("--scan full run", &["--scan"], "full.log", full_phases),
+        (
             "--check-only",
-            "--log-file",
-            &check_log_arg,
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-
-    let body = std::fs::read_to_string(&check_log).expect("the check log file was written");
-    let line = body
-        .lines()
-        .find(|line| line.contains("phase=check"))
-        .unwrap_or_else(|| panic!("no check completion line:\n{body}"));
-    assert!(line.contains("duration_ms="), "{line}");
-    assert!(
-        !body.contains("phase=repair"),
-        "the repair loop did not run:\n{body}"
-    );
-    assert!(
-        !body.contains("phase=post"),
-        "the post-phase did not run:\n{body}"
-    );
-
-    mock.stop();
-}
-
-/// An unscanned run must not log a scan completion: the phase only runs when
-/// `--scan` asked for it, and the repair phase still runs.
-#[tokio::test]
-async fn an_unscanned_run_does_not_log_a_scan_phase() {
-    let (mock, dir, _, game) = start_standard_install("unscanned_phase").await;
-
-    let log = dir.join("run.log");
-    let log_arg = log.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
+            &["--check-only"],
+            "check.log",
+            check_only_phase,
+        ),
+        ("no --scan", &[], "unscanned.log", unscanned_phase),
+        (
+            "--print-plan",
+            &["--print-plan"],
+            "publish.log",
+            publish_phase,
+        ),
+        (
+            "--purge-before",
+            &["--purge-before"],
+            "purge.log",
+            purge_before_phase,
+        ),
+    ];
+    for (label, flags, log_name, check) in rows {
+        let log = log_dir.join(log_name);
+        let log_arg = log.to_string_lossy().into_owned();
+        let mut args: Vec<&str> = vec![
             "--game-path",
             &game,
             "--biz",
@@ -554,104 +561,15 @@ async fn an_unscanned_run_does_not_log_a_scan_phase() {
             &mock.hyp_base,
             "--sophon-base",
             &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
+        ];
+        args.extend_from_slice(flags);
+        let (code, _, stderr) = run_binary(&args, &[]).await;
+        assert_eq!(code, 0, "{label}: stderr: {stderr}");
 
-    let body = std::fs::read_to_string(&log).expect("the log file was written");
-    assert!(
-        !body.contains("phase=scan"),
-        "an unscanned run must not log a scan phase:\n{body}"
-    );
-    assert!(
-        body.contains("phase=repair"),
-        "the repair phase still ran:\n{body}"
-    );
-
-    mock.stop();
-}
-
-/// The plan half's `publish` step and the execute half's `purge-before` step
-/// each get their own completion line, so neither is hidden inside `plan` or
-/// left untimed.
-#[tokio::test]
-async fn the_publish_and_pre_purge_steps_are_timed() {
-    let (mock, _dir, _, game) = start_standard_install("phase_extra_steps").await;
-    // The log lives outside the install: `--purge-before` treats the game tree
-    // as its candidate set.
-    let log_dir = temp_dir("phase_extra_steps_log");
-
-    // Publishing only does work for `--print-plan` / `--plan-out`, so time it
-    // there; the run stops before the execute half.
-    let publish_log = log_dir.join("publish.log");
-    let publish_log_arg = publish_log.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--print-plan",
-            "--log-file",
-            &publish_log_arg,
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-
-    let body = std::fs::read_to_string(&publish_log).expect("the publish log was written");
-    let line = body
-        .lines()
-        .find(|line| line.contains("phase=publish"))
-        .unwrap_or_else(|| panic!("no publish completion line:\n{body}"));
-    assert!(line.contains("duration_ms="), "{line}");
-    assert!(
-        !body.contains("phase=repair"),
-        "print-plan stops before the repair loop:\n{body}"
-    );
-
-    // The up-front cleanup is its own timed step in the execute half.
-    let purge_log = log_dir.join("purge.log");
-    let purge_log_arg = purge_log.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--purge-before",
-            "--log-file",
-            &purge_log_arg,
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-
-    let body = std::fs::read_to_string(&purge_log).expect("the purge log was written");
-    let line = body
-        .lines()
-        .find(|line| line.contains("phase=purge-before"))
-        .unwrap_or_else(|| panic!("no purge-before completion line:\n{body}"));
-    assert!(line.contains("duration_ms="), "{line}");
-    // The scan and publish steps did not run in this invocation.
-    assert!(!body.contains("phase=scan"), "no --scan:\n{body}");
-    assert!(!body.contains("phase=publish"), "no --print-plan:\n{body}");
+        let body = std::fs::read_to_string(&log)
+            .unwrap_or_else(|e| panic!("the {label} log file was written: {e}"));
+        check(&body, &fx);
+    }
 
     mock.stop();
 }
