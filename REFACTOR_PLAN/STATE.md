@@ -47,28 +47,31 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 
 ## Follow-ups
 
+Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04 dropped; FU-12 and NF-1 held. Batch order by value: D → P → G → H → A.
+
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| FU-01 | Update `tools/sync/README.md:10` shared-crate inventory to include `girpr-sync-test-support` (fixtures no longer from `girpr-tempdir`) | open | From review A; §F39 doc-seam consistency |
-| FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md:25` | open | From review A; §F39 shared-crate inventory consistency |
-| FU-03 | Extract `repair/audio.rs` into a leaf crate — now a true leaf since util is external; same §A2 argument as `girpr-lock` | open | From review B; T03's "uses crate::util" reason no longer holds |
-| FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning (cited §A5/§F37 do not apply to product-only files); decide with a concrete rebuild-edge argument or drop | open | From review B |
-| FU-05 | Consider a narrow audio/lock-only consumer test target so the §A2 win shows in link count, not just compile caching (current `tests/run_lock.rs` links the full facade) | open | From review B |
-| FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` so the §A2 win shows in link count (currently a girpr-package target re-linked on repair edits) | open | From review D |
-| FU-07 | Add `girpr-report` to the nextest crate-list comment in `.config/nextest.toml` (T06 added girpr-fetch; T07 did not add girpr-report) | open | From review D; docs-only, no filter affected |
-| FU-08 | Restore the README paragraph break around the crate inventory (report paragraph runs into the fetch sentence) | open | From review D; docs-only |
-| FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` (was `#[cfg(test)]` in facade; now public only for facade unit tests) | open | From review D |
-| FU-10 | Refresh `tools/capture/docs/02-plan.md:124` layout tree — labels `common/mod.rs` as local mock; mock now in gircap-only `test-support/`, common is a thin shim | open | From review E; remaining §F39 doc-seam gap |
-| FU-11 | Update `tools/sync/README.md:1754` — still says shared fixtures live in `tests/common/mod.rs`; now from `girpr-sync-test-support` via shim (see FU-01) | open | From review E; §F39 inventory consistency |
-| FU-12 | Revisit narrowing facade-coupled `girpr-test-support` glue — still normal-depends on full `girpr` facade; compile-once win, no rebuild edge; T08 narrow CLI tests remain blocked | open | From review E; §A2, tied to config↔repair SCC |
-| FU-13 | Add `girpr-sync-leaves` to §F39 doc seams — `README.md:48` crate table, `README.md:443` prose inventory, `docs/03-repair-rust-implementation-plan.md:28` layout tree | open | From review F; docs-only inventory consistency |
-| FU-14 | Drop now-unused `girpr-digest` direct dependency from `tools/sync/Cargo.toml` (vocabulary moved to `girpr-sync-cache`, reached transitively) | open | From review F; dependency hygiene, §A2 cleanup |
-| FU-15 | Drop gircap's direct `reqwest` dep by replacing `config::validate_base`'s `reqwest::Url` with the `url` crate, leaving reqwest owned solely by `gircap-http` | open | From review G1; §F25 http split alone cannot remove reqwest |
-| FU-16 | Relocate mechanics-only tests from `tools/capture/src/http/tests.rs` into `tools/capture/http/tests/` so HTTP edits re-link only the gircap-http test binary (keep probe/negative policy tests local) | open | From review G1; §A2 test-link payoff |
-| FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy instead of girpr-<policy>/[lints] workspace = true) in crate/independence-table notes so a future session does not "correct" them | open | From review G1; §A4 deliberate deviation |
-| FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` flag default into gircap policy — pass the ceiling in rather than owning a run-policy constant in the logic-free leaf (§A5) | open | From review G2; strict logic-free boundary |
-| FU-19 | Relocate mechanics-only gzip/zstd tests from `src/emit`/`src/manifest` into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) for the §A2 test-link payoff | open | From review G2; analogous to FU-16 |
-| FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` after tests moved between crates | open | From review G2; doc accuracy only |
+| FU-01 | Update `tools/sync/README.md:10` shared-crate inventory to include `girpr-sync-test-support` | batched:D | From review A; §F39 doc seam |
+| FU-02 | Add `crates/sync-test-support/` to crate-layout tree in `docs/03-repair-rust-implementation-plan.md:25` | batched:D | From review A; §F39 inventory |
+| FU-03 | Extract `repair/audio.rs` into a leaf crate (clean leaf: girpr-audio-language/anyhow/tracing); verify §A2 with a narrow consumer, stop if no edge shrinks | batched:A | From review B; conditional, highest risk, do last |
+| FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning | dropped | Planning review: §F37 names retry a keeper, T19 showed logging is a program-wide facade ancestor — no §A2 edge |
+| FU-05 | Narrow audio/lock-only consumer test target so §A2 win shows in link count (current `tests/run_lock.rs` links full facade) | batched:A | From review B; makes FU-03 payoff observable |
+| FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` for the §A2 test-link win | batched:P | From review D |
+| FU-07 | Add `girpr-report` to nextest crate-list comment in `.config/nextest.toml` | batched:D | From review D; docs-only |
+| FU-08 | Restore README paragraph break around crate inventory | batched:D | From review D; docs-only |
+| FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` | batched:P | From review D; same surface as FU-06 |
+| FU-10 | Refresh `tools/capture/docs/02-plan.md:124` layout tree (mock now in gircap-only `test-support/`) | batched:D | From review E; remaining §F39 gap |
+| FU-11 | Update `tools/sync/README.md:1754` (fixtures now from `girpr-sync-test-support` via shim) | batched:D | From review E; same file as FU-01 |
+| FU-12 | Narrow facade-coupled `girpr-test-support` glue | open | HELD by planning review: blocked by config↔repair SCC; compile-once win only, no rebuild edge until severed |
+| FU-13 | Add `girpr-sync-leaves` to §F39 doc seams (README table/prose, docs/03 tree) | batched:D | From review F; docs-only |
+| FU-14 | Drop unused `girpr-digest` direct dep from `tools/sync/Cargo.toml` | batched:H | From review F; dependency hygiene |
+| FU-15 | Replace `config::validate_base`'s `reqwest::Url` with `url` crate so reqwest is owned solely by `gircap-http` | batched:H | From review G1; §A5 boundary |
+| FU-16 | Relocate mechanics-only http tests into `tools/capture/http/tests/` (keep probe/negative local) | batched:G | From review G1; §A2 test-link payoff |
+| FU-17 | Document deliberate gircap-owned deviations (gircap- prefix, tools-only lint policy) in crate/independence-table notes | batched:D | From review G1; §A4 deliberate deviation, docs-only |
+| FU-18 | Move `DEFAULT_MAX_DECOMPRESSED_BYTES` default into gircap policy (strict logic-free leaf) | batched:H | From review G2; §A5 |
+| FU-19 | Relocate mechanics-only gzip/zstd tests into gircap-hash tests (keep SCHEMA_VERSION/write_json_gz cases local) | batched:G | From review G2; §A2 test-link payoff |
+| FU-20 | Refresh stale gircap test-count figure in `tools/capture/README.md` (do after FU-16/FU-19) | batched:G | From review G2; doc accuracy |
+| NF-1 | Mechanically enforce the gircap leaf-only dependency boundary (guard against girpr/program-logic deps) | open | NEW from Phase 3 planning review; HELD — infrastructure, no new rebuild edge; revisit if boundary churn recurs |
 
 ## Persistent context
 
