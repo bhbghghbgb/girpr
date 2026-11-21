@@ -16,7 +16,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | `girpr-util` leaf crate | completed | 1665a69f, dd8c6d13 | Facade uses `use girpr_util as util` direct dep; §A2 payoff verified empirically (repair edit leaves util Fresh). Deviation: leaf also needs fs-names/tracing + dev log/tempdir beyond §F14; §F31 filters updated by content. Review B clean; dd8c6d13 fixed doc seams only |
 | T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
-| T05 | Plan / purge / scope decision crate | todo | | |
+| T05 | Plan / purge / scope decision crate | in_progress | | |
 | T06 | HTTP + Sophon fetch crate | todo | | |
 | T07 | Report plane crate | todo | | |
 | T08 | CLI / config crate for narrow tests | todo | | |
