@@ -28,7 +28,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | gircap: extract the http subsystem crate | completed | b8b31045, 0670b7c9 | New logic-free `gircap-http` (tools/capture/http) owns reqwest/thiserror mechanics; gircap direct dep, src/http/mod.rs thin facade (probe/negative/tests kept local as policy). §A2 verified empirically (emit edit leaves gircap-http/reqwest/retry Fresh). Dev: §F25 SCC actually 11 modules (http↔manifest via negative, http↔failure, biz↔cli↔config) — carved acyclic leaf instead; doc seams updated in same work; wiremock stays gircap dev-dep. Review G1 clean; 0670b7c9 removed 6 superseded dead-duplicate mechanics files |
 | T15 | gircap: emit + verify subsystem crates | skipped | | emit/verify not logic-free leaves: emit in SCC with manifest/assemble/http (manifest→emit, assemble→emit back-edges); verify depends on emit policy types; no direct consumer, no heavy dep isolatable (flate2/ini_core stay, ini=§A13 keeper). Legal extraction needs whole-SCC move + byte-contract rewrite (§A6) |
 | T16 | gircap: blobs + manifest crates | skipped | | §F25/F27 premise stale: wire types already in girpr-proto, zstd helpers in acyclic `hash` leaf; blobs/manifest deep in gircap SCC (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no T14-style acyclic logic-free leaf; §A2 fails |
-| T17 | gircap: small production leaves | todo | | |
+| T17 | gircap: small production leaves | in_progress | | |
 | T18 | Split the disjoint halves of `girpr-digest` | todo | | |
 | T19 | `girpr-log` split payoff assessment | todo | | |
 
