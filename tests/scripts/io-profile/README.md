@@ -25,7 +25,7 @@ written; a fresh `analyze.ps1 -CompareCsv` run writes the same data as
 
 ## Quick start
 
-From the repository root, in PowerShell 7:
+From the repository root, in PowerShell:
 
 ```pwsh
 # Serial sweep on the disk under test (%TEMP% as configured).
@@ -63,7 +63,7 @@ target/io-profile/iot-bench-target/release/iot-bench.exe Z:\scratch
 Use an empty scratch directory; the tool creates and removes its own files.
 Run it once per disk and compare the `per_op` figures, not the totals: the
 number of operations is fixed so the totals are comparable, but a single noisy
-run is still only worth about 10%.
+run is still only worth a rough reading.
 
 The bench is a standalone workspace, so ordinary builds do not compile it. It
 is checked on the same stable toolchain as the rest of the workspace:
@@ -72,7 +72,7 @@ is checked on the same stable toolchain as the rest of the workspace:
 cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
 ```
 
-Its `redb` requirement tracks the workspace's `4.x` line; there is no old-toolchain
+Its `redb` requirement tracks the workspace's; there is no old-toolchain
 pin to keep buildable.
 
 ## Reading the output

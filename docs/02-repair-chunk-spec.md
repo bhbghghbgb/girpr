@@ -28,7 +28,7 @@ matched case-insensitively, `_` is accepted for `-`, and the display names `chin
 `english` / `english(us)` / `japanese` / `korean` are aliases; anything else is a usage error
 (exit 1), as is mixing `none` with a language. Unknown flags, missing/duplicate-incompatible
 values and `jobs = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
-`jobs ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
+`jobs ≥ 1` (a modest default; lower for HDDs, higher for SSDs), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
 `1` usage/config error, `2` metadata/network error (including a malformed manifest
@@ -65,7 +65,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    is missing, and `none` opts into that behavior explicitly).
    A **readable empty** file is the game-only selection written by `--audio none` and is
    kept as-is. An **unreadable** file is an error, not a default. A non-empty file
-   whose lines name none of the four display names is also an error (exit 1) naming
+   whose lines name none of the supported display names is also an error (exit 1) naming
    the file and the first unrecognized line — an empty result would read as game-only
    and hide the selected language from the purge keep set. An unrecognized line beside
    a recognized one is warned and ignored; a leading UTF-8 BOM is stripped before
@@ -102,7 +102,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
    **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
    `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
-   returns the wrong set. It is the only one of the three APIs that carries them.
+   returns the wrong set. It is the only one of these API calls that carries them.
 
 Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
 
@@ -149,11 +149,11 @@ For each latest file `F{path,size,md5,chunks[]}`:
 
 ### Step 5 — Files-cleanup before (reclaim space before repairing)
 Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
-`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:177-263`): run the
+`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs`): run the
 §Step-7 cleanup *now* — after the plan exists, before any repair — to free space
 for the repair itself. Same file set as `--purge-after`; only the timing differs.
 Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
-`--check-only` (verification must not delete). In `--dry-run` the two purge
+`--check-only` (verification must not delete). In `--dry-run` the purge
 passes share their listing: because nothing was deleted, the after pass names
 only candidates the before pass did not, so each candidate is reported once.
 
@@ -174,8 +174,8 @@ Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
 
 **Two regimes.** The in-place path is not a defragmentation, and the difference decides the
 design. There is no staging area anywhere in it — a reuse source and its destination are
-both inside the same file, and the copy between them uses the existing 512 KiB `COPY_BUF`
-and nothing else.
+both inside the same file, and the copy between them uses a fixed-size copy buffer
+(`COPY_BUF`) and nothing else.
 
 - **Corruption repair** — the file is the right size and most chunks are intact. A chunk's
   reuse source is at *its own offset* (`r_i == o_i`), so the bad chunk is simply overwritten
@@ -185,7 +185,7 @@ and nothing else.
   bytes have to physically move from `r_i` to `o_i`. *This* is the defrag-shaped case.
 
 The second regime is the classic "relocate blocks inside a file without a staging area"
-problem, and it has exactly two answers: **order the relocations** so no source is
+problem, and its answers are: **order the relocations** so no source is
 overwritten before it is read, or **stage the moving bytes in RAM**. The first is free and
 forces the writes into one direction (a backwards-seek pattern); the second costs RAM and
 buys everything else. Which one a file gets is decided per file, so the in-place path is
@@ -193,7 +193,7 @@ not one algorithm but two tiers:
 
 | tier | when | extra disk | RAM | reuse | writes | direction |
 |---|---|---|---|---|---|---|
-| **RAM-staged** | the moving payload fits `--max-ram-bytes` | `0` | the payload | 100 % | only the wrong chunks | ascending |
+| **RAM-staged** | the moving payload fits `--max-ram-bytes` | `0` | the payload | all | only the wrong chunks | ascending |
 | **ordered** | the payload does not fit | `0` | `0` | one direction | the wrong chunks | ascending *or* descending |
 
 Both tiers produce **the same file**; they differ in how much reuse they keep and in which
@@ -335,7 +335,7 @@ optimization).
    (Redundant when the purge below is enabled — deprecated files are not in the
    live manifest — but keeps them cleaned without any purge flag.)
 2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite)
-   (Starward parity `GameInstallService.cs:427-445,643-661`). Only files are moved;
+   (Starward parity `GameInstallService.cs`). Only files are moved;
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
     `repair::purge::purge_extra` and is skipped only in `--dry-run`).
@@ -365,7 +365,7 @@ optimization).
    rewrites it after patching. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
-   `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
+   `GenshinInstall.cs`); everything else not in the manifest purges —
    including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`,
    `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`, logs, server
    bookkeeping files.

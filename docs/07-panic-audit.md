@@ -1,7 +1,7 @@
 # Panic-site audit for `girpr`
 
-**Status: complete (2026-10-30, re-swept 2026-11-09).** Audit of the tree at
-`1f4c3b2` plus the changes in this branch.
+**Status: complete.** The audit covered an audited tree at the time plus the
+changes in this branch.
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
 value chosen by the server (or by a hostile local manifest) reaches arithmetic
@@ -37,8 +37,7 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 3. Classified each as **guarded** (checked/refused), **saturated** (bounded
    arithmetic), or **invariant** (no server input can break it), and named the
    test that pins the behaviour.
-4. `rg` checklist used for the sweep, re-run on 2026-11-09 against the current
-   tree:
+4. `rg` checklist used for the sweep, re-run against the audited tree:
 
    ```
    rg -n '\.unwrap\(\)|\.expect\(|panic!|unreachable!|\[[a-zA-Z_][a-zA-Z0-9_.]*\]|\[[^\]]*\.\.[^\]]*\]| as (u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)|saturating|checked_| \+= | -= ' src
@@ -62,7 +61,7 @@ says which.
 
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
-| `crates/fetch/src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: `clamp(0, 64 MiB)` before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
+| `crates/fetch/src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: clamped to a bounded capacity before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
 | `crates/fetch/src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
 | `crates/fetch/src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `crates/fetch/src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
@@ -80,7 +79,7 @@ says which.
 | `src/repair/file/temp.rs` `try_reuse_slice` (reuse copy) | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
 | `src/repair/file/mod.rs` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
 | `src/repair/mod.rs` `publish_plan` (`disk.as_ref().expect`) | disk plan for the report | local | **Invariant**: `disk` is `Some` exactly when `--print-plan` or `--plan-out` is set, the same condition that builds it in this function; each `expect` is reached only under that condition. |
-| `crates/lock/src/lib.rs` `may_write_body` (`head[..read]`) | lock-file body prefix | local | **Invariant**: `read` is the count returned by `File::read` into the 8-byte `head`, so `read <= head.len()`; the slice is bounded by the read. |
+| `crates/lock/src/lib.rs` `may_write_body` (`head[..read]`) | lock-file body prefix | local | **Invariant**: `read` is the count returned by `File::read` into the fixed-size `head` buffer, so `read <= head.len()`; the slice is bounded by the read. |
 | `src/repair/scope/report.rs` `DiskPlan::new` | file `size`, `compressed_size` | server | **Saturating** (`est_write_bytes`, `est_extra_bytes`, `saturating_sub`). |
 | `src/repair/scope/report.rs` `PlanDocument::new` (`disk.for_id(...).expect`) | disk-plan entry for each planned file | local | **Invariant**: `DiskPlan::new` pushes exactly one entry per `plan.iter()` in plan order; `debug_assert_eq!` pins the length, and the release `expect` refuses a hand-built plan that breaks coverage instead of shifting another file's figures. |
 | `src/repair/scope/report.rs` `PlanTotals::new` (`max_chunk_bytes`) | chunk `compressed_size` | server | **Guarded**: `max(0)` before the `u64` cast; `max()`/`unwrap_or(0)` is total, so a corrupt size cannot panic. |

@@ -26,11 +26,11 @@ assert, offline and by hash, that it produced `expected/` and fetched exactly
 the chunks the artifact says it must fetch.
 
 ```powershell
-# Capture hk4e_global 7.0.0 -> 7.1.0 (defaults: new = main.tag, old = diff_tags[0])
+# Capture a version pair (defaults: new = main.tag, old = diff_tags[0])
 .\target\release\gircap.exe capture --biz hk4e_global --out artifacts
 
 # Re-check the bundle from stored bytes, no network
-.\target\release\gircap.exe verify --artifact artifacts\hk4e_global\7.0.0__7.1.0\<id>
+.\target\release\gircap.exe verify --artifact artifacts\hk4e_global\<old>__<new>\<id>
 
 # Rebuild old + new files from the retained chunks, no network
 .\target\release\gircap.exe materialize --artifact <same dir>
@@ -55,7 +55,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p gircap   # 772 tests, three #[ignore]d for cost (769 run by default), no network
+cargo nextest run -p gircap   # no network
 ```
 
 The HTTP mechanics tests live with the mechanics in the `gircap-http` package
@@ -65,8 +65,9 @@ on gircap's own contracts, remain in this package.
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
 environment variable — can reach the next one. The price is that the mock's
-world is built once per *test* rather than once per binary: `tests/schema.rs`
-goes from ~0.7 s to ~5 s, and the suite as a whole stays a few seconds.
+world is built once per *test* rather than once per binary: a suite that shares
+a mock pays that setup cost in every test's process, but the suite as a whole
+stays fast.
 
 **Doctests are not run**: nextest has no doctest support at all. This crate has
 none, so nothing is lost.
@@ -79,14 +80,12 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈97.7 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`expected/` is ≈18.7 MiB, `game/` ≈19.9 MiB, `chunks/` ≈15.8 MiB and
-`manifests/` ≈41.4 MiB; MiB = 1 048 576 B, measured on the reference bundle) and
-regenerable, so they belong on disk, not in history. Of `manifests/`, only the
-four served `*.manifest.zst` archives are ever fetched — ≈19 MiB — while the
-rest is the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv`
-sidecars. **This is the project location**: anything a test or another tool is
-expected to rely on lives here.
+bundles are large (tens of MiB on disk for a captured pair, with the retained
+manifests the largest contributor) and regenerable, so they belong on disk, not
+in history. Of `manifests/`, only the served `*.manifest.zst` archives are ever
+fetched — a fraction of the total — while the rest is the `.manifest.json.gz`
+copies and the `.meta.json` / `.paths.tsv` sidecars. **This is the project
+location**: anything a test or another tool is expected to rely on lives here.
 
 **When to re-capture.** A bundle is out of date when the world moved or when
 this tool moved:
@@ -98,8 +97,8 @@ this tool moved:
 - a test wants a pair that only exists upstream now.
 
 Do **not** re-capture merely to refresh a bundle you are not otherwise changing.
-A capture downloads tens of megabytes of blobs; doing that on a whim is the
-difference between a five-second loop and a two-minute one.
+A capture downloads a large volume of blobs; doing that on a whim is the
+difference between a quick loop and a slow one.
 
 **Being efficient about it.**
 
@@ -140,7 +139,7 @@ builds, diffs them, and assembles a **complete artifact**:
 
 | | shipped |
 |---|---|
-| `api/` | six response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `error_responses.json` and retained `error_bodies/` + `requests.ndjson` |
+| `api/` | the response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `error_responses.json` and retained `error_bodies/` + `requests.ndjson` |
 | `diagnostics/` | `rejections.json` (refused values) and `path_map.json` (escaped device names) |
 | `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json`, `matrix.json` |
 | `chunks/` | the three retention sets, every blob, `index.json` with `build_id` on each reference |
@@ -150,14 +149,13 @@ builds, diffs them, and assembles a **complete artifact**:
 | commands | `capture`, `verify`, `materialize`, `list` |
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
-The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` — the
+A current reference bundle under `artifacts/<biz>/<old>__<new>/` — the
 directory named `<UTC timestamp>Z`, the one the tool writes today — **verifies
-63/63, exit `0`**, and its own selfcheck is **93/93, `pass`**. Find the local
-bundle with `gircap list --root artifacts`.
+with every check green, exit `0`**, and its own selfcheck is **`pass`**. Find the
+local bundle with `gircap list --root artifacts`.
 
-It holds **six** captures and answers **all six** patch shapes, one capture
-each: the class set is a partition on the content, so a file answers exactly
-one shape.
+It holds **one capture per patch shape**: the class set is a partition on the
+content, so a file answers exactly one shape.
 
 **A class the budget refused is recorded, not dropped.** `--max-download-bytes`
 refuses a class it cannot pay for and the matrix row says `over_budget` with

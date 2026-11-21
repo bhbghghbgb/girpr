@@ -61,7 +61,7 @@ No build.rs (prost `derive` only, no protoc). No SQLite, no GUI, no speed limite
 ```text
 girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--audio <zh-cn,en-us,ja-jp,ko-kr|none>]...   (repeatable; default: keep current else en-us; `none` = explicit game-only, overwrites scan file, cannot mix)
-      [--jobs <N, default 4>]                  (concurrent FILES; chunks sequential/file; `--io-threads` is a deprecated alias)
+      [--jobs <N>]                            (concurrent FILES; a modest default; chunks sequential/file; `--io-threads` is a deprecated alias)
       [--purge-after] [--purge-before]          (same files-cleanup after / before; timing only)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
       [--repair-mode <auto|inplace|temp|discard>]  (how each file is written; default auto)
@@ -105,20 +105,20 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Files-cleanup after | `repair::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` + the legacy in-install `girpr.lock` + the cleaned blacklist) |
 | Summary | `report::format_summary_line`, emitted by `main` (8) | — |
 
-Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fixed
-`pool_max_idle_per_host(16)` (see `crates/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
-(512 KiB bufs). Retries: 5× linear backoff on manifest/chunk/file ops.
+Concurrency: `tokio::Semaphore(jobs)` over files; a single `reqwest::Client` with a fixed
+connection-pool cap (see `crates/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
+with fixed-size buffers. Retries: 5× linear backoff on manifest/chunk/file ops.
 
 ## 4. Testing
 
-`cargo nextest run` runs two layers, both offline by construction:
+`cargo nextest run` runs its test layers, all offline by construction:
 
 - **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump,
   audio-lang mapping and flag validation, API URL/query building (per-launcher
   `channel`/`sub_channel`, `getBuild` tag encoding), local chunk-map build, manifest
   filter, work-list build/dedup, expected-set/purge classification, audio scan file,
   REPORT/PROGRESS/SUMMARY formatting, HoYoPlay wrapper and int-or-string parsing.
-- **Integration tests** (`tests/repair_offline.rs`): one `#[tokio::test]` per
+- **Integration tests** (`tests/repair_offline.rs`): a dedicated `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`
   on `127.0.0.1:<ephemeral>` (`crates/test-fixtures`, reached through the thin
   `tests/common/mod.rs` shim) injected through
@@ -135,7 +135,7 @@ Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fix
   `1`, never clap's `2`, and `--help` is `0`. No game directory is touched.
 - **The bundle-backed suite** (`tests/artifact_bridge.rs`, [`docs/06`](06-artifact-bridge-spec.md)):
   `#[ignore]`d, and it drives the real binary over a captured bundle — each
-  capture twice, once per write mode, asserting that the two produce the same
+  capture is exercised in every write mode, asserting that the modes produce the same
   file and that the in-place one writes less.
 - **The streaming invariant** (`crates/fetch/src/sophon/stream.rs`): an always-on unit test
   (`the_streamed_decode_writes_in_pieces_not_one_buffer`) asserts that a decoded
@@ -146,9 +146,9 @@ Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fix
 
 ## 5. Logging & correlation
 
-`tracing` to stderr (`--log-level`, `info` by default, with `RUST_LOG` adding to
-it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`,
-`debug` by default). Both layers are built in `src/logging.rs` over the shared
+`tracing` to stderr (`--log-level`, with `RUST_LOG` adding to
+it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`).
+Both layers are built in `src/logging.rs` over the shared
 policy in `crates/log/` — the same policy the two dev tools follow. The two
 levels are separate: `--log-level` only affects stderr, `--log-file-level` only
 the file. A log file that cannot be opened degrades to a warning and a sink,
@@ -202,11 +202,11 @@ them, which is the one term the decode cannot remove.
 
 | item | why not now |
 |---|---|
-| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is one pure function (`repair::reuse::salvage_order`) to swap, and the writer does not know which tier produced the order |
-| a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves one read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about, and the read is mostly served by the page cache |
+| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is a pure function (`repair::reuse::salvage_order`) to swap, and the writer does not know which tier produced the order |
+| a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves a read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about, and the read is mostly served by the page cache |
 | cross-file salvage (a chunk from any local file, not just the same path) | mutually exclusive with an in-place repair absent a file-level order: repairing a donor destroys a donee's source. The reuse map is same-file-only, so the conflict is latent — but it must be settled before anyone adds it |
 | reclaim-on-demand (delete files mid-run to make room) | the in-place repair removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and its own doc |
-| an incremental protobuf parse of the manifest | the manifest's *decoded* bytes (16.8 MB for the `game` manifest of build 7.1.0) must be resident for `prost` to parse them — the remaining term is protobuf, not zstd. The wire form is a sequence of `0x0A <varint len> <bytes>`, so each entry could be parsed on its own as the bytes arrive, but that needs the *read* side of the decoder (an async→sync bridge) and a ~60-line wire reader that must agree with `prost` on field order, unknown fields and framing. A separate piece of work with its own risk profile |
+| an incremental protobuf parse of the manifest | the manifest's *decoded* bytes (the measured game manifest for a release build) must be resident for `prost` to parse them — the remaining term is protobuf, not zstd. The wire form is a sequence of `0x0A <varint len> <bytes>`, so each entry could be parsed on its own as the bytes arrive, but that needs the *read* side of the decoder (an async→sync bridge) and a small wire reader that must agree with `prost` on field order, unknown fields and framing. A separate piece of work with its own risk profile |
 | hard-link dedup of byte-identical manifest paths | permanent space rather than transient, NTFS-only (exFAT, where Genshin installs often live, has no hard links), and it interacts with the in-place write: rewriting one link rewrites both |
 | a compressed chunk cache on disk | strictly more disk, retained on purpose — the opposite of what this tool is for |
 

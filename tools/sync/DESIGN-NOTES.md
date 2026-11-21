@@ -16,7 +16,7 @@ and not here.
 ## Load-bearing invariants, and what enforces them
 
 The dangerous edits in this crate are the ones that break an invariant nothing
-fails loudly about. Twelve of them.
+fails loudly about. Several of them.
 
 ### The verify needs two independent reads
 
@@ -36,15 +36,12 @@ the second read come from the same page cache the flush never wrote through.
 `--hash-all-of none` takes a different arm and keeps `std::io::copy`'s fast
 path, since there is no digest to justify giving it up.
 
-**Enforced by:** `verify_digests` takes two maps and is unreachable with one;
-`a_disagreement_between_the_two_digests_is_a_failure` hands it two maps that
-disagree, `a_digest_that_only_one_side_has_is_a_failure` covers the `Some !=
-None` case a loop over `src`'s keys would skip, and
-`a_failed_copy_names_the_algorithm_in_canonical_order` pins the algorithm a
-failure names — the canonical one, not the request's. That case reads the
-error *text*; the error **event** is the other channel a parser can read, and
-`a_failed_verify_names_the_algorithm_in_the_error_event` pins its `algo` field
-to the same canonical algorithm.
+**Enforced by:** `verify_digests` takes two maps and is unreachable with one.
+The enforcement tests cover a disagreement between the digests, a digest only
+one side has (the `Some != None` case a loop over `src`'s keys would skip), and
+the canonical algorithm named on failure — read both from the error *text* and
+from the error **event**'s `algo` field, which is the other channel a parser can
+read.
 
 ### src → dst, always, for lock ordering
 
@@ -76,7 +73,7 @@ costs one batched write and depends on none of those.
 
 It becomes load-bearing the moment `copy_one` stops truncating, stops deferring
 mtime, or **reuses a digest across a content change** — which is exactly what a
-single-pass copy would do. Do not "optimise it away" without checking those three.
+single-pass copy would do. Do not "optimise it away" without checking those conditions.
 
 ### The plan must precede the rename, and the two pairings must differ
 
@@ -101,7 +98,7 @@ either way. The one that does not is
 and its row in `tests/sync_plan/`. If you add a case-only fixture, give the two
 sides **different bytes at the same length** or it tests nothing.
 
-### Four fold sites, and the questions each one answers
+### The fold sites, and the questions each one answers
 
 **The path key folds ASCII case only.** `util::path_key` is the key every
 relative-path index uses — the mixed-case guard, the diff's pairing, the
@@ -146,8 +143,8 @@ exact match wins, and two entries that fold together are ambiguous rather than
 equal. Each site says which question it asks, and the ASCII-only path key
 stays a rule of its own.
 
-**The cache reservation is a fourth site, and it folds the path key's way.**
-`util::has_cache_prefix` asks a narrower question than any of the three above:
+**The cache reservation is another site, and it folds the path key's way.**
+`util::has_cache_prefix` asks a narrower question than any of the others above:
 is this path component one of the tool's own names (`girpr-cache` and its
 copies)? The prefix it matches is ASCII, so the ASCII-only comparison
 (`util::ascii_case_eq`) states it without borrowing the identity rule's Unicode
@@ -156,40 +153,25 @@ which is not the question here. On POSIX neither fold applies at all: the two
 spellings are distinct entries, so the reservation is an exact prefix match
 and `GIRPR-CACHE` is ordinary content.
 
-**The reservation has two rules, and both state that comparison.** The prefix
+**The reservation's rules each state that comparison.** The prefix
 helper `util::has_cache_prefix` reserves the whole `girpr-cache*` prefix, and
 its exact-name counterpart `util::is_cache_name` asks whether the component is
 the cache's own name, `girpr-cache`, rather than one of its copies. Both ask
 it with `util::ascii_case_eq` on Windows and with an exact match elsewhere, so
 a reader who follows one finds the other.
 
-**Enforced by:** `util::tests::path_key_folds_ascii_case_only` and
-`util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key, and
-`util::tests::the_borrowed_folded_key_is_the_path_key_s_rule` and
-`util::tests::a_borrowed_folded_key_is_found_under_another_spelling` for the
-borrowed form of it;
-`util::tests::component_equality_folds_ascii_and_non_ascii_case` and
-`util::tests::path_identity_ignores_case_on_windows` for identity;
-`util::tests::the_path_key_and_the_identity_rule_disagree_deliberately` for
-the boundary between them;
-`util::tests::the_cache_prefix_folds_case_on_windows_only` for the
-reservation, and `util::tests::the_cache_name_is_the_exact_name_not_the_prefix`
-for its exact-name counterpart;
-`planner::pairs::tests::insensitive_mode_does_not_fold_non_ascii_case` and
-`planner::pairs::tests::insensitive_mode_keeps_a_non_ascii_lookalike_distinct`
-for the planner's use of the key; and the `plan::tests` cases
-`a_case_differing_final_component_names_the_walk_entry`,
-`a_case_differing_link_component_is_spared_under_the_walk_spelling`,
-`a_case_differing_mirrored_target_is_refused`,
-`a_case_differing_terminal_is_spared_by_the_full_pass` and
-`a_case_differing_alias_is_spared_under_the_walk_key` for the on-disk lookup
-and the path key, with
-`plan::tests::the_identity_rule_and_the_on_disk_lookup_agree_on_a_non_ascii_spelling`
-for the two sites that share the mapping, compared with each other.
+**Enforced by:** the enforcement tests cover the key's ASCII-only fold and its
+borrowed form, identity's wider fold and its deliberate disagreement with the
+key, the reservation's case folding on Windows only and its exact-name
+counterpart, the planner's use of the key (including non-ASCII lookalikes), and
+the on-disk lookup across case-differing components, aliases, mirrored targets
+and terminals — including the identity rule and the lookup agreeing on a
+non-ASCII spelling, the two sites that share the mapping compared with each
+other.
 
 ### The cache's algorithm vocabulary is open; the request's is not
 
-`HashAlg` is a closed two-variant enum and the parser refuses everything else, so
+`HashAlg` is a closed enum and the parser refuses everything else, so
 what a run may **ask for** is settled at compile time. What a cache row **holds**
 is not: a cache written by a newer build may carry a digest under a name this one
 has never heard of, and that row has to stay readable. `cache/wire.rs` therefore
@@ -211,21 +193,20 @@ one. `DigestSet::insert_named` is where the routing lives, so the rule cannot be
 spelled two ways.
 
 **Why `kind` is the opposite.** `FileRec.kind` *is* a closed registry in the wire
-format and its deserializer refuses an unknown spelling on purpose: a third kind
+format and its deserializer refuses an unknown spelling on purpose: a new kind
 would break older binaries that cannot represent it, so failing loudly is the
 right answer.
 The two look inconsistent and are not. Do not "fix" the asymmetry, and do not
 convert `kind` to an enum on the strength of `HashAlg` being one — the enum is what
 makes the *request* cheap to hold; inline names are what make the *cache* survive.
 
-**Enforced by:** `codec_preserves_unknown_algorithms`; the `blake3` cases in
-`tools/sled2redb/tests/convert.rs` — the converter is a separate tool — which
-go through a conversion and a whole scan rather than a round trip;
-`merge_row_drops_a_foreign_digest_when_the_stat_changed`, which is
-one place the rule has to be visible to `merge`; and
+**Enforced by:** the codec's preservation of unknown algorithms, checked both in
+a round trip and — through the separate `sled2redb` converter — across a
+conversion and a whole scan; the `merge_row` case where the rule has to be
+visible to `merge` after a stat change; and
 `a_digest_set_is_eighty_bytes_and_allocates_nothing`, which fails if a later
-edit puts a map back — a map passes every other test here and costs five
-allocations per row.
+edit puts a map back — a map passes every other test here and adds allocations
+to every row.
 
 ### The effective source is checked against dst before a plan exists
 
@@ -263,14 +244,11 @@ target is removed as a link and its target survives. That is the second line
 because a plan is data: a later phase that invents a delete must not be able to
 remove the file the run is copying.
 
-**Enforced by:** `sync_refuses_a_src_directory_link_to_dst`,
-`sync_refuses_a_src_directory_link_inside_dst`,
-`sync_refuses_a_src_directory_link_containing_dst`,
-`sync_refuses_a_src_file_link_into_dst` (all but the last run on a Windows host
-through a junction; the file-link case may skip),
-`sync_refuses_a_dst_file_link_into_src` and
-`sync_refuses_a_dst_directory_link_into_src` (the first may skip; the junction
-case runs here), and `a_removal_whose_parent_resolves_inside_src_is_refused`.
+**Enforced by:** the enforcement tests cover src links into dst (directory,
+inside, containing and file-link shapes) and dst links into src (file and
+directory shapes), plus a removal whose parent resolves inside src. Host
+coverage varies: the junction cases run on Windows, and the file-link cases
+may skip where the host refuses the primitive.
 
 ### A filtered dst blocker is refused before the rename
 
@@ -292,10 +270,9 @@ src directory, so the blocker is normally its own candidate. `dm` is deliberatel
 not widened to retain non-directory ancestors: that would make the planner
 delete an entry the filter promised to leave alone.
 
-**Enforced by:** `a_filtered_file_at_a_mkdir_path_is_refused_from_disk`,
-`a_file_at_a_strict_prefix_is_refused_from_disk`,
-`a_planned_fix_at_a_strict_prefix_is_applicable`, and
-`a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename` (which also
+**Enforced by:** the enforcement tests cover a filtered file at a mkdir path, a
+non-directory at a strict prefix, a planned fix at a strict prefix, and a
+filtered dst file blocking a mkdir being refused before the rename (which also
 pins that no case-only rename precedes the refusal).
 
 ### A hard-linked destination is refused at plan time, not written through
@@ -372,35 +349,27 @@ src's casing. `spare_link_storage` stats the on-disk spelling and maps the
 canonicalized target back through `DiskSpelling::plan_rel`, the same path map
 the other plan-time guards use.
 
-**Enforced by:** `sync_writes_through_a_dst_file_link`,
-`sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed`,
-`sync_spares_a_link_target_inside_a_dst_only_directory`,
-`sync_refuses_a_dst_file_link_whose_target_is_also_mirrored`,
-`sync_spares_a_kept_link_through_a_dst_directory_link`,
-`sync_refuses_two_kept_links_that_share_one_dst_file` and
-`sync_refuses_a_chained_pair_of_kept_links_sharing_storage` (file-link cases
-self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
-`sparing_a_links_content_drops_it_from_every_removal_list`,
-`a_link_target_is_named_relative_to_the_dst_root`,
-`a_case_differing_final_component_names_the_walk_entry`,
-`a_case_differing_link_component_is_spared_under_the_walk_spelling`,
-`a_case_differing_mirrored_target_is_refused`,
-`a_case_differing_terminal_is_spared_by_the_full_pass`,
-`a_case_differing_alias_is_spared_under_the_walk_key`,
-`a_case_only_rename_of_the_target_is_one_spare_in_both_modes` and
-`an_unresolvable_dst_root_is_refused_at_plan_time`.
+**Enforced by:** the enforcement tests cover write-through of a dst file link,
+keeping a link's target when no copy is needed or it sits in a dst-only
+directory, refusing a target that src also mirrors, sparing a kept link through
+a dst directory link, and judging linked files that share storage as a set —
+including chained links (file-link cases self-skip on a host that refuses
+`symlink_file`). The plan-time cases cover dropping a spared target from every
+removal list, naming the target relative to the dst root, case-differing
+components, aliases, terminals and mirrored targets, a case-only rename of the
+target, and refusing an unresolvable dst root.
 
 ### A digest is looked up by name, not by slot
 
-`DigestSet` has three lookups, and the two that answer the usual question agree.
-`get_algo(HashAlg)` reads the slot *and* the foreign arm; `get_named(&str)` asks
-by name; `get(HashAlg)` reads the slot and nothing else.
+`DigestSet` has `get_algo(HashAlg)`, which reads the slot *and* the foreign arm;
+`get_named(&str)`, which asks by name; and `get(HashAlg)`, which reads the slot
+and nothing else. The first two answer the usual question, and they agree.
 
 **Every caller asking "does this row hold algorithm X" must use the by-name one** —
 `obtainable` and `pick_one` in the planner, `HashPlan::missing`, `hashes_differ` in
 the diff, and `verify_digests` in the copy phase. A row whose `md5` is stored with
-eight bytes is not in the md5 slot, and a slot lookup reports that row as holding
-nothing at all.
+an unexpected length is not in the md5 slot, and a slot lookup reports that row
+as holding nothing at all.
 
 **The foreign arm is searched by name, not by spelling.** A known algorithm is
 found under any ASCII-case spelling of its name — `MD5` as well as `md5` — because
@@ -435,31 +404,20 @@ algorithms — so a slot lookup would report a corrupt row as clean. That is the
 false clean, reached from the other side, and the coverage check cannot see it
 because the row genuinely does hold a digest under that name.
 
-**Enforced by:** `a_known_name_in_the_foreign_arm_is_found_under_any_ascii_case`,
-`an_unknown_name_is_matched_exactly_and_by_no_algorithm`,
-`a_known_name_with_the_right_length_still_goes_to_its_slot`,
-`a_typed_lookup_finds_a_known_name_carried_in_foreign` and
-`a_non_ascii_lookalike_name_is_never_matched` in `src/hash/tests.rs`;
-`the_name_resolver_agrees_with_the_parser` for the resolver and the parser
-answering one question, and
-`the_resolver_folds_exactly_as_the_ascii_case_comparison_does` for the
-resolver folding as the ASCII-case rule says it folds, against that rule
-written out rather than against `std`; the resolver's `const`
-context for the comparison's allocation-freedom: a resolver that stopped
-being `const` would not compile there, and the context is in the crate
-rather than in its tests, so a build that does not build the tests holds
-it too;
-`a_foreign_entry_is_replaced_only_under_its_own_spelling` for the arm
-holding one entry per spelling,
-`a_merge_replaces_a_foreign_entry_only_under_its_own_spelling` for the merge
-path writing under the same rule, and
-`two_spellings_of_one_algorithm_survive_a_merge` for a row that still holds
-two spellings of one algorithm after a merge;
-`the_first_of_two_entries_that_name_one_algorithm_answers` for the first
-match that wins; `a_known_name_with_the_wrong_length_routes_to_foreign`
-for the routing rule; and `tests/why/disagreement.rs`, whose fixtures give
-`sha256` a digest of the wrong length so the row really does carry a known name
-in the foreign arm, and which asserts the comparison still finds it.
+**Enforced by:** the enforcement tests in `src/hash/tests.rs` cover a known name
+in the foreign arm found under any ASCII-case spelling, an unknown name matched
+exactly and by no algorithm, a right-length known name still going to its slot,
+a typed lookup finding a known name carried in foreign, and a non-ASCII lookalike
+never matching. The resolver is checked against the parser for answering one
+question and against the ASCII-case rule written out rather than `std` for how
+it folds; its `const` context enforces allocation-freedom from the crate itself,
+so even a build that does not build the tests holds it. The arm and the merge
+path are checked for replacing entries only under their own spelling, for
+keeping distinct spellings of one algorithm across a merge, and for the first
+match winning; a known name with the wrong length is checked for routing to
+foreign. `tests/why/disagreement.rs` gives `sha256` a wrong-length digest so the
+row really does carry a known name in the foreign arm, and asserts the comparison
+still finds it.
 
 ### A copy is published, and the bound runs under the cache's lock
 
@@ -606,19 +564,19 @@ run making it ever reads it.
 
 The order is the order of **age**, read off the name: the stamp it carries,
 and — for a name that carries the fallback suffix — the number after it. The
-suffix does not sort as a number (`_10` sorts before `_9`), so ten copies
-published inside one microsecond would be ordered wrongly by the name alone,
-and the bound would take the newest of them away. The number is therefore read
-as a number, and the two orders the bound uses — the one it walks the copies
-in and the one it picks the newest by — are the same one.
+suffix does not sort as a number, so copies published in the same instant could
+be ordered wrongly by the name alone, and the bound would take the newest of
+them away. The number is therefore read as a number, and the orders the bound
+uses — the one it walks the copies in and the one it picks the newest by — are
+the same one.
 
 **The family of names has a limit of its own.** A name of that shape that is
 taken is stepped over rather than reused, so the published name is one of a
-family: the plain `girpr-cache-backup-<ts>` and its `_2`, `_3`, … spellings,
-up to the thousandth suffix — a thousand candidates in all. The limit is
-generous on purpose, because a candidate is only ever taken by a run that
-collided on the same microsecond; it is there so a pathological folder cannot
-spin the claim loop forever, not because the number is expected to be reached.
+family: the plain `girpr-cache-backup-<ts>` and its numbered spellings. The
+family is bounded by a generous limit on purpose, because a name is only ever
+stepped over when a run collided at the same instant; it is there so a
+pathological folder cannot spin the claim loop forever, not because the limit
+is expected to be reached.
 A claim that finds no free name within the limit fails the run loudly rather
 than spinning: the run reports the failure rather than a backup that is not on
 disk.
@@ -628,7 +586,7 @@ cache's sidecar lock (`girpr-cache-lock`, a file of its own beside the cache)
 until the run is done with the cache. The crate takes that lock non-blockingly,
 so at most one run is in its run phase for a folder's cache at a time —
 **where the filesystem can lock a file at all**. The sidecar is used because
-redb 4.3+ locks the database with byte ranges and, on Windows, takes a blocking
+redb locks the database with byte ranges and, on Windows, takes a blocking
 lock on a reserved byte when a byte-range lock is refused: a whole-file lock on
 the cache itself would block rather than fail fast. A filesystem that cannot
 lock a file has neither sidecar nor redb lock, and there the exclusion is gone:
@@ -751,7 +709,7 @@ name another run is publishing under, and it moves on to the next name rather
 than racing for it. Taking the record before the claim is also what keeps two
 runs from publishing onto one name.
 
-The tool takes **two kinds of lock of its own**: the per-copy record's and the
+The tool takes **locks of its own**: the per-copy record's and the
 cache's sidecar. The bound itself still runs under the cache's sidecar, which
 the open holds: a folder whose filesystem cannot lock a file still gets the
 bound, and its copies are
@@ -760,62 +718,27 @@ lock is per copy, and a filesystem that cannot take one leaves the copy
 unmarked rather than failing the run. A publish that fails fails the run
 loudly, rather than leaving a run reporting a backup that is not there.
 
-**Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
-and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
-`a_working_copy_that_cannot_be_removed_is_left_behind` for the scratch the
-publish leaves behind when the removal fails,
-`a_published_name_appears_with_the_copy_it_carries` and
-`a_copy_is_published_on_a_filesystem_that_cannot_link` for the publish
-itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
-`a_directory_copy_is_published_whole` for the directory case,
-`a_publish_whose_claim_was_taken_away_fails_loudly` and
-`a_publish_whose_claimed_name_was_taken_away_fails_loudly` for the claim
-that went away,
-`a_publish_whose_claim_was_taken_over_by_another_run_fails_loudly` for the
-claim that another run took over, and
-`a_publish_does_not_drop_the_copy_of_another_run` for the copy that is at the
-name when the claim is dropped,
-`a_publish_that_does_not_land_does_not_drop_the_copy_of_another_run` for the
-copy that is at the name when a rename that did not land drops the claim, and
-`a_publish_whose_rename_does_not_land_fails_the_run_and_frees_the_name` for
-the publish that fails when the rename does not land,
-`a_published_copy_is_named_after_it_became_whole` for the name the bound
-orders the copies by, and
-`the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself,
-`the_bound_keeps_the_copy_the_run_published` for the bound against the run's
-own copy,
-`a_second_bound_still_spares_the_copy_the_process_published` for a later bound
-in the same run,
-`an_earlier_runs_copy_is_an_ordinary_copy_again` for a copy an earlier run in
-the same process published,
-`an_earlier_runs_copy_is_not_spared_by_a_run_that_published_nothing` for the
-run that published nothing into the list, and
-`a_copy_a_run_that_never_opened_the_cache_published_is_adopted_by_the_next_run`
-for the copy that was waiting for an open,
-`a_run_whose_open_failed_does_not_adopt_the_copies_that_are_waiting` and
-`a_run_whose_open_failed_spares_the_copies_that_are_waiting` for the run
-whose open did not happen,
-`a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
-same thing seen through a whole run,
-`the_folder_of_a_legacy_sled_cache_is_bounded`,
-`the_folder_of_a_corrupt_cache_is_bounded` and
-`the_folder_of_a_cache_another_run_holds_is_left_to_it` for the bound on a
-cache that did not open, and
-`a_cache_that_cannot_be_opened_for_writing_is_still_locked` for the lock on
-a cache that is not writable,
-`a_copy_whose_record_is_released_is_kept_while_the_cache_is_open` for the
-protection the cache's own lock gives once the record is released,
-`a_published_copy_carries_a_record_of_its_own`,
-`a_copy_a_live_run_is_using_is_not_the_bounds_to_take`,
-`a_folder_of_copies_a_live_run_is_using_can_hold_more_than_its_bound` for
-the bound when a copy is spoken for,
-`a_record_whose_run_is_gone_does_not_stop_the_bound`,
-`a_record_that_cannot_be_locked_does_not_spare_its_copy`,
-`a_record_of_a_copy_that_is_gone_is_reclaimed`,
-`a_record_is_not_one_of_the_copies_the_bound_counts`,
-`a_record_carries_nothing_but_its_lock`,
-`concurrent_publishes_get_copies_and_records_of_their_own` and
-`the_record_is_released_once_the_cache_is_open` for the record itself.
+**Enforced by:** the enforcement tests cover the publish — a copy still being
+written is out of the bound's reach, a published name holds the whole copy, a
+failed removal leaves the working name behind, and the copy is published whole
+under a claimed name, including on a filesystem that cannot link and for
+directory copies. They cover a claim that went away or was taken over by another
+run failing the publish loudly, a publish that fails when its rename does not
+land, and a publish not dropping another run's copy. They pin that the bound
+orders copies by age and not by name (the name says when a copy became whole),
+keeps the copy the run published, keeps sparing it on a later bound in the same
+run, treats an earlier run's copy as ordinary again (also when that run published
+nothing), and adopts a copy left waiting for an open; a run whose open failed
+neither adopts nor loses those copies. They cover bounding a folder seen through
+a whole run, and bounding a folder whose cache is absent, corrupt or held by
+another run, as well as a cache not openable for writing still being locked and
+the protection the cache's own lock gives once a record is released. Finally
+they cover the per-copy record: published copies carry one, a live run's copy is
+spared by the bound, a spared copy does not spend the removal budget, a record
+whose run is gone or whose lock cannot be tested does not spare its copy, a
+record of a gone copy is reclaimed, a record is not one of the copies the bound
+counts, a record carries nothing but its lock, concurrent publishes get copies
+and records of their own, and the record is released once the cache is open.
 
 ---
 
@@ -841,8 +764,9 @@ plus `tests/rw_threads/limiter.rs`); leave them alone.
 
 **Do not convert `FileRec.kind` to an enum.** It is the obvious companion to
 `HashAlg`, and it is the wrong direction: `kind` is a closed registry *on the
-wire* by design, so that a third kind breaks old binaries loudly instead of
-quietly. See the sixth invariant for why algorithms are not the same case.
+wire* by design, so that a new kind breaks old binaries loudly instead of
+quietly. See the algorithm-vocabulary invariant above for why algorithms are not
+the same case.
 
 **Do not inline `same_spelling`.** It is a one-line wrapper over an equality
 comparison, and it stays because it is the one place the foreign arm's
@@ -871,16 +795,16 @@ That is a **false clean**, the worst outcome this tool can produce, and the
 failure mode of a regression here is invisible: the counters look fine, the rows
 look fine, only the verdict is wrong.
 
-**Do not fold the three rename failure hooks into one.** `GIRSYNC_TEST_FAIL_RENAME`,
-`GIRSYNC_TEST_FAIL_RENAME_STEP1` and `GIRSYNC_TEST_FAIL_RENAME_STEP2` are three
-switches because the case-fixing rename has three failure points, and each leaves
+**Do not fold the rename failure hooks into one.** `GIRSYNC_TEST_FAIL_RENAME`,
+`GIRSYNC_TEST_FAIL_RENAME_STEP1` and `GIRSYNC_TEST_FAIL_RENAME_STEP2` are separate
+switches because the case-fixing rename has distinct failure points, and each leaves
 something different behind — nothing, a file placeholder, an entry to roll back.
 One switch with a stage value would put that stage in the *value*, and the value
-is a path everywhere else in the family, so the family would carry two kinds of
+is a path everywhere else in the family, so the family would carry different kinds of
 value to parse and one rule to state twice. The stage in the switch's **name**
 keeps every failure hook's value a plain relative path.
 
-It also keeps the three separately armable. Each stage reads its own variable
+It also keeps them separately armable. Each stage reads its own variable
 and holds its own path, so a test can name a stage and a path per variable; a
 single variable would hold one stage and one path at a time. The compound value
 the copy gate already uses (`<wait>:<on>`) shows what the alternative costs: a
@@ -891,7 +815,7 @@ nothing, all of it beside the rule the paths already have.
 
 ## Known limits, deliberately not fixed
 
-They are five kinds of thing: state in the cache that the next run reclaims, a
+They are several kinds of thing: state in the cache that the next run reclaims, a
 race the run cannot win, state in the cache or the folder that nothing reclaims
 on its own, a limit on what the host can create, and an approximation of the
 filesystem's own case table. Every one of them is stated in `README.md` where a
@@ -928,12 +852,11 @@ is what makes it worth stating.
 **A conversion a killed run left behind stays in the folder.** The converter
 writes the new cache into a temporary beside the destination and moves it onto
 the destination only once it is whole, so a conversion that is killed leaves
-that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or
-`girpr-cache-convert-<pid>-<ts>_2.redb` and its `_3`, `_4`, … spellings when
-the plain one is taken. That family of names is bounded as well: the plain
-name and the `_2` … `_1000` spellings, a thousand candidates in all, and a
-conversion that finds every one of them taken fails rather than trying
-forever. Nothing reclaims any of them: the retention bound
+that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or the numbered
+spellings of that name when the plain one is taken. That family of names is
+bounded as well: the plain name and its numbered variants up to a generous
+limit, and a conversion that finds every one of them taken fails rather than
+trying forever. Nothing reclaims any of them: the retention bound
 ranges over a cache's published copies and not over these names, so a leftover
 stays in the folder until it is removed by hand.
 That is the same trade as the working copy a killed backup leaves, and for the
@@ -998,14 +921,14 @@ one is a real loss:
 - The **answers have to be a set** because there is one per path, for every path in
   the tree, and under `--hash-all-of` every one of them is the same value. A list
   there is a heap allocation per path holding a fresh clone of the request; a set
-  is two bytes inside a map value that already exists.
+  is a compact value inside a map value that already exists.
 
 Neither shape is derivable from the other, and the reason each is right is
 opposite to the other's.
 
 **The request is spelled one algorithm per occurrence.** `--hash-any-of` and
 `--hash-all-of` are repeatable, and each occurrence names one algorithm, so a
-request for two is written `--hash-any-of sha256 --hash-any-of md5`. A flag that
+request for more than one is written `--hash-any-of sha256 --hash-any-of md5`. A flag that
 named two values in one occurrence is refused by the parser before the run
 starts, so every place that spells these flags — the CLI's own help, the README,
 and the remedy a coverage error prints — repeats the flag. The remedy matters
@@ -1023,8 +946,8 @@ order — as the diff's `digest-differs` tag already names it.
 **The commit thresholds and the durability are one policy.** A cache write
 resolves both when it starts — a batched write handle when it is opened, the
 open's own one-off `meta` write when it runs — and keeps them for as long as
-the write lasts. They are two test-only switches and they look like two
-independent knobs; they are not, because a write that committed some of its
+the write lasts. They are test-only switches and they look like independent
+knobs; they are not, because a write that committed some of its
 batches one way and the rest another would leave a run's own cache half
 durable and half not, which is the opposite of what the durability switch is
 for. The thresholds exist so that a small fixture can make a commit

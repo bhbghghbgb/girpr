@@ -39,8 +39,8 @@ main tool, and never imports its code.
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
 | No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`, `--no-log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program. The shared exit-table mechanism below generates each tool's table from the tool's own list — no code or meaning crosses between the tools. The shared audio-language mechanics below carry only the four code/display-name pairs and the lower + `_`→`-` spelling; each tool keeps its own alias map, `none` sentinel and validation, so no audio policy crosses between the tools. The shared clap-error mapping below turns help/version into `0` and every other error into the usage code the caller supplies — no exit code or exit table crosses between the tools |
 | No shared fixtures | `gircap` builds its own mock server for its own tests, in the gircap-only dev library `test-support/` reached through the thin `tests/common/mod.rs` shim; the mock inverts onto gircap's own public seams and borrows nothing from the repair binary |
-| Eleven shared *leaf* crates: the log policy, the ordered-JSON/line-writing mechanics, the digest mechanics, the Windows path-name and canonical-path mechanics (device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization), the retry mechanics, the exit-table generation mechanism, the clap-error to usage-code mapping mechanics, the audio-language mechanics, the Sophon protobuf wire types, the shared region values and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-report-core` (`crates/report-core/`): ordered-JSON and line-writing mechanics — each tool passes its own field order, event placement, value types, escaping and boolean spelling, so no report format crosses between the tools. `girpr-digest` (`crates/digest/`): hex spelling and fixed-width digest mechanics — no flag, no exit code, no published shape. `girpr-fs-names` (`crates/fs-names/`): the Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — each tool passes its own reserved set and rule flags, so no program rule is borrowed. `girpr-retry` (`crates/retry/`): the retry schedule factory and injectable sleep driver — each tool passes its own base delay, multiplier, jitter and cap, and keeps its own attempt loop and side effects, so no retry policy of either program is borrowed. `girpr-exit` (`crates/exit/`): the exit-table generation mechanism — the enum/`ALL`/code/pin pattern only; each tool supplies its own codes and meanings, so no exit-code contract is borrowed. `girpr-audio-language` (`crates/audio-language/`): the lower + `_`→`-` token primitive and the four code/display-name pairs in the game's canonical order — each tool passes its own case-folding flavour and keeps its own alias map, `none` sentinel and path-component validation, so no audio policy is borrowed. `girpr-proto` (`crates/proto/`): the Sophon protobuf wire types — the three messages, their tags, the misspelled `chuncks` and opaque tag 6; each tool keeps its own decode boundary, dump format, validation and normalisation, so no program logic is borrowed. `girpr-model` (`crates/model/`): the region identity, ids, channel tuples and base URLs — each tool keeps its own resolve policy, `Endpoints` override seam and URL builders, so no program logic is borrowed. `girpr-cli` (`crates/cli/`): the clap-error to usage-code mapping — help/version map to `0` and every other error to the usage code the caller passes in, so no exit code crosses between the tools. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. None holds any logic of any program, and no test of one program depends on another's |
-| A gircap-owned mechanics crate, not a twelfth shared leaf | `gircap-http` (`tools/capture/http/`): the reqwest transport, the retrying fetcher, the request log and the error-body budget. gircap depends on it directly, so an edit to emit/blobs/manifest leaves this crate and its native tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no probe decisions, no artifact writing — and depends on no program crate (only the shared logic-free leaves `girpr-retry` and `girpr-digest`), and invokes no binary. It is the only crate that depends on `reqwest` directly; `config::validate_base` parses the two API base overrides with the `url` crate, so no transport dependency crosses into gircap. gircap keeps the three narrow seams on its side: the digesting-file trait, the fixed `User-Agent` value and the ordered-join loop's consumers |
+| The shared *leaf* crates: the log policy, the ordered-JSON/line-writing mechanics, the digest mechanics, the Windows path-name and canonical-path mechanics (device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization), the retry mechanics, the exit-table generation mechanism, the clap-error to usage-code mapping mechanics, the audio-language mechanics, the Sophon protobuf wire types, the shared region values and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-report-core` (`crates/report-core/`): ordered-JSON and line-writing mechanics — each tool passes its own field order, event placement, value types, escaping and boolean spelling, so no report format crosses between the tools. `girpr-digest` (`crates/digest/`): hex spelling and fixed-width digest mechanics — no flag, no exit code, no published shape. `girpr-fs-names` (`crates/fs-names/`): the Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — each tool passes its own reserved set and rule flags, so no program rule is borrowed. `girpr-retry` (`crates/retry/`): the retry schedule factory and injectable sleep driver — each tool passes its own base delay, multiplier, jitter and cap, and keeps its own attempt loop and side effects, so no retry policy of either program is borrowed. `girpr-exit` (`crates/exit/`): the exit-table generation mechanism — the enum/`ALL`/code/pin pattern only; each tool supplies its own codes and meanings, so no exit-code contract is borrowed. `girpr-audio-language` (`crates/audio-language/`): the lower + `_`→`-` token primitive and the four code/display-name pairs in the game's canonical order — each tool passes its own case-folding flavour and keeps its own alias map, `none` sentinel and path-component validation, so no audio policy is borrowed. `girpr-proto` (`crates/proto/`): the Sophon protobuf wire types — the three messages, their tags, the misspelled `chuncks` and opaque tag 6; each tool keeps its own decode boundary, dump format, validation and normalisation, so no program logic is borrowed. `girpr-model` (`crates/model/`): the region identity, ids, channel tuples and base URLs — each tool keeps its own resolve policy, `Endpoints` override seam and URL builders, so no program logic is borrowed. `girpr-cli` (`crates/cli/`): the clap-error to usage-code mapping — help/version map to `0` and every other error to the usage code the caller passes in, so no exit code crosses between the tools. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. None holds any logic of any program, and no test of one program depends on another's |
+| A gircap-owned mechanics crate, not a shared leaf | `gircap-http` (`tools/capture/http/`): the reqwest transport, the retrying fetcher, the request log and the error-body budget. gircap depends on it directly, so an edit to emit/blobs/manifest leaves this crate and its native tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no probe decisions, no artifact writing — and depends on no program crate (only the shared logic-free leaves `girpr-retry` and `girpr-digest`), and invokes no binary. It is the only crate that depends on `reqwest` directly; `config::validate_base` parses the two API base overrides with the `url` crate, so no transport dependency crosses into gircap. gircap keeps the narrow seams on its side: the digesting-file trait, the fixed `User-Agent` value and the ordered-join loop's consumers |
 | A second gircap-owned mechanics crate, still not a shared leaf | `gircap-hash` (`tools/capture/hash/`): the one-pass/one-shot digests, hex spelling, gzip rule and bounded zstd decode/measure helpers. gircap depends on it directly, so an edit to emit/blobs/manifest leaves it and its native zstd tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no artifact writing — and depends on no program crate (only the shared logic-free `girpr-digest` and the logic-free `gircap-http` leaf), and invokes no binary. gircap keeps the `--gzip-threshold` and `--max-decompressed-bytes` flags, every call site and all artifact bytes on its side — including the `DEFAULT_MAX_DECOMPRESSED_BYTES` default in its config policy, so the leaf only enforces the ceiling it is handed; the `zstd_measure`/`zstd_measure_from` pair stays deliberately duplicated there |
 
 Three deviations from the shared-crate convention are deliberate and must not be
@@ -63,7 +63,7 @@ wants it. None of the above is mechanically enforced — nothing here checks it 
 so it is a rule the tree has to keep, not a guarantee a build makes.
 
 **The log policy is the one thing about a *run* that is shared, deliberately.** A
-user who has learned `--log-file` for one of the three programs should not have
+user who has learned `--log-file` for one of the programs should not have
 to learn it again for the next, and a log file that lands somewhere different
 per tool is a log file nobody finds. The shared crate is a leaf: it depends on
 `chrono` (for the timestamp in a file name) and on `tracing-subscriber` (for
@@ -76,7 +76,7 @@ flag that is not about logging.
 dev-dependency.** A scratch directory is a thing for a test, not for a program:
 the shared crate is how a test's tree is *named* (so two runs never share one)
 and *removed* (so a failed case leaves nothing behind). Sharing it means the
-three suites cannot drift apart on the one thing where a drift is invisible
+suites cannot drift apart on the one thing where a drift is invisible
 until it eats another test's tree. Nothing that ships links against it, and it
 depends on no program at all.
 
@@ -115,7 +115,7 @@ are sent **only** on `getGameDeprecatedFileConfigs`.
 
 ```
 GET https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api/getBuild
-      ?branch=main&package_id=ScSYQBFhu9&password=bDL4JUHL625x[&tag=<version>]
+      ?branch=main&package_id=<package id>&password=<password>[&tag=<version>]
 ```
 
 `package_id` / `password` / `branch` come from `getGameBranches → main`, never
@@ -157,19 +157,17 @@ artifact and not only from the fetcher. See
 ### 3.4 Version pair *(measured)*
 
 ```
-getGameBranches → main.tag       = "7.1.0"
-                  main.diff_tags  = ["7.0.0", "6.7.0"]
+getGameBranches → main.tag       = "<the current version>"
+                  main.diff_tags  = ["<a prior version>", …]
 ```
 
 **`getBuild?tag=` serves far more than `diff_tags`.** *(measured)*
 
 | tag | result |
 |---|---|
-| *(none)* | ✅ `build_id sMXGW2ll3Fuu` (7.1.0) |
-| `7.0.0` (in `diff_tags`) | ✅ `3XnPviMfoILi` |
-| `6.7.0` (in `diff_tags`) | ✅ `E2zvp18oyzw6` |
-| `6.6.0` (**not** in `diff_tags`) | ✅ `L7CJe4FP1z71` |
-| `5.5.0` (**not** in `diff_tags`) | ✅ `wUcNY2SeSiQE` |
+| *(none)* | ✅ the current build |
+| a tag in `diff_tags` | ✅ a served build |
+| a tag **not** in `diff_tags` | ✅ still a served build |
 
 `diff_tags` is a **patch-support** list, not a retention list. A full old-version
 file is therefore reconstructible **today** without the legacy zip path, so the
@@ -177,9 +175,9 @@ legacy API is irrelevant to the capture. `getGamePackages` is captured anyway,
 purely as dated evidence:
 
 ```
-main.major.version = "5.5.0"   main.major.game_pkgs = 8   patches = ["5.4.0","5.3.0"]
+main.major.version = "<a legacy version>"   main.major.game_pkgs = <count>   patches = [ … ]
 ```
-— frozen in 2025, ~2 major versions stale.
+— frozen long ago, several major versions stale.
 
 **Pair resolution:** `--new-tag` defaults to `main.tag`; `--old-tag` defaults to
 `diff_tags[0]` ("current minus one"). Any tag the API serves is accepted; an
@@ -205,15 +203,15 @@ everywhere: negative values are clamped to zero and arithmetic on them is
 checked, so a manifest declaring an absurd size becomes a recorded finding rather
 than an abort.
 
-### 3.6 Manifest structure *(measured, 7.0.0 and 7.1.0)*
+### 3.6 Manifest structure *(measured)*
 
-These hold for both `game` manifests and are recorded as assertions, not
+These hold for the captured `game` manifests and are recorded as assertions, not
 assumptions — if a future version violates one, the capture still works and
 `selfcheck.json` says which property broke:
 
-- 0 `is_folder` entries, 0 empty paths, 0 backslash paths, 0 duplicate paths, 0 non-ASCII paths
+- no `is_folder` entries and no empty, backslash, duplicate or non-ASCII paths
 - chunk offsets strictly ascending, gapless from 0, `Σ uncompressed_size == size` for every file
-- largest chunk: **3 689 476 B** compressed (bounds the main tool's whole-chunk buffering)
+- the largest chunk bounds the main tool's whole-chunk buffering
 
 A violation of any of these is **counted, never fatal**: the capture still
 happens, the property lands in `meta.json → decoded.structure`, and A11 goes red
@@ -230,7 +228,7 @@ on the specific file that broke.
 | `manifest.checksum` == the **32-hex suffix** of `manifest.id` | verified |
 | the **16-hex prefix** of `manifest.id` is **opaque** | *not* xxh64 of the blob — see below |
 | chunk URLs are namespaced per `build_id` | the same chunk id under the other build's prefix is a **`404`** — see §3.3a, and `api/error_shapes.json → blob_wrong_build` |
-| `Range:` is honoured | `Range: bytes=10-99` → `206` + `Content-Range: 10-99/259795` |
+| `Range:` is honoured | `Range: bytes=10-99` → `206` + `Content-Range: 10-99/<file size>` |
 | CDN | `Server: AliyunOSS`, `Via: …cloudfront.net`, `x-cache: Hit from cloudfront`, `accept-ranges: bytes`, `etag`, `last-modified`, `content-md5` |
 
 **The 16-hex prefix is not a hash of anything we can see.** *(measured)* it is
@@ -258,9 +256,9 @@ A class is a statement about the **patch**: what a consumer has to download to
 produce the new file, and what the file becomes. It is not a statement about
 how a repair tool gets there.
 
-The repair spec (2026-10-20, merge `f9e6f6a`) makes the repair **in place** by
+The repair spec makes the repair **in place** by
 default, in two tiers, with a trim that is sometimes eager and sometimes
-deferred. Per file, it decides nine things.
+deferred. Per file, it decides the following set of things.
 
 | # | decision | what it depends on | tested where |
 |---|---|---|---|
@@ -276,25 +274,29 @@ deferred. Per file, it decides nine things.
 
 **None of those decisions is shared with any other repair tool.** They are the
 repair tool's own, and they are tested where they belong — on crafted
-fixtures, where a 192-byte input states each of them exactly and a broken
+fixtures, where a small input states each of them exactly and a broken
 branch fails the case that names it.
 
 **So the class set is over the patch space, and only the patch space.** A class
-is a statement about what the patch is, and the six classes are the patch
+is a statement about what the patch is, and the classes are the patch
 space's boundary conditions: **nothing** fetched, **everything** fetched, a
 **subset** fetched with the reused part already in place, a **subset** fetched
 with the reused part moved, a **new** file and a **deleted** file.
 
 #### The classes
 
-| class | predicate over the old/new manifest entries | the patch it covers | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
-|---|---|---|---|---|
-| `identical` | `old.md5 == new.md5` | nothing to fetch: the file is already right | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `no_reuse` | `same_md5 == false`, `reused == 0`, `nchunks > 1` | everything fetched: the whole file is overwritten | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `reuse_in_place` | `same_md5 == false`, `0 < reused < nchunks`, `moved == 0` | a subset fetched: the reused chunks are already correct where they belong | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `reuse_moved` | `same_md5 == false`, `moved > 0` | a subset fetched: the reused chunks live elsewhere in the file and have to be copied | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `added` | path only in the new manifest | the file is created whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
-| `removed` | path only in the old manifest | the file is purged | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
+| class | predicate over the old/new manifest entries | the patch it covers |
+|---|---|---|
+| `identical` | `old.md5 == new.md5` | nothing to fetch: the file is already right |
+| `no_reuse` | `same_md5 == false`, `reused == 0`, `nchunks > 1` | everything fetched: the whole file is overwritten |
+| `reuse_in_place` | `same_md5 == false`, `0 < reused < nchunks`, `moved == 0` | a subset fetched: the reused chunks are already correct where they belong |
+| `reuse_moved` | `same_md5 == false`, `moved > 0` | a subset fetched: the reused chunks live elsewhere in the file and have to be copied |
+| `added` | path only in the new manifest | the file is created whole |
+| `removed` | path only in the old manifest | the file is purged |
+
+For each class the capture picks the cheapest qualifying candidate; which file
+that is, and what it costs, are measurements for that particular pair rather
+than fixed values.
 
 **The two reuse classes are exclusive, and the class set is a partition.** A
 file that reuses *and* moves is the `reuse_moved` one, and a file that reuses
@@ -304,9 +306,9 @@ the bundle is one file per shape.
 **The `same_md5 == false` carve-out is what makes the partition true.** Every
 content class requires it: a file whose whole-file MD5s agree is the **skip**
 branch — the repair makes no content decision about it at all, so it cannot be
-a statement about how the content changed. The live pool holds one such path
-(`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled, so four
-chunks "move", yet the file's content is byte-identical. Without the carve-out
+a statement about how the content changed. The live pool holds such a path
+(`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled, so chunks
+"move", yet the file's content is byte-identical. Without the carve-out
 it would satisfy a content class as well as `identical`, and the class set would
 not be a partition. **A reader implementing the table above must include it**,
 or `Music4.pck` lands in `reuse_moved`.
@@ -314,9 +316,8 @@ or `Music4.pck` lands in `reuse_moved`.
 **A one-chunk file with nothing reusable is not a class.** It is a degenerate
 patch, and `added` already covers "the file is created whole".
 
-*(measured)* population over the pool the capture selects (`game` ∪ `en-us`,
-2 932 paths): `identical` 1 733, `no_reuse` 491, `reuse_in_place` 29,
-`reuse_moved` 463, `added` 84, `removed` 11.
+*(measured)* the class population over the pool the capture selects is recorded
+in `candidates.json`; its distribution shifts with each version pair.
 
 **The admission order is a decision.** The cheap shapes come first, so a small
 budget buys the boundaries before the expensive ones:
@@ -327,19 +328,13 @@ identical, no_reuse, reuse_in_place, reuse_moved, added, removed
 
 #### What the reference bundle exercises
 
-*(measured)* against the reference bundle. The counts are the patch's own
+*(measured)* against a reference bundle. The counts are the patch's own
 vocabulary: how many chunks the new side has, how many of them the old file
 already holds (**reused**), how many of the reused ones live elsewhere in the
-file (**moved**), and how many have to come off the network (**fetched**).
-
-| capture | chunks | reused | moved | fetched | download bytes | the two sizes |
-|---|---|---|---|---|---|---|
-| `identical` | 1 | 1 | 0 | 0 | 0 | 14 → 14 (the same) |
-| `no_reuse` | 2 | 0 | 0 | 2 | 336 852 | 4 871 912 → 5 064 836 (**grows**) |
-| `reuse_in_place` | 3 | 1 | 0 | 2 | 274 426 | 2 340 264 → 2 340 264 (the same) |
-| `reuse_moved` | 10 | 8 | 4 | 2 | 1 564 894 | 11 914 387 → 11 912 007 (**shrinks**) |
-| `added` | 1 | 0 | 0 | 1 | 114 357 | — → 249 256 (created) |
-| `removed` | — | — | — | — | — | 1 731 133 → — (purged) |
+file (**moved**), and how many have to come off the network (**fetched**). Each
+capture exercises one shape, and its patchmap records that shape's own counts,
+download cost and two sizes — these are measurements of the pair, not constants
+to copy into a reader.
 
 **Every patch shape is here once.** `no_reuse` fetches the whole file;
 `reuse_in_place` fetches a part of it and leaves the rest where it belongs;
@@ -349,38 +344,30 @@ one.
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
-*(measured)* each audio manifest carries 177 further file entries for ~1 MB
-compressed. Widening `--audio` therefore widens the candidate corpus, which is
+*(measured)* each audio manifest carries further file entries at a modest
+compressed cost. Widening `--audio` therefore widens the candidate corpus, which is
 the backstop when a class has no `game`-field candidate in a given version pair.
 Ranking prefers `game` on a cost tie (`field` asc after `total_cost`, so the
 choice stays deterministic), and every capture records which `matching_field` it
 came from. Audio files are real game files and are materialised exactly like
-`game` ones when selected — the only difference is that they are, on average,
-~80 MB each, so cost ranking matters there.
+`game` ones when selected — the only difference is that they are comparatively
+large, so cost ranking matters there.
 
 #### The candidates, and what each class costs
 
-*(measured)* over the pool the capture selects (`game` ∪ `en-us`, 2 932 paths).
-The ranking key is `gircap`'s own: `total_cost` = the compressed bytes of the old
+*(measured)* over the pool the capture selects. The ranking key is `gircap`'s
+own: `total_cost` = the compressed bytes of the old
 and the new file, because the old file has to be materialized in full for the
-fixture to be real.
+fixture to be real. Every common path is scored in `candidates.json`; the number
+of candidates per class and the cost of the cheapest one are measurements for
+that pair, not fixed values.
 
-| class | candidates | cheapest candidate | `total_cost` | on disk |
-|---|---|---|---|---|
-| `identical` | 1 733 | `…/Resources/browser_assets` | 54 | 28 B |
-| `no_reuse` | 491 | `…/Resources/unity default resources` | 633 588 | 9.9 MB |
-| `reuse_in_place` | 29 | `…/Plugins/HoYoChannel.dll` | 1 826 067 | 4.7 MB |
-| `reuse_moved` | 463 | `…/blocks/00/09801749.blk` | 22 662 068 | 23.8 MB |
-| `added` | 84 | `…/Plugins/libHttpClient.GDK.dll` | 114 357 | 249 KB |
-| `removed` | 11 | `…/blocks/00/00664172.blk` | 1 731 133 | 1.7 MB |
-
-**`reuse_moved` is the expensive one.** Its cheapest candidate is 22.7 MB of
-compressed bytes and 23.8 MB of fixture, so it is the last capture admitted
-before the one-sided shapes. `gircap` has the mechanism for a capture that
-cannot afford one: `--max-download-bytes` refuses a class it cannot pay for
-and the matrix records it as `over_budget` with its reason. The reference bundle
-is captured **without** a ceiling, so every class is funded; a capture with a
-ceiling records the truth instead of pretending.
+**`reuse_moved` tends to be the expensive class**, so it is typically the last
+two-sided capture admitted before the one-sided shapes. `gircap` has the
+mechanism for a capture that cannot afford one: `--max-download-bytes` refuses a
+class it cannot pay for and the matrix records it as `over_budget` with its
+reason. The reference bundle is captured **without** a ceiling, so every class
+is funded; a capture with a ceiling records the truth instead of pretending.
 
 #### What the bundle cannot cover
 
@@ -440,7 +427,7 @@ in the resolved plan rather than at each consumer, and `--jobs`, `--retries` and
 
 ### 4.1a What `api/` carries, including the failures
 
-`api/` holds the six response bodies **byte-exact**, the request log, and two
+`api/` holds the response bodies **byte-exact**, the request log, and two
 generated documents that are this tool's own measurements rather than the API's
 words:
 
@@ -560,7 +547,7 @@ no-op except for `game_version`:
 channel=1
 cps=hyp_hoyoverse
 game_biz=hk4e_global
-game_version=7.0.0
+game_version=<OLD tag>
 sdk_version=
 sub_channel=0
 ```
@@ -574,8 +561,8 @@ never hardcoded.
 `--audio` has a **second** effect beyond the fixture file: each selected
 language adds a manifest to the capture and to the selection pool (§4.1). The
 default of `en-us` is therefore both a launchable-install default *and* a
-deliberate widening of the candidate corpus — a second audio language costs
-~1.2 MB of manifest and adds 177 more file entries to score. It exists as a
+deliberate widening of the candidate corpus — a second audio language adds a
+manifest and further file entries to score. It exists as a
 backstop for the case where the `game`-field pool yields no candidate for a
 required class in a given version pair.
 
@@ -606,8 +593,9 @@ total_cost    : old_bytes + new_bytes                       # ← the ranking ke
 ```
 
 `total_cost` — **not** `patch_bytes` — is the ranking key, because the old file
-must be materialized in full for the fixture to be real. On 7.0.0→7.1.0 that
-puts `HoYoChannel.dll` at 1.83 MB rather than its 274 KB patch size.
+must be materialized in full for the fixture to be real. On a captured pair this
+can put a file's total cost far above its patch size when a large region is
+reused.
 
 Tie-break order: `total_cost`, then `matching_field` asc (`game` before the
 audio fields), then `moved` desc, then `reused` desc, then `path` asc. Fully
@@ -672,9 +660,8 @@ Each row is `{id, assertion, subject, expected, actual, ok}`.
 | A22 | the bundle covers both sides of the moved boundary: at least one capture whose reused chunks are in place and at least one whose reused chunks moved |
 | A23 | the bundle covers both sides of the size boundary: at least one capture whose file grows and at least one whose file shrinks |
 
-There are **twenty-three** ids: seventeen from this spec (A1–A17), A19 and the
-three coverage assertions (A21–A23) from a capture, and A18 and A20 from
-`verify` only.
+The ids split by origin: A1–A17 and A19 come from this spec, A21–A23 are the
+coverage assertions from a capture, and A18 and A20 come from `verify` only.
 
 ### A21, A22 and A23 — the coverage the class set exists to buy
 
@@ -732,10 +719,10 @@ named and did not get is exit `4`.
 
 ### A18 — and what `verify` does *not* re-derive
 
-None of the seventeen asks whether `game/` is what the retained blobs say it is.
-That is the bundle's central claim and the reason `materialize` exists, so it
-gets an id of its own. It cannot be recorded by a capture, because it is a
-statement about the bundle rather than about the run.
+None of the captured-run assertions asks whether `game/` is what the retained
+blobs say it is. That is the bundle's central claim and the reason `materialize`
+exists, so it gets an id of its own. It cannot be recorded by a capture, because
+it is a statement about the bundle rather than about the run.
 
 ### A19 — the converse of A14
 
@@ -764,15 +751,15 @@ dropped.
 
 ### What `verify` re-derives, and what it does not
 
-`gircap verify` re-derives **nine** of the twenty-one — A6, A7, A8, A11, A13,
+`gircap verify` re-derives A6, A7, A8, A11, A13,
 A16, A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15, A19
-or A21–A23: the first **eleven** are statements about the API bodies, the
+or A21–A23: the former are statements about the API bodies, the
 manifests and the diff, and re-running them inside the bundle would be re-running
 the capture's own algorithm against the capture's own output, which can only ever
-agree; the last three are the bundle's **coverage**, which `verify` reports as
-a finding rather than as a failed check (see A21 above).
+agree; the coverage assertions are the bundle's **coverage**, which `verify`
+reports as a finding rather than as a failed check (see A21 above).
 
-The nine are split in two, and `SUMMARY` names both as `checks_derived=`:
+The re-derived set is split in two, and `SUMMARY` names both as `checks_derived=`:
 
 | set | ids | what it means |
 |---|---|---|
@@ -797,7 +784,7 @@ An empty `--require-class` is **not** "every required class". The implementation
 requires nothing unless a class is named, so a capture whose matrix leaves a
 class `unavailable` still exits `0`; the unavailable row is the finding, not the
 exit code. That is a deliberate reversal of "all required classes", and the live
-pair is why: requiring all six by default would make *every* run of a pair
+pair is why: requiring every class by default would make *every* run of a pair
 that lacks one of them exit `4`. `unavailable` is a fact about the manifests;
 `over_budget` is a fact about this run's flags; only a class the caller named
 is fatal. A caller that needs the stronger rule asks for it:
@@ -914,9 +901,9 @@ numbers rather than the verdict matches on `stage=`.
 
 ```
 $ gircap list --root artifacts --output json
-{"event":"bundle","tool":"gircap","version":"0.1.0","path":"…/20261015T092615Z","id":"20261015T092615Z","tags":"7.0.0 -> 7.1.0","patchmaps":8,"blobs":38,"selfcheck":"pass","complete":true}
-{"event":"bundle", … ,"id":"20261015T111345Z", …}
-{"event":"list","tool":"gircap","version":"0.1.0","result":"ok","root":"artifacts","bundles":2, …,"exit_code":0}
+{"event":"bundle","tool":"gircap","version":"<version>","path":"…/<capture id>","id":"<capture id>","tags":"<old> -> <new>","patchmaps":<count>,"blobs":<count>,"selfcheck":"pass","complete":true}
+{"event":"bundle", … ,"id":"<another capture id>", …}
+{"event":"list","tool":"gircap","version":"<version>","result":"ok","root":"artifacts","bundles":<count>, …,"exit_code":0}
 ```
 
 `event` is the discriminator and **always leads**, so a consumer can dispatch
@@ -966,8 +953,8 @@ files-cleanup as well as to the repair, and that a scoped run does not bump
 
 `game/` holds a handful of files. Run the main tool against it unscoped and the
 main tool does what it is specified to do: build the plan from the **whole live
-manifest** and fetch every file in it. A run meant to repair one 2.3 MB DLL would
-pull ~130 GB, and a `--purge-after` run would also delete every file in the
+manifest** and fetch every file in it. A run meant to repair one small file would
+pull the entire live game, and a `--purge-after` run would also delete every file in the
 bundle that the live manifest happens not to contain.
 
 That is correct behaviour for the main tool and not something `gircap` should
@@ -1007,7 +994,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    API — but it costs no payload:
 
    ```
-   PLAN files=1 est_download_bytes=274426 purge_files=0 purge_bytes=0 scoped=1
+   PLAN files=1 est_download_bytes=<download bytes> purge_files=0 purge_bytes=0 scoped=1
    ```
 
    `est_download_bytes` is **`totals.download_bytes`**. `files=1` proves the glob
@@ -1017,14 +1004,14 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    `--check-only` is the other free check, and it **is expected to report
    damage**: under `--include <a capture path>` the run verifies only that one
    path against the *new* manifest while the copy still holds the *old* bytes,
-   so the four repairable captures come back damaged and exit **`4`**. Only
+   so the repairable captures come back damaged and exit **`4`**. Only
    `identical` is clean and exits `0`, because its bytes already match. A `0`
    here would mean the check looked at nothing.
 
    What it names is what makes it useful:
 
    ```
-   CHECK fail: md5 file=GenshinImpact_Data/… expect_md5=d992a789… actual_md5=1e210ff1…
+   CHECK fail: md5 file=GenshinImpact_Data/… expect_md5=<new md5> actual_md5=<old md5>
    ```
 
    this capture's `new.md5` and `old.md5`. Those two come from `tracing::warn!`
@@ -1038,7 +1025,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
-   makes `download_bytes` attributable; a single run over all six sums to the
+   makes `download_bytes` attributable; a single run over all captures sums to the
    same total but cannot be compared per capture. `removed` is the exception and
    takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
@@ -1095,12 +1082,12 @@ that nothing was downloaded. Not a byte total, because there is no patch to cost
 ```
 girpr --game-path <copy-of-game> --biz hk4e_global --purge-only
       --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"
-→ SUMMARY total=0 … download_bytes=0 deleted_extra_bytes=1731133 exit=0
+→ SUMMARY total=0 … download_bytes=0 deleted_extra_bytes=<old size> exit=0
       scoped=1 config_bumped=0 plan_files=0 local_manifest=ok
 ```
 
 `plan_files=0` is correct and is not a failure: there is nothing to repair. The
-two figures worth checking are `deleted_extra_bytes=1731133`, which is the
+two figures worth checking are `deleted_extra_bytes=<old size>`, which is the
 patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
 says exactly this, so the artifact's contract and the run's output agree.
 
@@ -1143,35 +1130,28 @@ Three details worth knowing rather than rediscovering:
 - **The path is `/`-separated and case-insensitive**, like every other glob, and
   `*` also crosses `/` — which is why step 3 passes `--max-files 1`.
 
-Expected per-capture figures, for the reference bundle. Compare each against the
-artifact's own patchmap rather than against this table:
+The expected per-capture figures come from each artifact's own patchmap, never
+from a fixed table: `expectations.download_bytes` (which must equal the run's
+total), the plan's reuse / fetch / moved counts, and `expectations.must_not_fetch`
+(the chunk ids a working reuse path skips). `removed` is the exception — it is a
+cleanup run with no plan, and downloads nothing.
 
-| capture | class | `download_bytes` | reuse / fetch / moved | `must_not_fetch` |
-|---|---|---|---|---|
-| `identical` | `identical` | 0 | 1 / 0 / 0 | 1 |
-| `no_reuse` | `no_reuse` | 336 852 | 0 / 2 / 0 | 0 |
-| `reuse_in_place` | `reuse_in_place` | 274 426 | 1 / 2 / 0 | 1 |
-| `reuse_moved` | `reuse_moved` | 1 564 894 | 8 / 2 / 4 | 8 |
-| `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
-| `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
-
-All six exit `0`. **2 290 529 B in total**, which is the sum of the patchmaps'
-figures to the byte. Ten reused chunks across the three captures that declare
-them, none of them downloaded. Only the six captures' own paths changed on the
+Every capture exits `0`. The sum of the patchmaps' `download_bytes` figures is
+the cross-tool total, and the chunks named in each capture's `must_not_fetch`
+are never downloaded. Only the captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
-`identical` one was left alone, and the other three were modified in place — so
-the scope held across all twelve runs (a `--print-plan` pre-pass plus a real run
+`identical` one was left alone, and the remaining two-sided ones were modified in place — so
+the scope held across every run (a `--print-plan` pre-pass plus a real run
 per capture). The bundle itself was never a working tree and still verifies.
 
 **One capture, one class.** The class set is a partition on the content, so a
-file answers exactly one class and the bundle holds six captures for six
-classes.
+file answers exactly one class and the bundle holds one capture per class.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
 
 - **`added` has a `plan` and `totals` after all.** Every entry is `FETCH`, and
-  `download_bytes` is **114 357** — the one chunk's compressed size. The figure
+  `download_bytes` is the whole file's compressed download cost. The figure
   is real, not a defaulted zero; see §13.2 of the schema.
 - **`removed` has no `plan` and no `totals`** — there is no new side to patch to,
   so the reuse / fetch / moved cells above are empty rather than `0 / 0 / 0`.
@@ -1179,8 +1159,8 @@ the rest, so read them with §13.1 of the schema:
   nothing. The run that produces it is a cleanup run, and the size it reports is
   `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
-The four that carry a total of their own sum to **2 176 172 B**; adding `added`
-makes it **2 290 529 B**.
+The captures that carry a total of their own are summed by the bridge from the
+patchmaps; `added` contributes its whole-file download cost.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 
@@ -1220,10 +1200,10 @@ makes it **2 290 529 B**.
 - No patching, no hdiff, no 7z, no predownload, no purge simulation
 - No `getGameScanInfo`, SDK, WPF, or plugin enumeration
 - No cross-build *cross-file* chunk reuse modelling beyond **measuring and
-  recording** it — *(measured)* 98 910 new chunks have an MD5 present somewhere
-  in the old manifest, but only **2 files** have a chunk reusable *only* from a
-  different old file (1 776 356 B forgone by same-file-only reuse). That number
-  is recorded in `diff/reuse_pool.json` because it quantifies a deliberate
+  recording** it — *(measured)* many new chunks have an MD5 present somewhere
+  in the old manifest, but only a handful of files have a chunk reusable *only*
+  from a different old file; the volume forgone by same-file-only reuse is
+  recorded in `diff/reuse_pool.json` because it quantifies a deliberate
   simplification, not because `gircap` acts on it.
 - Audio manifests are captured for the selection pool and can supply a capture
   when the `game` pool has no candidate for a class, but no audio *bulk* beyond

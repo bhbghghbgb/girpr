@@ -22,10 +22,9 @@ bundle's own integrity (`gircap verify`). The fourth does not: **run `girpr
 Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 
 - `repair::phases::plan::build_plan` builds the work list from the **whole live `game` manifest**
-  — 2 662 common paths measured for 7.0.0→7.1.0, several thousand more across
-  the audio fields;
+  — every common path in the live pair, and many more across the audio fields;
 - `file::repair_all` spawns one task per planned file and downloads whatever is
-  not intact — on the order of **130 GB**;
+  not intact — on the order of **tens of gigabytes**;
 - `--purge-after` / `--purge-before` delete **everything the live manifest does
   not contain**, which for a fixture that small is most of it.
 
@@ -37,8 +36,8 @@ belongs in `girpr`.
 
 | | job | failure if wrong |
 |---|---|---|
-| **path scope** | *which paths exist* | repairs 130 GB instead of 2.3 MB |
-| **resource scope** | *how much work* | a filter typo, or a glob that misses one path, still lets a 100 GB run or a 100 GB delete through |
+| **path scope** | *which paths exist* | repairs a whole live install instead of a small fixture |
+| **resource scope** | *how much work* | a filter typo, or a glob that misses one path, still lets a full run or a full delete through |
 
 The first is a **selector**. The second is a **backstop**: it exists precisely
 *because* selectors are fallible. A design that ships only globs has no answer
@@ -109,7 +108,7 @@ purge walk (`classify_purge_path` gains a scope argument and returns `Keep`
 *before* the manifest check), or push every hidden path into `server_keep`. The
 first is the better fit. `classify_purge_path` is a pure function with an
 exhaustive unit test, and a scope parameter keeps it one; widening `server_keep`
-grows a `HashSet<String>` to tens of thousands of entries, turns a pure
+grows a `HashSet<String>` to hold a large part of the install, turns a pure
 classifier into one that needs an answer computed elsewhere first, and gets the
 emptied-dir sweep wrong for free — an emptied directory has no files left to
 classify.
@@ -120,9 +119,9 @@ classify.
 once the bytes are in place". Under a scoped run that premise is false by
 construction: the bytes are deliberately **not** in place.
 
-A scoped run therefore leaves an install whose `config.ini` claims `7.1.0` while
-the tree is still `7.0.0` in every excluded path — precisely the launcher
-desync the ordering exists to prevent, and strictly worse than a normal partial
+A scoped run therefore leaves an install whose `config.ini` claims the newer
+version while the tree is still the old one in every excluded path — precisely
+the launcher desync the ordering exists to prevent, and strictly worse than a normal partial
 failure, which exits `3` and skips the post-phase entirely.
 
 **A run in which any path scope is active does not bump `config.ini`**, and says
@@ -137,21 +136,21 @@ requested ceiling **fails before doing the work**, exit `5`. It never truncates
 the work list. Three reasons:
 
 **1. These flags are for testing, and testing wants a failure, not a subset.**
-A ceiling exists to stop a 130 GB run from happening. Admission stops the
+A ceiling exists to stop a whole-install run from happening. Admission stops the
 *downloads* — but the run has already paid for the part that costs most on a
 real install: the metadata calls, the manifest fetches, and a plan of thousands
-of paths. What it returns is an install that reports success and is still 99%
-broken. Refusal returns in seconds, writes nothing, and says by how much it was
+of paths. What it returns is an install that reports success and is still mostly
+broken. Refusal returns promptly, writes nothing, and says by how much it was
 over.
 
 **2. A refusal is a better assertion than an admission.** Same flags, only the
 ceiling's semantics differ:
 
-| `--include "<the 8 you meant>" --max-files 8` | admission | refusal |
+| `--include "<the paths you meant>" --max-files <N>` | admission | refusal |
 |---|---|---|
-| glob correct | repairs 8, exit `0` | repairs 8, exit `0` |
-| glob is a typo | repairs 8 **wrong** files, exit `0` | exit `5` before any write: `plan_files=0 limit=8` |
-| what the ceiling checked | "did I stay under N" | "did the scope select what you meant" |
+| glob correct | repairs the intended files, exit `0` | repairs the intended files, exit `0` |
+| glob is a typo | repairs the **wrong** files, exit `0` | exit `5` before any write: `plan_files=0 limit=<N>` |
+| what the ceiling checked | "did I stay under the ceiling" | "did the scope select what you meant" |
 
 Under refusal the two flags stop being redundant. `--include` **selects**;
 `--max-files` **verifies the selection**. That is the whole answer to "use it in
@@ -164,7 +163,7 @@ N" is a *selection*, not an *enforcement*. It should be `--first <N>` or
 `--limit <N>`, and a name that says "limit" for a flag that quietly truncates is
 its own hazard. Deferred (§8).
 
-Two enforcement points exist and are not interchangeable:
+Enforcement points are not interchangeable:
 
 | shape | when | suits |
 |---|---|---|
@@ -179,9 +178,9 @@ produces an install that is not a working install, and the sooner the tool says
 so, the better.
 
 **What refusal does not bound.** Metadata and manifest traffic. Those fetches
-happen before the plan exists, and nothing here changes them (~2–3 MB per run
-measured against a live pair). A ceiling bounds chunk downloads, writes and
-deletes. It is not a bandwidth cap and must not be described as one.
+happen before the plan exists, and nothing here changes them (a small, fixed
+amount per run, measured against a live pair). A ceiling bounds chunk downloads,
+writes and deletes. It is not a bandwidth cap and must not be described as one.
 
 ---
 
@@ -199,10 +198,10 @@ at the filesystem boundary. Empty `--include` admits everything; `--exclude` bea
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
 false, case_sensitive: false }`.
 
-Three spec details worth stating rather than re-deriving:
+Some spec details worth stating rather than re-deriving:
 
 - **`*` crosses `/`.** With `require_literal_separator: false`, `--include
-  "*.blk"` matches `GenshinImpact_Data/StreamingAssets/.../00/09801749.blk`. A
+  "*.blk"` matches a path such as `GenshinImpact_Data/StreamingAssets/.../00/<name>.blk`. A
   user expecting `*.blk` to mean "in the current directory" will be surprised;
   the flag help must say so, because every `*.blk`-shaped include in a shell is
   at risk of it.
@@ -211,8 +210,8 @@ Three spec details worth stating rather than re-deriving:
   hardcodes insensitive rather than growing a second spelling of that decision.
 - **A bad pattern is exit `1`**, naming the offending glob.
 
-**Three guards.** A filter that matches nothing currently produces a cheerful
-`exit 0` having done nothing, which is the single most likely way this feature is
+**Guards against misuse.** A filter that matches nothing currently produces a
+cheerful `exit 0` having done nothing, which is the single most likely way this feature is
 misused:
 
 1. **A run that selected nothing at all → exit `1`**, naming the globs. The test
@@ -228,9 +227,9 @@ misused:
    mutation of a path the scope may not have admitted, so the combination is
    refused outright. Two flags asking for opposite scopes is a contradiction,
    not a merge. The escape hatch
-   is to include the scan file's own rel path (`GenshinImpact_Data/Persistent/
-   audio_lang_14` for a global install) — it comes from `getGameConfigs`, so it
-   is never hardcoded.
+   is to include the scan file's own rel path (`<scan-parent>/<audio-scan-dir>`
+   for a global install) — it comes from `getGameConfigs`, so it is never
+   hardcoded.
 3. **Any active scope plus a purge that would touch a hidden path → `warn` at plan
    time**, listing the count. Silent agreement is correct, but silence should be
    visible once.
@@ -360,7 +359,7 @@ the **live** figures: the traffic the run caused, and the disk it took. Neither
 bounds **the repair** — how much of the install the run actually had to
 rewrite. So a run against a flaky origin gets stopped early (the budget was
 eaten by retries that produced nothing), while a run that legitimately rewrote
-40 GB of the install is not bounded by anything except the disk.
+a large part of the install is not bounded by anything except the disk.
 
 These two bound the **settled** figures instead: the bytes of the files that
 were actually repaired, and the bytes the repair actually wrote into the
@@ -395,12 +394,12 @@ nothing to refuse.
 
 ### C1 · `--print-plan` + `--plan-out <FILE>` — **P0** — observability
 
-**`--dry-run` does not cover this,** for three concrete reasons:
+**`--dry-run` does not cover this,** for concrete reasons:
 
 1. **Cost.** `--dry-run` is not cheap. `repair_one_file` runs `util::file_len`
    and then `util::md5::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
-   `--dry-run` on a real install **full-file MD5s every planned file** — on the
-   130 GB case, exactly the cost the limitation is meant to avoid.
+   `--dry-run` on a real install **full-file MD5s every planned file** — on a
+   full-size install, exactly the cost the limitation is meant to avoid.
    `--print-plan` stops before the repair loop entirely, so it pays none of it.
 2. **Plane.** `--dry-run` answers on **stderr / the log file**, via `tracing`.
    Asserting on it means scraping a log with `--log-level debug` turned up. The
@@ -416,15 +415,15 @@ post-phase. It returns before `create_dir_all`, so it is read-only by
 construction — and it short-circuits `--dry-run` for the same reason.
 
 ```
-PLAN files=8 est_download_bytes=2373385 est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 \
-     max_chunk_bytes=3689476 scoped=1
+PLAN files=<N> est_download_bytes=<bytes> est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 \
+     max_chunk_bytes=<bytes> scoped=1
 ```
 
 `--plan-out <FILE>` writes the per-file detail as **JSON** —
 `{"repair": [{rel, size, chunks_total, est_download_bytes, mode, extra_bytes}], "purge": [{rel,
-size}]}` — for the `--per-class`-sized cases where diffing eight lines beats
-eight `--include` flags. It works with or without `--print-plan`: on its own it
-writes the plan of the run that then does the work, before the first mutation,
+size}]}` — for the `--per-class`-sized cases where diffing one structured dump
+beats a pile of `--include` flags. It works with or without `--print-plan`: on
+its own it writes the plan of the run that then does the work, before the first mutation,
 so a write failure is exit `3` with nothing changed. If the file is inside the
 install, the `--purge-after`/`--purge-only` re-plan in the same run treats it
 as an unexpected file and deletes it (`--purge-before` acts on the plan built
@@ -477,18 +476,18 @@ what `docs/06` designs.
 
 The single most valuable thing for a mock-server test.
 
-`repair_one_file` retries a file up to `MAX_ATTEMPTS = 5` with a linear backoff,
-**and** each attempt's chunk fetches retry 5× internally with their own 1–5 s
-sleeps. One failing file costs **~125 s of pure sleeping** before any connection
-timeout is counted. Across a real plan that is hours of wall clock, and every
-failure reports the same thing.
+`repair_one_file` retries a file several times with a linear backoff,
+**and** each attempt's chunk fetches retry internally with their own short
+sleeps. One failing file costs **a long stretch of pure sleeping** before any
+connection timeout is counted. Across a real plan that is hours of wall clock,
+and every failure reports the same thing.
 
 `--fail-fast` stops spawning new file tasks and aborts the rest once one file has
 exhausted its retries. Mechanism 1 alone cannot help the *first* file, so the flag
 also caps a file at **one** attempt: the flag is an explicit "tell me fast", and a
 user who wants the full retry budget does not pass it. Counter semantics are
-unchanged, `files_failed` stays honest, and the run reaches its `SUMMARY` in
-seconds.
+unchanged, `files_failed` stays honest, and the run reaches its `SUMMARY`
+promptly.
 
 Only worth setting for `5xx`-shaped failures: `girpr` retries only
 `408 | 429 | 5xx`, so a 4xx costs nothing on its own.
@@ -511,10 +510,9 @@ so.
 
 One job left, and it is real:
 
-- **Targeting.** The capture measured the largest real Genshin chunk at
-  **3 689 476 B compressed**, and the same measurement makes the flag a way to
-  *deliberately* exercise the largest-chunk branch, which no small synthetic
-  fixture reaches.
+- **Targeting.** A measured capture shows the largest real Genshin chunk to be
+  far bigger than any small synthetic fixture reaches, and the same measurement
+  makes the flag a way to *deliberately* exercise the largest-chunk branch.
 
 The chunk path is **streamed**: the body is decoded as it arrives and the
 decoded bytes are written into the target as they are produced, so the peak
@@ -526,9 +524,9 @@ printed because printing it costs one line.
 
 ### E4 · `--no-skip-intact` — **P2**
 
-`repair_one_file`'s fast path is `size + full-file MD5`. On a 100 GB install that
-is a 100 GB read before a single byte is downloaded — the largest fixed cost in
-the tool. Under a path scope it is paid only for the files the scope selected,
+`repair_one_file`'s fast path is `size + full-file MD5`. On a full-size install
+that is a full-size read before a single byte is downloaded — the largest fixed
+cost in the tool. Under a path scope it is paid only for the files the scope selected,
 which is already a large improvement. This flag skips the check and forces every
 selected file down the download path, so a test can exercise reuse and downloading
 *without* paying for the hash. Deliberately not a production flag: it forfeits
@@ -537,9 +535,8 @@ the skip, which is the main reason the tool is low-disk.
 ### E5 · `--manifest-field <NAME>` (repeatable) — **P2**
 
 `sophon::select_manifests` returns the `game` field plus one per selected audio
-language, each ~1 MB compressed and ~177 further file entries. Capping to `game`
-cuts fetch and parse cost when the audio manifests cannot hold the file under
-test. Low value — `--audio none` plus `--audio en-us` already spans it — and it
+language, each carrying many further file entries. Capping to `game` cuts fetch
+and parse cost when the audio manifests cannot hold the file under test. Low value — `--audio none` plus `--audio en-us` already spans it — and it
 adds a third way to say "which manifests", so it should be cut if the surface
 needs trimming.
 
@@ -618,7 +615,7 @@ before pass did not.
 **Why `5` and not `1`.** The instinct is that a flag check is a usage error. It
 is not: **the API has to be fetched first**, and whether a limit is exceeded is
 only knowable from the server's answer. `--max-files 0` against an empty plan is
-not an error; the identical flag against a 3000-file plan is. A code that means
+not an error; the identical flag against a large plan is. A code that means
 "the run was misconfigured" cannot mean both, so `5` means "the run failed", and
 it is deliberately paired with the `SUMMARY` line and exit `0` on success.
 
@@ -631,7 +628,7 @@ do is assert `0`. A script that wants the weaker guarantee tests `$? -ne 5`.
 A **refusal emits `SUMMARY`** and is *returned*, not raised as a failure: it is a
 reported outcome and needs the same uniform tail as `0`/`3`/`4`. The diagnosis
 itself goes to stderr and the log file (`ERROR limit exceeded: --max-files
-exceeded: plan_files=3000 limit=8 …`), because `SUMMARY` carries counters and
+exceeded: plan_files=<count> limit=<N> …`), because `SUMMARY` carries counters and
 flags, not prose. The one thing a refusal has and a normal run does not is that
 every value in it is `0` except the plan-derived ones, which is itself the proof
 that nothing was written.
@@ -684,7 +681,7 @@ question a budget asks.
 | `write_bytes=<N>` | `--max-write-bytes` **or** `--max-verified-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
 | `write_bytes_spent=<N>` | `--max-write-bytes` active. The bytes that **landed in the install**, the bytes of an attempt that later failed its digest included: the disk the run took, which is what the ceiling bounds. `write_bytes` is the other half — the bytes written from sources that passed their gate |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
-| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so two stops cannot share a value |
+| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so different stops cannot share a value |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves `download_bytes` and the plan's estimate while still exiting `0` |
 
 `download_bytes` is **not** in this table: it is one of the fixed keys, and it is
@@ -759,9 +756,9 @@ branch:
   selection, not an enforcement, and it wants its own name (§2.2 reason 3).
 - **A `--scope-profile` file.** Readable, but the flags compose fine and a
   profile is a second surface to document, test and keep in sync.
-- **Rate limiting / bandwidth caps.** `gircap` measures a 2.37 MB total for its
-  patchable captures; nothing here needs a throttle, and ceilings do not bound
-  metadata traffic (§2.2).
+- **Rate limiting / bandwidth caps.** `gircap` measures only a small total for
+  its patchable captures; nothing here needs a throttle, and ceilings do not
+  bound metadata traffic (§2.2).
 - **Sharing code with `gircap` or `girsync`.** Independence between the tools is
   a design constraint, and the filter and the budget are each a few dozen lines
   that will be written more than once.

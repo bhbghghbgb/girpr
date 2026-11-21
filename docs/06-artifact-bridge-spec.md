@@ -14,7 +14,7 @@ implementation is written against it, so the contract stands as written.
 ## 1. Why it exists
 
 `gircap` writes a self-contained bundle per version pair: a real `game/` fixture
-holding one file per patch shape, the API bodies and manifests behind them,
+with real files for the patch shapes, the API bodies and manifests behind them,
 every chunk blob, `expected/` ground truth, and a `patchmaps/<id>.json` per
 capture. Three consumption paths work — inspect the metadata, rebuild old/new
 offline, prove the bundle's own integrity. The fourth does not: **run `girpr
@@ -38,29 +38,27 @@ Everything else about `girpr` — which tier it picked, which direction it wrote
 in, whether it trimmed eagerly, what its `SUMMARY` line said — is **`girpr`'s own
 business**. It is not shared with any other repair tool, it is not what the
 bundle is for, and it is tested where it belongs: on crafted fixtures, in
-`girpr`'s `tests/repair_machinery.rs`. A 192-byte input states a decision
+`girpr`'s `tests/repair_machinery.rs`. A small crafted input states a decision
 exactly, and a bundle of real game bytes states it at the price of a download.
 
 **The claim is not specific to one version pair.** It has been checked against
-`hk4e_global` 7.0.0 → 7.1.0 and against 6.7.0 → 7.1.0: two bundles, two
-different sets of files and two different sets of numbers, and the same six
-captures green on both. A claim that held on one pair alone would be a claim
-about that pair.
+two version pairs of `hk4e_global`: two bundles, two different sets of files
+and two different sets of numbers, and the same capture classes green on both.
+A claim that held on one pair alone would be a claim about that pair.
 
 **The second bundle is not kept in the tree**, because `artifacts/` is
-gitignored and a bundle is a hundred megabytes of game bytes rather than a
+gitignored and a bundle is a large collection of real game bytes rather than a
 document — so this is a claim a reader can check, not one they have to take on
-faith. Reproduce it with
+faith. Reproduce it by capturing a different version pair:
 
 ```
-cargo run -p gircap -- capture --old-tag 6.7.0 --new-tag 7.1.0 --out artifacts
+cargo run -p gircap -- capture --old-tag <old> --new-tag <new> --out artifacts
 ```
 
 and point the bridge at the result with `GIRPR_ARTIFACT_BUNDLE=<dir>`. The
-captures are then the same six classes over a different pair's files, and the
-byte totals are the pair's own: on 6.7.0 → 7.1.0 the `reuse_in_place` capture
-fetches 839 603 B where the 7.0.0 pair fetches 274 426 B, and `reuse_moved`
-fetches 2 745 798 B where it fetches 1 564 894 B.
+captures are then the same classes over a captured pair's files, and the byte
+totals are the pair's own — each capture's fetched total depends on the pair
+and is not a fixed figure.
 
 | | the bridge does | the bridge does not |
 |---|---|---|
@@ -110,7 +108,7 @@ nothing about the surface.
 |---|---|
 | `tools/e2e` crate | earns its keep only if it also captures bundles, which `gircap capture` already does. Costs binary discovery, a workspace member, and README/doc rows |
 | `src/bin/*.rs` | same discovery problem, inside the shipping package |
-| feature-gated test (`#![cfg(feature)]`) | a broken bridge would stop compiling with no default build noticing; compile-time coverage of the harness is worth more than a few hundred lines of test compilation |
+| feature-gated test (`#![cfg(feature)]`) | a broken bridge would stop compiling with no default build noticing; compile-time coverage of the harness is worth more than the extra test compilation it costs |
 
 ### 2.1 The server is its own library module
 
@@ -122,11 +120,11 @@ mod bundle;
 ```
 
 The replay server used to be a `#[path = "artifact_bridge/server.rs"] mod server;`
-in both this binary and `tests/artifact_server.rs`, compiling the several-hundred-
-line module into each. It now lives once in
+in both this binary and `tests/artifact_server.rs`, compiling the module into
+each. It now lives once in
 `crates/test-fixtures/src/artifact_server.rs` as a public library module, reached
-through a one-line `use` shim in both binaries so the replay mechanics compile
-once. The `#[path]` on `bundle.rs` stays: that module has only one consumer, so
+through a `use` shim in both binaries so the replay mechanics compile
+once. The `#[path]` on `bundle.rs` stays: that module has no other consumer, so
 there is nothing to share it with.
 
 The server remains a **distinct** fake HTTP server from the offline HoYoPlay/
@@ -148,15 +146,13 @@ depend on the reader — so the reader is not what they use.
 ### 3.1 Gate 1 — every bridge test is `#[ignore]`d, because the suite is expensive
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
-four manifests — ~19 MiB of real bundle bytes — before it can plan a single file.
-The six cases take roughly a minute of wall-clock in a debug build (measured:
-63 s wall for the whole six-test run — the cases run in parallel, so that is
-not the sum of their durations — and 67 s wall including the rebuild, on a
-4-core Windows x86_64 host with `cargo nextest run -p girpr --test artifact_bridge
---run-ignored only` against one 7.0.0 → 7.1.0 bundle). The figure depends on the
-profile and host, and a release build was not measured here. That is a price
-worth paying **before a release that changes the repair spec** and *after
-something has gone wrong*, and not worth paying on every `cargo nextest run`.
+its selected manifests — a fraction of the bundle's real bytes — before it can
+plan a single file. The cases are slow enough in a debug build (the run is
+dominated by fetching and planning, and the cases run in parallel, so the
+wall-clock is not the sum of their durations). The figure depends on the profile
+and host. That is a price worth paying **before a release that changes the repair
+spec** and *after something has gone wrong*, and not worth paying on every
+`cargo nextest run`.
 
 So it runs **by hand, deliberately: before any release that changes the repair
 spec, and whenever that spec is suspected to have regressed**. A pre-release run
@@ -164,7 +160,7 @@ builds the verifier first, so the `gircap verify` precondition below actually
 executes instead of skipping:
 
 ```
-# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+# optional: GIRPR_ARTIFACT_BUNDLE names a bundle explicitly
 cargo build -p gircap
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
@@ -177,7 +173,7 @@ needed either. To reproduce one failure, put the case in the filter of the same
 command:
 
 ```
-cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+cargo nextest run -p girpr --run-ignored only -E 'test(<one-capture-case>)'
 ```
 
 The `-E` expression narrows the set nextest has already selected; it does not
@@ -248,8 +244,8 @@ skip — a corrupt bundle is a real problem and must not hide behind a green run
 
 ## 4. The server
 
-An ephemeral `127.0.0.1:<port>` listener per route family. **Four listeners, one
-route family each** — the only load-bearing requirement is that *manifests and
+An ephemeral `127.0.0.1:<port>` listener per route family. **One listener per
+route family** — the only load-bearing requirement is that *manifests and
 chunks are on different ports* (§4.1's `build_id` invariant), and extra
 listeners buy nothing that one port plus a `build_id` check inside it does not.
 
@@ -283,8 +279,8 @@ the manifest prefix's port, one on the chunk prefix's port. The shapes `girpr`
 builds are then
 
 ```
-manifest : <origin>/client_app/sophon/manifests/cxhpq4g4rgg0/<build_id>/manifest_<16hex>_<32hex>
-chunk    : <origin>/client_app/sophon/chunks/cxhpq4g4rgg0/<build_id>/<16hex>_<32hex>
+manifest : <origin>/client_app/sophon/manifests/<game-id>/<build_id>/manifest_<16hex>_<32hex>
+chunk    : <origin>/client_app/sophon/chunks/<game-id>/<build_id>/<16hex>_<32hex>
 ```
 
 Each blob listener **takes the last two path segments and ignores the rest**. The
@@ -342,16 +338,16 @@ because it is **green**:
 
 > A tag the shim does not serve degrades to the local-build fallback: the run
 > proceeds with an **empty reuse map**, downloads every chunk, and **still exits
-> `0`** — reporting `local_manifest=unavailable`, `download_bytes=913040` instead
-> of `274426`, and requesting the `must_not_fetch` chunk.
+> `0`** — reporting `local_manifest=unavailable`, a `download_bytes` total far
+> larger than the patch's own, and requesting the `must_not_fetch` chunk.
 
 Two assertions catch it, and both are required: the byte comparison of §7.1, and
 the assertion that `local_manifest` did not come back `unavailable`.
 
 ### 4.4 Not-found is replayed, not chosen
 
-Measured against the live endpoints on 2026-10-16, the route families answer
-failure **differently**:
+Measured against the live endpoints, the route families answer failure
+**differently**:
 
 | family | request | answer |
 |---|---|---|
@@ -364,20 +360,20 @@ failure **differently**:
 Three consequences for the shim:
 
 1. **Replay status, content-type and body from `api/error_shapes.json`**, and
-   synthesize only the fields that document marks volatile — `RequestId` (24
-   characters, as recorded), `HostId`, `Key`, and the body length that follows
-   from `Key`. `girpr` calls `.error_for_status()` and never reads the body, so
-   **status and content-type are the contract and the body is fidelity**, for a
-   human reading the shim's log.
+   synthesize only the fields that document marks volatile — `RequestId`,
+   `HostId`, `Key`, and the body length that follows from `Key`. `girpr` calls
+   `.error_for_status()` and never reads the body, so **status and content-type
+   are the contract and the body is fidelity**, for a human reading the shim's
+   log.
 2. **A bundle that predates the file has no `error_shapes.json`.** The shim then
    404s with `application/xml` — the measured shape — and the bridge **logs that
    the not-found assertions were skipped for lack of evidence** rather than
    passing them silently. Inventing the statuses would make this document's claim
    about the API unfounded.
 3. **A 404 costs almost nothing.** `girpr` retries only `408 | 429 | 5xx`
-   (`sophon::retryable`), so a 404 is asked **once, with no backoff**. Measured: a
-   run against a real bundle with one chunk 404'd went from **88.5 s and 25
-   requests** to roughly **10 s and one request**, and to **~0 s** under
+   (`sophon::retryable`), so a 404 is asked **once, with no backoff**. A run
+   against a real bundle with one chunk 404'd went from a slow run with many
+   requests to a fast failure with a single request, and faster still under
    `--fail-fast`, with the exit code unchanged at `3`.
 
 Shapes with no route are still checked for presence, status, content-type and
@@ -390,33 +386,33 @@ asserted as replayed, because the bridge never issues such a request (a bad
 **Index whatever `manifests/<tag>/` holds** — that is, `game` plus whichever
 audio fields the capture stored. Do not hardcode a language.
 
-*(measured)* the `getBuild` body carries five manifests for this biz: `game`,
-`zh-cn`, `en-us`, `ja-jp`, `ko-kr`. `sophon::select_manifests` drops every field
-whose name is five or ten characters and contains a hyphen, then re-adds only the
-selected languages; the bundle's scan file selects `en-us`, and only the blobs
-the capture stored are present. So a run fetches **`game` + `en-us`** — and it
-does so **twice**: once for the latest build and once for the local build (the
-one the installed game names, for the chunk-reuse map — the bridge's scratch
-tree always installs one), which is **four manifests per run**, plus four more
-for the `--print-plan` pre-pass (§6.1) — while the other three of the five are
-never requested.
+*(measured)* the `getBuild` body carries a `game` manifest plus a set of
+language manifests for this biz (`zh-cn`, `en-us`, `ja-jp` and `ko-kr` are among
+those captured). `sophon::select_manifests` drops every field whose name is a
+short token containing a hyphen, then re-adds only the selected languages; the
+bundle's scan file selects `en-us`, and only the blobs the capture stored are
+present. So a run fetches **`game` + `en-us`** — and it does so **for both
+builds**: once for the latest build and once for the local build (the one the
+installed game names, for the chunk-reuse map — the bridge's scratch tree always
+installs one), with the `--print-plan` pre-pass (§6.1) repeating the fetches —
+while the other language fields are never requested.
 
 The rule generalises to whatever the bundle holds, so the run's selection and the
 bundle's contents decide the set between them. **Keep the `--audio` warning:**
 adding a language widens the selection, and a bundle that does not carry that
 field's manifest will 404 on it — which, after §4.4, fails immediately and
-visibly rather than after fifteen seconds of silence.
+visibly rather than after a long silence.
 
 ### 4.6 Cache served manifest bytes
 
-Each run fetches four manifests (§4.5) — the `game` and `en-us` archives of the
-latest build and of the local build — and those four `.manifest.zst` files are
-~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB, but
-the cache holds the archives and nothing else: the rest of that directory is
-the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv` sidecars,
-which the server never serves. The suite makes twelve `girpr` runs — six cases,
-each a `--print-plan` pre-pass plus a real run — so it re-reads ≈228 MiB of
-served archives for nothing. They are immutable per bundle, so cache them.
+Each run fetches its selected manifests (§4.5) — the archives for the latest
+build and for the local build — and those archives are only a fraction of the
+bundle's bytes. The `manifests/` **directory** is larger still, but the cache
+holds the archives and nothing else: the rest of that directory is the
+`.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv` sidecars, which
+the server never serves. Each case makes a pre-pass run and a real run, so the
+suite re-reads the same served archives repeatedly for nothing. They are
+immutable per bundle, so cache them.
 
 The cache is **outside the listeners and process-global within one test
 binary** — one static per binary, not per bridge and not per capture — keyed by
@@ -426,9 +422,9 @@ archives are ever in it — and shared by every listener in that process: it
 holds bytes that are a function of the bundle alone, so nothing about
 per-capture isolation is lost by sharing it. The server module is compiled into
 both `tests/artifact_bridge.rs` and `tests/artifact_server.rs`, so each binary
-has its own static and the two never share one. Under `cargo test` all six
-bridge cases run in one process and share the cache; under `cargo nextest` each
-case gets a process of its own, so there the cache is per case.
+has its own static and the two never share one. Under `cargo test` the bridge
+cases run in one process and share the cache; under `cargo nextest` each case
+gets a process of its own, so there the cache is per case.
 
 ### 4.7 The request log is not optional, and it is the primary source
 
@@ -520,7 +516,7 @@ is tested on a crafted fixture.
 disk cost:
 
 ```
-PLAN files=1 est_download_bytes=274426 est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 max_chunk_bytes=… scoped=1
+PLAN files=1 est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 max_chunk_bytes=… scoped=1
 ```
 
 Run it once per capture first. It separates the two failure modes that otherwise
@@ -538,13 +534,14 @@ When the first fails, the glob is wrong. When the second fails, reuse is wrong.
 its pre-pass prints
 
 ```
-PLAN files=0 est_download_bytes=0 est_write_bytes=… est_extra_bytes=… purge_files=1 purge_bytes=1731133 scoped=1
+PLAN files=0 est_download_bytes=0 est_write_bytes=… est_extra_bytes=… purge_files=1 purge_bytes=… scoped=1
 ```
 
 So for that capture the **purge counters are the pre-pass assertion**: `files=0`
-(the path is correctly absent from the repair plan) and `purge_files=1
-purge_bytes=1731133` (the cleanup found it and priced it). Asserting `files=1`
-here would fail forever for a reason that has nothing to do with the bridge.
+(the path is correctly absent from the repair plan) and `purge_files=1` with
+`purge_bytes` equal to the patchmap's `old.size` (the cleanup found it and
+priced it). Asserting `files=1` here would fail forever for a reason that has
+nothing to do with the bridge.
 
 ### 6.2 Isolation is per capture, because the tests run in parallel
 
@@ -562,9 +559,9 @@ So, **per capture:**
 - **its own request log** and **its own log file** for the pre-pass.
 
 **The served-bytes cache stays shared within a process** (§4.6) because it holds
-nothing capture-specific. Under `cargo test` the six per-capture bridges share
-one process and so one cache; under `cargo nextest` each case is a process of
-its own and gets its own.
+nothing capture-specific. Under `cargo test` the per-capture bridges share one
+process and so one cache; under `cargo nextest` each case is a process of its
+own and gets its own.
 
 ### 6.3 The bundle is the fixture; a copy is the working tree
 
@@ -585,7 +582,7 @@ at it in place is what turns a cleanup flag into a way to destroy the evidence.
 The other captures' files are not what this capture is about. "Every path
 outside the scope is untouched" is `girpr`'s own claim, and it is tested where
 it belongs: on a crafted multi-file manifest, in `girpr`'s
-`tests/repair_machinery.rs`, where five small files cost five small files
+`tests/repair_machinery.rs`, where a few small files cost only those small files
 rather than the whole fixture.
 
 ---

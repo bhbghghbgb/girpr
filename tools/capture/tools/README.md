@@ -13,7 +13,7 @@ reading bundles and, for the probe driver, running the `gircap` binary.
 |---|---|
 | `bundle_differ.py` | **the instrument.** normalises a bundle and compares two of them, file-set first then byte-for-byte |
 | `case_coverage.py` | the instrument behind [`../docs/00-spec.md` §4.1](../docs/00-spec.md): the class population, what the in-place repair would do with each captured file, and the candidate ranking. It carries **both** class sets — the historical one and the one the doc publishes — so the two can be compared, and it is gated against the artifact by `tests/case_coverage.rs` |
-| `mutation_control.py` | proves the instrument: injects nine kinds of change this tool's output has actually been through, and requires all nine to be caught |
+| `mutation_control.py` | proves the instrument: injects the kinds of change this tool's output has actually been through, and requires them all to be caught |
 | `search.py` | the divide-and-conquer that finds which commits moved the output |
 | `probe.ps1` | build one commit and capture it twice; fingerprints and rejects it if the two disagree |
 | `zz_probe.rs` | the capture driver, copied into `tests/` by `probe.ps1` |
@@ -51,7 +51,7 @@ under it, which is what keeps a rebuild cheap.
    harness that always fires would prove nothing.
 
 Both exist because this work went wrong without them: an early version reported
-13 of 58 documents as changed between two commits that had changed nothing,
+many documents as changed between two commits that had changed nothing,
 because the mock's ephemeral port is recorded throughout a bundle. A self-check
 that only ever compares one binary to itself cannot find a field that one binary
 happens to share with itself.

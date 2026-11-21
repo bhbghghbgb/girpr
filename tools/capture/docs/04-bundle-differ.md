@@ -38,18 +38,18 @@ a reformatted `MANIFEST.json` still fails.
 ## 2. The run-local tokens, and how the list was arrived at
 
 Not assumed — **discovered**, by capturing twice from one binary and diffing
-*without* normalisation first. The raw diff of two captures of one binary is
-exactly four documents:
+*without* normalisation first. The raw diff of two captures of one binary is a
+fixed set of documents:
 
 ```
   api/requests.ndjson            ts, elapsed_ms
   MANIFEST.json                  argv's --out; its own digest row; bytes_on_disk
   README.md                      "N B on disk"
-  verify/checksums.json          digests of the three above; total_bytes
+  verify/checksums.json          digests of those above; total_bytes
 ```
 
 which is the cascade, exactly as `tests/bundle_diff.rs` documents it. After
-scrubbing those four, two captures of one binary are identical — which is the
+scrubbing those documents, two captures of one binary are identical — which is the
 check that the normalisation is not vacuous, and it is re-run for **every** commit
 probed (see §5).
 
@@ -75,11 +75,11 @@ of `api/requests.ndjson`.
 
 Two captures of **one** binary share a mock, so the port matched and the
 self-check passed — the trap only opens when you compare **two commits**, which
-is the only thing this differ is for. It reported 13 of 58 documents as changed
-between two commits that had changed nothing at all.
+is the only thing this differ is for. It reported a large number of documents as
+changed between two commits that had changed nothing at all.
 
-Fixing the token in the bodies collapsed that to 2. The residue was the
-*digests* of those bodies, recorded in `MANIFEST.json` and
+Fixing the token in the bodies collapsed that to a small residue. The residue was
+the *digests* of those bodies, recorded in `MANIFEST.json` and
 `verify/checksums.json` — content that compares equal after scrubbing has a
 digest that does not.
 
@@ -90,8 +90,8 @@ rather than by listing them:
 volatile = {rel for rel, b in raws.items() if b"127.0.0.1:" in b or rel in DERIVED}
 ```
 
-Twelve of 58 files qualify under the mock, and the digest rows for exactly those
-twelve are blanked. The other 46 — every chunk blob, every assembled `game/`
+A set of files qualifies under the mock, and the digest rows for exactly those
+are blanked. All the others — every chunk blob, every assembled `game/`
 and `expected/` file, every `diff/` and `manifests/` document — keep their
 digests compared, which is most of the signal a change would show up in.
 
@@ -103,7 +103,7 @@ taken raw first.
 
 ## 3. The cascade exemptions
 
-`api/requests.ndjson` is not byte-reproducible, and four documents record its
+`api/requests.ndjson` is not byte-reproducible, and several documents record its
 digest. So does every file that embeds the port. For those, the digest row is
 blanked rather than compared:
 
@@ -124,15 +124,9 @@ quietly comparing nothing (`--strict`).
 ### A note on `encoding: gzip`
 
 For a gzipped document, `files[].bytes` and its digests are the
-**decompressed** size and digest, not the `.gz` bytes on disk. Measured on
-`artifacts/hk4e_global/7.0.0__7.1.0/20261021T141336Z`:
-
-```
-  manifests/7.0.0/en-us.manifest.json.gz   on disk 1 356 632 B
-                                           recorded 5 700 141 B   <- decompressed
-  md5(gz bytes)  3c55a60901bc25e212fa7da96e086f16
-  recorded md5   6b772797cfe10a764b4ba440952bfc57           <- of the payload
-```
+**decompressed** size and digest, not the `.gz` bytes on disk: the recorded size
+is that of the decompressed payload, and the recorded digest is of the payload,
+not of the compressed file.
 
 So the compressed bytes are **not** part of the recorded contract at all, and
 comparing `.gz` payloads decompressed is the right granularity. If a change ever
@@ -142,7 +136,7 @@ down the `.gz` path — the default profile never takes it (§6).
 ## 4. Proving the differ works
 
 A differ that scrubs too much reports "identical" for two different bundles,
-and every conclusion drawn from it is then worthless. So the nine kinds of
+and every conclusion drawn from it is then worthless. So the kinds of
 change listed in `tools/mutation_control.py` are injected into a known
 fingerprint, and the differ is required to catch each one:
 
@@ -174,43 +168,35 @@ Every probed commit is captured **twice** and the two fingerprints must agree,
 or the probe is rejected and no fingerprint is cached. That is what stops a
 badly-normalised commit from entering the search as a false boundary — the
 failure mode where one commit looks like it changed the output because its
-`elapsed_ms` happened to be one digit wider.
+`elapsed_ms` happened to be slightly wider.
 
 ## 6. Profiles, and what each one can and cannot see
 
-One profile, `World::all_shapes()`, produces a **79-file** bundle covering
-every document type the tool writes:
-
-| | mock | reference (`20261021T141336Z`) |
-|---|---|---|
-| files | 79 | 78 |
-| `api/` | 9 | 9 |
-| `manifests/` | 16 | 16 |
-| `diff/` | 5 | 5 |
-| `patchmaps/` | 6 | 6 |
-| chunk blobs | 22 | 25 |
+One profile, `World::all_shapes()`, produces a bundle covering
+every document type the tool writes — the same `api/`, `manifests/`, `diff/`,
+`patchmaps/` set and chunk blobs as a captured bundle.
 
 It is small, deterministic, offline, and produces the whole document surface —
 which is what makes a commit-by-commit search affordable. It is also a *healthy*
-capture, and a healthy capture cannot see three things:
+capture, and a healthy capture cannot see several things:
 
 | not seen | why | how it is covered |
 |---|---|---|
-| the `.gz` write path | the synthetic manifests are 1.0–3.7 kB and the default threshold is 1 MiB, so nothing is ever gzipped | a second profile with `--gzip-threshold 512` |
+| the `.gz` write path | the synthetic manifests are below the default threshold, so nothing is ever gzipped | a second profile with a lowered `--gzip-threshold` |
 | a mis-served chunk | every blob the mock serves is a real zstd frame | the mock patched to serve non-frame bytes |
 | a non-2xx on the retryable path | the world answers 200, and the probes' 404s go through `observe`, which read the body regardless | the mock patched to answer 503/429 with a body |
 
-The mock patch (`tools/capture/tools/mockpatch.py`) adds two builder methods and
-one dispatch check in `serve`. It is anchored, so it refuses to half-apply if
+The mock patch (`tools/capture/tools/mockpatch.py`) adds builder methods and
+a dispatch check in `serve`. It is anchored, so it refuses to half-apply if
 the mock's shape has moved, and it is idempotent.
 
-Two shapes have to be anchored, because the mock's `serve` has changed inside the
-ranges this has been run over: one handled one request per connection and
-returned, the other speaks keep-alive and loops. The anchors are matched as *line
+The relevant `serve` shapes have to be anchored, because the mock's `serve` has
+changed over the ranges this has been run over: one variant handled one request
+per connection and returned, the other speaks keep-alive and loops. The anchors are matched as *line
 prefixes* — deliberately omitting whatever follows — so a change further along
 the line does not break them.
 
-Two more details are not obvious, and each cost a run to find:
+A few more details are not obvious, and each cost a run to find:
 
 - **The needle is matched against the whole request target, path *and* query.**
   The negative probes share their *paths* with the metadata capture
@@ -225,9 +211,9 @@ Two more details are not obvious, and each cost a run to find:
   for a reason that has nothing to do with the tool. The guard is right to
   reject; the instrument was wrong.
 
-**The patcher was wrong four times before it was right**, and each failure had the
+**The patcher was wrong several times before it was right**, and each failure had the
 same shape: a textual edit that silently did not do what it looked like it did,
-surfacing as a syntax error fifty lines from the cause — a block substituted
+surfacing as a syntax error far from the cause — a block substituted
 *in place of* its anchor instead of inserted before it; an anchor constant that
 lost its closing bracket; a guard that compared a *stripped* line against an
 *indented* anchor, so it could never fire; and an "insert after" splice that
@@ -248,8 +234,8 @@ produced by a mock that is byte-for-byte the one in the repository.
 
 ## 7. The search, and why it is not a sweep
 
-Two captures of one binary tell you nothing about history. 56 adjacent
-comparisons would. So a boundary is found by divide and conquer, using a
+Two captures of one binary tell you nothing about history. Comparing every
+adjacent pair would. So a boundary is found by divide and conquer, using a
 predicate that is monotone:
 
 > P(lo, hi) — "some change lies in (lo, hi]" — is true **iff** F(mid) ≠ F(lo).
@@ -275,22 +261,18 @@ reports a result rather than failing.
 ## 8. Validated against the real bundles, not only the mock
 
 The mock is convenient and deterministic; it is also not the thing anybody
-reads. So the same differ is run over the reference bundles in
-`artifacts/hk4e_global/7.0.0__7.1.0/`, with no build at all:
+reads. So the same differ is run over the reference bundles, with no build at
+all. Two comparisons of captures of the same world — taken days apart, and an
+older capture against the then-current reference — both show the same small set
+of volatile documents changing.
 
-| comparison | identical | changed |
-|---|---|---|
-| `20261016T002107Z` vs `20261017T000730Z` — two captures of the same world, days apart | 93 of 97 | 4 |
-| `20261017T000730Z` vs `20261017T123335Z` — the older against the then-current reference | 93 of 97 | 4 |
+Those results are recorded outcomes, not a recipe: the bundles they compared
+have since been replaced, and the current reference bundle under `artifacts/`
+is the one `docs/00-spec.md` §4.1 describes. The number to beat is the same one
+either way — a small set of documents move on a capture of the same world.
 
-Those two rows are a recorded result, not a recipe: the bundles they compared
-have since been replaced, and the reference bundle under `artifacts/` is now
-the one `docs/00-spec.md` §4.1 describes. The number to beat is the same one
-either way — **four** documents move on a capture of the same world.
-
-The first row is a result in its own right: two captures of the same world, from
-different days, differ in **four** documents. That is the volatility floor of a
-real capture, and it matches the mock's five closely enough to be a check on the
+The volatility floor of a real capture is that small set of documents, and it is
+close to the mock's volatility floor — close enough to be a check on the
 normaliser rather than a coincidence:
 
 | document | why it moves on a live capture |
@@ -298,15 +280,15 @@ normaliser rather than a coincidence:
 | `MANIFEST.json` | `tool_argv[0]` is the binary's own path — `target\debug\…` vs an absolute path |
 | `api/error_shapes.json` | the CDN's per-request `RequestId`, echoed in the recorded 404 body |
 | `api/requests.ndjson` | `ts`, `elapsed_ms`, and CDN response headers |
-| `verify/checksums.json` | the digests of the three above |
+| `verify/checksums.json` | the digests of those above |
 
 `api/error_shapes.json` is the one the mock does **not** need to exempt — its
 `RequestId` is a constant there — which is exactly why it is worth running the
-differ over real bundles once: a live capture has one more volatile document
-than a mock capture, and a gate that only ever sees mock captures will not know
-that.
+differ over real bundles once: a live capture has an extra volatile document
+compared with a mock capture, and a gate that only ever sees mock captures will
+not know that.
 
-The second row is the reusable finding: **every chunk blob, every assembled
+The reusable finding is: **every chunk blob, every assembled
 `game/` and `expected/` file, every `patchmaps/`, every `diff/`, every
 `manifests/` document is byte-identical across two captures of the same world on
 different days.** That is the claim worth re-checking after any change to the
@@ -316,9 +298,9 @@ writer, and it is a cheap check — no build required.
 
 | | |
 |---|---|
-| commits built for the search | 8 — six midpoints and two leaves, for two boundaries among 56 |
-| commits built for the degraded-input pairs | 8, in four before/after pairs |
-| what a sweep would have built | 56 |
+| commits built for the search | a few midpoints and leaves, for a few boundaries among many commits |
+| commits built for the degraded-input pairs | one before/after pair per degraded input |
+| what a sweep would have built | one build per adjacent pair |
 
 That ratio is the whole argument for §7: O(k·log(n/k)) behaving as advertised,
 rather than one build per adjacent pair.
@@ -354,10 +336,10 @@ listener and binds `127.0.0.1:0`.
   against the real CDN — a header the mock does not model, a body the mock
   cannot produce — is out of reach by construction. A change to the wire needs a
   live check as well.
-- **"Identical" means identical to this fixture.** A 58-file bundle with 10 blobs
-  exercises the same document surface as the 97-file reference, but it does not
-  exercise scale, and a difference that only appears at 113 610 chunks would not
-  show up here.
+- **"Identical" means identical to this fixture.** A mock bundle
+  exercises the same document surface as the reference, but it does not
+  exercise scale, and a difference that only appears at full manifest size would
+  not show up here.
 - **`--jobs > 1` is not swept.** Every probe pins `--jobs 1`, because `seq` is
   reserved at issue time and chunk-row *order* in the request log genuinely varies
   at higher concurrency. That is real, and it is not what this measures.

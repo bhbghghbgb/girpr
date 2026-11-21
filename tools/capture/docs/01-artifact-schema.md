@@ -16,13 +16,13 @@ document, it is marked below and is optional *everywhere*.
 **Compression rule.** A document is gzipped (`*.json.gz`) only when its
 uncompressed body exceeds `--gzip-threshold` (default 1 MiB). The decision is
 recorded in `MANIFEST.json → files[].encoding`, so a reader never has to guess.
-In a real capture exactly the four full decoded `game` and `en-us` manifests trip
-it; every gzipped document ships a plain-text sidecar (`*.tsv`) so an agent can
-`grep` it without decompressing.
+In a real capture the full decoded manifests trip it; every gzipped document
+ships a plain-text sidecar (`*.tsv`) so an agent can `grep` it without
+decompressing.
 
-The worked values throughout are from the reference capture of `hk4e_global`
-7.0.0 → 7.1.0: 81 files, 6 captures, 25 chunk blobs, 43 request rows, 93
-selfcheck rows, `result: "pass"`.
+The worked values throughout are illustrative, drawn from a reference capture of
+a live version pair; a bundle's own documents are authoritative, and these
+examples are not constants to copy.
 
 ---
 
@@ -116,10 +116,10 @@ is the completion proof.
 ```jsonc
 {
   "schema_version": 3,
-  "tool":   { "name": "gircap", "version": "0.1.0" },
+  "tool":   { "name": "gircap", "version": "<tool version>" },
   "capture": {
-    "id": "20261021T141336Z",
-    "captured_at": "2026-10-20T15:48:10Z",
+    "id": "<capture id>",
+    "captured_at": "<RFC 3339 instant>",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
     "tool_argv_raw": [[116,0,97,0,…], …],   // exact host bytes per argument, see below
@@ -129,9 +129,9 @@ is the completion proof.
                 "channel": "1", "sub_channel": "0", "cps": "hyp_hoyoverse",
                 "hyp_base": "…", "sophon_base": "…" },
   "versions": {
-    "new": { "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu", "source": "main.tag" },
-    "old": { "tag": "7.0.0", "build_id": "3XnPviMfoILi", "source": "diff_tags[0]" },
-    "diff_tags": ["7.0.0", "6.7.0"]
+    "new": { "tag": "<new tag>", "build_id": "<new build id>", "source": "main.tag" },
+    "old": { "tag": "<old tag>", "build_id": "<old build id>", "source": "diff_tags[0]" },
+    "diff_tags": ["<tag>", …]
   },
   "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
@@ -139,29 +139,29 @@ is the completion proof.
   "max_decompressed_bytes": 268435456,   // --max-decompressed-bytes this run used
   "selection_pool": {                    // matching_fields scored and diffed
     "fields": ["game", "en-us"],
-    "manifest_entries": { "game": 2744, "en-us": 177 },
+    "manifest_entries": { "game": <count>, "en-us": <count> },
     "note": "--audio widens this pool; captures may come from any listed field"
   },
   "totals": {
-    "files_captured": 6,
-    "chunks_blobs": 25,
-    "bytes_downloaded": 36543872,
-    "bytes_on_disk": 175547873
+    "files_captured": <count>,
+    "chunks_blobs": <count>,
+    "bytes_downloaded": <bytes>,
+    "bytes_on_disk": <bytes>
   },
   "matrix": [                            // one row per class, in admission order
     { "class": "identical", "status": "captured", "capture_id": "identical",
       "path": "GenshinImpact_Data/Resources/browser_assets", "matching_field": "game",
-      "candidates_considered": 1733 },
+      "candidates_considered": <count> },
     { "class": "reuse_moved", "status": "captured", "capture_id": "reuse_moved",
       "path": "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
       "matching_field": "game",
-      "candidates_considered": 463 }
+      "candidates_considered": <count> }
   ],
   "files": [                             // every file under the artifact root
     { "path": "game/GenshinImpact_Data/Plugins/HoYoChannel.dll",
-      "bytes": 2340264, "md5": "1e21…", "sha256": "…", "encoding": "identity" }
+      "bytes": <bytes>, "md5": "<md5>", "sha256": "…", "encoding": "identity" }
   ],
-  "totals_by_set": { "materialize_old": 19, "materialize_new": 19, "patch_fetch": 7 }
+  "totals_by_set": { "materialize_old": <count>, "materialize_new": <count>, "patch_fetch": <count> }
 }
 ```
 
@@ -195,12 +195,13 @@ before they are written: `MANIFEST.json` (it is being written), `README.md` and
 (its own). A document that hashes itself has no fixed point, and here the
 dependency runs both ways.
 
-`verify/checksums.json` is the complete inventory: `file_count: 80` for an
-81-file bundle, and it covers all four.
+`verify/checksums.json` is the complete inventory: `file_count` is one less than
+the number of files on disk (it cannot list the close-out documents it renders),
+and it covers all four.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
-what `du` reports (≈167 MB against ≈98 MB on disk for the reference bundle);
+what `du` reports, which counts compressed bytes on disk;
 that is the correct answer, because it is the number a reader would need to hold
 the document in memory.
 
@@ -241,23 +242,23 @@ byte-exact `error_bodies/` files, and the two `diagnostics/` documents (§5c).
 
 ## 4. `api/requests.ndjson`
 
-One object per HTTP request, in `seq` order. In the reference capture: 43 rows —
-6 `api`, 4 `manifest`, 25 `chunk`, 8 `probe`.
+One object per HTTP request, in `seq` order. The row counts by kind depend on the
+capture; the kinds and their meaning are fixed.
 
 ```jsonc
-{ "seq": 1, "ts": "2026-10-17T12:33:35.971Z", "kind": "api",     // api|manifest|chunk|probe
+{ "seq": 1, "ts": "<RFC 3339 instant>", "kind": "api",     // api|manifest|chunk|probe
   "method": "GET", "url": "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api/getGameConfigs?…",
   "range": null,                        // literal Range header sent, if any
   "status": 200, "final_url": "https://…", "redirected": false,
-  "elapsed_ms": 338,
+  "elapsed_ms": <ms>,
   "req_headers":  { "accept": "*/*", "accept-encoding": "identity",
-                    "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)" },
-  "resp_headers": { "connection": "keep-alive", "content-length": "1529",
+                    "user-agent": "<the fixed User-Agent value>" },
+  "resp_headers": { "connection": "keep-alive", "content-length": "<bytes>",
                     "content-type": "application/json",
-                    "date": "Sat, 17 Oct 2026 12:33:29 GMT", "vary": "Accept-Encoding",
+                    "date": "<HTTP date>", "vary": "Accept-Encoding",
                     "via": "1.1 …cloudfront.net (CloudFront)",
-                    "x-cache": "Miss from cloudfront", "x-amz-cf-pop": "HKG61-P1", … },
-  "bytes_in": 1529,
+                    "x-cache": "Miss from cloudfront", "x-amz-cf-pop": "<pop>", … },
+  "bytes_in": <bytes>,
   "stored_as": "api/getGameConfigs.json",
   "attempts": 1 }
 ```
@@ -307,14 +308,14 @@ Which tags the API actually serves, with no blob downloads.
 
 ```jsonc
 { "schema_version": 3,
-  "requested": ["7.1.0", "7.0.0", "6.7.0"],
+  "requested": ["<new tag>", "<old tag>", "<tag>"],
   "results": [
-    { "tag": "7.0.0", "in_diff_tags": true, "http": 200, "retcode": 0,
-      "build_id": "3XnPviMfoILi", "tag_echoed": "7.0.0", "served": true },
-    { "tag": "0.0.1", "in_diff_tags": false, "http": 200, "retcode": -202,
+    { "tag": "<old tag>", "in_diff_tags": true, "http": 200, "retcode": 0,
+      "build_id": "<build id>", "tag_echoed": "<old tag>", "served": true },
+    { "tag": "<unknown tag>", "in_diff_tags": false, "http": 200, "retcode": -202,
       "build_id": null, "tag_echoed": null, "served": false }
   ],
-  "summary": { "requested": 3, "served": 3, "not_in_diff_tags_but_served": 1 } }
+  "summary": { "requested": <count>, "served": <count>, "not_in_diff_tags_but_served": <count> } }
 ```
 
 `served` is the load-bearing fact: `diff_tags` is a patch-support list, not a
@@ -338,7 +339,7 @@ a bundle recorded only successes contains no not-found evidence at all.
   "shapes": [
     { "id": "chunk_missing", "family": "blob",
       "request": "a chunk id under the new build's prefix that the build does not have",
-      "url": "https://autopatchhk.yuanshen.com/…/chunks/cxhpq4g4rgg0/sMXGW2ll3Fuu/000…",
+      "url": "https://autopatchhk.yuanshen.com/…/chunks/<series>/<build id>/000…",
       "status": 404, "content_type": "application/xml", "retcode": null,
       "error": true,
       "body": "<?xml version=\"1.0\" …><Error><Code>NoSuchKey</Code>…</Error>",
@@ -415,17 +416,17 @@ this one records what the origin said when it refused something the run wanted.
 ```jsonc
 { "schema_version": 3,
   "budget_bytes": 8388608,                 // the run-wide retention budget
-  "total_retained_bytes": 734,
+  "total_retained_bytes": <bytes>,
   "responses": [
-    { "seq": 31,                           // this attempt's row in requests.ndjson
+    { "seq": <seq>,                        // this attempt's row in requests.ndjson
       "url": "https://autopatchhk.yuanshen.com/…/chunks/…/000…",
       "final_url": "https://autopatchhk.yuanshen.com/…",
       "status": 404, "attempts": 1,
       "content_type": "application/xml",
-      "bytes_received": 367,
-      "retained_bytes": 367,
+      "bytes_received": <bytes>,
+      "retained_bytes": <bytes>,
       "truncated": false,
-      "stored_path": "api/error_bodies/000031.body" }
+      "stored_path": "api/error_bodies/<seq:06>.body" }
   ] }
 ```
 
@@ -477,10 +478,10 @@ text.
 ```jsonc
 { "schema_version": 3,
   "cap_bytes": 512,                        // per-value cap this run used
-  "total": 1,
-  "omitted": 0,                            // refusals not retained (cap or duplicate key)
+  "total": <count>,
+  "omitted": <count>,                      // refusals not retained (cap or duplicate key)
   "rejections": [
-    { "source": "manifest 7.1.0/game entry 42 file",
+    { "source": "manifest <tag>/<field> entry <n> file",
       "value": "GenshinImpact_Data/Resources/aux.dll",
       "rule": "path.device",
       "truncated": false }
@@ -559,42 +560,42 @@ Everything known about one archive blob.
 
 ```jsonc
 { "schema_version": 3,
-  "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu", "matching_field": "game",
-  "category_id": "10016", "category_name": "…",   // the API's own name for the category
-  "manifest": { "id": "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d",
-                "checksum": "8d4dfb34d2ee2cf64aae45a9b1ecf58d",
-                "compressed_size": 9007187, "uncompressed_size": 16827424 },
+  "tag": "<tag>", "build_id": "<build id>", "matching_field": "game",
+  "category_id": "<id>", "category_name": "…",   // the API's own name for the category
+  "manifest": { "id": "manifest_<prefix>_<suffix>",
+                "checksum": "<checksum>",
+                "compressed_size": <bytes>, "uncompressed_size": <bytes> },
   "declared": {                                  // fields the API sends that most clients drop
-    "stats": { "file_count": 2744, "chunk_count": 113610,
-               "compressed_size": 128310073410, "uncompressed_size": 131981846376 },
-    "deduplicated_stats": { "file_count": 2744, "chunk_count": 113441,
-                            "compressed_size": 128174445744,
-                            "uncompressed_size": 131776619976 },
+    "stats": { "file_count": <count>, "chunk_count": <count>,
+               "compressed_size": <bytes>, "uncompressed_size": <bytes> },
+    "deduplicated_stats": { "file_count": <count>, "chunk_count": <count>,
+                            "compressed_size": <bytes>,
+                            "uncompressed_size": <bytes> },
     "chunk_download":   { "url_prefix": "…", "url_suffix": "", "compression": 1,
                           "encryption": 0, "password": "" },
     "manifest_download":{ "url_prefix": "…", "url_suffix": "", "compression": 1,
                           "encryption": 0, "password": "" } },
-  "id_parts": { "prefix_16hex": "671e1a92a6cf53ff", "prefix_semantics": "opaque",
-                "suffix_32hex": "8d4dfb34d2ee2cf64aae45a9b1ecf58d",
+  "id_parts": { "prefix_16hex": "<prefix>", "prefix_semantics": "opaque",
+                "suffix_32hex": "<checksum>",
                 "suffix_equals_checksum": true },
   "stored": {
-    "path": "manifests/7.1.0/game.manifest.zst",
-    "bytes": 9007187, "container": "zstd",
-    "md5_compressed": "313ea8c56f184ed57c778e442d4fc039",
+    "path": "manifests/<tag>/<field>.manifest.zst",
+    "bytes": <bytes>, "container": "zstd",
+    "md5_compressed": "<md5>",
     "sha256_compressed": "…",
-    "md5_decompressed": "8d4dfb34d2ee2cf64aae45a9b1ecf58d",
-    "bytes_decompressed": 16827424, "encoding": "identity"
+    "md5_decompressed": "<checksum>",
+    "bytes_decompressed": <bytes>, "encoding": "identity"
   },
   "verified": { "decompressed_md5_matches_checksum": true,
                 "checksum_matches_id_suffix": true,
                 "id_prefix_verified": false },
-  "decoded": { "entries": 2744, "files": 2744, "folders": 0,
-               "total_chunks": 113610, "max_chunk_compressed_bytes": 3689476,
-               "total_file_bytes": 131981846376,
-               "structure": { "duplicate_paths": 0, "empty_paths": 0,
-                              "backslash_paths": 0, "non_ascii_paths": 0,
-                              "unsorted_chunk_offsets": 0, "non_gapless_files": 0,
-                              "size_mismatch_files": 0 } },
+  "decoded": { "entries": <count>, "files": <count>, "folders": 0,
+               "total_chunks": <count>, "max_chunk_compressed_bytes": <bytes>,
+               "total_file_bytes": <bytes>,
+               "structure": { "duplicate_paths": <count>, "empty_paths": <count>,
+                              "backslash_paths": <count>, "non_ascii_paths": <count>,
+                              "unsorted_chunk_offsets": <count>, "non_gapless_files": <count>,
+                              "size_mismatch_files": <count> } },
   "full_decode_written": true
 }
 ```
@@ -604,7 +605,7 @@ Everything known about one archive blob.
 so the artifact states that finding rather than implying the prefix went
 unchecked.
 
-`decoded.structure` counts the six structural properties of spec §3.6. They are
+`decoded.structure` counts the structural properties of spec §3.6. They are
 recorded, never fatal: a violation still produces a capture, and A11 goes red on
 the file that broke.
 
@@ -620,16 +621,16 @@ The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
 
 ```jsonc
 {
-  "schema_version": 3, "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
+  "schema_version": 3, "tag": "<tag>", "build_id": "<build id>",
   "matching_field": "game", "entries": [
     { "file": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
-      "is_folder": false, "size": 2340264, "md5": "d992a789…",
+      "is_folder": false, "size": <bytes>, "md5": "<md5>",
       "chunks": [
-        { "id": "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3",
-          "uncompressed_md5": "de1cfe69…", "offset": 0,
-          "compressed_size": 259795, "uncompressed_size": 690719,
-          "unknown_field6": 8640275792690937856,          // opaque, preserved verbatim
-          "compressed_md5": "06ba73bb…" } ]
+        { "id": "<chunk id>",
+          "uncompressed_md5": "<md5>", "offset": 0,
+          "compressed_size": <bytes>, "uncompressed_size": <bytes>,
+          "unknown_field6": <opaque>,                      // preserved verbatim
+          "compressed_md5": "<md5>" } ]
     }
   ]
 }
@@ -653,7 +654,7 @@ Always plain text, tab-separated, header line, `\n` endings:
 
 ```
 path	size	md5	nchunks	is_folder
-GenshinImpact.exe	444260776	f69da59bdc366df20bd2b598700e9370	325	false
+GenshinImpact.exe	<size>	<md5>	<count>	false
 ```
 
 This is the sidecar that makes the gzipped JSON greppable without decompression.
@@ -664,24 +665,24 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 
 ```jsonc
 { "schema_version": 3,
-  "old_tag": "7.0.0", "new_tag": "7.1.0",
+  "old_tag": "<old tag>", "new_tag": "<new tag>",
   "fields": ["game", "en-us"],
-  "counts": { "common": 2837, "identical": 1733, "changed": 1104,
-              "added": 84, "removed": 11, "folders": 0 },
-  "byte_counts": { "added": 6172743354, "removed": 263761287, "patch": 14173762284 },
+  "counts": { "common": <count>, "identical": <count>, "changed": <count>,
+              "added": <count>, "removed": <count>, "folders": 0 },
+  "byte_counts": { "added": <bytes>, "removed": <bytes>, "patch": <bytes> },
   "added":   ["game:GenshinImpact_Data/Plugins/libHttpClient.GDK.dll", …],
   "removed": ["game:GenshinImpact_Data/…/00664172.blk", …],
-  "by_field": { "game": { "common": 2662, "identical": 1592, "changed": 1070,
-                          "added": 82, "removed": 11 },
-                "en-us": { "common": 175, "identical": 141, "changed": 34,
-                           "added": 2, "removed": 0 } },
-  "new_chunks_reusable_at_all": 110850 }
+  "by_field": { "game": { "common": <count>, "identical": <count>, "changed": <count>,
+                          "added": <count>, "removed": <count> },
+                "<audio field>": { "common": <count>, "identical": <count>, "changed": <count>,
+                           "added": <count>, "removed": <count> } },
+  "new_chunks_reusable_at_all": <count> }
 ```
 
 Counts at the top level are aggregated over `fields`; `by_field` is the
 breakdown, and every `added`/`removed` entry is prefixed with its field so a path
-from two pools cannot collide. The `game` row is the **measured** one for
-7.0.0→7.1.0; the `en-us` row depends on which audio languages `--audio` selected.
+from two pools cannot collide. The `game` row is measured for the captured pair;
+the audio rows depend on which languages `--audio` selected.
 
 `new_chunks_reusable_at_all` is how many of the new manifest's chunks have an MD5
 present **anywhere** in the old manifest — the number the same-file-only reuse
@@ -692,13 +693,13 @@ same relative path can appear in more than one pool:
 
 ```
 field	path	state	old_size	new_size	reused	moved	patch_bytes	total_cost
-game	GenshinImpact.exe	changed	430973352	444260776	0	0	179241379	353260299
+game	GenshinImpact.exe	changed	<bytes>	<bytes>	<count>	<count>	<bytes>	<bytes>
 ```
 
 ## 10. `diff/candidates.json`
 
-The scoring table, for **every** common path, not just the winners — 2 837 rows
-for the reference pool. Lets a later run ask "why did it pick that?"
+The scoring table, with a row for **every** common path, not just the winners.
+Lets a later run ask "why did it pick that?"
 
 ```jsonc
 { "schema_version": 3,
@@ -707,12 +708,12 @@ for the reference pool. Lets a later run ask "why did it pick that?"
               "patch_bytes","total_cost","classes","rank","admission_rank"],
   "rows": [
     { "path": "…/HoYoChannel.dll", "matching_field": "game",
-      "old_size": 2340264, "new_size": 2340264,
-      "nchunks": 3, "reused": 1, "moved": 0, "moved_later": 0, "moved_earlier": 0,
-      "old_max_end": 2340264, "same_md5": false,
-      "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
-      "total_cost": 1826067, "classes": ["reuse_in_place"], "rank": 1,
-      "admission_rank": 1 }
+      "old_size": <bytes>, "new_size": <bytes>,
+      "nchunks": <count>, "reused": <count>, "moved": <count>, "moved_later": <count>, "moved_earlier": <count>,
+      "old_max_end": <bytes>, "same_md5": false,
+      "old_bytes": <bytes>, "new_bytes": <bytes>, "patch_bytes": <bytes>,
+      "total_cost": <bytes>, "classes": ["reuse_in_place"], "rank": <rank>,
+      "admission_rank": <rank> }
   ] }
 ```
 
@@ -762,11 +763,11 @@ simplification in the main tool; `gircap` never acts on it.
 
 ```jsonc
 { "schema_version": 3,
-  "new_chunks_total": 113610,
-  "new_chunks_md5_present_in_old_manifest": 98910,
-  "files_with_a_cross_file_only_chunk": 2,
-  "cross_file_only_chunks": 2,
-  "cross_file_only_bytes_forgone": 1776356,
+  "new_chunks_total": <count>,
+  "new_chunks_md5_present_in_old_manifest": <count>,
+  "files_with_a_cross_file_only_chunk": <count>,
+  "cross_file_only_chunks": <count>,
+  "cross_file_only_bytes_forgone": <bytes>,
   "note": "same-file-only reuse is a deliberate simplification; this quantifies its cost" }
 ```
 
@@ -775,20 +776,19 @@ simplification in the main tool; `gircap` never acts on it.
 ## 12. `chunks/index.json` and `chunks/blobs/`
 
 One blob per distinct `chunk_id`, byte-exact (zstd as served), stored once even
-when several files or both builds reference it. 25 blobs for the reference
-capture.
+when several files or both builds reference it.
 
 ```jsonc
 { "schema_version": 3,
   "blobs": [
-    { "chunk_id": "096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4",
-      "stored_path": "chunks/blobs/096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4.zst",
-      "bytes": 519810, "container": "zstd",
-      "md5_compressed": "a6b9a872edc05505899c7c60bcdbf406",
-      "md5_decompressed": "60215d50041d92c36dab0fa5dd7609b4",
-      "sha256_compressed": "5694eef1b3f2104f98ca509168f90608a16b7a4db8e0229d4463b32d01f346cf",
-      "uncompressed_size": 519785,
-      "unknown_field6": 4233562806722494464,
+    { "chunk_id": "<chunk id>",
+      "stored_path": "chunks/blobs/<chunk id>.zst",
+      "bytes": <bytes>, "container": "zstd",
+      "md5_compressed": "<md5>",
+      "md5_decompressed": "<md5>",
+      "sha256_compressed": "<sha256>",
+      "uncompressed_size": <bytes>,
+      "unknown_field6": <opaque>,
       "verified": { "raw_size_matches": true, "md5_compressed_matches": true,
                     "md5_decompressed_matches": true, "decoded_size_matches": true },
       "decode_error": null,
@@ -796,9 +796,9 @@ capture.
       "partial": false,
       "measurement_error": null,
       "referenced_by": [
-        { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
-          "capture_id": "reuse_moved",
-          "path": "…/blocks/00/09801749.blk", "role": "materialize_old", "offset": 5502333 }
+        { "tag": "<tag>", "build_id": "<build id>",
+          "capture_id": "<capture id>",
+          "path": "<path>", "role": "materialize_old", "offset": <offset> }
       ],
       "sets": ["materialize_old"] }
   ],
@@ -887,7 +887,7 @@ I/O error, a panic or cancellation. The blob is kept and `stored_path` stays set
 so this is distinguishable from "no bytes arrived"; the row is unusable until a
 measurement succeeds.
 
-A `stored_path` that is `null` has three causes:
+A `stored_path` that is `null` has these causes:
 
 - **A fetch was attempted and failed without producing bytes** — a source that
   refused, a transport failure, a write that failed, or a fetch task that
@@ -958,44 +958,44 @@ Per target chunk: where its bytes come from.
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
   "classes": ["reuse_in_place"],
-  "old": { "tag": "7.0.0", "size": 2340264, "md5": "1e210ff1…", "nchunks": 3 },
-  "new": { "tag": "7.1.0", "size": 2340264, "md5": "d992a789…", "nchunks": 3 },
+  "old": { "tag": "<old tag>", "size": <bytes>, "md5": "<md5>", "nchunks": <count> },
+  "new": { "tag": "<new tag>", "size": <bytes>, "md5": "<md5>", "nchunks": <count> },
   "plan": [
     { "i": 0,
       "decision": "FETCH",
-      "target_range":  { "start": 0,       "end": 690719 },
+      "target_range":  { "start": <offset>, "end": <offset> },
       "source_range":  null,
-      "chunk_id":      "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3",
-      "url":           "https://…/chunks/…/sMXGW2ll3Fuu/ddb31a9f…",
-      "compressed_size": 259795, "uncompressed_size": 690719,
-      "uncompressed_md5": "de1cfe69…", "note": null },
+      "chunk_id":      "<chunk id>",
+      "url":           "https://…/chunks/…/<build id>/<chunk id>…",
+      "compressed_size": <bytes>, "uncompressed_size": <bytes>,
+      "uncompressed_md5": "<md5>", "note": null },
     { "i": 1,
       "decision": "REUSE",
-      "target_range":  { "start": 690719,  "end": 2316738 },
-      "source_range":  { "start": 690719,  "end": 2316738, "file_tag": "7.0.0" },
-      "chunk_id":      "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b",
+      "target_range":  { "start": <offset>, "end": <offset> },
+      "source_range":  { "start": <offset>, "end": <offset>, "file_tag": "<old tag>" },
+      "chunk_id":      "<chunk id>",
       "url":           null,
-      "compressed_size": 638614, "uncompressed_size": 1626019,
-      "uncompressed_md5": "291a7719…",
+      "compressed_size": <bytes>, "uncompressed_size": <bytes>,
+      "uncompressed_md5": "<md5>",
       "note": "byte-identical to the old chunk at the same offset" },
     { "i": 2,
       "decision": "FETCH",
-      "target_range":  { "start": 2316738, "end": 2340264 },
+      "target_range":  { "start": <offset>, "end": <offset> },
       "source_range":  null,
-      "chunk_id":      "340ca86ee8ac9be0_87434f1bc3431f2c443dc5311d543308",
-      "url":           "https://…/chunks/…/sMXGW2ll3Fuu/340ca86e…",
-      "compressed_size": 14631, "uncompressed_size": 23526,
-      "uncompressed_md5": "87434f1b…", "note": null }
+      "chunk_id":      "<chunk id>",
+      "url":           "https://…/chunks/…/<build id>/<chunk id>…",
+      "compressed_size": <bytes>, "uncompressed_size": <bytes>,
+      "uncompressed_md5": "<md5>", "note": null }
   ],
-  "totals": { "chunks": 3, "reuse": 1, "fetch": 2, "moved": 0,
-              "download_bytes": 274426,
-              "materialize_old_bytes": 2340264, "materialize_new_bytes": 2340264 },
+  "totals": { "chunks": <count>, "reuse": <count>, "fetch": <count>, "moved": <count>,
+              "download_bytes": <bytes>,
+              "materialize_old_bytes": <bytes>, "materialize_new_bytes": <bytes> },
   "expectations": {
     "result_path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
-    "result_md5": "d992a789…",
+    "result_md5": "<md5>",
     "absent_after": false,
-    "download_bytes": 274426,
-    "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"]
+    "download_bytes": <bytes>,
+    "must_not_fetch": ["<chunk id>"]
   }
 }
 ```
@@ -1049,7 +1049,7 @@ shape:
 
 ```jsonc
 { "capture_id": "removed",
-  "old": { "tag": "7.0.0", "size": 1731133, "md5": "6c220a33…", "nchunks": 2 },
+  "old": { "tag": "<old tag>", "size": <bytes>, "md5": "<md5>", "nchunks": <count> },
   "new": null, "plan": null, "totals": null,
   "expectations": {
     "result_path": null,
@@ -1070,10 +1070,10 @@ is known and a consumer should be able to compare against it.
 `FETCH` entries — what a correct patch costs. It is **never** null and never
 defaulted. This is stated as a rule because getting it wrong is not a cosmetic
 bug: `null` where a figure exists reads as *unrecorded* and `0` reads as a claim.
-An `added` capture whose file actually costs 114 357 B to download, written as
+An `added` capture whose file has a real download cost, written as
 `plan: null` / `totals: null` / `download_bytes: 0`, makes a consumer that
-asserts `SUMMARY download_bytes == expectations.download_bytes` compare 114 357
-against 0 and call a perfectly correct run a failure. Assertion A20 exists to stop
+asserts `SUMMARY download_bytes == expectations.download_bytes` compare that real
+cost against 0 and call a perfectly correct run a failure. Assertion A20 exists to stop
 the rule being quietly dropped.
 
 Absent data has to be absent. Where a figure genuinely does not exist, the field
@@ -1113,15 +1113,15 @@ whose two sides are deliberately byte-identical.
   "algorithm": "sha256",
   "entries": [
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
-      "bytes": 2340264,
-      "md5": "d992a78915ebc0cc31b86d10b05c14e4f",
+      "bytes": <bytes>,
+      "md5": "<md5>",
       "sha256": "…", "encoding": "identity" },
-    { "path": "manifests/7.1.0/game.manifest.json.gz",
-      "bytes": 40996047,
-      "md5": "8c718562f39f91f7e399b02de591f3bd",
+    { "path": "manifests/<tag>/<field>.manifest.json.gz",
+      "bytes": <bytes>,
+      "md5": "<md5>",
       "sha256": "…", "encoding": "gzip" }
   ],
-  "file_count": 80, "total_bytes": 175623265 }
+  "file_count": <count>, "total_bytes": <bytes> }
 ```
 
 This is the **complete** inventory of the bundle: every file except
@@ -1131,7 +1131,7 @@ files on disk, and a bundle whose count disagrees with its tree fails A16.
 **`file_count` is a property of the shape and `total_bytes` is a property of the
 run.** The count does not move between two captures of the same pair — the same
 documents, the same tree — while the byte total moves by a few bytes, because
-the capture's own timestamp and id are in two of the documents and their
+the capture's own timestamp and id are in some of the documents and their
 lengths change with it. So a reader comparing two bundles of the same pair
 should expect the counts to agree and the byte totals to differ slightly, and
 should not read the difference as a different tree.
@@ -1164,23 +1164,22 @@ The count is safe, because no file appears or disappears between the two passes.
 ```jsonc
 { "schema_version": 3,
   "result": "pass",                                  // pass | fail | incomplete
-  "counts": { "total": 93, "passed": 93, "failed": 0 },
+  "counts": { "total": <count>, "passed": <count>, "failed": <count> },
   "assertions": [
     { "id": "A6", "assertion": "chunk decompressed md5 matches",
-      "subject": "chunks/blobs/340ca86e….zst",
-      "expected": "87434f1bc3431f2c443dc5311d543308",
-      "actual":   "87434f1bc3431f2c443dc5311d543308",
+      "subject": "chunks/blobs/<chunk id>.zst",
+      "expected": "<md5>",
+      "actual":   "<md5>",
       "ok": true }
   ],
   "matrix": [ { "class": "identical", "status": "captured", "ok": true }, … ]
 }
 ```
 
-One row per assertion **instance**, not per assertion kind — 25 stored chunks
-produce 25 A6 rows, so `counts.total` is much larger than the number of ids. In
-the reference capture it is 93: A1 6, A2 2, A3 4, A4 8, A6 25, A7 5, A8 5,
-A9 4, A10 3, A11 10, A12 5, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1,
-A21 1, A22 1, A23 1.
+One row per assertion **instance**, not per assertion kind — a bundle with many
+stored chunks produces that many A6 rows, so `counts.total` is larger than the
+number of assertion ids, and its value is a property of the bundle rather than a
+fixed tally.
 `ok:false` rows are never dropped; a failing capture leaves them in place so the
 failure is inspectable rather than summarized away.
 

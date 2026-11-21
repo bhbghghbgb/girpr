@@ -50,7 +50,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
   Repair/download chunk identity is MD5-only (`ChunkDecompressedHashMd5`); `xxh64` parsed from the
   chunk name is only a preload/diff-staging resume probe, not the repair hash.
 - Genshin glue (`RepairManagement/Genshin/Fetch.cs:BuildPrimaryManifest`) fakes the legacy `pkg_version`
-  from the Sophon manifest (post-5.6 HoYo removed scattered zips): `SophonAssetDictRef` map +
+  from the Sophon manifest (HoYo removed scattered zips in a recent release): `SophonAssetDictRef` map +
   `PkgVersionProperties{remoteName,fileSize,md5}` per asset + per-VO `Audio_*_pkg_version` from
   `audio_lang_14`. `Fetch.Persistent.cs` additionally queries the **game dispatcher**
   (`ClientGameResURL/.../res_versions_external`, `ClientDesignDataURL/.../data_versions`) and can
@@ -67,7 +67,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
 |---|---|---|
 | Repair entry | `GameInstallService.cs:ExecuteRepairTaskAsync` ← `PrepareForInstallOrRepairAsync` (latest chunk build + optional local-version build for dedup) | `RepairManagement/Genshin/GenshinRepair.cs:CheckRoutine`: `ResetAndFetchAssets→CountAssetIndex→Check→Summarize`; `Repair.cs:RepairAssetTypeGeneric` |
 | Update entry | `ExecuteUpdateTaskAsnyc`: Patch build if `localVersion ∈ DiffTags`, else latest+local chunk builds, else legacy package patch/major | `InstallManagerBase.Sophon*.cs`: (A) `SophonPatch` hdiff path `EnumerateUpdateAsync`+`DownloadPatchAsync`+`ApplyPatchUpdateAsync`, (B) `SophonUpdate` chunk-diff fallback `EnumerateUpdateAsync(oldPair,newPair)` + `WriteUpdateAsync` |
-| Hash | **MD5 (lowercase hex) + size only**. `GameInstallHelper.cs:CheckFileMD5Async` (512 KiB blocks). File-level skip, per-reused-chunk slice MD5 (`FileSliceStream`), chunk-cache compressed MD5, final `_tmp` MD5; mismatch → delete tmp + throw | Size first, then `XxHash64` if `xxh64hash` present else MD5 (`Check.cs:CheckAssetAllType`). Per-chunk decompressed hash verified on the fly during copy/download (`SophonAsset.Download.cs:InnerWriteStreamToAsync`); mismatch → retry from network. `UseFastMethod` can skip hashing (not for us) |
+| Hash | **MD5 (lowercase hex) + size only**. `GameInstallHelper.cs:CheckFileMD5Async` (streamed blocks). File-level skip, per-reused-chunk slice MD5 (`FileSliceStream`), chunk-cache compressed MD5, final `_tmp` MD5; mismatch → delete tmp + throw | Size first, then `XxHash64` if `xxh64hash` present else MD5 (`Check.cs:CheckAssetAllType`). Per-chunk decompressed hash verified on the fly during copy/download (`SophonAsset.Download.cs:InnerWriteStreamToAsync`); mismatch → retry from network. `UseFastMethod` can skip hashing (not for us) |
 | Full vs diff | **Repair never uses diffs**: every target file verified; missing/corrupt bytes re-fetched as **full chunks** (zstd blobs). Update prefers `Patch` (ldiff blobs + `HPatch.PatchZstandard`) or legacy `hdiffmap.json/hdifffiles.txt/deletefiles.txt` + 7z, falling back to chunk-dedup (only chunks with empty `OriginalFileFullPath` download; rest copied from `OriginalFileFullPath:Offset` after slice-MD5 check) | Repair: full-file `WriteToStreamAsync` per broken asset (chunk-parallel, per-chunk resume/skip via `CheckChunkMd5HashAsync`). Update (A) hdiff: needs intact `OriginalFile` (hash-checked, else `PatchMethod=DownloadOver` fallback; 5 retries → force full). Update (B) chunk-diff: joins old+new **server** manifests by `AssetName` and `ChunkDecompressedHashMd5`; `ChunkOldOffset=-1` = download, else copy from old file / staged `chunk_collapse/` blob / network; old-reference bytes are hash-verified after copy with network fallback |
 | Version gate | **Repair = Install path: no `DiffTags` check.** Works from any/unknown local version (missing `config.ini` → `localFile=null` → full fetch, still skips already-correct files by MD5). This is the behavior the user relies on ("patch to new version directly") | Update refuses/redirects when local version has no diff entry (`SophonPatchBranch.IsFound=false` → fallback to B). Repair itself is version-agnostic, but the surrounding launcher gates repair on version checks (the user's complaint). Overall flow also depends on dispatcher persistent revisions |
 
@@ -76,7 +76,7 @@ Starward's repair path is *unconditionally* version-agnostic by construction.
 
 ## 3. Disk-space behavior (the deciding factor)
 
-Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles` L722-777):
+Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles`):
 - No sparse files / preallocation (`FileSliceStream.SetLength` throws).
 - **Temp-then-atomic-move everywhere**: chunk mode writes `FullPath_tmp` (`OpenOrCreate`, resume by
   `Length < Offset+UncompressedSize`), streaming zstd-decompress via `Pipe+DecompressionStream`;
@@ -87,28 +87,28 @@ Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles` L
   parallel (`Parallel.ForEachAsync`, unbounded in code → we will bound it). No whole-game duplicate.
 - **Starward-handling cleanup (post-task ONLY, never an orphan sweep)** — `ClearDeprecatedFiles`
   runs after Install/Update/Repair (never Predownload), and only when `PredownloadVersion is null`
-  does it also sweep `**/*_tmp`, `**/*.hdiff`, dirs `chunk/`, `ldiff/`, `staging/` (L747-773).
-  Otherwise it deletes exactly: downloaded compressed packages (L729-737) + each
-  `DeprecatedFileConfig.deprecated_files[].Name` joined under install path (L738-746, source:
+  does it also sweep `**/*_tmp`, `**/*.hdiff`, dirs `chunk/`, `ldiff/`, `staging/`.
+  Otherwise it deletes exactly: downloaded compressed packages + each
+  `DeprecatedFileConfig.deprecated_files[].Name` joined under install path (source:
   `GET getGameDeprecatedFileConfigs`, node `deprecated_file_configs`,
-  `GamePackageService.cs:993-996` via `HoYoPlayClient.cs:222-226`). Update-patch additionally
+  `GamePackageService.cs` via `HoYoPlayClient.cs`). Update-patch additionally
   deletes consumed diffs/sources/`hdiffmap.json|hdifffiles.txt|deletefiles.txt`
-  (`GameInstallHelper.cs:730-841`) and per-`DeleteTags[localVersion]` files
-  (`GameInstallService.cs:508-519`, populated `GamePackageService.cs:329-376`).
+  (`GameInstallHelper.cs`) and per-`DeleteTags[localVersion]` files
+  (`GameInstallService.cs`, populated `GamePackageService.cs`).
   Pre-task does NO deletes (only `SetAttributes(Normal)`).
-- **Does NOT purge unknown extra files** (only the deprecated list; `GameInstallService.cs:681`
+- **Does NOT purge unknown extra files** (only the deprecated list; `GameInstallService.cs`
   `// todo clear useless audio` — unselected audio is never cleaned). `res_category_dir`
   (`{"category":"...","is_delete":true}`) and `blacklist_dir` (`{"fileName":"..."}`) only
-  *exclude* entries from the download work list (`GamePackageService.cs:128-143` blacklist apply,
-  `GamePackageService.cs:703-727` res-category read consumed by the `GamePackageService.cs:742-769` filter); they are
-  never deleted. Audio `cache→res` move (`GameInstallService.cs:427-445,643-661`, `File.Move`
-  overwrite) and `config.ini` bump (`SetGameConfigIniAsync`, L788-850) are moves/rewrites, not purges.
+  *exclude* entries from the download work list (`GamePackageService.cs` blacklist apply,
+  `GamePackageService.cs` res-category read consumed by the `GamePackageService.cs` filter); they are
+  never deleted. Audio `cache→res` move (`GameInstallService.cs`, `File.Move`
+  overwrite) and `config.ini` bump (`SetGameConfigIniAsync`) are moves/rewrites, not purges.
 
 Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall.cs:GetUnusedFileInfoList`):
 - Quota gate `EnsureDiskSpaceSufficiencyAsync` (volume free space + dialog) — UI-oriented, skip for CLI.
-- **Writes in place for its plain-HTTP repair path** (`DownloadClient.cs:234-241` opens the final
-  path directly, and `ChunkSession.cs:71-100` deletes before writing when `overwrite` is on — the
-  default, `ProgressBase.cs:1309`). "Write the broken file where it lies" is therefore a
+- **Writes in place for its plain-HTTP repair path** (`DownloadClient.cs` opens the final
+  path directly, and `ChunkSession.cs` deletes before writing when `overwrite` is on — the
+  default, `ProgressBase.cs`). "Write the broken file where it lies" is therefore a
   shipped launcher behaviour, not an invention: the chunk path below is the one that stages.
 - Temps: `*_tempSophon`, `*_tempUpdate`, `*.temp`, plus retained `GamePath/chunk_collapse/` (preload
   compressed blobs + `.verified` + `preload.verified` flag) and `GamePath/ldiff/` (patch blobs),
@@ -116,31 +116,31 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
   apply (extra transient ≈ compressed delta retained alongside game), then apply writes `_tempUpdate`
   alongside the original → `Move`. Patch path holds `ldiff/{PatchName}` + `target.temp` + old file.
 - Streaming: `PerformWriteStreamThreadAsync` (`ResponseHeadersRead` + zstd stream, `MD5.TransformBlock`
-  on the fly, `ArrayPool` 4 KiB, per-chunk `Parallel.ForEachAsync(min(8,CPU))`, `FileStream.Lock`
-  disabled via `NOSTREAMLOCK`), 20 s timeout/retry, speed limiter.
-- Deletion comes in **two separate Collapse-handling mechanisms** (do not conflate with Starward's
+  on the fly, pooled buffers, a bounded per-chunk `Parallel.ForEachAsync`, `FileStream.Lock`
+  disabled via `NOSTREAMLOCK`), a timeout/retry, speed limiter.
+- Deletion comes in **distinct Collapse-handling mechanisms** (do not conflate with Starward's
   post-task sweep above):
   - (a) **Manual orphan purge** — `GenshinInstall.GetUnusedFileInfoList` override
-    (`CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs:177-263`), triggered only by
-    user cleanup UI (`HomePage.xaml.cs:969-981`, `MainPage.Navigation.cs:396-405` → `CleanUpGameFiles()`
-    → `InstallManagerBase.PkgVersion.cs:151-188`), never auto before/after repair. Expected set =
+    (`CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs`), triggered only by
+    user cleanup UI (`HomePage.xaml.cs`, `MainPage.Navigation.cs` → `CleanUpGameFiles()`
+    → `InstallManagerBase.PkgVersion.cs`), never auto before/after repair. Expected set =
     `Repair.ResetAndFetchAssets()` union (Sophon fake-`pkg_version` via
-    `GenshinInstall.PkgVersion.cs:112-190` + dispatcher persistent via `Fetch.Persistent.cs:44-117` +
+    `GenshinInstall.PkgVersion.cs` + dispatcher persistent via `Fetch.Persistent.cs` +
     plugin/SDK/WPF zip entries via `SimpleZipArchiveReader`), diffed against full
     `EnumerateFiles("*", AllDirectories)`. Protected: server `FilesCleanupIgnoreList` regexes
-    (`PresetConfig.cs:86-94`, normally `[]` for Genshin — `GenshinInstall.cs:145-172` sets none) matched
-    against `RelativePath` via `WhereMatchPattern` (`PatternMatcher.cs:93-108`, case-insensitive,
+    (`PresetConfig.cs`, normally `[]` for Genshin — `GenshinInstall.cs` sets none) matched
+    against `RelativePath` via `WhereMatchPattern` (`PatternMatcher.cs`, case-insensitive,
     non-matching kept) **plus** per-line `^Audio_<entry>_pkg_version$` built from
-    `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs:232-241`). Note the base-class
-    `config.ini/pkg_version/Persistent/ScreenShot` protections (`InstallManagerBase.PkgVersion.cs:456-535`)
+    `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs`). Note the base-class
+    `config.ini/pkg_version/Persistent/ScreenShot` protections (`InstallManagerBase.PkgVersion.cs`)
     do NOT apply to this override (except insofar as those files are in the union).
-  - (b) **Repair-time redundant pass** — `Check.cs:26-67` → `CheckRedundantFiles` (before the hash loop)
-    marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs:232-319`) as `Unused`, deleted in
-    `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
+  - (b) **Repair-time redundant pass** — `Check.cs` → `CheckRedundantFiles` (before the hash loop)
+    marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs`) as `Unused`, deleted in
+    `Repair.cs` during `RepairAssetTypeGeneric`.
 - **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
   `{latest chunk-manifest paths} ∪ {config.ini} ∪ {the legacy in-install girpr.lock} ∪ {cleaned blacklist paths}`
   plus filename-pattern keeps for `audio_lang_*` + `Audio_*_pkg_version` (Collapse
-  `GenshinInstall.cs:232-241` parity). Everything not kept by rules 0-4 purges into the
+  `GenshinInstall.cs` parity). Everything not kept by rules 0-4 purges into the
   single `deleted_extra_bytes` counter — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
   `ldiff/`, `staging/`, legacy `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`,
   logs, and server bookkeeping files (the exe / `pkg_version` / `Persistent/` / `ctable.dat`

@@ -7,7 +7,7 @@
 
 Workspace member (`tools/sync`, binary `girsync`) for testing version upgrades/downgrades:
 snapshot a game folder's state, diff two folders/records, and restore `dst` to `src` content.
-Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-report-core` (ordered-JSON/line-writing mechanics — this tool keeps its own alphabetical key order, `serde_json::Value` fields and record layouts), `girpr-filter` (the shared `--include`/`--exclude` glob rules — one glob version and one set of matching rules for both tools), `girpr-fs-names` (Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — parameterised by this tool's own host policy for folding and backslash rewriting), and, for tests, `girpr-tempdir` (the scratch-directory names and cleanup) and `girpr-sync-test-support` (the girsync-coupled option/cache/planner fixtures, kept in that crate so the scratch-directory policy stays girsync-free). Its cache lives in the separate `girpr-sync-cache` crate (with `redb`, `postcard` and `tempfile`), which this tool and `sled2redb` consume directly so an edit to a planner, command or other subsystem here leaves the whole cache cached; that crate also owns the hash vocabulary the wire format pins. Its four acyclic leaves — the rw limiter, the include/exclude filter, the link classifier and the hardlink facts — live in `girpr-sync-leaves`, which this tool depends on directly and whose own integration tests reach without the facade, so a high-level edit here leaves them cached too. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets, nor the retry schedule and sleep driver that those two parameterise with their own delay and jitter policies, nor `girpr-exit`, the exit-table generation mechanism shared by the repair binary and `gircap` (each supplies its own codes and meanings; this tool keeps its own literals), nor `girpr-audio-language`, the audio-token and display-name mechanics shared by the repair binary and `gircap` (each keeps its own alias map, sentinel and validation; this tool has no audio selection), nor `girpr-proto`, the Sophon protobuf wire types shared by the repair binary and `gircap` (this tool never decodes a chunk manifest), nor `girpr-model`, the region identity, ids, channel tuples and base URLs shared by the repair binary and `gircap` (this tool has no region selector), nor `girpr-cli`, the clap-error to usage-code mapping shared by the repair binary, `gircap` and `sled2redb` (each passes its own usage code; this tool keeps clap's default exit status).
+Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-report-core` (ordered-JSON/line-writing mechanics — this tool keeps its own alphabetical key order, `serde_json::Value` fields and record layouts), `girpr-filter` (the shared `--include`/`--exclude` glob rules — one glob version and one set of matching rules for both tools), `girpr-fs-names` (Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — parameterised by this tool's own host policy for folding and backslash rewriting), and, for tests, `girpr-tempdir` (the scratch-directory names and cleanup) and `girpr-sync-test-support` (the girsync-coupled option/cache/planner fixtures, kept in that crate so the scratch-directory policy stays girsync-free). Its cache lives in the separate `girpr-sync-cache` crate (with `redb`, `postcard` and `tempfile`), which this tool and `sled2redb` consume directly so an edit to a planner, command or other subsystem here leaves the whole cache cached; that crate also owns the hash vocabulary the wire format pins. Its acyclic leaves — the rw limiter, the include/exclude filter, the link classifier and the hardlink facts — live in `girpr-sync-leaves`, which this tool depends on directly and whose own integration tests reach without the facade, so a high-level edit here leaves them cached too. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets, nor the retry schedule and sleep driver that those two parameterise with their own delay and jitter policies, nor `girpr-exit`, the exit-table generation mechanism shared by the repair binary and `gircap` (each supplies its own codes and meanings; this tool keeps its own literals), nor `girpr-audio-language`, the audio-token and display-name mechanics shared by the repair binary and `gircap` (each keeps its own alias map, sentinel and validation; this tool has no audio selection), nor `girpr-proto`, the Sophon protobuf wire types shared by the repair binary and `gircap` (this tool never decodes a chunk manifest), nor `girpr-model`, the region identity, ids, channel tuples and base URLs shared by the repair binary and `gircap` (this tool has no region selector), nor `girpr-cli`, the clap-error to usage-code mapping shared by the repair binary, `gircap` and `sled2redb` (each passes its own usage code; this tool keeps clap's default exit status).
 
 ## Source layout
 
@@ -17,18 +17,18 @@ and drive the public API. Modules that carry more than one idea are split into
 directories (`mod.rs` is the facade re-exporting the same items, so no public
 path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
 tests travel with the code they exercise). A path in the table is relative to
-`src/`; a row spells the whole path — `src/…` — in three cases: a path
+`src/`; a row spells the whole path — `src/…` — in some cases: a path
 relative to `src/` that is a bare name another file in the tree shares
 (`link.rs`, which the plan directory's own `link.rs` shares), and a file the
 module tree holds only in a test build (`#[cfg(test)]`).
 
 | File | Responsibility |
 | --- | --- |
-| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all four subcommands) |
+| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all subcommands) |
 | `config/mod.rs` | the per-command input structs: `TrustOpts`, `Update/Compare/CompareSelf/SyncOpts` |
 | `config/common.rs` | settings every subcommand shares: `CommonOpts`, `LogCtx`, `ScanMode`, and the `TryFrom` impls that validate raw flags into them |
 | `report/mod.rs` | the stdout data plane: `OutputFormat`, `Report`, `verdict`, `update_summary` |
-| `report/record.rs` | `Record`: the event name, its fields, and the three text layouts |
+| `report/record.rs` | `Record`: the event name, its fields, and the text layouts |
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff reporter/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
@@ -90,7 +90,7 @@ girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-ext
 ```
 
 **Each occurrence of a hash flag names one algorithm**, and the flag is
-repeatable, so the synopsis above spells a request for two the way the parser
+repeatable, so the synopsis above spells a request for several the way the parser
 takes it: `--hash-all-of md5 --hash-all-of sha256`. `--hash-all-of md5 sha256` —
 two values in one occurrence — is refused before the run starts. The default is
 `--hash-all-of md5` alone.
@@ -118,7 +118,7 @@ live in [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
 The log policy is the workspace's and lives in `crates/log/`, shared with the
 repair binary and with `gircap` — one set of rules, so a script that learned
-`--log-file` for one of them knows it for all three.
+`--log-file` for one of them knows it for all of them.
 
 - **A release build always writes a log file; a debug build writes one only
   when it is asked to.** A release build's default is
@@ -153,7 +153,7 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   the cache, one that hashes what the plan asked for — and each phase reports a
   start, a progress and a done, all named for the map and for the phase they
   came from: `effective start: phase a`, `effective progress: phase a` and
-  `effective done: phase a`, and the same three for phase C. Every event of a
+  `effective done: phase a`, and the same events for phase C. Every event of a
   phase names the phase by its letter, so a reader — or a parser — never has
   to know which fields an event carries to say where it came from, and a grep
   for `effective done` finds both phases' done events.
@@ -251,7 +251,7 @@ only state where a digest is consulted at all. Anything else is already decided 
 stat or presence, so no algorithm is required and no coverage is checked.
 
 `--hash-any-of` picks cheapest-first — an algorithm both sides already hold costs
-no read, one costs a read, two cost two — and within a tier it takes the **order you
+no read, one costs a read, and more cost a read each — and within a tier it takes the **order you
 wrote the flags in**, so `--hash-any-of sha256 --hash-any-of md5` prefers sha256.
 The choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
 
@@ -281,7 +281,7 @@ never trusts cached digests in the first place.
 
 ## Concurrency
 
-How many file **reads and writes** may be in flight at once. Three flags, on every
+How many file **reads and writes** may be in flight at once. Several flags, on every
 subcommand:
 
 | | |
@@ -350,12 +350,12 @@ copy including the verify. So `Split{s,d}` admits `min(s,d)` concurrent copies.
 Releasing around the halves would buy nothing — the file is not finished until it
 verifies.
 
-**Two reads and a write, and the check needs both.** A copied file is read from
+**An independent re-read, and the check needs both.** A copied file is read from
 src once (the stream), written, `sync_all`'d, and then **re-read from dst and
 hashed again** — that is what is compared against src's digest, and the
 comparison is the verify. src's own digest is taken from the copy's read rather
-than from a third pass over the file, so the cost is **2 reads + 1 write** per
-copied file rather than 3 + 1.
+than from a separate pass over the file, so the copy costs a stream, a write and
+an independent re-read instead of another full pass over src.
 
 **A failed flush is a failed copy.** A `sync_all` error aborts the copy, so the
 run exits `3` and writes no cache row for that file. Ignoring it would let the
@@ -456,7 +456,7 @@ case-insensitive filesystem, a directory the run creates can be the same
 directory a later step removes, and its row then survives until the next run
 prunes it.
 
-It runs the same three phases as every other command — stat-only scan, plan,
+It runs the same phases as every other command — stat-only scan, plan,
 resolve — via `HashPlan::plan_one_side`, which is the one-sided predicate: there
 is no other side to be lazy *relative to*, so every file is a candidate and every
 requested algorithm is asked for. That is also why `update` needs no exemption from
@@ -497,7 +497,7 @@ borrow is the point.
 Each side is classified by basename: path whose final component starts with
 `girpr-cache` is a **record** (DB used as-is, no FS access, no writes);
 otherwise it is a **folder** (embedded `<root>/girpr-cache` loaded/created, live
-stat + lazy hash, **cache created and updated as a side effect**). All 4 combos
+stat + lazy hash, **cache created and updated as a side effect**). All combinations
 work, subject to the one-cache-per-run rule below. What gets read is decided per
 pair, not per side: a file on both sides with equal size and mtime is the only
 thing that needs a digest (see "Cache is a cache, not truth"). Output classes, one
@@ -571,7 +571,7 @@ to hit it and it is worth knowing:
 girsync update --dir D:\game-old      # cache warm
 # a file appears in D:\game-old
 girsync sync --src D:\game-old --dst D:\game-live    # ...and leaves a stat-only row for it in D:\game-old's cache
-girsync compare-self --dir D:\game-old   # exit 3: 1 of 3 undecided paths uncovered
+girsync compare-self --dir D:\game-old   # exit 3: an undecided path is uncovered
 ```
 
 The `sync` is not at fault. It decided that pair by presence, so it needed no
@@ -580,7 +580,7 @@ digest, so phase A recorded the file's stat and nothing else — and that row is
 stat-equal pair the record cannot digest, and without this rule it would have
 exited **0**: `hashes_differ` skips an algorithm either side lacks, so the pair
 quietly falls back to the size+mtime that had already agreed and the audit reports
-the newcomer as in step. Three ways out, all named in the error: one command
+the newcomer as in step. Several ways out, all named in the error: one command
 (`girsync update --dir D:\game-old` — with the **folder spelled out**, so the
 line is one you can paste as it stands), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
@@ -592,10 +592,10 @@ comparison may be pointed at one — but no folder's `girpr-cache` is it, so
 nothing the tool can run would rebuild it, and the error does not offer a
 repopulation that would rebuild a *different* file. It says so in the message
 — the record is not a folder's own cache, so nothing would rebuild it — rather
-than leaving the remedy list quietly one line shorter. The other two ways out
+than leaving the remedy list quietly one line shorter. The other ways out
 are still named.
 
-**`--hash-any-of` is the fourth, and the one that needs no new work on the tree.**
+**`--hash-any-of` is another way out, and the one that needs no new work on the tree.**
 Where the record holds *some* of what you asked for, it reads one algorithm instead
 of refusing:
 
@@ -605,8 +605,8 @@ girsync compare-self --dir D:\game-old --hash-any-of md5 --hash-any-of sha256
 
 An audit of an `--hash-all-of md5` record then succeeds wherever the record has md5,
 without repopulating. It reads one digest per undecided pair and cannot read zero —
-this command's disk side has no cache by design, so there is no tier-1 "already have
-it" to hit — which makes `any-of` here a way to *narrow the request to one
+this command's disk side has no cache by design, so there is no cheapest "already
+have it" tier to hit — which makes `any-of` here a way to *narrow the request to one
 algorithm*, not a way to skip the work.
 
 The same caveat as everywhere else applies to `--max-depth` and
@@ -708,7 +708,7 @@ SUMMARY missing=0 extra=0 changed=2 type_conflict=0 case_mismatch=0 total_diff=2
 | `unverifiable:<fields>` | no digest was available and a difference this run distrusts is unresolved |
 | `dir-present` | a directory on both sides — compared by presence |
 
-Three things worth knowing:
+Worth knowing:
 
 - **One tag per *decision*, never per check.** The diff is a short circuit, so the
   tag names whatever settled the pair. A stat difference needs no digest at all, and
@@ -773,7 +773,7 @@ path's plan line, and repeating it on the action would put one fact in two place
 with two vocabularies. The hard rule is that **an action line carries `because=` and
 never `why=`**; anyone wanting the join has both records for the same path.
 
-The stream is three segments, in this order:
+The stream is segmented, in this order:
 
 | segment | what it is | when |
 | --- | --- | --- |
@@ -781,7 +781,7 @@ The stream is three segments, in this order:
 | the **plan** | the diff, through the same `report::verdict` `compare` uses | up-front, once the diff exists |
 | the **actions** | what the apply phases do, in apply order | as they happen — so with more than one rw operation permitted the `COPY` lines come out in **completion** order, not plan order |
 
-Two things follow from that split, and both are the point:
+Several things follow from that split, and they are the point:
 
 - **The plan line answers *"why did it decide that"*, the action line answers *"what
   is this tool doing"*.** A `COPY` names the bucket that caused it and never repeats
@@ -860,7 +860,7 @@ not that internal order.
    name the plan removes first reduces the count and is allowed — the default
    run's delete of an extra, or a file `fix_dirs` replaces — so this is not a
    blanket refusal of every shared inode. `copy_one` keeps its own runtime check.
-   **No resume**, in two senses: a failed mtime restore aborts the run although the
+   **No resume**, in the following senses: a failed mtime restore aborts the run although the
    bytes are already correct (a rerun recopies that file), and cache rows written
    since the last periodic commit are discarded when a run aborts (copies that
    completed stay on disk, but a rerun re-stats, and may re-hash, that tail before
@@ -878,13 +878,12 @@ renamed` exists for exactly that, because every other case-only fixture uses
 identical bytes and would pass either way.
 
 **Laziness moves work between runs rather than only removing it, so the honest
-summary is a trade.** Measured on five src files / three dst files / two src-only,
-cold caches:
+summary is a trade.** With cold caches:
 
 | run | before | after |
 | --- | --- | --- |
-| `sync` #1, dst has drifted | 8 files read | **0** |
-| `sync` #2, nothing changed | 0 read | 5 read |
+| `sync` #1, dst has drifted | the files stat cannot settle | **none** |
+| `sync` #2, nothing changed | none | the stat-equal files on src |
 
 Run #1 is the common case and the large win: the pairs size settled are never
 opened. Run #2 is the cost — a lazy scan records stat without a digest, and the
@@ -987,10 +986,10 @@ rename lands.
 
 **A name of that shape that is taken is stepped over, not reused.** The copy
 is published under the next name of the family instead: `girpr-cache-backup-<ts>`
-and then its `girpr-cache-backup-<ts>_2`, `_3`, … spellings, and the same
+and then its numbered spellings, and the same
 family of names for the `girpr-cache-old-…` snapshots and for the working
 `girpr-cache-partial-…` name. **That family of names is bounded** — the plain
-name and the `_2` … `_1000` suffixes, a thousand candidates in all — so a
+name and its numbered variants up to a generous limit — so a
 claim cannot spin forever over a pathological folder: a publish that finds
 every one of them taken fails loudly, and the run reports the failure rather
 than a backup that is not on disk.
@@ -1207,7 +1206,7 @@ run's only addition is `dry_run=true`, so a caller reading either does not have 
 know which it got.
 
 `a_dry_run_reports_what_a_real_run_reports` compares the two modes as a
-**two-segment** comparison. The plan and the renames are decided
+**segmented** comparison. The plan and the renames are decided
 before anything is written, so they are compared **ordered, field for field**. The
 actions are reported as they complete, and completion order is a function of I/O
 timing rather than of the plan, so they are compared as a **multiset** — with the
@@ -1218,8 +1217,8 @@ it reports on.
 
 **A dry run and a real run are not comparable as one ordered document.**
 `COPY` lines are emitted inside the copy worker, so a run with
-`--rw-threads 4` prints them in whatever order the files finish — 24 padded files
-under `--rw-threads 4` come out shuffled on 8 of 8 runs. The *set* and the *count*
+`--rw-threads 4` prints them in whatever order the files finish — a fixture of
+equal-length names comes out shuffled on every run. The *set* and the *count*
 are what the tests assert; the order is not, and no test may depend on it.
 
 The emit is serialised by a leaf mutex rather than left to each thread's
@@ -1268,19 +1267,18 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
   file; POSIX spellings stay exact. The converter's temporary is one of them
-  (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spellings of the
+  (`girpr-cache-convert-<pid>-<ts>.redb`, or the numbered spellings of the
   same name when that one is taken), so a conversion that was killed
   leaves the tool's own residue behind rather than a file that looks like
-  content. The family of those spellings is bounded, and stops at the
-  thousandth suffix.
+  content. The family of those spellings is bounded by a generous limit.
   Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
   convert once with `sled2redb <old-dir> <new-file>` — the standalone converter
   in `tools/sled2redb`).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
-- **Cache memory.** Every redb handle gets a **64 MiB** page cache — the budget
-  redb may spend on pages it has cached. The default is small on purpose:
+- **Cache memory.** Every redb handle gets a **bounded page cache** — the budget
+  redb may spend on pages it has cached. The default is modest on purpose:
   `cargo nextest` runs one process per test, so parallel tests each get their
   own. `GIRSYNC_CACHE_SIZE_MIB` raises or lowers it, in MiB, and applies to
   **each handle** a run opens — so a `sync` that opens src's and dst's caches
@@ -1560,7 +1558,7 @@ opts in by naming it.
 
 | switch | what it does |
 | --- | --- |
-| `GIRSYNC_TEST_CACHE=memory` | a folder's cache opens against redb's shared in-memory backend instead of the `girpr-cache` file, so a case that asserts a verdict rather than the cache file pays no 1 MB create + fsync per command |
+| `GIRSYNC_TEST_CACHE=memory` | a folder's cache opens against redb's shared in-memory backend instead of the `girpr-cache` file, so a case that asserts a verdict rather than the cache file pays no cache-file create + fsync per command |
 | `GIRSYNC_TEST_FAIL_COPY=<rel>` | the copy of `<rel>` fails before it opens its destination, so nothing is written |
 | `GIRSYNC_TEST_FAIL_FLUSH=<rel>` | the flush after that copy's write fails, so the copy fails at the flush rather than at the write |
 | `GIRSYNC_TEST_NO_FSYNC=1` | the per-file `sync_all` after a copy is skipped — the runner sets it for the whole suite |
@@ -1568,9 +1566,9 @@ opts in by naming it.
 | `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the file placeholder exists |
 | `GIRSYNC_TEST_FAIL_RENAME_STEP2=<rel>` | the same rename fails after step 1, so the entry is in the temporary |
 | `GIRSYNC_TEST_GATE_COPY=<wait>:<on>` | the copy of `<wait>` does not begin until the copy of `<on>` has **failed** |
-| `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the default batch of 50 |
-| `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the default 256 MiB |
-| `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the default 5 s |
+| `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the configured batch size |
+| `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the configured byte threshold |
+| `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the configured interval |
 | `GIRSYNC_TEST_DURABILITY=none` | a cache write commits without its per-commit fsync — the runner sets it for the whole suite |
 
 `<rel>` is the path **inside the mirror**: `/`-separated, relative to the root,
@@ -1579,15 +1577,15 @@ src's casing — and the rename hooks name the **dst** path as it is on disk
 before the rename, since that is the path the pass moves.
 
 **One switch per failure point, and the switch names what fails.** The copy
-path has two failure points, so it has two switches: `FAIL_COPY` (the copy
-itself) and `FAIL_FLUSH` (the flush after the write). The case-fixing rename
-has three, so it has three: `FAIL_RENAME` (before the temporary is claimed),
+path has its own failure points, each with a switch: `FAIL_COPY` (the copy
+itself) and `FAIL_FLUSH` (the flush after the write). The case-fixing rename has
+one switch per stage: `FAIL_RENAME` (before the temporary is claimed),
 `FAIL_RENAME_STEP1` (after the claim) and `FAIL_RENAME_STEP2` (after step 1).
-Each of the rename's three leaves a different thing behind — nothing, a file
-placeholder to remove, an entry to roll back — so the three are armed
-separately. Only the rename fails there, so its three switches share that name
-and carry the point in the suffix; the stage is in the **switch's name** and
-never in its value, so every failure hook's value stays a plain relative path.
+Each stage leaves a different thing behind — nothing, a file placeholder to
+remove, an entry to roll back — so they are armed separately. Only the rename
+fails there, so its switches share that name and carry the point in the suffix;
+the stage is in the **switch's name** and never in its value, so every failure
+hook's value stays a plain relative path.
 
 **The gate's value is split on the first colon**, and the two halves are paths
 inside the mirror — the `<rel>` shape above, spelled the way the plan spells a
@@ -1615,12 +1613,12 @@ open's own one-off `meta` write resolves a policy of its own when it runs.
 A value that is not the one named means the production behaviour: the real
 cache file, a durable commit, the default commit thresholds, and no injected
 failure. The fsync switch is the one that takes any unambiguous truthy value
-— `1`, `true`, `yes` or `on` — and every other value is an exact match. Two
-values are the exceptions, and both are reported in the log and ignored: a
+— `1`, `true`, `yes` or `on` — and every other value is an exact match. A
+couple of values are the exceptions, and are reported in the log and ignored: a
 commit limit that cannot be parsed, and a copy gate that names no copy — so a
 typo is visible rather than silent.
 
-The runner sets two of them for every test process — `GIRSYNC_TEST_DURABILITY=none`
+The runner sets the following for every test process — `GIRSYNC_TEST_DURABILITY=none`
 and `GIRSYNC_TEST_NO_FSYNC=1` — and it does it in `.config/nextest-test-env`,
 which the workspace's nextest setup copies into the environment of every test
 process. That is why a case that wants the **flush** hook has to turn the
@@ -1629,7 +1627,7 @@ the switch is off.
 
 ### Benchmarks
 
-A small harness walks three tree shapes — **many tiny files**, **few large
+A small harness walks several tree shapes — **many tiny files**, **few large
 files**, **deep nesting** — and prints the elapsed time and a throughput
 number for each:
 
@@ -1656,12 +1654,12 @@ Each shape's line carries the walk's own counts beside the fixture's:
 `files` and `bytes` are what the walk saw — the files' sizes, not the
 directory's size on disk — while `fixture_files` and `fixture_bytes` are what
 the tree holds. The two differ for the deep shape, whose chain is deeper
-than the walk's 64-level cap.
+than the walk's depth cap.
 
 ## Cost model
 
 Where a run's time goes, so a slow run can be read rather than guessed at. On a
-200 k-file tree the walk and the `stat` calls dominate; everything else is bounded
+large tree the walk and the `stat` calls dominate; everything else is bounded
 by what the planner asked for.
 
 | | cost |
@@ -1669,7 +1667,7 @@ by what the planner asked for.
 | every live path | one `stat`, one cache lookup. No content read. |
 | a file on both sides, size+mtime equal | one read per side per requested algorithm |
 | a stat-differing, one-sided, or conflicting path | nothing — already decided |
-| a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
+| a copied file | **a stream, a write and an independent re-read** to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
 | a backup copy | one whole-file copy of the cache — src's `backup-*`, dst's `old-*`; `--no-backup` skips both |
 | a backup copy's record | one small file beside it, held until the run opens the folder's cache |
@@ -1679,9 +1677,9 @@ property worth preserving:
 
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
   comparisons. It is on the default path — insensitive mode is the default — and
-  the scan form quadrupled per doubling of the tree.
-- **`diff_maps`' insensitive branch** walks two case-folded indices once each, not
-  three collections plus a lookup per key.
+  the scan form grew disproportionately as the tree grew.
+- **`diff_maps`' insensitive branch** walks the case-folded indices once each, not
+  multiple collections plus a lookup per key.
 
 A `compare` that writes both caches costs the same read count as one that reads
 them; `--dry-run` costs the same again.
@@ -1709,7 +1707,7 @@ them; `--dry-run` costs the same again.
 - **A stat-only row can get stuck.** A row whose stat changed arrives with its digests
   dropped (a stale row's are all suspect), and while a stat difference settles the pair
   for free — a size difference, or an mtime one — no comparison rehashes it, so the
-  row stays stat-only, describing content it cannot verify. Two repairs: the flag
+  row stays stat-only, describing content it cannot verify. The repairs are: the flag
   that distrusts the field doing the settling — `--no-trust-size` for a size
   difference, `--no-trust-mtime` for an mtime one, and either acts only when the
   distrusted field is the *only* difference — and `girsync update --dir D:\game-old`,
@@ -1745,7 +1743,7 @@ them; `--dry-run` costs the same again.
   converter's own cases moved with it to `tools/sled2redb/tests/convert.rs`.
   They run against the public API, so anything they touch must stay `pub`.
 
-  The six largest are **directories**: each is a test target at
+  The largest are **directories**: each is a test target at
   `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`
   and the cases grouped into sibling modules along the concern boundaries below.
   (`main.rs` rather than `mod.rs` because Cargo only auto-discovers a test target
@@ -1767,7 +1765,7 @@ them; `--dry-run` costs the same again.
   keyed by path** instead — each row says what a path is on each side and what the
   plan must therefore do about it — which survives a change of implementation, fails
   naming the path, and makes new behaviour a new row rather than an edited vector.
-  Three things follow: the summary counts are **derived** from the plan rather than
+  Several things follow: the summary counts are **derived** from the plan rather than
   transcribed, so they cannot disagree with it; the `--case-sensitive` expectation
   is **derived** from the same rows by a rule, since that mode is the same fixture
   without the rename pass; and record **order** is asserted as a property (event

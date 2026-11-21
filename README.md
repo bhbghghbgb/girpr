@@ -73,14 +73,14 @@ machine rather than the code.
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
 | `crates/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
-| `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
-| `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
+| `tests/repair_offline.rs` | offline integration/e2e (mock API) | a case per behavior |
+| `tests/cli_contract.rs` | binary-level arg handling + exit codes | a case per usage error class |
 | `tests/common/mod.rs` | thin shims over the two shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
-| `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | one case per decision (D1–D9) |
-| `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, one test per capture |
+| `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | a case per decision |
+| `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, a test per capture |
 | `tests/artifact_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
 | `crates/test-fixtures/src/artifact_server.rs` | the loopback replay server, a module distinct from the offline mock and reached through one-line `use` shims | `Bridge`, `Bundle`, `Hit` |
-| `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | one case per route family |
+| `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | a case per route family |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
 
@@ -221,7 +221,7 @@ flowchart TD
   stopped=…`). Either way
   `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
-  against an empty plan and is on a 3000-file one. Every argument-level failure
+  against an empty plan and is on a large one. Every argument-level failure
   (unknown flag, bad enum value, `--jobs 0`, bad `--audio`, bad
   `--include` glob, non-numeric `--max-files`) is `1` — clap's default `2` is
   remapped so it cannot collide with "metadata/network". `--help` is `0`.
@@ -532,14 +532,13 @@ shared crates carries a program's flags, exit-code values or published shapes.
 ## Testing (offline by construction)
 
 The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
-the prebuilt release for the platform. Every crate in the workspace (`girpr`,
-`girpr-log`, `girpr-tempdir`, `gircap`, `girsync`, `sled2redb`) runs its suite
+the prebuilt release for the platform. Every workspace crate runs its suite
 with it, and [`.config/nextest.toml`](.config/nextest.toml) holds the shared
 defaults.
 
 ```powershell
 cargo nextest run             # this package's offline suite (ignored tests excluded)
-cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync, sled2redb
+cargo nextest run --workspace # the whole workspace
 cargo check -p girsync -p gircap -p sled2redb # the dev tools, which a root command does not build
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
@@ -548,8 +547,8 @@ cargo clippy -p girsync -p gircap -p sled2redb --all-targets -- -D warnings
 
 # girpr-log's default-file policy is a `cfg!(debug_assertions)` branch. The
 # dev-profile runs above exercise "no default file"; this release run exercises
-# the other half — `the_default_file_is_written_in_a_release_build_and_not_in_a_debug_one`
-# asserting the timestamped default is written. Both halves need a run to be covered.
+# the other half, asserting the timestamped default is written. Both halves
+# need a run to be covered.
 cargo nextest run --release -p girpr-log
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
@@ -571,8 +570,8 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   MiB and one source range in every chunk through `scan_file` and
   `scan_reader`, the path a repair scan takes. Both print MiB/s; run them with
   `--release`, because the debug profile measures the compiler, not the
-  hasher. `GIRPR_MD5_BENCH_MIB`/`GIRPR_SCAN_BENCH_MIB` (default 64) size the
-  files and `GIRPR_MD5_BENCH_RUNS`/`GIRPR_SCAN_BENCH_RUNS` (default 5) the
+  hasher. `GIRPR_MD5_BENCH_MIB`/`GIRPR_SCAN_BENCH_MIB` size the
+  files and `GIRPR_MD5_BENCH_RUNS`/`GIRPR_SCAN_BENCH_RUNS` the
   repetitions.
 
 - **One lint policy for the product and its shared policy crates.** The root
@@ -583,9 +582,9 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   lint is about the paths a user runs. Nothing denies warnings at the crate
   level: CI, or the command above, is free to add `-D warnings`.
 
-  Test allowances stay in the code. On this toolchain (clippy 0.1.99 / rustc
-  1.99.1) `clippy.toml`'s `allow-unwrap-in-tests` and `allow-expect-in-tests`
-  exempt only code inside a `#[cfg(test)]` module or a `#[test]` function. The
+  Test allowances stay in the code. On the pinned toolchain `clippy.toml`'s
+  `allow-unwrap-in-tests` and `allow-expect-in-tests` exempt only code inside a
+  `#[cfg(test)]` module or a `#[test]` function. The
   shared helpers now live in library crates (`crates/test-fixtures`,
   `crates/test-support`, `tools/capture/test-support`), where each crate's own
   `allow` covers them; only the tiny binary-runner shim in `tests/common/mod.rs`
@@ -602,7 +601,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   dev tool it is a failed developer run, and those paths may assert. There is no
   `unsafe` in `tools/sync/src/hardlink.rs`: its link-count and file-identity
   facts come from the shared `girpr-fs-identity` leaf, which uses the
-  `same-file`/`winapi-util` seams. The one deliberate `unsafe` is the test that
+  `same-file`/`winapi-util` seams. The deliberate `unsafe` is the test that
   sets an environment variable in `tools/sync/tests/cli_dispatch.rs`, annotated
   at its item.
 
@@ -682,9 +681,9 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `tests/cli_contract.rs` also spawns the binary, and it never reaches the API
   at all — it is argument handling and exit codes only.
 - **The repair's own decisions are on crafted fixtures.**
-  `tests/repair_machinery.rs` has one case per decision the repair makes
+  `tests/repair_machinery.rs` has a case per decision the repair makes
   per file — the tier, the write direction, the trim, the growth, the mode, the
-  resume, and what a malformed manifest does — plus the four facts the run
+  resume, and what a malformed manifest does — plus the facts the run
   reports on its data plane (the live and the settled byte figures agree,
   `local_manifest` says `ok` or `unavailable`, the scope contains the run, and
   the trace log's download records agree with the server's request log). They
@@ -696,17 +695,17 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   coverage and a path with a space in it are all a description rather than a
   builder of their own. A case costs kilobytes.
 - **The replay server has its own tests, against a synthetic mini-bundle.**
-  `tests/artifact_server.rs` builds a bundle of a few kilobytes — two `getBuild`
-  bodies, one carried manifest per build, one chunk blob, the recorded failure
+  `tests/artifact_server.rs` builds a synthetic mini-bundle — recorded `getBuild`
+  bodies, a carried manifest per build, a chunk blob and the recorded failure
   shapes — and drives the server over it: the surgical `url_prefix` rewrite,
   the `build_id` invariant, the request log, and the recorded not-found shapes.
-  It is always on and it takes no time, because the server's behaviour does not
-  depend on the bundle being hundreds of megabytes of real game bytes.
+  It is always on and it is quick, because the server's behaviour does not
+  depend on the bundle holding real game bytes.
 - **Real bytes, real flags — and expensive.** `tests/artifact_bridge.rs` runs
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
   `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs real binary runs over ~19 MiB of bundle bytes per run**, and it is a
+  it costs real binary runs over real bundle bytes**, and it is a
   **pre-release gate: run it by hand before any release that changes the repair
   spec, and whenever a regression in that spec is suspected**:
   ```powershell
@@ -714,15 +713,11 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
   cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
   ```
-  The six cases run in parallel — each capture gets its own scratch tree and its
+  The cases run in parallel — each capture gets its own scratch tree and its
   own listeners — so neither `--no-capture` nor `--test-threads=1` is needed:
   the per-case `success-output` override in `.config/nextest.toml` prints each
   case's precondition and summary lines even though it passes. To reproduce one
-  failure, put the case in the filter of the same command:
-
-  ```powershell
-  cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
-  ```
+  failure, put that case's test name in the filter of the same command.
 
   The `-E` expression narrows the set nextest has already selected; it does not
   add `#[ignore]`d cases to it. A command without `--run-ignored only` (or
@@ -752,15 +747,15 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   - **Everything else about `girpr` is tested elsewhere**, on fixtures where the
     answer is exact and the cost is nothing: the tier, the direction, the trim
     and the rest are in `tests/repair_machinery.rs`.
-- Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
+- Mock shapes mirror live `hk4e_global` responses: same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.
-- Fixture: 2 files / 3 chunks with fixed bytes (`build_fixture`), plus a
+- Fixture: fixed bytes (`build_fixture`), plus a
   **moved** fixture (`build_moved_fixture`) whose old file has a different
   chunk layout from the new one — the case where the bytes have to move
   *inside* the file. Chunk fetches are logged (`mock.chunk_hits()`) so
   reuse/resume tests assert exact download sets.
-- Unit tests sit next to the code they cover, one `mod tests` per module: pure
+- Unit tests sit next to the code they cover, in per-module `mod tests` blocks: pure
   phases only (plan, purge classification, audio scan file, `config.ini`, URL and
   query building, REPORT/SUMMARY formatting, flag validation, manifest filter,
   local chunk map).
@@ -775,7 +770,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 
 1. **In-place repair (the default).** A repair writes only the bytes that are wrong, at the
    offsets they belong at, into the file itself. The peak extra disk is the file's
-   **growth**, not its size — so a same-size repair of a 2 GB file needs **0** extra bytes.
+   **growth**, not its size — so a same-size repair needs **0** extra bytes.
 2. Files-cleanup (`--purge-before`/`--purge-after`): delete everything not in the live manifest.
 3. Skip intact files (size + full MD5): 0 bytes for healthy files.
 4. Chunk-level repair: only missing/corrupt chunks fetched; unchanged chunks kept in place, or

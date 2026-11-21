@@ -14,10 +14,10 @@ Companions: [`02-plan.md`](02-plan.md) (shape, tests, risks),
 
 ## 1. How this crate measures risk
 
-A bundle is a **fixture other work depends on**. Re-capturing one costs a couple
-of minutes and ~98 MiB, and `girpr`'s `artifact_bridge` runs against the copies
-under `artifacts/`. So the risk axis for a change here is not "might it break the
-build":
+A bundle is a **fixture other work depends on**. Re-capturing one is expensive
+and produces a large bundle, and `girpr`'s `artifact_bridge` runs against the
+copies under `artifacts/`. So the risk axis for a change here is not "might it
+break the build":
 
 > **Risk = P(silently changing what a bundle says) × cost of noticing.**
 
@@ -32,23 +32,22 @@ only affects allocation needs nothing but `cargo nextest run`.
 
 ### The shape of the data
 
-The numbers below are measured against `hk4e_global` 7.0.0 → 7.1.0 and are here
-because several of the design decisions below are only obvious against them.
+The magnitudes below are measured against a captured pair and are here because
+several of the design decisions below are only obvious against them.
 Re-measure before trusting them; they are a scale reference, not a benchmark.
 
-| quantity | value |
+| quantity | scale |
 |---|---|
-| files in the `game` manifest | 2 744 per tag |
-| chunks in the `game` manifest | 113 610 per tag |
-| total chunk bytes in `game` 7.1.0 | 128.3 GB |
-| manifest archive | 9 007 187 B zstd → 16 827 424 B |
-| largest single chunk | 3 689 476 B compressed — this bounds the main tool's whole-chunk buffering |
-| a default capture | ≈98 MiB on disk: 81 files, 4 manifest archives (≈19 MiB of them served; `manifests/` is ≈41 MiB with its `.json.gz` copies and sidecars), 25 stored chunks, 43 request rows |
-| admitted files per capture | 6 captures, 5 in `game/` and 5 in `expected/` |
-| assembled bytes per capture | 453 033 100 B |
+| files and chunks in the `game` manifest | thousands of files, hundreds of thousands of chunks per tag |
+| total chunk bytes | on the order of a hundred gigabytes |
+| manifest archive | megabytes compressed, larger decompressed |
+| largest single chunk | bounds the main tool's whole-chunk buffering |
+| a default capture | tens of MiB on disk, with manifests the largest contributor, alongside stored chunks and request rows |
+| admitted files per capture | one fixture file in `game/` and one ground-truth file in `expected/` per capture |
+| assembled bytes per capture | the captured files' own sizes |
 
-The ratio that matters: the `game` manifest describes **128 GB** of content and a
-capture retains ~48 MB of it. Everything in this tool is therefore written under
+The ratio that matters: the `game` manifest describes **far more content than a
+capture retains**. Everything in this tool is therefore written under
 the assumption that the manifest is a *description* to be checked, not a
 resource to be loaded.
 
@@ -60,8 +59,8 @@ So nobody re-audits them.
 
 | | |
 |---|---|
-| **`biz.rs`** | all `const fn` tables and `match` over a 2–3 variant enum: `Biz::resolve`, `Host::hyp_base`/`sophon_base`, `HypEndpoint::path`. **Zero per-call table construction, zero repeated lookups.** The one note is `Endpoints::owned`'s `Box::leak` — see below. |
-| **`exit.rs`** | three `const fn` tables over a 5-variant enum, a `const ALL` pinned by a test, and a `From<ExitCode> for i32`. The cleanest file in the crate. |
+| **`biz.rs`** | all `const fn` tables and `match` over a small enum: `Biz::resolve`, `Host::hyp_base`/`sophon_base`, `HypEndpoint::path`. **Zero per-call table construction, zero repeated lookups.** The one note is `Endpoints::owned`'s `Box::leak` — see below. |
+| **`exit.rs`** | `const fn` tables over the exit-code enum, a `const ALL` pinned by a test, and a `From<ExitCode> for i32`. The cleanest file in the crate. |
 | **`select/budget.rs`** | **zero magic numbers.** `saturating_add`, a charge that saturates, a rejected candidate is never charged, and the tie-break is documented as the caller's. Use it as the model for the rest of `select`. |
 | **`report.rs` serialization** | there is **no `serde_json::Value` construction** — `Record`/`Val` implement `serde::Serialize` and `to_json_line` is `serde_json::to_string(self)`; the `Serialize` impl emits an ordered map with `event` first to keep field order (`preserve_order` would be a workspace-wide feature-unification hazard). `serde_json` owns escaping, so backslashes and control characters keep their prior bytes. |
 | **`assemble/ranges.rs`** | already a **single forward pass**; there is no sort-then-merge to improve. |
@@ -104,7 +103,7 @@ rather than only compared.
 
 What stays unpinned, deliberately: every digest in `MANIFEST.json`,
 `verify/checksums.json` and `README.md`. A16 covers those, and they move for
-`api/requests.ndjson` and its three cascade rows by design; pinning them would
+`api/requests.ndjson` and its cascade rows by design; pinning them would
 mean pinning a timestamp.
 
 The cross-binary instrument is described in
@@ -112,7 +111,7 @@ The cross-binary instrument is described in
 one: **a self-check that only ever compares one binary to itself cannot find a
 field that one binary happens to share with itself.** That is a real failure mode
 here, not a hypothetical — the mock's ephemeral port is recorded throughout a
-bundle, and it reads as 13 of 58 documents changed between two commits that
+bundle, and it reads as many documents changed between two commits that
 changed nothing at all.
 
 ### Mutating to prove a gate works
@@ -123,8 +122,8 @@ catch, and the two ends were confirmed: the mutant fails the pin, and every
 other suite passes with it. Two that were caught only by the new pin, with
 nothing else noticing:
 
-- a total in `MANIFEST.json` moved by one
-- an assertion's **wording** narrowed by three words
+- a total in `MANIFEST.json` moved slightly
+- an assertion's **wording** narrowed
 
 The second is the interesting one. `A10` can read "every reused chunk's
 old-file slice MD5 matches" or "every reused chunk's MD5 matches", both under the
@@ -136,7 +135,7 @@ pinned by exact wording as well as by id.
 PowerShell's `Copy-Item` **preserves `LastWriteTime`**. Restoring a mutated file
 with it therefore leaves the source file *older* than the binary cargo last built
 from the mutation, cargo considers the target fresh, and `cargo build --release`
-reports `Finished in 0.50s` without compiling anything.
+reports `Finished` in a fraction of a second without compiling anything.
 
 The symptom is worse than a stale binary is usually: a capture that looks fine —
 exit `0`, all selfcheck rows passing, `verify` green — while carrying none of the
@@ -168,19 +167,19 @@ opt-out's reasoning is recorded at the method.
 around the log record does not serialise the workers. What is left under the lock
 is a map lookup.
 
-**What is left is the filesystem.** On Windows, per-blob latency grows several
-fold as `--jobs` rises while throughput barely moves, total CPU stays well under
+**What is left is the filesystem.** On Windows, per-blob latency grows sharply
+as `--jobs` rises while throughput barely moves, total CPU stays well under
 one core, and the time is inside `spawn_blocking(measure_file)` rather than in the
-thread handoff. A micro-benchmark on one 2 KB frame settles it: the zstd decode
-is ~4% of that call, and creating, renaming and reopening a fresh file — with no
-decode at all — is several times the decode.
+thread handoff. A micro-benchmark on a single small frame settles it: the zstd
+decode is a small fraction of that call, and creating, renaming and reopening a
+fresh file — with no decode at all — is several times the decode.
 
 Two consequences:
 
 1. The cost is **per file, not per directory entry**. A `chunks/blobs/` directory
-   growing from 1 000 to 8 000 entries leaves the per-blob cost flat, so "the
-   directory gets slower" is not the explanation and a fix aimed at it would
-   achieve nothing.
+   growing from a small to a large number of entries leaves the per-blob cost
+   flat, so "the directory gets slower" is not the explanation and a fix aimed at
+   it would achieve nothing.
 2. The file operations are **not obviously removable**, because the
    temporary-file-and-rename step is what lets `verify` trust a blob: without it
    a crash mid-write leaves a truncated file at the final path that nothing can
@@ -197,7 +196,7 @@ person does not spend a day concluding that concurrency is broken.
 | | |
 |---|---|
 | `fs::rename` overwriting an existing destination | works. On Windows it is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, and it is pinned by a test. It is worth knowing because the opposite is a common belief, and acting on it here would mean deleting an atomic step the code needs. |
-| a blob whose `stored_path` is `null` | has four causes: three failures (a source that refused, a write that failed, a task that panicked mid-measure), which say which in `fetch_error`, and a `--no-chunk-blobs` row, which is null there and means "not measured". |
+| a blob whose `stored_path` is `null` | has several causes: failures (a source that refused, a write that failed, a task that panicked mid-measure), which say which in `fetch_error`, and a `--no-chunk-blobs` row, which is null there and means "not measured". |
 | `verify` reporting a blob as red under `--no-chunk-blobs` | correct. The index lists a blob with no path, which is exactly "this bundle cannot be materialized". Red, not skipped. |
 | a `probe` row with `attempts: 1` on every healthy capture | correct, and not evidence that nothing was ever retried. A `getBuild?tag=` probe *is* retried when the status calls for it; the negative probes behind `error_shapes.json` never are. |
 | `identical` appearing in both `game/` and `expected/` with equal bytes | that is the class. `diff -r game/ expected/` shows it as unchanged, on purpose. |
