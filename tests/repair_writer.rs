@@ -23,20 +23,19 @@ async fn verified_local_slice_is_reused_without_redownload() {
     // loads; foo keeps chunk0 intact and corrupts chunk1 -> only chunk_foo1
     // may be fetched.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("reuse");
-    let fx2 = build_fixture();
     std::fs::write(
         dir.join("config.ini"),
         format!("[General]\ngame_version={LATEST_TAG}\n"),
     )
     .unwrap();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
@@ -45,8 +44,8 @@ async fn verified_local_slice_is_reused_without_redownload() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data
     );
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
 
@@ -60,11 +59,10 @@ async fn partial_tmp_prefix_is_resumed() {
     // writes `{path}_tmp` at all. foo missing but foo_tmp holds the first
     // chunk; only the second chunk is downloaded, then tmp is promoted.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("resume");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, "game/foo.dat_tmp", &fx2.files[0].data[..64]);
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    write_game_file(&dir, "game/foo.dat_tmp", &fx.files[0].data[..64]);
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
@@ -82,8 +80,8 @@ async fn partial_tmp_prefix_is_resumed() {
         "the resumed `_tmp` prefix is kept, not rewritten"
     );
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data
     );
     assert!(
         !dir.join("game").join("foo.dat_tmp").exists(),
@@ -102,11 +100,10 @@ async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
     // retried, and the second attempt downloads the file from scratch instead
     // of promoting the corrupt bytes.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("corrupt_tmp_full");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let bad = vec![0xEEu8; fx2.files[0].data.len()];
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let bad = vec![0xEEu8; fx.files[0].data.len()];
     write_game_file(&dir, "game/foo.dat_tmp", &bad);
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
@@ -120,8 +117,8 @@ async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
         "the corrupt attempt was retried, not counted as a failure"
     );
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data,
         "the rebuilt file is the manifest's"
     );
     assert!(
@@ -148,15 +145,14 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
     // reuse map: the in-place path finds the intact chunk on its own, from
     // the scan. That is the network win that needs no manifest at all.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("inplace_patch");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
@@ -165,8 +161,8 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data,
         "the file is correct"
     );
     // The disk claim: one chunk written, not the whole file.
@@ -195,19 +191,18 @@ async fn a_file_that_grows_writes_only_the_growth() {
     // chunk is already right, the second is missing: the repair writes 64
     // bytes — the growth — and not the 128 the temp path would have.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("inplace_grow");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    write_game_file(&dir, &fx.files[0].rel, &fx.files[0].data[..64]);
 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
     assert_eq!(code, RunExit::Success);
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data,
         "the file grew to its manifest size"
     );
     assert_eq!(
@@ -230,20 +225,19 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
     // the reuse map exists and the *default* run would keep the intact
     // chunk. That is the difference the mode makes visible.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("discard");
     std::fs::write(
         dir.join("config.ini"),
         format!("[General]\ngame_version={}\n", LATEST_TAG),
     )
     .unwrap();
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Discard;
@@ -252,8 +246,8 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data
     );
     assert_eq!(
         mock.chunk_hits(),
@@ -272,15 +266,14 @@ async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
     // the temp path would not have helped, because the promote renames over
     // the target and that fails the same way.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("readonly");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
     let target = dir.join("game").join("foo.dat");
     let mut perms = std::fs::metadata(&target).unwrap().permissions();
     perms.set_readonly(true);
@@ -293,8 +286,8 @@ async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data
     );
     assert!(
         !dir.join("game").join("foo.dat_tmp").exists(),
@@ -396,25 +389,24 @@ async fn an_interrupted_in_place_run_resumes_by_verification() {
     // from — the next run finds the correct chunks in its scan and rewrites
     // the rest, and a `_tmp` is nowhere in sight.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("inplace_resume");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
     // Half of the second chunk is wrong: the file is neither the old one
     // nor the new one, which is exactly what an interrupted write leaves.
-    let mut interrupted = fx2.files[0].data.clone();
+    let mut interrupted = fx.files[0].data.clone();
     for b in interrupted.iter_mut().skip(96) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &interrupted);
+    write_game_file(&dir, &fx.files[0].rel, &interrupted);
 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
     assert_eq!(code, RunExit::Success);
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data
     );
     assert_eq!(
         summary.write.settled(),
@@ -437,11 +429,10 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     // run downloads both files, so almost every byte written into the install
     // is a write the plan's estimate never counted.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("max_write");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+    write_game_file(&dir, &fx.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx.files[1].rel, b"not the game data");
 
     let limit = 1u64;
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
@@ -477,8 +468,8 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     // it, so an aborted run is a smaller run, not a corrupt one.
     assert!(!dir.join("config.ini").exists(), "post-phase is skipped");
     assert_ne!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data,
         "the file was not finished"
     );
 
@@ -488,11 +479,10 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
 #[tokio::test]
 async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("write_bytes_absent");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+    write_game_file(&dir, &fx.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx.files[1].rel, b"not the game data");
 
     // Same run, no flag: the repair completes and the key is absent.
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
@@ -513,9 +503,8 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
 
     // A generous ceiling is reported but not tripped.
     let dir2 = temp_dir("write_bytes_generous");
-    let fx3 = build_fixture();
-    write_game_file(&dir2, &fx3.files[0].rel, b"not the game data");
-    write_game_file(&dir2, &fx3.files[1].rel, b"not the game data");
+    write_game_file(&dir2, &fx.files[0].rel, b"not the game data");
+    write_game_file(&dir2, &fx.files[1].rel, b"not the game data");
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.limits.write_bytes = Some(1 << 20);
     let (summary, code) = run(ctx).await.expect("run");
@@ -531,12 +520,11 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
 #[tokio::test]
 async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
 
     // No ceiling: neither figure is on the line.
     let dir = temp_dir("spent_absent");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, b"not the game data");
     }
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
@@ -551,8 +539,7 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     // wasted — and the spent one is the larger whenever the transport made
     // the run work for it.
     let dir2 = temp_dir("spent_present");
-    let fx3 = build_fixture();
-    for f in &fx3.files {
+    for f in &fx.files {
         write_game_file(&dir2, &f.rel, b"not the game data");
     }
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
@@ -586,10 +573,9 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     // settles 48 bytes, which is under the line. `foo.dat`'s first chunk
     // settles 64 more and crosses it.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("verified_write");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, b"not the game data");
     }
 
@@ -654,10 +640,9 @@ async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() 
     // (48 bytes) and `foo.dat`'s first chunk settles 64 more.
     async fn run(live: u64, verified: u64, tag: &str) -> &'static str {
         let fx = build_fixture();
-        let mock = MockServer::start(fx, MockOpts::default()).await;
+        let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
         let dir = temp_dir(tag);
-        let fx2 = build_fixture();
-        for f in &fx2.files {
+        for f in &fx.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
@@ -694,10 +679,9 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     // The settled download figure is counted in **compressed** bytes, and it
     // is settled per file — a file is the atom it is counted in.
     let bar_bytes = fx.chunk_store.get("chunk_bar0").unwrap().len() as u64;
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("verified_download");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, b"not the game data");
     }
 
@@ -755,10 +739,9 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
     // the file verifies.
     async fn run(opts: MockOpts, tag: &str) -> u64 {
         let fx = build_fixture();
-        let mock = MockServer::start(fx, opts).await;
+        let mock = MockServer::start(fx.clone(), opts).await;
         let dir = temp_dir(tag);
-        let fx2 = build_fixture();
-        write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+        write_game_file(&dir, &fx.files[0].rel, b"not the game data");
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.repair_mode = RepairMode::Inplace;
         // The key is emitted only when the flag was passed.
@@ -771,8 +754,8 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
             "the file was repaired on the second attempt"
         );
         assert_eq!(
-            read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-            fx2.files[0].data,
+            read_game_file(&dir, &fx.files[0].rel).unwrap(),
+            fx.files[0].data,
             "the file is correct"
         );
         mock.stop();
@@ -813,7 +796,7 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     let fx = build_fixture();
     let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             corrupt_first_chunks: 1,
             ..Default::default()
@@ -821,16 +804,15 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     )
     .await;
     let dir = temp_dir("download_retry");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+    write_game_file(&dir, &fx.files[1].rel, b"not the game data");
 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the retry must recover");
     assert_eq!(code, RunExit::Success);
     assert_eq!(
-        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
-        fx2.files[1].data
+        read_game_file(&dir, &fx.files[1].rel).unwrap(),
+        fx.files[1].data
     );
     // bar.dat sorts first and its single chunk is the corrupt one, so attempt 1
     // really transfers a byte and then fails the chunk MD5. The total is still
@@ -898,17 +880,16 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
 
     async fn run(opts: MockOpts, tag: &str) -> (u64, u64) {
         let fx = lying_fixture();
-        let mock = MockServer::start(fx, opts).await;
+        let mock = MockServer::start(fx.clone(), opts).await;
         let dir = temp_dir(tag);
-        let fx2 = lying_fixture();
-        for f in &fx2.files {
+        for f in &fx.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }
         let (summary, code) = crate::common::run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect("run");
         assert_eq!(code, RunExit::Success, "the repair recovered");
-        for f in &fx2.files {
+        for f in &fx.files {
             assert_eq!(
                 read_game_file(&dir, &f.rel).unwrap(),
                 f.data,
@@ -971,23 +952,22 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
 
     // (a) local version at the latest tag → the manifest loads → reuse works.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("local_manifest_ok");
     std::fs::write(
         dir.join("config.ini"),
         format!("[General]\ngame_version={}\n", LATEST_TAG),
     )
     .unwrap();
-    let fx2 = build_fixture();
     // bar intact (skipped) and foo half-intact, so its first chunk is copied
     // from a verified local slice and only the second is fetched. That is a real
     // reuse, not an absent one.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
@@ -1005,22 +985,21 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     // (b) a local version the server does not serve → lookup attempted and
     //     failed → the fallback is full-fetch, and the run says so.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("local_manifest_gone");
     std::fs::write(
         dir.join("config.ini"),
         format!("[General]\ngame_version={UNSERVED_TAG}\n"),
     )
     .unwrap();
-    let fx2 = build_fixture();
     // The same tree as (a), so the only difference between the two runs is
     // whether the local manifest loaded.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("a degraded run still succeeds");
@@ -1064,7 +1043,7 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     // first attempt really does write bad bytes and then fail its digest.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             corrupt_first_chunks: 1,
             ..Default::default()
@@ -1072,7 +1051,6 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     )
     .await;
     let dir = temp_dir("tmp_rollback");
-    let fx2 = build_fixture();
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
@@ -1088,8 +1066,8 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
+        read_game_file(&dir, &fx.files[0].rel).unwrap(),
+        fx.files[0].data,
         "the file is correct"
     );
     // The corrupt chunk was asked for twice — once for the attempt that

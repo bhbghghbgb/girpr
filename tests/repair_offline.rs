@@ -54,13 +54,12 @@ fn extra_manifest<'a>(fx: &'a GameFixture, field: &str) -> &'a FixtureLatestMani
 #[tokio::test]
 async fn repairs_missing_and_corrupt_files_end_to_end() {
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("repair_ok");
 
-    // Rebuild the expected bytes from a fresh fixture (same deterministic data).
-    let fx2 = build_fixture();
-    let foo = &fx2.files[0];
-    let bar = &fx2.files[1];
+    // The expected bytes come from the same fixture the mock serves.
+    let foo = &fx.files[0];
+    let bar = &fx.files[1];
 
     // bar intact -> skip; foo corrupt (same size, flipped tail) -> repair.
     write_game_file(&dir, &bar.rel, &bar.data);
@@ -101,7 +100,7 @@ async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
     // `config.ini` bump, because the repair itself completed.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             cache_dir: "Audio/cache".to_string(),
             res_dir: "Audio/res".to_string(),
@@ -110,8 +109,7 @@ async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
     )
     .await;
     let dir = temp_dir("audio_move_failed");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
     write_game_file(&dir, "Audio/cache/a.pck", b"cache bytes");
@@ -143,18 +141,17 @@ async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
 #[tokio::test]
 async fn dry_run_writes_nothing() {
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("dry_run");
-    let fx2 = build_fixture();
     // foo missing entirely, bar intact.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.dry_run = true;
     let (_summary, code) = run(ctx).await.expect("dry-run runs");
     assert_eq!(code, RunExit::Success);
     assert!(
-        read_game_file(&dir, &fx2.files[0].rel).is_none(),
+        read_game_file(&dir, &fx.files[0].rel).is_none(),
         "dry-run must not create the missing file"
     );
     assert!(!dir.join("config.ini").exists());
@@ -248,15 +245,14 @@ async fn the_run_counts_the_paths_it_used() {
     // The disk claim of the run, in two numbers: how many files were written
     // where they lie, and how many went through a `_tmp`.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("mode_counts");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
 
     // The default: in place.
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
@@ -268,8 +264,8 @@ async fn the_run_counts_the_paths_it_used() {
 
     // The same file, forced through the temp path.
     let dir2 = temp_dir("mode_counts_temp");
-    write_game_file(&dir2, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir2, &fx.files[1].rel, &fx.files[1].data);
+    write_game_file(&dir2, &fx.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
     let (summary, code) = run(ctx).await.expect("temp run");
@@ -289,15 +285,14 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     // when `--max-ram-bytes` was: an unflagged run's line stays
     // byte-identical.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("mode_group");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut half_bad = fx.files[0].data.clone();
     for b in half_bad.iter_mut().skip(64) {
         *b ^= 0xFF;
     }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir, &fx.files[0].rel, &half_bad);
 
     // Unflagged: nothing.
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
@@ -314,8 +309,8 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
 
     // Flagged: the mode, the paths it used, and the bytes it kept.
     let dir2 = temp_dir("mode_group_flagged");
-    write_game_file(&dir2, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir2, &fx.files[1].rel, &fx.files[1].data);
+    write_game_file(&dir2, &fx.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Auto;
     ctx.repair_mode_explicit = true;
@@ -332,8 +327,8 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
 
     // The RAM peak, with a RAM budget asked for.
     let dir3 = temp_dir("mode_group_ram");
-    write_game_file(&dir3, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir3, &fx2.files[0].rel, &half_bad);
+    write_game_file(&dir3, &fx.files[1].rel, &fx.files[1].data);
+    write_game_file(&dir3, &fx.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir3.to_path_buf(), &mock, 1);
     ctx.limits.ram_bytes = Some(0);
     let (summary, code) = run(ctx).await.expect("run");
@@ -350,10 +345,9 @@ async fn a_second_run_against_the_same_install_is_refused() {
     // file. The lock is what stops the second one — and it stops it
     // loudly, by naming the file and the pid that holds it.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("lock");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
     // Hold the lock, as a first run would.
     let _lock = Lock::acquire(&dir).expect("the lock is taken");
     let lock_path = _lock.path().to_path_buf();
@@ -409,10 +403,9 @@ async fn read_only_runs_do_not_take_the_lock() {
     // A held lock only refuses a run that mutates the install. Verification,
     // a dry run and a printed plan stay lock-free.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("lock_readonly");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
     let _lock = Lock::acquire(&dir).expect("the lock is taken");
@@ -443,10 +436,9 @@ async fn a_legacy_in_install_lock_is_left_alone() {
     // the install and must not delete the old file behind the user's back;
     // the files-cleanup keeps it for the same reason.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("lock_purge");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
@@ -503,7 +495,7 @@ async fn non_chunk_download_mode_is_a_usage_error() {
     for mode in ["DOWNLOAD_MODE_FILE", "DOWNLOAD_MODE_LDIFF", ""] {
         let fx = build_fixture();
         let mock = MockServer::start(
-            fx,
+            fx.clone(),
             MockOpts {
                 download_mode: Some(mode.to_string()),
                 ..Default::default()
@@ -511,8 +503,7 @@ async fn non_chunk_download_mode_is_a_usage_error() {
         )
         .await;
         let dir = temp_dir("dlmode");
-        let fx2 = build_fixture();
-        for f in &fx2.files {
+        for f in &fx.files {
             write_game_file(&dir, &f.rel, &f.data);
         }
         let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
@@ -571,7 +562,7 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     for case in &cases {
         let fx = build_fixture();
         let mock = MockServer::start(
-            fx,
+            fx.clone(),
             MockOpts {
                 download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
                 branch_failure: case.failure,
@@ -630,7 +621,7 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
     // build or write.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             branch_failure: BranchFailure::NonJson,
             ..Default::default()
@@ -638,8 +629,7 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
     )
     .await;
     let dir = temp_dir("branch_fatal_metadata");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
+    for f in &fx.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
 
@@ -683,7 +673,7 @@ async fn a_retryable_branch_failure_is_retried_then_succeeds() {
     // retries it and takes the next (successful) answer, so the run proceeds.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             branch_failure: BranchFailure::Retryable { calls: 2 },
             ..Default::default()
@@ -721,7 +711,7 @@ async fn a_retryable_branch_failure_exhausts_the_retry_budget() {
     // call, before any build request or write.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             branch_failure: BranchFailure::Retryable { calls: 5 },
             ..Default::default()
@@ -766,7 +756,7 @@ async fn a_retried_config_call_after_the_branch_still_answers() {
     // answer instead of waiting for another branch response that never comes.
     let fx = build_fixture();
     let mock = MockServer::start(
-        fx,
+        fx.clone(),
         MockOpts {
             config_after_branches: true,
             ..Default::default()
@@ -806,7 +796,7 @@ async fn a_run_without_a_local_version_issues_only_the_latest_build() {
     // for: the second build call is not merely allowed to fail, it must not
     // be issued at all.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
     let dir = temp_dir("no_local_build");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.print_plan = true;

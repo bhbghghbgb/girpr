@@ -85,12 +85,14 @@ pub fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct FixtureChunk {
     pub id: String,
     pub data: Vec<u8>,
     pub offset: i64,
 }
 
+#[derive(Clone)]
 pub struct FixtureFile {
     pub rel: String,
     pub data: Vec<u8>,
@@ -98,6 +100,9 @@ pub struct FixtureFile {
     pub chunks: Vec<FixtureChunk>,
 }
 
+/// A described game build, cloneable so one build can back both a mock server
+/// and the install a test lays out from it without rebuilding the zstd bodies.
+#[derive(Clone)]
 pub struct GameFixture {
     pub latest_tag: String,
     pub manifest_id: String,
@@ -130,6 +135,7 @@ pub struct GameFixture {
 }
 
 /// A second manifest: the old file's chunk layout.
+#[derive(Clone)]
 pub struct FixtureManifest {
     pub id: String,
     pub zstd: Vec<u8>,
@@ -139,6 +145,7 @@ pub struct FixtureManifest {
 /// Another manifest in the same latest build, with its own fields and file
 /// list. `served = false` advertises it in `getBuild` but answers `404` for its
 /// body, which is what a build whose manifest is gone looks like.
+#[derive(Clone)]
 pub struct FixtureLatestManifest {
     pub matching_field: String,
     pub category_id: String,

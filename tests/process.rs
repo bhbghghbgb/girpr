@@ -36,13 +36,12 @@ async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (
 /// The standard fixture as a running mock plus a fresh install holding that
 /// fixture's files, ready for a run.
 ///
-/// The fixture is built twice: once for the mock to serve and once for the
-/// bytes laid out on disk, so the install starts from the same game the mock
-/// describes.
+/// One built fixture backs both: the mock gets a clone and the original lays
+/// the bytes out on disk, so the install starts from the game the mock serves.
 async fn start_standard_install(name: &str) -> (MockServer, TempDir, GameFixture, String) {
-    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
-    let dir = temp_dir(name);
     let fx = build_fixture();
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
+    let dir = temp_dir(name);
     for f in &fx.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
