@@ -419,7 +419,10 @@ identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
 glob-filter rules to this binary and `girsync`, pinning one glob version and one
-set of matching rules for both. `crates/lock/` holds this binary's single-writer
+set of matching rules for both. `crates/util/` holds this binary's low-level
+scan, digest, path, atomic-publish and config.ini mechanics; the repair, report
+and CLI code depend on it directly, so an edit there leaves it cached for them.
+`crates/lock/` holds this binary's single-writer
 run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
 repair and the lock-only integration tests depend on it directly, while the dev
 tools never take it, so a repair edit leaves the lock cached. All four share the
