@@ -28,7 +28,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T14 | Group `artifact_server.rs` bundle tests | completed | fe0fea6b | 1 commit; 5 with_shapes tests→1 grouped test (one bundle + one bridge), 3 other shape tests untouched; tests 8→4, bundles 8→4, listeners 32→16; all 87 assertions preserved verbatim incl HTTP status/body/zstd; full TCP end-to-end case unchanged; no nextest filter named them; no OnceLock/sleeps/fixture growth; zstd_bytes intact; contracts 44 passed |
 | T15 | Remove cross-file duplicate process-level assertions | completed | a94eac24 | 1 commit; removed 1 duplicate process case after folding its only process-only assertion (getBuild via endpoint overrides) into base_precedence_and_env_fallback smoke; spawns 14→13, process tests 8→7; coverage verified in-process first (REPORT/SUMMARY via cli_contract goldens, scope via repair_scope); no nextest filter change; pinned repair_post + host-skips untouched; 420 passed/6 skipped; F22 premises partly stale (already reduced by earlier work) |
 | T16 | Fold tiny pure-test clusters | pending_review | 4e8d728c, 97a7cd34, 5588b71f, f2ae25b8, 09b8f468, 0301c15c | 6 commits (one per cluster), none skipped; measured report-core isolated 0.070s→0.043s (~38% saved by 3 fewer spawns); 45→24 test fns (21 fewer spawns); every assertion/message preserved with labelled subcases; pinned junction/symlink, clock and artifact-bridge cases untouched; no nextest filter change; 79 passed |
-| T17 | Leaf-crate test cleanups | todo | | |
+| T17 | Leaf-crate test cleanups | in_progress | | |
 | T18 | Reduce row-reading redb reopens | todo | | |
 | T19 | Shrink the sync-cache digest fixture and add `dirs()` | todo | | |
 | T20 | Merge pure gircap test clusters | todo | | |
