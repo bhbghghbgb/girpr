@@ -45,6 +45,7 @@ machine rather than the code.
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
+| `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock` |
 | `crates/report/` | run counters + every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -445,8 +446,12 @@ holds only program-free
 fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
 `crates/sync-test-support/` and are taken only by `girsync` and `sled2redb`,
 which already depend on girsync — so a scratch directory never drags girsync
-into the repair binary's or `gircap`'s test builds. None of the shared crates
-carries a program's flags, exit-code values or published shapes.
+into the repair binary's or `gircap`'s test builds. This package's integration
+fixtures — the offline HoYoPlay/Sophon mock, the manifest/chunk builders and
+the run-lock cleanup — live in `crates/test-fixtures/`, reached through thin
+shims under `tests/common/`; the crate borrows only narrow leaves, never the
+repair facade, so a repair edit leaves the mock cached. None of the shared
+crates carries a program's flags, exit-code values or published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is

@@ -1,0 +1,43 @@
+[package]
+name = "girpr-test-fixtures"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared offline HoYoPlay/Sophon mock and fixture builders for the girpr integration tests"
+
+[lib]
+name = "girpr_test_fixtures"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The mock serves the Sophon wire shapes and the retcode classifier the client
+# uses. Only the leaf's DTOs and pure classifier are borrowed; the run pipeline
+# stays in the facade, which this crate deliberately does not depend on.
+girpr-fetch = { path = "../fetch" }
+# The launcher identity the mock puts in its JSON answers, re-exported by the
+# facade as `Biz` but taken from the value leaf directly here.
+girpr-model = { path = "../model" }
+# The digest spelling a fixture uses to name the bytes the repair compares.
+girpr-digest = { path = "../digest" }
+# The lock mechanics the test-side lock cleanup reads; a test only removes the
+# unlocked file a finished run leaves behind.
+girpr-lock = { path = "../lock" }
+# One scratch-directory policy and one game-tree file implementation for every
+# test that builds a fixture.
+girpr-tempdir = { path = "../tempdir" }
+# The one shared log-capture implementation, enabled only here and in the
+# repair binary's dev-dependency; no shipped program links the test surface.
+girpr-log = { path = "../log", features = ["test-support"] }
+# The mock's canned JSON answers and their tweaks.
+serde_json = "1.0.154"
+# The manifest body is protobuf; `Message` is the encode trait the fixture needs.
+prost = "0.14.6"
+# Manifests and chunk payloads are zstd frames on the wire.
+zstd = "0.14.4"
+# The mock is a small accept loop on an ephemeral loopback port. `rt` runs the
+# spawned task, `net`/`io-util` serve the socket and `sync` holds the watch the
+# branch/config ordering seam uses.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "io-util", "sync"] }

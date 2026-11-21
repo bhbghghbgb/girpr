@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -138,6 +138,12 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 tempfile = "3.27"
 
 [dev-dependencies]
+# The shared offline HoYoPlay/Sophon mock, fixture builders and lock-cleanup
+# helpers for the root integration binaries. They used to be inlined by
+# `mod common;` into every binary; the public library surface lets each binary
+# keep a thin shim and compiles the mechanics once. This crate is facade-free,
+# so a product edit leaves it cached.
+girpr-test-fixtures = { path = "crates/test-fixtures" }
 # The one shared log-capture helper, used by both unit and integration tests.
 # The `test-support` feature is off in the shipped build; nextest runs one
 # process per test and skips doctests, so the helper must be a public library

@@ -735,6 +735,7 @@ dependencies = [
  "girpr-report",
  "girpr-retry",
  "girpr-tempdir",
+ "girpr-test-fixtures",
  "girpr-util",
  "prost",
  "reqwest",
@@ -900,6 +901,22 @@ name = "girpr-tempdir"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "girpr-test-fixtures"
+version = "0.1.0"
+dependencies = [
+ "girpr-digest",
+ "girpr-fetch",
+ "girpr-lock",
+ "girpr-log",
+ "girpr-model",
+ "girpr-tempdir",
+ "prost",
+ "serde_json",
+ "tokio",
+ "zstd",
 ]
 
 [[package]]
