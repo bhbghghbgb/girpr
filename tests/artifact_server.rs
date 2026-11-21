@@ -421,128 +421,331 @@ async fn get(url: &str) -> (u16, String, Vec<u8>) {
     (status, ctype, body)
 }
 
-/// The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the
-/// **decompressed** manifest against `manifest.checksum`, so a checksum that
-/// moved kills the run at metadata with exit `2` — a failure that looks like a
-/// product bug and is not one. `manifest.id` is the URL path segment.
+/// The five cases that share the `with_shapes` mini-bundle run against one
+/// bundle and one bridge. Each case keeps its labelled block and all of its
+/// assertions; the loopback GETs stay real because the TCP path is the contract.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_rewrite_changes_only_the_two_url_prefixes() {
+async fn a_shaped_bundle_serves_the_rewrite_origins_index_and_failure_shapes() {
     let mini = MiniBundle::with_shapes();
     let bridge = Bridge::start(Bundle::open(mini.dir())).await;
-    let bundle = bridge.bundle();
+    let bundle = bridge.bundle().clone();
+    let o = bridge.origins().clone();
 
-    for tag in [&bundle.old_tag, &bundle.new_tag] {
-        let recorded: serde_json::Value =
-            serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("recorded body");
-        let served: serde_json::Value =
-            serde_json::from_slice(&bridge.served_build(tag).expect("tag is served"))
-                .expect("served body");
+    // ---- rewrite: only the two url_prefix fields change -------------------
+    {
+        // The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the
+        // **decompressed** manifest against `manifest.checksum`, so a checksum that
+        // moved kills the run at metadata with exit `2` — a failure that looks like a
+        // product bug and is not one. `manifest.id` is the URL path segment.
+        for tag in [&bundle.old_tag, &bundle.new_tag] {
+            let recorded: serde_json::Value =
+                serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("recorded body");
+            let served: serde_json::Value =
+                serde_json::from_slice(&bridge.served_build(tag).expect("tag is served"))
+                    .expect("served body");
 
-        assert_eq!(
-            recorded["retcode"], served["retcode"],
-            "{tag}: the envelope"
-        );
-        assert_eq!(recorded["message"], served["message"], "{tag}");
-        assert_eq!(
-            recorded["data"]["build_id"], served["data"]["build_id"],
-            "{tag}"
-        );
-        let rec = recorded["data"]["manifests"]
-            .as_array()
-            .expect("recorded[]")
-            .clone();
-        let srv = served["data"]["manifests"]
-            .as_array()
-            .expect("served[]")
-            .clone();
-        assert_eq!(rec.len(), srv.len(), "{tag}: manifest count changed");
-        for (r, s) in rec.iter().zip(srv.iter()) {
-            // The claim, pinned by comparing everything that is not one of the
-            // two rewritten fields. `manifest` is compared whole, so checksum
-            // and id are covered; they are then pinned by name below because
-            // *why* they must not move is not obvious from an equality.
-            for key in [
-                "category_id",
-                "category_name",
-                "matching_field",
-                "stats",
-                "deduplicated_stats",
-            ] {
-                assert_eq!(r[key], s[key], "{tag}: {key} must be identical");
+            assert_eq!(
+                recorded["retcode"], served["retcode"],
+                "{tag}: the envelope"
+            );
+            assert_eq!(recorded["message"], served["message"], "{tag}");
+            assert_eq!(
+                recorded["data"]["build_id"], served["data"]["build_id"],
+                "{tag}"
+            );
+            let rec = recorded["data"]["manifests"]
+                .as_array()
+                .expect("recorded[]")
+                .clone();
+            let srv = served["data"]["manifests"]
+                .as_array()
+                .expect("served[]")
+                .clone();
+            assert_eq!(rec.len(), srv.len(), "{tag}: manifest count changed");
+            for (r, s) in rec.iter().zip(srv.iter()) {
+                // The claim, pinned by comparing everything that is not one of the
+                // two rewritten fields. `manifest` is compared whole, so checksum
+                // and id are covered; they are then pinned by name below because
+                // *why* they must not move is not obvious from an equality.
+                for key in [
+                    "category_id",
+                    "category_name",
+                    "matching_field",
+                    "stats",
+                    "deduplicated_stats",
+                ] {
+                    assert_eq!(r[key], s[key], "{tag}: {key} must be identical");
+                }
+                assert_eq!(
+                    r["manifest"], s["manifest"],
+                    "{tag}: manifest{{}} identical"
+                );
+                assert_eq!(
+                    s["manifest"]["checksum"], r["manifest"]["checksum"],
+                    "manifest.checksum is MD5 of the DECOMPRESSED manifest, verified before the \
+                     protobuf is parsed; moving it is a metadata failure that looks like a product bug"
+                );
+                assert_eq!(
+                    s["manifest"]["id"], r["manifest"]["id"],
+                    "manifest.id is the URL path segment"
+                );
+                // `url_suffix` is irrelevant — `sophon::join_url` builds
+                // `{prefix}/{id}` and never reads it — but it is still recorded,
+                // so it must still be the recorded one.
+                for field in ["manifest_download", "chunk_download"] {
+                    for key in ["url_suffix", "encryption", "password", "compression"] {
+                        assert_eq!(
+                            r[field][key], s[field][key],
+                            "{tag}: {field}.{key} must be identical"
+                        );
+                    }
+                }
             }
-            assert_eq!(
-                r["manifest"], s["manifest"],
-                "{tag}: manifest{{}} identical"
-            );
-            assert_eq!(
-                s["manifest"]["checksum"], r["manifest"]["checksum"],
-                "manifest.checksum is MD5 of the DECOMPRESSED manifest, verified before the \
-                 protobuf is parsed; moving it is a metadata failure that looks like a product bug"
-            );
-            assert_eq!(
-                s["manifest"]["id"], r["manifest"]["id"],
-                "manifest.id is the URL path segment"
-            );
-            // `url_suffix` is irrelevant — `sophon::join_url` builds
-            // `{prefix}/{id}` and never reads it — but it is still recorded,
-            // so it must still be the recorded one.
-            for field in ["manifest_download", "chunk_download"] {
-                for key in ["url_suffix", "encryption", "password", "compression"] {
+        }
+    }
+
+    // ---- origins: each namespace keeps its path and gets its own port ----
+    {
+        // Each namespace gets its **own** origin, and the path is kept byte-for-byte
+        // so a blob route can be "take the last two segments and ignore the rest" —
+        // which is what makes the route indistinguishable from production's.
+        assert_ne!(
+            o.manifest_origin, o.chunk_origin,
+            "the two ports must differ"
+        );
+
+        for tag in [&bundle.old_tag, &bundle.new_tag] {
+            let recorded: serde_json::Value =
+                serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("recorded");
+            let served: serde_json::Value =
+                serde_json::from_slice(&bridge.served_build(tag).expect("body")).expect("json");
+            let rec = recorded["data"]["manifests"]
+                .as_array()
+                .expect("[]")
+                .clone();
+            let srv = served["data"]["manifests"].as_array().expect("[]").clone();
+            for (r, s) in rec.iter().zip(srv.iter()) {
+                for (field, origin) in [
+                    ("manifest_download", &o.manifest_origin),
+                    ("chunk_download", &o.chunk_origin),
+                ] {
+                    let before = r[field]["url_prefix"].as_str().expect("prefix");
+                    let after = s[field]["url_prefix"].as_str().expect("prefix");
+                    assert!(
+                        after.starts_with(origin.as_str()),
+                        "{field} must name the listener that serves it: {after}"
+                    );
                     assert_eq!(
-                        r[field][key], s[field][key],
-                        "{tag}: {field}.{key} must be identical"
+                        &after[origin.len()..],
+                        recorded_path(before),
+                        "{field}: only the scheme and authority may change, never the path"
+                    );
+                    assert!(
+                        after.starts_with("http://127.0.0.1:"),
+                        "loopback only: {after}"
                     );
                 }
             }
         }
     }
-}
 
-/// Each namespace gets its **own** origin, and the path is kept byte-for-byte
-/// so a blob route can be "take the last two segments and ignore the rest" —
-/// which is what makes the route indistinguishable from production's.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn each_namespace_keeps_its_path_and_gets_its_own_origin() {
-    let mini = MiniBundle::with_shapes();
-    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
-    let bundle = bridge.bundle();
-    let o = bridge.origins().clone();
-    assert_ne!(
-        o.manifest_origin, o.chunk_origin,
-        "the two ports must differ"
-    );
-
-    for tag in [&bundle.old_tag, &bundle.new_tag] {
-        let recorded: serde_json::Value =
-            serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("recorded");
-        let served: serde_json::Value =
-            serde_json::from_slice(&bridge.served_build(tag).expect("body")).expect("json");
-        let rec = recorded["data"]["manifests"]
-            .as_array()
-            .expect("[]")
-            .clone();
-        let srv = served["data"]["manifests"].as_array().expect("[]").clone();
-        for (r, s) in rec.iter().zip(srv.iter()) {
-            for (field, origin) in [
-                ("manifest_download", &o.manifest_origin),
-                ("chunk_download", &o.chunk_origin),
-            ] {
-                let before = r[field]["url_prefix"].as_str().expect("prefix");
-                let after = s[field]["url_prefix"].as_str().expect("prefix");
-                assert!(
-                    after.starts_with(origin.as_str()),
-                    "{field} must name the listener that serves it: {after}"
+    // ---- index: an id resolves to its own build field archive ------------
+    {
+        // The live ids are `manifest_<16hex>_<32hex>`; the bundle stores archives
+        // under *field* names. The translation is built while rewriting the body, so
+        // an id resolves only if **this** build declared it and the bundle carries
+        // that field's archive.
+        let mut resolvable = 0;
+        let mut uncarried = 0;
+        for tag in [&bundle.old_tag, &bundle.new_tag] {
+            let body: serde_json::Value =
+                serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("body");
+            let build = body["data"]["build_id"]
+                .as_str()
+                .expect("build_id")
+                .to_string();
+            for m in body["data"]["manifests"].as_array().expect("[]") {
+                let id = m["manifest"]["id"].as_str().expect("id");
+                let (got_tag, field, got_build, carried) = bridge
+                    .manifest_resolution_for(&build, id)
+                    .unwrap_or_else(|| panic!("{build}/{id} is not indexed"));
+                assert_eq!(got_tag, *tag, "the tag decides which archive");
+                assert_eq!(field, m["matching_field"].as_str().expect("field"));
+                assert_eq!(
+                    got_build, build,
+                    "the declaring build is the one whose body declared it"
                 );
                 assert_eq!(
-                    &after[origin.len()..],
-                    recorded_path(before),
-                    "{field}: only the scheme and authority may change, never the path"
+                    carried,
+                    bundle.manifest_archive(tag, &field).is_some(),
+                    "carried == the archive exists"
                 );
-                assert!(
-                    after.starts_with("http://127.0.0.1:"),
-                    "loopback only: {after}"
-                );
+                if carried {
+                    resolvable += 1;
+                    // Serve it over loopback: real bytes, real route.
+                    let url = format!(
+                        "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{build}/{id}",
+                        bridge.origins().manifest_origin
+                    );
+                    let (status, ctype, body) = get(&url).await;
+                    assert_eq!(status, 200, "{id}");
+                    assert_eq!(ctype, "application/octet-stream");
+                    assert!(!body.is_empty(), "{id} served no bytes");
+                } else {
+                    uncarried += 1;
+                }
             }
+        }
+        assert!(
+            resolvable > 0,
+            "the bundle must carry at least one manifest"
+        );
+        assert!(
+            uncarried > 0,
+            "a getBuild body declares the audio manifest too and the bundle stores only \
+             the field it captured; if every one resolved, the --audio warning would have no teeth"
+        );
+
+        // An id no build declared is a 404, not a best-effort guess.
+        let bogus = "manifest_0000000000000000_00000000000000000000000000000000";
+        let url = format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{bogus}",
+            bridge.origins().manifest_origin,
+            bundle.new_build
+        );
+        let (status, ctype, _) = get(&url).await;
+        assert_eq!(status, 404, "an undeclared id must not be served");
+        assert_eq!(
+            ctype, "application/xml",
+            "the measured blob 404 content-type"
+        );
+    }
+
+    // ---- build_id: a blob under the other build prefix is refused --------
+    {
+        // The invariant `docs/06` §4.1 buys: **every blob request's `<build_id>` must
+        // equal the build whose manifest declared that id.** The same id under the
+        // other build's prefix is a 404 — which is what makes a shim with the two blob
+        // prefixes crossed impossible to mistake for a working bridge.
+        // A manifest the new build really declares.
+        let body: serde_json::Value =
+            serde_json::from_slice(&bundle.recorded_build_body(&bundle.new_tag)).expect("body");
+        let m = &body["data"]["manifests"].as_array().expect("[]")[0];
+        let id = m["manifest"]["id"].as_str().expect("id");
+        let field = m["matching_field"].as_str().expect("field");
+        assert!(
+            bundle.manifest_archive(&bundle.new_tag, field).is_some(),
+            "the mini-bundle carries the new build's {field} manifest"
+        );
+
+        // Under its own build: served.
+        let right = format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{id}",
+            o.manifest_origin, bundle.new_build
+        );
+        assert_eq!(get(&right).await.0, 200);
+
+        // Under the other build's: 404, replayed from `blob_wrong_build`.
+        let wrong = format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{id}",
+            o.manifest_origin, bundle.old_build
+        );
+        let (status, ctype, body) = get(&wrong).await;
+        assert_eq!(
+            status, 404,
+            "the same id under the other build must be a 404"
+        );
+        assert_eq!(ctype, "application/xml");
+        if let Some((recorded_status, recorded_ctype, _)) =
+            bridge.recorded_shape("blob_wrong_build")
+        {
+            assert_eq!(status, recorded_status, "replayed status");
+            assert_eq!(ctype, recorded_ctype, "replayed content-type");
+        }
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("NoSuchKey"), "{text}");
+        assert!(
+            text.contains(&bundle.old_build),
+            "the replayed <Key> must name the build actually requested: {text}"
+        );
+
+        // And the chunk namespace: only the latest build's prefix is ever a
+        // download target, so the old build's is refused for any id at all.
+        let chunk = format!(
+            "{}/client_app/sophon/chunks/cxhpq4g4rgg0/{}/whatever",
+            o.chunk_origin, bundle.old_build
+        );
+        assert_eq!(get(&chunk).await.0, 404, "old-build chunk prefix must 404");
+    }
+
+    // ---- recorded shapes: both route families replay the evidence -------
+    {
+        // The two route families answer failure **differently**, and both answers are
+        // replayed from what the bundle recorded rather than chosen here. Measured on
+        // 2026-10-16 and tabulated in `docs/06` §4.4:
+        //
+        // | family | request | answer |
+        // |---|---|---|
+        // | blob (`AliyunOSS`) | bogus id, unknown build, a valid id under the other build | `404` + `application/xml` `NoSuchKey` |
+        // | JSON (`sg-downloader-api`) | `getBuild?tag=<unknown>` | `200` + `retcode -202` |
+        assert!(
+            !bridge.shapes_synthesized(),
+            "this bundle carries api/error_shapes.json, so these are replayed"
+        );
+
+        let missing = "0000000000000000_00000000000000000000000000000000";
+        let manifest_ns = format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0",
+            o.manifest_origin
+        );
+        let chunk_ns = format!("{}/client_app/sophon/chunks/cxhpq4g4rgg0", o.chunk_origin);
+
+        // The blob family: 404 + application/xml, for all three recorded reasons.
+        assert_replays(
+            &bridge,
+            "blob_missing",
+            &format!("{manifest_ns}/{}/{missing}", bundle.new_build),
+        )
+        .await;
+        assert_replays(
+            &bridge,
+            "chunk_missing",
+            &format!("{chunk_ns}/{}/{missing}", bundle.new_build),
+        )
+        .await;
+        assert_replays(
+            &bridge,
+            "blob_wrong_build",
+            &format!("{chunk_ns}/{}/{missing}", bundle.old_build),
+        )
+        .await;
+
+        // The JSON family: 200 + retcode -202, which is the call that populates the
+        // chunk-reuse map.
+        let (status, ctype, body) = get(&format!(
+            "{}/getBuild?branch=main&package_id=x&password=&tag=0.0.0-nope",
+            o.sophon_base
+        ))
+        .await;
+        let (rec_status, rec_ctype, rec_body) = bridge
+            .recorded_shape("getbuild_unknown_tag")
+            .expect("recorded");
+        assert_eq!((status, ctype), (rec_status, rec_ctype));
+        assert_eq!(String::from_utf8_lossy(&body), rec_body);
+
+        // The document's other three shapes have no route here, because the bridge
+        // never issues such a request: a bad `package_id` or a bad `game_ids[]` is
+        // something only `gircap capture` sends. They are still checked for
+        // presence and shape, so the bundle's record is read rather than assumed.
+        for (id, status, retcode) in [
+            ("getbuild_bad_package", 200u16, -201i64),
+            ("getgameconfigs_bad_game_id", 200, -1001),
+            ("getgamebranches_bad_game_id", 200, 0),
+        ] {
+            let (s, ct, b) = bridge.recorded_shape(id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!((s, ct.as_str()), (status, "application/json"), "{id}");
+            let v: serde_json::Value = serde_json::from_str(&b).expect("json body");
+            assert_eq!(v["retcode"].as_i64(), Some(retcode), "{id}");
         }
     }
 }
@@ -554,82 +757,6 @@ fn recorded_path(prefix: &str) -> &str {
         Some(i) => &rest[i..],
         None => "",
     }
-}
-
-/// The live ids are `manifest_<16hex>_<32hex>`; the bundle stores archives
-/// under *field* names. The translation is built while rewriting the body, so
-/// an id resolves only if **this** build declared it and the bundle carries
-/// that field's archive.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
-    let mini = MiniBundle::with_shapes();
-    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
-    let bundle = bridge.bundle().clone();
-
-    let mut resolvable = 0;
-    let mut uncarried = 0;
-    for tag in [&bundle.old_tag, &bundle.new_tag] {
-        let body: serde_json::Value =
-            serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("body");
-        let build = body["data"]["build_id"]
-            .as_str()
-            .expect("build_id")
-            .to_string();
-        for m in body["data"]["manifests"].as_array().expect("[]") {
-            let id = m["manifest"]["id"].as_str().expect("id");
-            let (got_tag, field, got_build, carried) = bridge
-                .manifest_resolution_for(&build, id)
-                .unwrap_or_else(|| panic!("{build}/{id} is not indexed"));
-            assert_eq!(got_tag, *tag, "the tag decides which archive");
-            assert_eq!(field, m["matching_field"].as_str().expect("field"));
-            assert_eq!(
-                got_build, build,
-                "the declaring build is the one whose body declared it"
-            );
-            assert_eq!(
-                carried,
-                bundle.manifest_archive(tag, &field).is_some(),
-                "carried == the archive exists"
-            );
-            if carried {
-                resolvable += 1;
-                // Serve it over loopback: real bytes, real route.
-                let url = format!(
-                    "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{build}/{id}",
-                    bridge.origins().manifest_origin
-                );
-                let (status, ctype, body) = get(&url).await;
-                assert_eq!(status, 200, "{id}");
-                assert_eq!(ctype, "application/octet-stream");
-                assert!(!body.is_empty(), "{id} served no bytes");
-            } else {
-                uncarried += 1;
-            }
-        }
-    }
-    assert!(
-        resolvable > 0,
-        "the bundle must carry at least one manifest"
-    );
-    assert!(
-        uncarried > 0,
-        "a getBuild body declares the audio manifest too and the bundle stores only \
-         the field it captured; if every one resolved, the --audio warning would have no teeth"
-    );
-
-    // An id no build declared is a 404, not a best-effort guess.
-    let bogus = "manifest_0000000000000000_00000000000000000000000000000000";
-    let url = format!(
-        "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{bogus}",
-        bridge.origins().manifest_origin,
-        bundle.new_build
-    );
-    let (status, ctype, _) = get(&url).await;
-    assert_eq!(status, 404, "an undeclared id must not be served");
-    assert_eq!(
-        ctype, "application/xml",
-        "the measured blob 404 content-type"
-    );
 }
 
 /// Both `getBuild` bodies declare the same `game` id. Because the index is
@@ -695,66 +822,6 @@ async fn a_game_id_shared_by_both_builds_resolves_and_serves_per_build() {
         assert_eq!(status, rec_status, "replayed status");
         assert_eq!(ctype, rec_ctype, "replayed content-type");
     }
-}
-
-/// The invariant `docs/06` §4.1 buys: **every blob request's `<build_id>` must
-/// equal the build whose manifest declared that id.** The same id under the
-/// other build's prefix is a 404 — which is what makes a shim with the two blob
-/// prefixes crossed impossible to mistake for a working bridge.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_blob_under_the_other_builds_prefix_is_refused() {
-    let mini = MiniBundle::with_shapes();
-    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
-    let bundle = bridge.bundle().clone();
-    let o = bridge.origins().clone();
-
-    // A manifest the new build really declares.
-    let body: serde_json::Value =
-        serde_json::from_slice(&bundle.recorded_build_body(&bundle.new_tag)).expect("body");
-    let m = &body["data"]["manifests"].as_array().expect("[]")[0];
-    let id = m["manifest"]["id"].as_str().expect("id");
-    let field = m["matching_field"].as_str().expect("field");
-    assert!(
-        bundle.manifest_archive(&bundle.new_tag, field).is_some(),
-        "the mini-bundle carries the new build's {field} manifest"
-    );
-
-    // Under its own build: served.
-    let right = format!(
-        "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{id}",
-        o.manifest_origin, bundle.new_build
-    );
-    assert_eq!(get(&right).await.0, 200);
-
-    // Under the other build's: 404, replayed from `blob_wrong_build`.
-    let wrong = format!(
-        "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{id}",
-        o.manifest_origin, bundle.old_build
-    );
-    let (status, ctype, body) = get(&wrong).await;
-    assert_eq!(
-        status, 404,
-        "the same id under the other build must be a 404"
-    );
-    assert_eq!(ctype, "application/xml");
-    if let Some((recorded_status, recorded_ctype, _)) = bridge.recorded_shape("blob_wrong_build") {
-        assert_eq!(status, recorded_status, "replayed status");
-        assert_eq!(ctype, recorded_ctype, "replayed content-type");
-    }
-    let text = String::from_utf8_lossy(&body);
-    assert!(text.contains("NoSuchKey"), "{text}");
-    assert!(
-        text.contains(&bundle.old_build),
-        "the replayed <Key> must name the build actually requested: {text}"
-    );
-
-    // And the chunk namespace: only the latest build's prefix is ever a
-    // download target, so the old build's is refused for any id at all.
-    let chunk = format!(
-        "{}/client_app/sophon/chunks/cxhpq4g4rgg0/{}/whatever",
-        o.chunk_origin, bundle.old_build
-    );
-    assert_eq!(get(&chunk).await.0, 404, "old-build chunk prefix must 404");
 }
 
 /// A tag the bundle does not carry answers with the recorded `retcode -202`
@@ -893,81 +960,6 @@ async fn assert_replays(bridge: &Bridge, shape_id: &str, url: &str) {
         !replayed.contains("6AD16DF4"),
         "{shape_id}: the recorded RequestId is marked volatile and must be synthesized"
     );
-}
-
-/// The two route families answer failure **differently**, and both answers are
-/// replayed from what the bundle recorded rather than chosen here. Measured on
-/// 2026-10-16 and tabulated in `docs/06` §4.4:
-///
-/// | family | request | answer |
-/// |---|---|---|
-/// | blob (`AliyunOSS`) | bogus id, unknown build, a valid id under the other build | `404` + `application/xml` `NoSuchKey` |
-/// | JSON (`sg-downloader-api`) | `getBuild?tag=<unknown>` | `200` + `retcode -202` |
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn not_found_is_replayed_from_the_recorded_shapes() {
-    let mini = MiniBundle::with_shapes();
-    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
-    let bundle = bridge.bundle().clone();
-    let o = bridge.origins().clone();
-    assert!(
-        !bridge.shapes_synthesized(),
-        "this bundle carries api/error_shapes.json, so these are replayed"
-    );
-
-    let missing = "0000000000000000_00000000000000000000000000000000";
-    let manifest_ns = format!(
-        "{}/client_app/sophon/manifests/cxhpq4g4rgg0",
-        o.manifest_origin
-    );
-    let chunk_ns = format!("{}/client_app/sophon/chunks/cxhpq4g4rgg0", o.chunk_origin);
-
-    // The blob family: 404 + application/xml, for all three recorded reasons.
-    assert_replays(
-        &bridge,
-        "blob_missing",
-        &format!("{manifest_ns}/{}/{missing}", bundle.new_build),
-    )
-    .await;
-    assert_replays(
-        &bridge,
-        "chunk_missing",
-        &format!("{chunk_ns}/{}/{missing}", bundle.new_build),
-    )
-    .await;
-    assert_replays(
-        &bridge,
-        "blob_wrong_build",
-        &format!("{chunk_ns}/{}/{missing}", bundle.old_build),
-    )
-    .await;
-
-    // The JSON family: 200 + retcode -202, which is the call that populates the
-    // chunk-reuse map.
-    let (status, ctype, body) = get(&format!(
-        "{}/getBuild?branch=main&package_id=x&password=&tag=0.0.0-nope",
-        o.sophon_base
-    ))
-    .await;
-    let (rec_status, rec_ctype, rec_body) = bridge
-        .recorded_shape("getbuild_unknown_tag")
-        .expect("recorded");
-    assert_eq!((status, ctype), (rec_status, rec_ctype));
-    assert_eq!(String::from_utf8_lossy(&body), rec_body);
-
-    // The document's other three shapes have no route here, because the bridge
-    // never issues such a request: a bad `package_id` or a bad `game_ids[]` is
-    // something only `gircap capture` sends. They are still checked for
-    // presence and shape, so the bundle's record is read rather than assumed.
-    for (id, status, retcode) in [
-        ("getbuild_bad_package", 200u16, -201i64),
-        ("getgameconfigs_bad_game_id", 200, -1001),
-        ("getgamebranches_bad_game_id", 200, 0),
-    ] {
-        let (s, ct, b) = bridge.recorded_shape(id).unwrap_or_else(|| panic!("{id}"));
-        assert_eq!((s, ct.as_str()), (status, "application/json"), "{id}");
-        let v: serde_json::Value = serde_json::from_str(&b).expect("json body");
-        assert_eq!(v["retcode"].as_i64(), Some(retcode), "{id}");
-    }
 }
 
 /// A bundle that **predates** `api/error_shapes.json` has no evidence to
