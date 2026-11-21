@@ -230,119 +230,132 @@ mod tests {
         );
     }
 
-    /// A target that names no file has nothing to publish under. The refusal
-    /// comes before the parent is created or a temp is named.
+    /// The four "refused before anything is written" cases, folded into one
+    /// process so nextest spawns one test instead of four. Every original
+    /// assertion and message is kept; a labelled subcase names the refusal that
+    /// failed.
     #[test]
-    fn a_target_with_no_file_name_is_refused_before_anything_is_written() {
-        let d = dir("no_file_name");
-        let path = d.join("missing").join("..");
-        assert!(path.file_name().is_none(), "the fixture names no file");
+    fn refusals_happen_before_anything_is_written() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            (
+                "a_target_with_no_file_name_is_refused_before_anything_is_written",
+                &|| {
+                    // A target that names no file has nothing to publish under.
+                    let d = dir("no_file_name");
+                    let path = d.join("missing").join("..");
+                    assert!(path.file_name().is_none(), "the fixture names no file");
 
-        let err = write_atomic(&path, b"{}", false).unwrap_err();
+                    let err = write_atomic(&path, b"{}", false).unwrap_err();
 
-        assert!(
-            format!("{err:#}").contains("publish target has no file name"),
-            "{err:#}"
-        );
-        assert!(
-            !d.join("missing").exists(),
-            "the refusal happens before the parent directory is created"
-        );
-        assert!(entries(&d).is_empty(), "no temp is written anywhere");
-    }
+                    assert!(
+                        format!("{err:#}").contains("publish target has no file name"),
+                        "{err:#}"
+                    );
+                    assert!(
+                        !d.join("missing").exists(),
+                        "the refusal happens before the parent directory is created"
+                    );
+                    assert!(entries(&d).is_empty(), "no temp is written anywhere");
+                },
+            ),
+            (
+                "a_directory_spelling_is_refused_before_anything_is_written",
+                &|| {
+                    // `Path::file_name()` ignores a trailing `.`, so `dir/.`
+                    // reports `Some("dir")` even though the spelling names the
+                    // directory. The guard reads the spelling instead.
+                    let d = dir("directory_spelling");
+                    // The parent does not exist, so creating it is observable
+                    // on both platforms, and the temp would land in it.
+                    let parent = d.join("missing");
+                    let target = parent.join("game");
+                    for path in [target.join("."), target.join("")] {
+                        assert_eq!(
+                            path.file_name(),
+                            Some(std::ffi::OsStr::new("game")),
+                            "the fixture exercises a spelling `file_name` cannot tell from a file"
+                        );
 
-    /// `Path::file_name()` ignores a trailing `.`, so `dir/.` reports
-    /// `Some("dir")` even though the spelling names the directory. The guard
-    /// reads the spelling, so the target is refused before the parent is
-    /// created or a temp is written, rather than at the rename.
-    #[test]
-    fn a_directory_spelling_is_refused_before_anything_is_written() {
-        let d = dir("directory_spelling");
-        // The parent does not exist, so creating it is observable on both
-        // platforms, and the temp would land in it.
-        let parent = d.join("missing");
-        let target = parent.join("game");
-        for path in [target.join("."), target.join("")] {
-            assert_eq!(
-                path.file_name(),
-                Some(std::ffi::OsStr::new("game")),
-                "the fixture exercises a spelling `file_name` cannot tell from a file"
-            );
+                        let err = write_atomic(&path, b"{}", false).unwrap_err();
 
-            let err = write_atomic(&path, b"{}", false).unwrap_err();
+                        assert!(
+                            format!("{err:#}").contains("publish target has no file name"),
+                            "{err:#}"
+                        );
+                        assert!(
+                            !parent.exists(),
+                            "the refusal happens before the parent directory is created"
+                        );
+                        assert!(
+                            !target.exists(),
+                            "the directory spelling is not published as a file"
+                        );
+                        assert!(entries(&d).is_empty(), "no temp is written anywhere");
+                    }
+                },
+            ),
+            (
+                "a_windows_trailing_dot_or_space_is_refused_before_anything_is_written",
+                &|| {
+                    // Windows strips a trailing dot or space, so `config.` or
+                    // `config ` would alias `config`; every host refuses them.
+                    let d = dir("windows_alias");
+                    let parent = d.join("missing");
+                    for name in ["config.", "config "] {
+                        let path = parent.join(name);
+                        assert!(
+                            path.file_name().is_some(),
+                            "the fixture has a file name; only the alias rule refuses it"
+                        );
 
-            assert!(
-                format!("{err:#}").contains("publish target has no file name"),
-                "{err:#}"
-            );
-            assert!(
-                !parent.exists(),
-                "the refusal happens before the parent directory is created"
-            );
-            assert!(
-                !target.exists(),
-                "the directory spelling is not published as a file"
-            );
-            assert!(entries(&d).is_empty(), "no temp is written anywhere");
-        }
-    }
+                        let err = write_atomic(&path, b"{}", false).unwrap_err();
 
-    /// Windows strips a trailing dot or space from a name, so `config.` or
-    /// `config ` would alias `config`. The publisher refuses that spelling
-    /// before the parent is created or a temp is written, on every host.
-    #[test]
-    fn a_windows_trailing_dot_or_space_is_refused_before_anything_is_written() {
-        let d = dir("windows_alias");
-        let parent = d.join("missing");
-        for name in ["config.", "config "] {
-            let path = parent.join(name);
-            assert!(
-                path.file_name().is_some(),
-                "the fixture has a file name; only the alias rule refuses it"
-            );
+                        assert!(
+                            format!("{err:#}").contains("Windows-trailing dot or space"),
+                            "{err:#}"
+                        );
+                        assert!(
+                            !parent.exists(),
+                            "the refusal happens before the parent directory is created"
+                        );
+                    }
+                },
+            ),
+            (
+                "a_nested_windows_alias_component_is_refused_before_anything_is_written",
+                &|| {
+                    // The alias rule also covers an **intermediate** directory
+                    // spelled with a trailing dot or space. The refusal comes
+                    // before the parent is created, so no alias is created.
+                    let d = dir("windows_alias_nested");
+                    for dir_name in ["dir.", "dir "] {
+                        // Constructed lexically: such a directory is not
+                        // created on any host, and the test never needs one.
+                        let parent = d.join(dir_name).join("missing");
+                        let path = parent.join("config.ini");
+                        assert_eq!(
+                            path.file_name(),
+                            Some(std::ffi::OsStr::new("config.ini")),
+                            "only an intermediate component is an alias"
+                        );
 
-            let err = write_atomic(&path, b"{}", false).unwrap_err();
+                        let err = write_atomic(&path, b"{}", false).unwrap_err();
 
-            assert!(
-                format!("{err:#}").contains("Windows-trailing dot or space"),
-                "{err:#}"
-            );
-            assert!(
-                !parent.exists(),
-                "the refusal happens before the parent directory is created"
-            );
-        }
-    }
-
-    /// The alias rule is not only about the final name: a caller-built target
-    /// can spell an **intermediate** directory with a trailing dot or space,
-    /// and Windows resolves that component to the stripped directory too. The
-    /// refusal comes before the parent is created, so the aliased directory is
-    /// not created either.
-    #[test]
-    fn a_nested_windows_alias_component_is_refused_before_anything_is_written() {
-        let d = dir("windows_alias_nested");
-        for dir_name in ["dir.", "dir "] {
-            // Constructed lexically: such a directory is not created on any
-            // host, and the test never needs one to exist.
-            let parent = d.join(dir_name).join("missing");
-            let path = parent.join("config.ini");
-            assert_eq!(
-                path.file_name(),
-                Some(std::ffi::OsStr::new("config.ini")),
-                "only an intermediate component is an alias"
-            );
-
-            let err = write_atomic(&path, b"{}", false).unwrap_err();
-
-            assert!(
-                format!("{err:#}").contains("Windows-trailing dot or space"),
-                "{err:#}"
-            );
-            assert!(
-                !parent.exists() && !d.join("dir").exists(),
-                "no directory is created (or aliased) for {dir_name:?}"
-            );
+                        assert!(
+                            format!("{err:#}").contains("Windows-trailing dot or space"),
+                            "{err:#}"
+                        );
+                        assert!(
+                            !parent.exists() && !d.join("dir").exists(),
+                            "no directory is created (or aliased) for {dir_name:?}"
+                        );
+                    }
+                },
+            ),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
         }
     }
 
