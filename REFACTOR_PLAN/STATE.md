@@ -27,7 +27,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T13 | girsync: planner + effective cycle crate | skipped | | planner/effective not a standalone 2-node SCC — sit in 6-module girsync SCC {cli,config,diff,effective,planner,report}; a legal whole-group move needs scan/util/hash too (broad, not narrow interface), §A2 fails; stop per task instruction |
 | T14 | gircap: extract the http subsystem crate | completed | b8b31045, 0670b7c9 | New logic-free `gircap-http` (tools/capture/http) owns reqwest/thiserror mechanics; gircap direct dep, src/http/mod.rs thin facade (probe/negative/tests kept local as policy). §A2 verified empirically (emit edit leaves gircap-http/reqwest/retry Fresh). Dev: §F25 SCC actually 11 modules (http↔manifest via negative, http↔failure, biz↔cli↔config) — carved acyclic leaf instead; doc seams updated in same work; wiremock stays gircap dev-dep. Review G1 clean; 0670b7c9 removed 6 superseded dead-duplicate mechanics files |
 | T15 | gircap: emit + verify subsystem crates | skipped | | emit/verify not logic-free leaves: emit in SCC with manifest/assemble/http (manifest→emit, assemble→emit back-edges); verify depends on emit policy types; no direct consumer, no heavy dep isolatable (flate2/ini_core stay, ini=§A13 keeper). Legal extraction needs whole-SCC move + byte-contract rewrite (§A6) |
-| T16 | gircap: blobs + manifest crates | in_progress | | |
+| T16 | gircap: blobs + manifest crates | skipped | | §F25/F27 premise stale: wire types already in girpr-proto, zstd helpers in acyclic `hash` leaf; blobs/manifest deep in gircap SCC (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no T14-style acyclic logic-free leaf; §A2 fails |
 | T17 | gircap: small production leaves | todo | | |
 | T18 | Split the disjoint halves of `girpr-digest` | todo | | |
 | T19 | `girpr-log` split payoff assessment | todo | | |
@@ -170,7 +170,13 @@ that in the relevant task's `note` instead of silently proceeding):
   index). Any legal emit/verify extraction needs those back-edges severed by
   moving shared schema/policy types down — a whole-SCC move that rewrites §A6
   byte contracts. T16/T17 should expect the same SCC unless they find a
-  T14-style acyclic mechanics leaf.
+  T14-style acyclic mechanics leaf. T16 found blobs/manifest deep in that SCC
+  (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no carvable
+  leaf. T16 also established the heavy-dep premise is stale: wire types are
+  already in `girpr-proto` (`manifest/proto.rs:17` re-exports them) and zstd
+  helpers (`is_zstd`, `zstd_decompress`, `zstd_measure`/`_from`, `HashingFile`)
+  live in the acyclic production leaf `tools/capture/src/hash/` — T17 territory,
+  not T16's. The `zstd_measure` pair stays duplicated (§A13).
 - **girsync planner/effective sit in a 6-module SCC (T13 validation, §A10).**
   Production `use crate::` edges put `{planner, effective, config, cli, report,
   diff}` in one strongly-connected group (§A10 also names `cli↔config` and
