@@ -20,7 +20,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | HTTP + Sophon fetch crate | completed | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged. Review D clean |
 | T07 | Report plane crate | completed | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged. Review D clean |
 | T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
-| T09 | De-duplicate root `tests/common/mod.rs` inlining | in_progress | | |
+| T09 | De-duplicate root `tests/common/mod.rs` inlining | pending_review | b6fe1c4d | New facade-free `girpr-test-fixtures` lib (~1400 lines); `tests/common/mod.rs` shrank 1521→~145-line shim; all 11 inline + 3 #[path] consumers unchanged; §A2 verified empirically (fixtures Fresh after repair edit). Dev: small glue (RunCtx/Limits/PathScope/RepairMode) still needs facade SCC — left for T10; §F29 counts stale |
 | T10 | Consolidate shared test seams and includes | todo | | |
 | T11 | girsync: extract the cache crate | todo | | |
 | T12 | girsync: extract the acyclic leaves | todo | | |
@@ -147,3 +147,10 @@ that in the relevant task's `note` instead of silently proceeding):
   from the config↔repair SCC (§A10). Revisit T08 only after T09/T10 make the
   shared test harness facade-free and that SCC is addressed. The §F22 claim that
   cli_contract needs only `girpr::Args` is contradicted by the current code.
+- **T09 moved the bulk harness, not the facade glue (T09 validation).** The
+  ~1400-line mock/fixture mechanics now live in facade-free `girpr-test-fixtures`;
+  `tests/common/mod.rs` is a ~145-line shim whose remaining glue (`scope`,
+  `ctx_for`, `load_counters`, `run`, `run_binary`, `stamp_ago/ahead`) still needs
+  `RunCtx`/`Limits`/`PathScope`/`RepairMode` from the config↔repair SCC. T10 is
+  the place to finish that seam; only then would T08's narrow CLI tests be
+  unblocked (and still only with the SCC addressed).
