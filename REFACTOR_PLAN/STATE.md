@@ -14,8 +14,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Consolidate root integration test binaries | completed | 080a0d45 | 4 root targets; kept artifact_bridge & repair_post standalone (pinned filters/host-skip/log-capture) so no nextest.toml edit; consolidated FQNs gained module prefix (repair::/contracts::); run_lock uses crate::common |
 | T02 | Memory cache seam for girsync record/FS cases | completed | b54115fd, 60382ea2 | 2 commits (seam + migration); file opens 302→183 (~39%), sync wall 62.6→41-46s; dry-run pairs skip cache writes so no forget call needed (wrapper exported); kept 4 cache-file-subject cases on file backend; F31 falls out for migrated cases; cold-cache pattern = rw_threads/limiter.rs drop_caches() |
-| T03 | Structured repair diagnostics to drop log-only spawns | pending_review | aa970db2, 02ddeaaa | 2 commits (surface + migration); 13 spawns→1 (one process smoke kept); premise was 11 cases/13 calls not 10/10; structured diagnostics are thread-local, take_repair_diagnostics() needs current-thread runtime; Rig::logs now lazy OnceLock; no nextest filter change; CLI goldens/shipped bytes unchanged |
-| T04 | Pure log-announcement helper to drop cli_contract spawns | pending_review | e41a134a, a627d4fd | 2 commits (helper + migration); 14 log-case spawns→1 smoke (separate from T03 repair smoke); contracts binary nextest 2.141s→1.235s; cases were not purely formatting — process-boundary assertions preserved via open_or_warn unit test, girpr_log::test_support::logs_of, pure plan assertions; no nextest filter change; announcement bytes/goldens unchanged; 0 girpr_<ts>.log under target/ |
+| T03 | Structured repair diagnostics to drop log-only spawns | completed | aa970db2, 02ddeaaa | 2 commits (surface + migration); 13 spawns→1 (one process smoke kept); premise was 11 cases/13 calls not 10/10; structured diagnostics are thread-local, take_repair_diagnostics() needs current-thread runtime; Rig::logs now lazy OnceLock; no nextest filter change; CLI goldens/shipped bytes unchanged |
+| T04 | Pure log-announcement helper to drop cli_contract spawns | completed | e41a134a, a627d4fd | 2 commits (helper + migration); 14 log-case spawns→1 smoke (separate from T03 repair smoke); contracts binary nextest 2.141s→1.235s; cases were not purely formatting — process-boundary assertions preserved via open_or_warn unit test, girpr_log::test_support::logs_of, pure plan assertions; no nextest filter change; announcement bytes/goldens unchanged; 0 girpr_<ts>.log under target/ |
 | T05 | Replace wiremock with a std-only loopback HTTP mock | todo | | |
 | T06 | Trial rust-lld for the test profile | todo | | |
 | T07 | Pin the stable toolchain to an exact release | todo | | |
@@ -40,7 +40,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01 | done | |
 | B | T02 | done | |
-| C | T03, T04 | pending | Split if the batch proves too heavy |
+| C | T03, T04 | done | |
 | D | T05 | pending | |
 | E | T06, T07 | pending | |
 | F | T08 | pending | |
@@ -65,6 +65,11 @@ orchestrator records them here. Planning review (Phase 3) decides batching and d
 | FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | open | Leave return-rows-on-RunOutcome work to T18 |
 | FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | open | Pre-existing vestigial param |
 | FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | open | Behavior predates T02; only if coverage matters |
+| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | open | None==None could pass; low risk today |
+| FU09 | Rename T04 unopenable-file case or restore a blocker path — name overstates what it checks | open | Warning bytes pinned by girpr-log unit test |
+| FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration — rename or add nested-path existence assertion | open | Creation pinned by bare-name smoke + girpr-log test |
+| FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | open | LogLevel may collapse to Trace only |
+| FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | open | Rendered case covered by smoke + girpr-log unit tests |
 
 ## Persistent context
 
