@@ -53,28 +53,29 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 ## Follow-ups
 
-No follow-ups yet. Only a review session creates or removes follow-ups; the
-orchestrator records them here. Planning review (Phase 3) decides batching and drops.
+Follow-ups are non-blocking suggestions from review sessions; the orchestrator records
+them here. A pruning review reduced the list to those below (12 dropped, FU10 merged
+into FU09). Phase 3 planning decides final batching and any further drops.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| FU01 | Re-measure clean-build wall time on CI with a fresh target dir | open | Report figure is host-specific; 14→4 link reduction verified structurally |
-| FU02 | Merging repair_post into repair needs pinned binary(=repair_post) overrides updated in same change | open | Correctly left separate in T01 |
-| FU03 | Narrow blanket allow(dead_code, unused_imports) in tests/common/mod.rs to per-item allows | open | Cosmetic only |
-| FU04 | Exercise or remove the unused forget_memory_cache wrapper | open | No migrated test needs it; add focused test or drop |
-| FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | open | Leave return-rows-on-RunOutcome work to T18 |
-| FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | open | Pre-existing vestigial param |
-| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | open | Behavior predates T02; only if coverage matters |
-| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | open | None==None could pass; low risk today |
-| FU09 | Rename T04 unopenable-file case or restore a blocker path — name overstates what it checks | open | Warning bytes pinned by girpr-log unit test |
-| FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration — rename or add nested-path existence assertion | open | Creation pinned by bare-name smoke + girpr-log test |
-| FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | open | LogLevel may collapse to Trace only |
-| FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | open | Rendered case covered by smoke + girpr-log unit tests |
-| FU13 | Record exact cargo tree command behind T05 dependency-count figures | open | Static/host-specific; deltas confirmed, absolute counts vary by cargo version |
-| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | open | Latent — current reqwest clients always send full request immediately |
-| FU15 | Document a deliberate toolchain-bump procedure (trigger/cadence/owner) | open | T07 pin says "bump deliberately" but defines no process |
-| FU16 | Revalidate the rust-lld linker win on the CI host | open | Host-specific per §A7/§F4; confirm MSVC setup unaffected |
-| FU17 | Re-trial and scope linker config for other MSVC triples if support widens | open | Current setting covers only x86_64-pc-windows-msvc |
+| FU01 | Re-measure clean-build wall time on CI with a fresh target dir | dropped | Host-specific; link reduction verified structurally |
+| FU02 | Merging repair_post into repair needs pinned overrides updated | dropped | Restates T01 decision; merge explicitly deferred |
+| FU03 | Narrow blanket allow(dead_code, unused_imports) in tests/common/mod.rs | dropped | Cosmetic |
+| FU04 | Exercise or remove the unused forget_memory_cache wrapper | dropped | No cold-cache need; helper kept for F30 |
+| FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | dropped | Duplicate of active task T18 |
+| FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | dropped | Pre-existing vestigial nit |
+| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | open | Real semantic gap: path-keyed cache may let run 2 skip the copy |
+| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | open | None==None could pass |
+| FU09 | Name-overstates-coverage hygiene in T04 log cases | open | Absorbed FU10; keep one item for this class |
+| FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration | dropped | Merged into FU09 (same class) |
+| FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | dropped | Comment only |
+| FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | dropped | Covered by smoke + girpr-log unit tests |
+| FU13 | Record exact cargo tree command behind T05 dependency-count figures | dropped | Host/cargo-specific; deltas confirmed |
+| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | open | Latent test-hang risk |
+| FU15 | Document a deliberate toolchain-bump procedure (trigger/cadence/owner) | dropped | Process-doc nit |
+| FU16 | Revalidate the rust-lld linker win on the CI host | dropped | Caveat already in T06 note; near-duplicate of FU01 |
+| FU17 | Re-trial and scope linker config for other MSVC triples if support widens | dropped | Conditional future scope |
 
 ## Persistent context
 
