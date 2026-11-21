@@ -223,59 +223,6 @@ async fn a_fatal_run_flushes_its_last_line_to_the_log_file() {
 }
 
 #[tokio::test]
-async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
-    // A mock at 127.0.0.1 standing in for the whole CDN, driven by the real
-    // binary through `--hyp-base` / `--sophon-base`. This is the shape
-    // `gircap`'s artifact-serving shim will take.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_flags");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    // A purge flag *and* a scope, so the run exercises the whole narrowed
-    // pipeline rather than the trivial path.
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
-    let game = dir.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1",
-            "--include",
-            "game/foo.dat",
-            "--purge-after",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(stdout.contains("REPORT "), "{stdout}");
-    assert!(stdout.contains("SUMMARY "), "{stdout}");
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the included file was repaired against the mock"
-    );
-    assert!(
-        read_game_file(&dir, "stray/orphan.dat").is_some(),
-        "the out-of-scope orphan survives the purge"
-    );
-    // The flags reached `HypClient::new_with_bases`: a miss would have been a
-    // connection failure against production, i.e. exit 2.
-    assert!(mock.first_target_with("getBuild").is_some());
-
-    mock.stop();
-}
-
-#[tokio::test]
 async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
     // Reduced to a smoke: the one process-only fact worth pinning is that the
     // shipped binary's `main` renders `SUMMARY … total=0` to stdout for the
@@ -427,6 +374,15 @@ async fn base_precedence_and_env_fallback() {
     for (message, args, env) in rows {
         let (code, _, stderr) = run_binary(args, env).await;
         assert_eq!(code, 0, "{message}: {stderr}");
+        // The endpoint override reached `HypClient::new_with_bases`: a miss would
+        // have gone to production (flag row) or the dead port (env row) and
+        // exited 2. The REPORT/SUMMARY, repair and scope facts of a full narrowed
+        // run are pinned in cli_contract.rs and repair_scope.rs; this seam check
+        // is the part that needs the binary.
+        assert!(
+            mock.first_target_with("getBuild").is_some(),
+            "{message}: the endpoint override reached the client"
+        );
     }
     mock.stop();
 }
