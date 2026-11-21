@@ -57,7 +57,10 @@ mod sophon;
 // The canned-reply loopback origin the unit tests share.
 #[cfg(test)]
 mod test_http;
-mod util;
+// The low-level mechanics live in a separate crate so an edit to `repair`,
+// `report` or `cli` leaves them cached. The alias keeps every existing
+// `crate::util::…` call site pointing at the same names.
+use girpr_util as util;
 
 // The log policy crate, re-exported so that a caller can name the type
 // [`init_tracing`] returns without adding a dependency of its own: the policy
@@ -124,71 +127,10 @@ pub mod test_support {
     };
     pub use crate::util::EMPTY_MD5;
 
-    /// Where a refusal to create a host-dependent test fixture came from.
-    ///
-    /// A host that cannot create one and a test that injected the failure both
-    /// take the skip branch, but only the first is a skipped case. The printed
-    /// line says which, and only the real skip keeps the `SKIP precondition:`
-    /// wording the runner is configured to surface.
-    #[derive(Clone, Copy)]
-    pub enum FixtureRefusal {
-        /// The host refused the fixture.
-        Host,
-        /// The test supplied the refusal; no host behaviour was observed.
-        Injected,
-    }
-
-    impl FixtureRefusal {
-        fn lead(self, subject: &str) -> String {
-            match self {
-                Self::Host => format!("SKIP precondition: this host cannot create {subject}"),
-                Self::Injected => format!(
-                    "simulated refusal: no host was consulted; a host that cannot create \
-                     {subject} would skip"
-                ),
-            }
-        }
-
-        /// What the required-case failure says about where the refusal came
-        /// from. An injected refusal never consulted the host, so blaming the
-        /// host there would name a cause the test did not observe.
-        fn failure_lead(self, subject: &str) -> String {
-            match self {
-                Self::Host => format!("this host cannot create {subject}"),
-                Self::Injected => {
-                    format!("the refusal to create {subject} was injected; no host was consulted")
-                }
-            }
-        }
-    }
-
-    /// Report that a host-dependent fixture could not be created, or fail when
-    /// `required_env` says the case must not be skipped.
-    ///
-    /// `subject` names the fixture (`a directory junction`, `a non-UTF-8
-    /// name`) and `detail` is the reason the attempt failed. A run meant to
-    /// prove the fixture must not pass having checked nothing, so the
-    /// presence-based switch named by `required_env` turns the skip into a
-    /// failure. Only a host refusal blames the host: a required injected
-    /// refusal fails saying the refusal was injected and no host was
-    /// consulted.
-    pub fn skip_fixture_refusal(
-        refusal: FixtureRefusal,
-        subject: &str,
-        required_env: &str,
-        detail: impl std::fmt::Display,
-        required: bool,
-    ) {
-        assert!(
-            !required,
-            "{required_env} is set, but {}: {detail}",
-            refusal.failure_lead(subject)
-        );
-        eprintln!(
-            "{}: {detail}; set {required_env} (to any value) to fail instead",
-            refusal.lead(subject)
-        );
-    }
+    // One refusal type across the product's tests and the util crate's
+    // unit-test-only fixture helpers, so a test can pass its seam value
+    // straight into `girpr_util`'s junction/symlink classifiers.
+    pub use girpr_util::test_support::{FixtureRefusal, skip_fixture_refusal};
 
     /// `now` minus `age`, or `None` when this platform cannot represent the
     /// result.

@@ -440,6 +440,7 @@ pub(super) fn require_junction() -> bool {
     std::env::var_os("GIRPR_TEST_REQUIRE_JUNCTION").is_some()
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -174,7 +174,7 @@ pub fn clean_rel(rel: &str) -> Result<String> {
 /// it cannot spell. A path equal to `base` yields `Some(String::new())`: it is
 /// under the base, but the empty rel names no file, and the walks skip the
 /// base itself.
-pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
+pub fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
     Some(rel_pair_from_base(path, base)?.0)
 }
 
@@ -190,7 +190,7 @@ pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
 ///
 /// The contract matches [`rel_from_base`]: `None` outside `base`, and
 /// `Some(("", ""))` for `base` itself.
-pub(crate) fn rel_pair_from_base<'a>(path: &'a Path, base: &Path) -> Option<(String, &'a Path)> {
+pub fn rel_pair_from_base<'a>(path: &'a Path, base: &Path) -> Option<(String, &'a Path)> {
     let rel = path.strip_prefix(base).ok()?;
     Some((lossy_slash(rel), rel))
 }
@@ -214,7 +214,7 @@ fn lossy_slash(path: &Path) -> String {
 /// converted lossily, with `\` reported as `/`. An empty `dir_rel` yields
 /// `name` alone, so the result never starts with `/`; a non-empty one adds
 /// exactly one separator, never `//`.
-pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
+pub fn join_rel(dir_rel: &str, name: &Path) -> String {
     let name = lossy_slash(name);
     if dir_rel.is_empty() {
         name
@@ -250,13 +250,13 @@ pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
 ///
 /// This is **not** the folding `--include` / `--exclude` matching uses. That
 /// match is case-insensitive through the `glob` crate's per-character
-/// `eq_ignore_ascii_case` (see [`crate::repair::scope::filter`]), which is
+/// `eq_ignore_ascii_case` (the product's `repair::scope::filter`), which is
 /// ASCII-only like this one but applies on every host. The two rules differ
 /// deliberately. A glob is a containment predicate over a user-written pattern,
 /// where matching broadly is the point. This function is a map key for path
 /// *identity*, where over-merging silently drops or keeps the wrong file, so it
 /// folds only where the filesystem does (Windows) and stays ASCII-only there.
-pub(crate) fn path_key(rel: &str) -> String {
+pub fn path_key(rel: &str) -> String {
     // The shared crate owns the ASCII-fold mechanic; this call site owns the
     // rule: fold only where the filesystem does (Windows), never on a host whose
     // names are case-sensitive. The sync tool's `path_key` passes `true` for its
@@ -282,7 +282,7 @@ pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
 /// Does any component of `path` that names a file end in a Windows-trailing
 /// dot or space?
 ///
-/// This is [`has_windows_trailing_dot_or_space`] over a whole path, for the
+/// This is `has_windows_trailing_dot_or_space` over a whole path, for the
 /// writers whose target did not come through [`contained_rel`]: a caller-built
 /// path can carry the alias spelling in any directory component, not only in
 /// the final one. Windows strips the character when it resolves each
@@ -294,7 +294,7 @@ pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
 /// out of a directory rather than naming one, and it would otherwise match this
 /// rule because it ends in a dot, refusing every path that climbs. `components()`
 /// drops `.` and repeated separators for the same reason.
-pub(crate) fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
+pub fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
     path.components().any(|c| match c {
         Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
         _ => false,
@@ -415,8 +415,8 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 /// contains the `..` before resolution and resolves to `Audio/.girpr_tmp` —
 /// beside `res`, not inside it — and the empty path becomes `.girpr_tmp` in the
 /// current directory.
-#[cfg(test)]
-pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
+#[cfg(any(test, feature = "test-support"))]
+pub fn temp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
         .map(|n| n.to_os_string())
@@ -426,7 +426,7 @@ pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
 }
 
 /// The suffix [`temp_sibling`] appends.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const TEMP_SUFFIX: &str = ".girpr_tmp";
 
 /// Canonicalize `path` as far as it exists, then append the missing tail.
@@ -478,15 +478,11 @@ mod tests {
     use super::*;
     // Both fixture families report a host refusal the shared way, so the
     // import is used on every host.
-    use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
-    use crate::util::junction_support::{
-        junction_fixture_decision, require_junction, try_junction_dir,
-    };
+    use crate::junction_support::{junction_fixture_decision, require_junction, try_junction_dir};
     #[cfg(unix)]
-    use crate::util::symlink_support::{
-        require_symlink, symlink_fixture_decision, try_symlink_dir,
-    };
+    use crate::symlink_support::{require_symlink, symlink_fixture_decision, try_symlink_dir};
+    use crate::test_support::FixtureRefusal;
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
     /// be refused; `a/b.dat` is the only legitimate shape.

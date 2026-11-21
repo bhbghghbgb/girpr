@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "crates/util", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -83,7 +83,6 @@ girpr-proto = { path = "crates/proto" }
 # this binary keeps its `Biz` resolve/request policy at its own call sites.
 # `clap` is enabled because `Biz` is this binary's `--biz` flag type.
 girpr-model = { path = "crates/model", features = ["clap"] }
-md-5 = "0.11.0"
 # Hex spelling and fixed-width digest mechanics, shared with the two dev tools
 # that cross the same digest/text boundary. A leaf crate with no program logic.
 girpr-digest = { path = "crates/digest" }
@@ -110,6 +109,13 @@ girpr-fs-names = { path = "crates/fs-names" }
 # leaf owns the platform wrappers and the error/option shapes; the guard here
 # keeps its own fail-closed policy and its no-follow path check.
 girpr-fs-identity = { path = "crates/fs-identity" }
+# The low-level scan/hash/path/ini/atomic mechanics. They live in their own
+# crate so an edit to the repair, report or CLI modules above leaves them
+# cached; this binary (and every test that links it) depends on the crate
+# directly. The `test-support` feature is enabled only by the dev-dependency
+# below, so the unit-test-only junction/symlink fixtures stay out of shipped
+# builds.
+girpr-util = { path = "crates/util" }
 # Only the `Stream`/`StreamExt` traits and `stream::iter` are used, never the
 # `join!`/`select!`-style macros, so the default `async-await-macro` feature
 # (and its `futures-macro` proc-macro) is not compiled. `std` is still needed:
@@ -131,6 +137,9 @@ girpr-log = { path = "crates/log", features = ["test-support"] }
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
+# The junction/symlink fixture helpers the repair tests share with util's own
+# unit tests. The feature is off in the normal dependency above.
+girpr-util = { path = "crates/util", features = ["test-support"] }
 # Test-only features; Cargo unions these with the normal features for a test
 # build, so `cargo build` still compiles just the runtime.
 # `test-util`: paused-time tests check the progress guard's cadence and its

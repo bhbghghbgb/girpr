@@ -1,7 +1,8 @@
 # The workspace's test runner.
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
-# `girpr-log`, `girpr-tempdir`, `gircap`, `girsync` and `sled2redb`. This file is where the
+# `girpr-util`, `girpr-log`, `girpr-tempdir`, `gircap`, `girsync` and `sled2redb`.
+# This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
 #
@@ -36,7 +37,7 @@ experimental = ["setup-scripts"]
 #   writing (see `tools/sync/src/commands/sync/apply/copy.rs::test_no_fsync`).
 #   The bytes, size/mtime checks and cache records are unchanged.
 # * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
-#   rename (see `src/util/ini.rs::test_no_fsync`). The temp-file write and
+#   rename (see `crates/util/src/ini.rs::test_no_fsync`). The temp-file write and
 #   rename are unchanged.
 # * `GIRSYNC_TEST_HEARTBEAT_ENTRIES=<n>` — lowers the walk's heartbeat period
 #   from its production 2000 (see `tools/sync/src/scan.rs::heartbeat_entries`),
@@ -120,15 +121,15 @@ success-output = "immediate"
 # The filter names the binary as well as the cases, for the same reason the
 # bridge filter below does: a `test(=name)` predicate on its own matches the
 # same name in *any* binary, so a test elsewhere that happened to share one of
-# these names would silently inherit the override. `package(=girpr)` and
-# `binary(=girpr)` pin the two cases to the library's own test binary.
+# these names would silently inherit the override. `package(=girpr-util)` and
+# `binary(=girpr_util)` pin the two cases to the util crate's own test binary.
 [[profile.default.overrides]]
 filter = """
-    package(=girpr)
-    and binary(=girpr)
+    package(=girpr-util)
+    and binary(=girpr_util)
     and (
-        test(=util::ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
-        or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
+        test(=ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
+        or test(=path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
     )
 """
 success-output = "immediate"
@@ -138,9 +139,9 @@ success-output = "immediate"
 # the switch that turns that skip into a failure.
 [[profile.default.overrides]]
 filter = """
-    package(=girpr)
-    and binary(=girpr)
-    and test(=util::ini::tests::config_bump_refuses_a_dangling_symlink_game_dir)
+    package(=girpr-util)
+    and binary(=girpr_util)
+    and test(=ini::tests::config_bump_refuses_a_dangling_symlink_game_dir)
 """
 success-output = "immediate"
 
@@ -153,11 +154,18 @@ success-output = "immediate"
 # filters above do.
 [[profile.default.overrides]]
 filter = """
+    package(=girpr-util)
+    and binary(=girpr_util)
+    and test(=path::tests::contained_join_resolves_a_symlink_and_refuses_the_escape)
+"""
+success-output = "immediate"
+
+[[profile.default.overrides]]
+filter = """
     package(=girpr)
     and binary(=girpr)
     and (
-        test(=util::path::tests::contained_join_resolves_a_symlink_and_refuses_the_escape)
-        or test(=repair::scope::report::tests::publishing_over_a_symlink_replaces_the_link_not_its_target)
+        test(=repair::scope::report::tests::publishing_over_a_symlink_replaces_the_link_not_its_target)
         or test(=repair::file::tests::a_symlink_resolves_to_the_temp_mode)
         or test(=repair::lock::tests::a_preexisting_symlink_target_is_not_truncated)
         or test(=repair::lock::tests::a_path_swapped_after_open_is_not_written_through_the_old_handle)

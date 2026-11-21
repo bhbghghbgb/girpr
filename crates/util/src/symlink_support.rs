@@ -32,7 +32,7 @@ use std::path::Path;
 ///
 /// A junction is not a symlink and needs no privilege, so this is the
 /// directory-symlink fixture only: the junction support owns that one.
-pub(crate) fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+pub fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(target, link)
@@ -186,7 +186,7 @@ pub(crate) fn symlink_skip_reason(e: &std::io::Error) -> Option<&'static str> {
 /// Every caller takes this decision here, at the point where the fixture
 /// failed, so a case that skips and a case that fails cannot disagree about
 /// which is which.
-pub(crate) fn symlink_fixture_decision(e: std::io::Error, required: bool, refusal: FixtureRefusal) {
+pub fn symlink_fixture_decision(e: std::io::Error, required: bool, refusal: FixtureRefusal) {
     match symlink_skip_reason(&e) {
         Some(why) => skip_symlink(&format!("{why}: {e}"), required, refusal),
         None => panic!("could not create the test directory symlink: {e}"),
@@ -215,7 +215,7 @@ pub(crate) fn skip_symlink(why: &str, required: bool, refusal: FixtureRefusal) {
 /// The switch is presence-based: any value, including `0`, requires the
 /// case, so a run meant to prove the symlink behaviour cannot pass having
 /// checked nothing.
-pub(crate) fn require_symlink() -> bool {
+pub fn require_symlink() -> bool {
     std::env::var_os("GIRPR_TEST_REQUIRE_SYMLINK").is_some()
 }
 

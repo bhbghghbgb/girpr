@@ -65,7 +65,7 @@ machine rather than the code.
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
-| `src/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
+| `crates/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + the fixture *description* | `MockServer`, `FixtureSpec`, `build_fixture_spec`, `MockOpts` |

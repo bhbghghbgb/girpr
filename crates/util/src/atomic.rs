@@ -59,7 +59,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 /// Bytes are buffered, so a caller that serializes incrementally does not pay a
 /// syscall per fragment. The caller still owns the serialization and its error
 /// context; this helper never inspects the bytes.
-pub(crate) fn write_atomic_with(
+pub fn write_atomic_with(
     path: &Path,
     durable: bool,
     write: impl FnOnce(&mut dyn Write) -> Result<()>,

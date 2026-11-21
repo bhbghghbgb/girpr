@@ -131,7 +131,7 @@ pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
 /// Parse one of the launcher's JSON-lines lists.
 ///
 /// One leading UTF-8 BOM is stripped first, as in
-/// [`crate::repair::audio::read_scan_file`]: the launcher may write one, and
+/// the product's `repair::audio::read_scan_file`: the launcher may write one, and
 /// U+FEFF is not whitespace, so `trim` would leave it glued to the first `{`
 /// and make that line unparseable.
 ///
@@ -550,14 +550,10 @@ fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
-    use crate::util::junction_support::{
-        junction_fixture_decision, require_junction, try_junction_dir,
-    };
-    use crate::util::symlink_support::{
-        require_symlink, symlink_fixture_decision, try_symlink_dir,
-    };
+    use crate::junction_support::{junction_fixture_decision, require_junction, try_junction_dir};
+    use crate::symlink_support::{require_symlink, symlink_fixture_decision, try_symlink_dir};
+    use crate::test_support::FixtureRefusal;
     use std::collections::HashSet;
 
     /// The names left in a directory, so a test can assert that no temp file
@@ -717,7 +713,7 @@ mod tests {
         .unwrap();
 
         let mut blacklist = HashSet::new();
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             blacklist = read_blacklist(&dir.join("bl")).unwrap().unwrap();
         });
         assert_eq!(blacklist, HashSet::from(["a/b.dat".to_string()]));
@@ -737,7 +733,7 @@ mod tests {
         )
         .unwrap();
         let mut ignore = HashSet::new();
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             ignore = read_ignore_categories(&dir.join("rc")).unwrap().unwrap();
         });
         assert_eq!(ignore, HashSet::from(["10302".to_string()]));
@@ -760,7 +756,7 @@ mod tests {
         // it is a refused file, naming the path, the line and the field.
         std::fs::write(dir.join("bl"), "{\"fileName\":123}\n").unwrap();
         let mut err = None;
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
         });
         let msg = format!("{:#}", err.expect("the probe ran"));
@@ -785,7 +781,7 @@ mod tests {
         )
         .unwrap();
         let mut got = None;
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             got = Some(read_blacklist(&dir.join("bl")).unwrap().unwrap());
         });
         assert_eq!(got.unwrap(), HashSet::from(["a/b.dat".to_string()]));
@@ -804,7 +800,7 @@ mod tests {
         )
         .unwrap();
         let mut err = None;
-        let logs = crate::repair::test_support::logs_of(|| {
+        let logs = girpr_log::test_support::logs_of(|| {
             err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
         });
         let msg = format!("{:#}", err.expect("the probe ran"));
@@ -867,7 +863,7 @@ mod tests {
         // global, so a concurrent subjective hit from a thread without one
         // must not cache the callsite as disabled.
         let mut rc_err = None;
-        crate::repair::test_support::logs_of(|| {
+        girpr_log::test_support::logs_of(|| {
             rc_err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
         });
         let msg = format!("{:#}", rc_err.expect("the probe ran"));
@@ -880,7 +876,7 @@ mod tests {
 
         std::fs::write(dir.join("bl"), "{\"fileName\":\n").unwrap();
         let mut bl_err = None;
-        crate::repair::test_support::logs_of(|| {
+        girpr_log::test_support::logs_of(|| {
             bl_err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
         });
         let msg = format!("{:#}", bl_err.expect("the probe ran"));

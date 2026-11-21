@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// and no interleaving can wrap. The load, the successful and the failed
 /// compare-exchange are all `Relaxed`, matching the counters this replaces: the
 /// value is a tally, not a publication point.
-pub(crate) fn add_saturating(cell: &AtomicU64, n: u64) {
+pub fn add_saturating(cell: &AtomicU64, n: u64) {
     let _ = cell.try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
         Some(cur.saturating_add(n))
     });
