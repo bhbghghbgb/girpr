@@ -17,8 +17,9 @@ workspace = true
 # girpr's own event-first order, unsigned counts and 1/0 flags; the core owns no
 # field order, value vocabulary or boolean spelling, and no `preserve_order`.
 girpr-report-core = { path = "../report-core" }
-# The saturating atomic counter used by the byte and RAM reservations.
-girpr-util = { path = "../util" }
+# The saturating atomic counter used by the byte and RAM reservations. It is a
+# dependency-free leaf, so a config, path or hash edit leaves the report cached.
+girpr-util-counter = { path = "../util-counter" }
 # The `event` field is emitted through `Serialize`; this crate owns the value
 # vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
 serde = "1.0.229"

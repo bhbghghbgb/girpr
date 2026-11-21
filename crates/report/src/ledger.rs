@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::summary::Summary;
-use girpr_util::counter::add_saturating;
+use girpr_util_counter::add_saturating;
 
 /// Which runtime ceiling bound, if any.
 ///

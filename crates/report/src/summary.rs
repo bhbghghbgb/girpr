@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use super::ledger::Meter;
 use super::record::Record;
-use girpr_util::counter::add_saturating;
+use girpr_util_counter::add_saturating;
 
 /// A byte ceiling whose "no ceiling" sentinel is `u64::MAX`.
 ///
