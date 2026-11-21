@@ -204,22 +204,22 @@ girpr-util-path = { path = "crates/util-path", features = ["test-support"] }
 girpr-util-hash = { path = "crates/util-hash", features = ["test-support"] }
 # Test-only features; Cargo unions these with the normal features for a test
 # build, so `cargo build` still compiles just the runtime.
-# `test-util`: paused-time tests check the progress guard's cadence and its
-# stop-on-drop against a controlled clock rather than by sleeping in CI.
 # `process`: the CLI tests run the built binary.
 # `net` and `io-util`: the fake artifact servers accept connections and read
 # requests. (`reqwest` already enables `net` in a normal build; naming it here
 # keeps the tests' own requirement explicit.) `default-features = false` mirrors
 # the normal dependency above; tokio's `default` set is empty, so this withholds
-# no test feature.
-tokio = { version = "1.54.1", default-features = false, features = ["test-util", "process", "net", "io-util"] }
+# no test feature. Paused-time tests live in `girpr-report`, which declares its
+# own `test-util` dev feature; root tests never pause the clock.
+tokio = { version = "1.54.1", default-features = false, features = ["process", "net", "io-util"] }
 # The dependency-free loopback server behind the canned-reply unit tests. The
 # local helper keeps this product's own body-scripting contract; the fetch and
 # capture tests script the same leaf with their own replies and assertions.
 girpr-loopback-mock = { path = "crates/loopback-mock" }
-# Only the manifest fixture test encodes and decodes a canned Sophon body here;
-# the production paths do their prost/zstd work in `girpr-fetch`.
-prost = "0.14.6"
+# The artifact-server fixture tests build zstd frames for their replay bodies;
+# the production paths do their prost/zstd work in `girpr-fetch`. The root's
+# canned manifest bodies are frozen bytes in manifest.rs, so this crate needs
+# no direct prost dependency.
 zstd = "0.14.4"
 
 # Debug/test builds are link-bound on low-core HDD hosts: the default of 256

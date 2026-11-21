@@ -725,7 +725,6 @@ dependencies = [
  "girpr-util-hash",
  "girpr-util-ini",
  "girpr-util-path",
- "prost",
  "reqwest",
  "serde",
  "serde_json",

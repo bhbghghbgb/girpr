@@ -285,48 +285,74 @@ pub async fn local_reuse_map(
 mod tests {
     use super::*;
     use crate::hyp::{ChunkManifestMeta, ManifestFile, ManifestUrl};
-    use crate::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use crate::test_origin::{InFlight, Reply, TestServer};
     use crate::util::md5::md5_digest;
-    use prost::Message;
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    /// A manifest body as the origin sends it: zstd over the protobuf, with
-    /// the checksum of the **decompressed** bytes.
-    fn manifest_body(files: Vec<SophonChunkFile>) -> (Vec<u8>, String) {
-        let manifest = SophonChunkManifest { chuncks: files };
-        let mut raw = Vec::new();
-        manifest.encode(&mut raw).expect("prost encode");
-        let checksum = md5_digest(&raw).to_hex();
-        (
-            zstd::encode_all(raw.as_slice(), 3).expect("zstd encode"),
-            checksum,
-        )
-    }
+    /// The three deterministic manifest bodies the canned tests serve, frozen
+    /// from the prost + zstd(level 3) encoding the old `manifest_body` helper
+    /// produced on every call. Each companion checksum is the MD5 of the
+    /// decompressed protobuf — what the origin advertises and the fetch path
+    /// verifies — so freezing the bytes keeps that byte contract intact. The
+    /// tests still serve these exact bytes and assert against these exact
+    /// checksums; only the per-test re-encode is gone.
+    const OK_BODY: &[u8] = &[
+        0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x62, 0x4d, 0x02, 0x00, 0x14, 0x04, 0x0a, 0x60, 0x0a, 0x0b,
+        0x67, 0x61, 0x6d, 0x65, 0x2f, 0x6f, 0x6b, 0x2e, 0x64, 0x61, 0x74, 0x12, 0x2d, 0x0a, 0x05,
+        0x63, 0x68, 0x75, 0x6e, 0x6b, 0x12, 0x20, 0x33, 0x32, 0x31, 0x63, 0x33, 0x63, 0x66, 0x34,
+        0x38, 0x36, 0x65, 0x64, 0x35, 0x30, 0x39, 0x31, 0x36, 0x34, 0x65, 0x64, 0x65, 0x63, 0x31,
+        0x65, 0x31, 0x39, 0x38, 0x31, 0x66, 0x65, 0x63, 0x38, 0x20, 0x01, 0x28, 0x07, 0x20, 0x07,
+        0x2a, 0x01, 0x00, 0xc1, 0x1a, 0x55, 0x14,
+    ];
+    const OK_CHECKSUM: &str = "87073374716da339ccbaab78e2af1738";
 
-    /// One file with one chunk at `offset`, so two manifests can describe the
-    /// same path differently.
-    fn file(path: &str, offset: i64) -> SophonChunkFile {
-        let digest = md5_digest(b"payload").to_hex();
-        SophonChunkFile {
-            file: path.into(),
-            chunks: vec![SophonChunk {
-                id: "chunk".into(),
-                uncompressed_md5: digest.clone(),
-                offset,
-                compressed_size: 1,
-                uncompressed_size: 7,
-                unknown_field6: 0,
-                compressed_md5: String::new(),
-            }],
-            is_folder: false,
-            size: 7,
-            md5: digest,
-        }
+    const FIRST_BODY: &[u8] = &[
+        0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x63, 0x55, 0x02, 0x00, 0x24, 0x04, 0x0a, 0x61, 0x0a, 0x0c,
+        0x67, 0x61, 0x6d, 0x65, 0x2f, 0x66, 0x6f, 0x6f, 0x2e, 0x64, 0x61, 0x74, 0x12, 0x2d, 0x0a,
+        0x05, 0x63, 0x68, 0x75, 0x6e, 0x6b, 0x12, 0x20, 0x33, 0x32, 0x31, 0x63, 0x33, 0x63, 0x66,
+        0x34, 0x38, 0x36, 0x65, 0x64, 0x35, 0x30, 0x39, 0x31, 0x36, 0x34, 0x65, 0x64, 0x65, 0x63,
+        0x31, 0x65, 0x31, 0x39, 0x38, 0x31, 0x66, 0x65, 0x63, 0x38, 0x20, 0x01, 0x28, 0x07, 0x20,
+        0x07, 0x2a, 0x01, 0x00, 0xc2, 0x1a, 0x55, 0x14,
+    ];
+    const FIRST_CHECKSUM: &str = "898fcd4b256b0b4120387ec0fa9ac26e";
+
+    const LAST_BODY: &[u8] = &[
+        0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x65, 0x65, 0x02, 0x00, 0x44, 0x04, 0x0a, 0x63, 0x0a, 0x0c,
+        0x67, 0x61, 0x6d, 0x65, 0x2f, 0x66, 0x6f, 0x6f, 0x2e, 0x64, 0x61, 0x74, 0x12, 0x2f, 0x0a,
+        0x05, 0x63, 0x68, 0x75, 0x6e, 0x6b, 0x12, 0x20, 0x33, 0x32, 0x31, 0x63, 0x33, 0x63, 0x66,
+        0x34, 0x38, 0x36, 0x65, 0x64, 0x35, 0x30, 0x39, 0x31, 0x36, 0x34, 0x65, 0x64, 0x65, 0x63,
+        0x31, 0x65, 0x31, 0x39, 0x38, 0x31, 0x66, 0x65, 0x63, 0x38, 0x18, 0x63, 0x20, 0x01, 0x28,
+        0x07, 0x20, 0x07, 0x2a, 0x01, 0x00, 0x44, 0x1b, 0x55, 0x14,
+    ];
+    const LAST_CHECKSUM: &str = "e9bb76aba0043b5acb1dd5a216e29868";
+
+    /// The frozen bodies and their advertised checksums are a byte contract:
+    /// pin the compressed bytes (via their MD5) and the decompressed checksum
+    /// so an accidental edit to either is caught here rather than in a fetch.
+    #[test]
+    fn frozen_manifest_bodies_keep_their_checksums() {
+        assert_eq!(OK_BODY.len(), 82);
+        assert_eq!(
+            md5_digest(OK_BODY).to_hex(),
+            "9f0b1a07721d35a92240c495d7daec9c"
+        );
+        assert_eq!(OK_CHECKSUM, "87073374716da339ccbaab78e2af1738");
+        assert_eq!(FIRST_BODY.len(), 83);
+        assert_eq!(
+            md5_digest(FIRST_BODY).to_hex(),
+            "ab963dc07c83c66010d6d32aead23602"
+        );
+        assert_eq!(FIRST_CHECKSUM, "898fcd4b256b0b4120387ec0fa9ac26e");
+        assert_eq!(LAST_BODY.len(), 85);
+        assert_eq!(
+            md5_digest(LAST_BODY).to_hex(),
+            "fc7bd176fa5eb2411a76fe4e3696b292"
+        );
+        assert_eq!(LAST_CHECKSUM, "e9bb76aba0043b5acb1dd5a216e29868");
     }
 
     fn meta(field: &str, id: &str, checksum: &str) -> ChunkManifestMeta {
@@ -538,7 +564,7 @@ mod tests {
     /// from the error chain instead of from time spent sleeping.
     #[tokio::test]
     async fn fetch_latest_reports_the_first_failure_in_selection_order() {
-        let (ok_body, ok_checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let (ok_body, ok_checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
         let server = serve(vec![
             ("slow", Reply::Status("500 Internal Server Error")),
             ("fast", Reply::Status("404 Not Found")),
@@ -581,7 +607,7 @@ mod tests {
     async fn fetch_latest_bounds_live_http_fetches_to_manifest_concurrency() {
         for jobs in [1, 2, usize::MAX] {
             let bound = manifest_concurrency(jobs);
-            let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+            let (body, checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
             let gate = Arc::new(InFlight::new());
             let ids = ["m0", "m1", "m2", "m3", "m4", "m5"];
             let server = serve(
@@ -640,7 +666,7 @@ mod tests {
     /// the count must return to zero even though the handler never resumes.
     #[tokio::test]
     async fn an_aborted_gated_connection_releases_its_in_flight_slot() {
-        let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let (body, checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
         let gate = Arc::new(InFlight::new());
         let server = serve(vec![(
             "ok",
@@ -690,7 +716,7 @@ mod tests {
     /// request is reaped without another accept arriving to trigger it.
     #[tokio::test]
     async fn finished_connections_are_reaped_without_another_accept() {
-        let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let (body, checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
         let server = serve(vec![("ok", Reply::Body(body))]).await;
         let build = build(server.base(), vec![meta("game", "ok", &checksum)]);
         let client = Client::new();
@@ -715,8 +741,8 @@ mod tests {
     /// completion order cannot leak into the map.
     #[tokio::test]
     async fn local_reuse_map_keeps_the_union_and_selection_order() {
-        let (first_body, first_checksum) = manifest_body(vec![file("game/foo.dat", 0)]);
-        let (last_body, last_checksum) = manifest_body(vec![file("game/foo.dat", 99)]);
+        let (first_body, first_checksum) = (FIRST_BODY.to_vec(), FIRST_CHECKSUM.to_owned());
+        let (last_body, last_checksum) = (LAST_BODY.to_vec(), LAST_CHECKSUM.to_owned());
         let server = serve(vec![
             ("first", Reply::Body(first_body)),
             ("gone", Reply::Status("404 Not Found")),
