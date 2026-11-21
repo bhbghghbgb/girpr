@@ -10,7 +10,9 @@ corrupt or any older version; after the run the game must be at the current live
 
 - Local version: `src/Starward.RPC/GameInstall/GamePackageService.cs:GetLocalGameVersionAsync`
   reads `config.ini` (`game_version=` regex, last match). Missing file = install.
-- Metadata API: `src/Starward.Core/HoYoPlay/HoYoPlayClient.cs` (`BuildHypUrl` / `BuildSophonUrl`).
+- Metadata API: `src/Starward.Core/HoYoPlay/HoYoPlayClient.cs` — `BuildUrl` builds the HoYoPlay
+  URLs; the Sophon `getBuild`/`getPatchBuild` URLs are built in the same file by
+  `GetGameChunkBuildAsync` / `GetGameSophonChunkBuildAsync` / `GetGameSophonPatchBuildAsync`.
   - CN host `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/{api}?launcher_id=...&language=...`,
     global `https://sg-hyp-api.hoyoverse.com/...`. Launcher IDs
     (`src/Starward.Core/HoYoPlay/LauncherId.cs`): CN `jGHBHlcOq1`, global `VYTpXlbWo8`,
@@ -106,10 +108,11 @@ Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles`):
 
 Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall.cs:GetUnusedFileInfoList`):
 - Quota gate `EnsureDiskSpaceSufficiencyAsync` (volume free space + dialog) — UI-oriented, skip for CLI.
-- **Writes in place for its plain-HTTP repair path** (`DownloadClient.cs` opens the final
-  path directly, and `ChunkSession.cs` deletes before writing when `overwrite` is on — the
-  default, `ProgressBase.cs`). "Write the broken file where it lies" is therefore a
-  shipped launcher behaviour, not an invention: the chunk path below is the one that stages.
+- **Writes in place for its plain-HTTP repair path** (`Hi3Helper.Http/DownloadClient.cs` opens
+  the final path directly, and `Hi3Helper.Http/ChunkSession.cs` deletes before writing when
+  `overwrite` is on — the default, `CollapseLauncher/Classes/Interfaces/Class/ProgressBase.cs`).
+  "Write the broken file where it lies" is therefore a shipped launcher behaviour, not an
+  invention: the chunk path below is the one that stages.
 - Temps: `*_tempSophon`, `*_tempUpdate`, `*.temp`, plus retained `GamePath/chunk_collapse/` (preload
   compressed blobs + `.verified` + `preload.verified` flag) and `GamePath/ldiff/` (patch blobs),
   plus `%LocalLow%/_sophonMetadataCache/` manifests. Preload phase downloads compressed blobs **before**
@@ -191,7 +194,7 @@ Extra behavior changes recommended (beyond 1:1 port):
 
 ## 5. File / API reference (for implementers)
 
-Starward: `src/Starward.Core/HoYoPlay/{HoYoPlayClient.cs,GameId.cs,LauncherId.cs,LauncherConfig.cs,
+Starward: `src/Starward.Core/HoYoPlay/{HoYoPlayClient.cs,GameId.cs,LauncherId.cs,
 GameBranch.cs,GameSophonChunkBuild.cs,GameSophonPatchBuild.cs,GamePackage.cs,GameConfig.cs,
 GameDeprecatedFile.cs,GameScanInfo.cs}`, `src/Starward.RPC/GameInstall/{GamePackageService.cs
 (discovery/manifests),GameInstallService.cs (orchestration/cleanup/config.ini),GameInstallHelper.cs
@@ -202,8 +205,8 @@ for repair-chunk), `ZstdSharp.Port`, `Vanara.PInvoke.Kernel32` (hardlink — opt
 (retry — keep retry, drop grpc), `Google.Protobuf`.
 Collapse: `Hi3Helper.Sophon/{SophonManifest.cs,SophonUpdate.cs,SophonPatch*.cs,SophonAsset.{Download,
 Update,Diff}.cs,Structs/Sophon*.cs,Helper/{Extension,ChunkStream}.cs,Protos/*.proto}`,
-`CollapseLauncher/Classes/{RepairManagement/Genshin/{Fetch.cs,Fetch.Persistent.cs,Check.cs,Repair.cs,
-GenshinRepair.cs,BSDiff.cs},InstallManagement/{Genshin/{GenshinInstall.cs,GenshinInstall.PkgVersion.cs},
+`CollapseLauncher/Classes/{RepairManagement/{Genshin/{Fetch.cs,Fetch.Persistent.cs,Check.cs,Repair.cs,
+GenshinRepair.cs},BSDiff.cs},InstallManagement/{Genshin/{GenshinInstall.cs,GenshinInstall.PkgVersion.cs},
 Base/InstallManagerBase*.cs},Helper/Metadata/PresetConfig.cs}`. Libs: `Google.Protobuf`,
 `Hi3Helper.ZstdNet`, `SharpHPatchZ`, `System.IO.Hashing` (xxh64 — not needed; MD5 suffices),
 `Hi3Helper.{Http,EncTool,Win32,SimpleZipArchiveReader}`.

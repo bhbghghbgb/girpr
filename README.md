@@ -22,9 +22,10 @@ reach.
 
 ## For developers / AI agents — read this first
 
-`src/main.rs` is a thin shim (parse → tracing → run → `SUMMARY` → exit). All
-behavior is in the library; `src/repair/mod.rs::run` is the pipeline
-coordinator and holds no logic beyond phase order and the exit-code contract.
+`src/main.rs` is a thin shim (parse → tracing → runtime → run → `SUMMARY` →
+flush → exit). All behavior is in the library; `src/repair/mod.rs::run` is the
+pipeline coordinator and holds no logic beyond phase order and the exit-code
+contract.
 
 **No test scans a directory it does not own.** Every scratch tree lives under
 `<temp>/girpr-test/` and goes away with the test that made it; every log file
@@ -36,11 +37,11 @@ machine rather than the code.
 
 | File | Owns | Key symbols |
 |---|---|---|
-| `src/main.rs` | shim: `Args::parse` → `init_tracing` → `repair::run` → `SUMMARY` → `exit` | `main` |
+| `src/main.rs` | shim: `Args::try_parse` → `init_tracing` → runtime → `repair::run` → `SUMMARY` → `flush_log` → `exit` | `main` |
 | `src/lib.rs` | module map + re-exports | — |
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
-| `src/config.rs` | validated run config; failure carrying the exit code; the `--max-decompressed-bytes` default policy | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure`, `DEFAULT_MAX_DECOMPRESSED_BYTES` |
-| `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
+| `src/config.rs` | validated run config (scope, limits, repair mode); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
+| `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
@@ -53,15 +54,15 @@ machine rather than the code.
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
 | `tools/capture/http/` | the gircap-owned logic-free HTTP mechanics: the reqwest transport, the retrying fetcher, the request log and the error-body budget, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native tree cached; no program policy crosses the boundary | `Fetcher`, `Transport`, `RequestLog`, `RetryPolicy`, `Kind`, `ApiError`, `BodyFile`, `USER_AGENT` |
 | `tools/capture/hash/` | the gircap-owned logic-free digest/zstd mechanics: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native zstd tree cached; no program policy crosses the boundary | `md5_hex`, `sha256_hex`, `DualDigest`, `HashingFile`, `hex_bytes`, `Encoding`, `should_gzip`, `zstd_decompress`, `zstd_measure` |
-| `crates/report/` | run counters + every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
-| `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
+| `crates/report/` | run counters, the report-owned runtime ledger (`Meter`/`StoppedBy`) the hard stops read, every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
+| `src/biz.rs` | re-export of `girpr-model`'s region identity as `Biz`; the ids, channel tuples and base URLs live in `crates/model/` | `Biz`, `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
 | `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_rels`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
-| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
+| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
@@ -71,7 +72,7 @@ machine rather than the code.
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics over the shared `girpr-filter` rules (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
-| `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
+| `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
 | `crates/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | a case per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | a case per usage error class |
@@ -96,7 +97,7 @@ flowchart TD
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
-    E2 -->|"--print-plan"| P["emit PLAN … (+ --plan-out JSON)<br/>exit 0, writes nothing"]
+    E2 -->|"--print-plan"| P["emit PLAN … (+ --plan-out JSON)<br/>exit 0, install untouched"]
     E -->|"--scan"| SCAN["scan::scan_plan: one read per planned file<br/>download estimate for the resolved write path + damaged chunks"]
     SCAN --> E2
     F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
@@ -257,8 +258,9 @@ flowchart TD
   bytes in place, so claiming the newer version would desync the launcher
   (same rule as a scoped run), and on an already-current install it is a no-op
   anyway. `SUMMARY config_bumped=0` says so.
-  `--print-plan` is read-only by construction too (it returns before
-  `create_dir_all`) but is **not** the same thing as `--check-only`: it answers
+  `--print-plan` is read-only with respect to the install (it returns before
+  `create_dir_all`; `--plan-out` writes only the plan document) but is **not**
+  the same thing as `--check-only`: it answers
   "what would you do", not "what is wrong". It also short-circuits `--dry-run` —
   the run returns at the plan either way, so the combination is just
   `--print-plan`. A ceiling still trips a `--print-plan` run.
@@ -292,8 +294,8 @@ flowchart TD
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 no manifest cache in `game_dir` (`sophon/`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
-(`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
+S1 no manifest cache in `game_dir` (`sophon/`, `src/repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
+(`src/repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
 legacy in-install `girpr.lock` (`purge::keep_set`); the cleaned blacklist is a separate keep input
 (`purge::plan_purge`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
@@ -369,7 +371,7 @@ cargo build --release
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
 | `--check-only` | off | Verify size+MD5; writes nothing. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
-| `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
+| `--fail-fast` | off | Cap each file at a single attempt and abort the run on the first failed file; no further files are started and in-flight files are dropped. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once) |
 | `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, the `--purge-after`/`--purge-only` re-plan in the same run deletes it as an unexpected file (`--purge-before` acts on the plan built before the document exists). Write it outside the install when combining it with a purge |
@@ -599,7 +601,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   table, and the command above checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
   deliberately absent: for a repair run a panic is a failed run, while for a
   dev tool it is a failed developer run, and those paths may assert. There is no
-  `unsafe` in `tools/sync/src/hardlink.rs`: its link-count and file-identity
+  `unsafe` in `crates/sync-leaves/src/hardlink.rs`: its link-count and file-identity
   facts come from the shared `girpr-fs-identity` leaf, which uses the
   `same-file`/`winapi-util` seams. The deliberate `unsafe` is the test that
   sets an environment variable in `tools/sync/tests/cli_dispatch.rs`, annotated
@@ -713,10 +715,13 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
   cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
   ```
-  The cases run in parallel — each capture gets its own scratch tree and its
-  own listeners — so neither `--no-capture` nor `--test-threads=1` is needed:
-  the per-case `success-output` override in `.config/nextest.toml` prints each
-  case's precondition and summary lines even though it passes. To reproduce one
+  The cases share one process-wide fixture — a verified bundle and one listener
+  set — and serialize against it with a run lock; under nextest each case has a
+  process of its own. Each case still gets its own scratch tree and log file,
+  and checkpoints the shared request log so its fetch set holds only its own
+  requests. Neither `--no-capture` nor `--test-threads=1` is needed: the per-case
+  `success-output` override in `.config/nextest.toml` prints each case's
+  precondition and summary lines even though it passes. To reproduce one
   failure, put that case's test name in the filter of the same command.
 
   The `-E` expression narrows the set nextest has already selected; it does not

@@ -17,16 +17,19 @@ and drive the public API. Modules that carry more than one idea are split into
 directories (`mod.rs` is the facade re-exporting the same items, so no public
 path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
 tests travel with the code they exercise). A path in the table is relative to
-`src/`; a row spells the whole path — `src/…` — in some cases: a path
-relative to `src/` that is a bare name another file in the tree shares
+`tools/sync/src/`, except that a workspace crate (`crates/sync-cache/`,
+`crates/sync-leaves/`) is named from the repository root and its modules are
+named as Rust paths under that crate's `src/`. A row spells the whole path —
+`src/…` — in some cases: a path relative to `src/` that is a bare name another
+file in the tree shares
 (`link.rs`, which the plan directory's own `link.rs` shares), and a file the
 module tree holds only in a test build (`#[cfg(test)]`).
 
 | File | Responsibility |
 | --- | --- |
-| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all subcommands) |
+| `cli.rs` | clap surface: `Cli`, `Cmd`, `CommonArgs` (flattened into all subcommands), plus `RwArgs` and `TrustArgs` |
 | `config/mod.rs` | the per-command input structs: `TrustOpts`, `Update/Compare/CompareSelf/SyncOpts` |
-| `config/common.rs` | settings every subcommand shares: `CommonOpts`, `LogCtx`, `ScanMode`, and the `TryFrom` impls that validate raw flags into them |
+| `config/common.rs` | settings every subcommand shares: `CommonOpts`, `LogCtx`, `ScanMode`, `BackupPolicy`, `TestHooks`, and the `TryFrom` impls that validate raw flags into them |
 | `report/mod.rs` | the stdout data plane: `OutputFormat`, `Report`, `verdict`, `update_summary` |
 | `report/record.rs` | `Record`: the event name, its fields, and the text layouts |
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff reporter/exit code shared by `compare` and `compare-self` |
@@ -55,7 +58,7 @@ module tree holds only in a test build (`#[cfg(test)]`).
 | `src/planner/fixtures.rs` | `#[cfg(test)]` entry fixtures shared by the planner's own test modules |
 | `diff/mod.rs` | `Diff` buckets, `diff_maps`, `pair_verdict` and `hashes_differ`: the set of per-pair classifications |
 | `diff/verdict.rs` | `Verdict`: the per-pair classification and its reason tag — the one place a `why=` tag is assembled |
-| `hash.rs` | facade re-exporting the hash vocabulary from `crates/sync-cache/` (`HashAlg`, `AlgoSet`, `DigestSet`, `parse_hash_list`, `Digests`, `hash_file`); the type and its serde impl live with the cache wire format |
+| `hash.rs` | facade re-exporting the hash vocabulary from `crates/sync-cache/` (`HashAlg`, `AlgoSet`, `DigestSet`, `parse_hash_list`, `Digests`, `hash_file`); the vocabulary and `DigestSet`'s serde impl live in the cache crate whose wire format pins them |
 | `util.rs`, `logging.rs` | path/FS helpers, tracing setup over the shared log policy (`crates/log/`); the timestamp and recursive-copy helpers now live in `crates/sync-cache/` |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
@@ -83,7 +86,7 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
+girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run] [...]
 girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
 girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
@@ -1566,6 +1569,7 @@ opts in by naming it.
 | `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the file placeholder exists |
 | `GIRSYNC_TEST_FAIL_RENAME_STEP2=<rel>` | the same rename fails after step 1, so the entry is in the temporary |
 | `GIRSYNC_TEST_GATE_COPY=<wait>:<on>` | the copy of `<wait>` does not begin until the copy of `<on>` has **failed** |
+| `GIRSYNC_TEST_HEARTBEAT_ENTRIES=<n>` | lowers the walk's heartbeat period so a small fixture can trip the `scan progress: walk` event; an unset, non-numeric or zero value leaves the production period in place |
 | `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the configured batch size |
 | `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the configured byte threshold |
 | `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the configured interval |

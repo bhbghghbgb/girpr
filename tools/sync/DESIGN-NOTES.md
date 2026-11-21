@@ -49,10 +49,11 @@ A copy takes both rw permits; it takes **src first**, and a thread holding dst
 takes nothing further. Every wait-for edge therefore points forward along
 `src → dst` and the graph is acyclic.
 
-`rw/gate.rs:acquire_copy` is the only place in the crate where a wrong edit can
-*hang* a run rather than fail one. A copy waiting for dst while holding src is
-the only operation that ever holds one gate while waiting for another, so changing
-the order — or letting a third gate into the set — is the difference between a
+`crates/sync-leaves/src/rw/gate.rs`'s `RwLimiter::acquire_copy` is the only place
+in this workspace where a wrong edit can *hang* a run rather than fail one. A copy
+waiting for dst while holding src is the only operation that ever holds one gate
+while waiting for another, so changing the order — or letting a third gate into
+the set — is the difference between a
 failing test and a hung run. `RwRuntime::new` sizes the pool at the largest number
 of permits a run can hold at once, so no worker usually blocks on the gate at all;
 that is a throughput property, not the correctness argument.
@@ -125,11 +126,11 @@ apart, and an ASCII identity rule stops the overlap and containment checks
 from seeing a case difference Windows really has.
 
 **The on-disk spelling lookup is neither.** `on_disk_name` in
-`commands/sync/plan/link.rs` asks which directory entry the OS would open, so
+`src/commands/sync/plan/link.rs` asks which directory entry the OS would open, so
 it compares Unicode-lowercased names. It is a question about the filesystem,
 not about how a run keys its map, and it follows neither rule above. The
 lookup and the path key live in different modules — the lookup in
-`commands/sync/plan/link.rs`, the key in `util` — and each answers its own
+`src/commands/sync/plan/link.rs`, the key in `util` — and each answers its own
 question.
 
 **One mapping, one comparison, two questions.** The Unicode lowercase mapping
@@ -174,8 +175,8 @@ other.
 `HashAlg` is a closed enum and the parser refuses everything else, so
 what a run may **ask for** is settled at compile time. What a cache row **holds**
 is not: a cache written by a newer build may carry a digest under a name this one
-has never heard of, and that row has to stay readable. `cache/wire.rs` therefore
-keeps algorithm names inline rather than behind an id registry, and `DigestSet`'s
+has never heard of, and that row has to stay readable. `crates/sync-cache/src/wire.rs`
+therefore keeps algorithm names inline rather than behind an id registry, and `DigestSet`'s
 custom deserializer never refuses one.
 
 The in-memory end of the same guarantee is `DigestSet`'s `foreign` arm, and it has
@@ -259,8 +260,9 @@ the plan will `mkdir`, so `build_plan` sees no type conflict and
 prints a `MKDIR`/`COPY` plan that the real run cannot execute: `create_dir_all`
 fails with `AlreadyExists` after earlier phases have changed dst.
 
-`ensure_mkdir_targets_free` closes that gap before the rename pass, which is the
-first filesystem change. It derives the same mkdir candidates `build_plan` will:
+`ensure_mkdir_targets_free` closes that gap before the rename pass — a case-only
+rename is itself a filesystem change, and a refusal must not follow one. It
+derives the same mkdir candidates `build_plan` will:
 src directories that the post-rename `dm` does not hold (a pair the path key
 merges in insensitive mode, because the rename collapses those), and stats each
 candidate and every strict prefix on disk. An existing directory is fine; a
@@ -365,9 +367,10 @@ target, and refusing an unresolvable dst root.
 `get_named(&str)`, which asks by name; and `get(HashAlg)`, which reads the slot
 and nothing else. The first two answer the usual question, and they agree.
 
-**Every caller asking "does this row hold algorithm X" must use the by-name one** —
-`obtainable` and `pick_one` in the planner, `HashPlan::missing`, `hashes_differ` in
-the diff, and `verify_digests` in the copy phase. A row whose `md5` is stored with
+**Every caller asking "does this row hold algorithm X" must use a name-aware
+lookup, not the slot-only `get`** — `obtainable` and `pick_one` in the planner,
+`HashPlan::missing`, `hashes_differ` in the diff, and `verify_digests` in the copy
+phase all use `get_algo` for it. A row whose `md5` is stored with
 an unexpected length is not in the md5 slot, and a slot lookup reports that row
 as holding nothing at all.
 
@@ -404,9 +407,10 @@ algorithms — so a slot lookup would report a corrupt row as clean. That is the
 false clean, reached from the other side, and the coverage check cannot see it
 because the row genuinely does hold a digest under that name.
 
-**Enforced by:** the enforcement tests in `src/hash/tests.rs` cover a known name
-in the foreign arm found under any ASCII-case spelling, an unknown name matched
-exactly and by no algorithm, a right-length known name still going to its slot,
+**Enforced by:** the enforcement tests in `crates/sync-cache/src/hash/tests.rs`
+cover a known name in the foreign arm found under any ASCII-case spelling, an
+unknown name matched exactly and by no algorithm, a right-length known name still
+going to its slot,
 a typed lookup finding a known name carried in foreign, and a non-ASCII lookalike
 never matching. The resolver is checked against the parser for answering one
 question and against the ASCII-case rule written out rather than `std` for how
@@ -754,13 +758,14 @@ exactly the mistake the record path exists to prevent — and `compare-self` is 
 that separation buys. `effective/record.rs`'s own module doc says so.
 
 **Do not turn `Side` / `RwSide` into a trait.** Two variants, one dispatch site
-(`effective/side.rs`). A trait here would be ceremony with no second
-implementor, and the enum's shape is what makes the two spellings in
-`case_sensitive` and `case_insensitive` readable at a glance.
+each (`effective/side.rs` for `Side`, the rw gate for `RwSide`). A trait here
+would be ceremony with no second implementor, and the enum's shape is what keeps
+each dispatch site readable at a glance.
 
 **Do not touch the `--rw-threads*` family, `RwLimiter`, or the lock order.** See
-the lock-ordering section above. The tests are good (`rw/gate.rs`'s unit tests
-plus `tests/rw_threads/limiter.rs`); leave them alone.
+the lock-ordering section above. The tests are good
+(`crates/sync-leaves/src/rw/gate.rs`'s unit tests plus
+`tests/rw_threads/limiter.rs`); leave them alone.
 
 **Do not convert `FileRec.kind` to an enum.** It is the obvious companion to
 `HashAlg`, and it is the wrong direction: `kind` is a closed registry *on the
@@ -781,7 +786,7 @@ arm's exact-match rule ever stops being exact, this is where it changes.
 
 **Do not add `bitflags` (or any dependency) for `AlgoSet`.** `bitflags` is already
 in `Cargo.lock` transitively, so it would cost nothing to compile — which is
-exactly why it is worth refusing. `AlgoSet` is fifty lines of newtype whose `Debug`
+exactly why it is worth refusing. `AlgoSet` is a newtype whose `Debug`
 has to be hand-written anyway to keep printing `["md5", "sha256"]`, and this crate
 hand-rolls `RwLimits`, `StatTrust` and `CasePairing` in preference to derives.
 Consistency wins, and a bitset crate is not a rule the crate can enforce for us.

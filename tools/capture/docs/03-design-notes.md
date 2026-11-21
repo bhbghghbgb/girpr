@@ -64,7 +64,7 @@ So nobody re-audits them.
 | **`select/budget.rs`** | **zero magic numbers.** `saturating_add`, a charge that saturates, a rejected candidate is never charged, and the tie-break is documented as the caller's. Use it as the model for the rest of `select`. |
 | **`report.rs` serialization** | there is **no `serde_json::Value` construction** — `Record`/`Val` implement `serde::Serialize` and `to_json_line` is `serde_json::to_string(self)`; the `Serialize` impl emits an ordered map with `event` first to keep field order (`preserve_order` would be a workspace-wide feature-unification hazard). `serde_json` owns escaping, so backslashes and control characters keep their prior bytes. |
 | **`assemble/ranges.rs`** | already a **single forward pass**; there is no sort-then-merge to improve. |
-| **`assemble/mod.rs` byte movement** | **no per-byte loops anywhere.** `copy_from_slice` per chunk and a zeroed `vec![0u8; size]` are already optimal. The waste is the *number of buffers*, not the copying. |
+| **`assemble/assembly.rs` byte movement** | **no per-byte loops anywhere.** `copy_from_slice` per chunk and a zeroed `vec![0u8; size]` are already optimal. The waste is the *number of buffers*, not the copying. |
 | **`assemble_side`'s three-way `buffer` / `Layout::of` / `zip`** | correct. |
 | **`prost` decode** | sound. The wrapper is decoded and its `chuncks` immediately moved out, so the outer struct is not retained. |
 | **Chunk-store keying** | `BTreeMap<String, Want>` keyed by `chunk.id` gives id-uniqueness *and* the deterministic order the schema requires (`into_values()`), and shared chunks correctly merge into one `Want` with multiple sources. |

@@ -15,21 +15,21 @@ one command split into phases — the coordinator (`mod.rs`) owns phase order an
 the exit-code contract, the submodules own the work.
 
 ```text
-Cargo.toml            # clap, tokio, reqwest, serde, prost, md5, zstd, tracing, anyhow, walkdir, regex
+Cargo.toml            # runtime: clap, chrono, tokio, reqwest, serde(+json), tracing(+subscriber, appender), anyhow, walkdir, futures-util, tempfile, plus the girpr-* path crates below; prost/zstd and wiremock are dev-only; no regex dependency
 src/main.rs           # shim: Args::try_parse (arg errors -> exit 1) -> logging::init_tracing -> repair::run -> SUMMARY -> exit
 src/lib.rs            # module map + re-exports
 src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx -> RunCtx
 src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit code) + RepairMode
 src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
-crates/log/           # the shared log policy: log file path, log levels, env vars (also used by tools/)
+crates/log/           # the shared log policy: log file path, log levels, env vars (shared by girpr and the three dev tools)
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
 crates/test-fixtures/ # facade-free offline HoYoPlay/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
 crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
 crates/sync-cache/    # the dev tools' redb hash cache, its postcard wire codec and digest vocabulary; consumed directly by girsync and sled2redb
 crates/sync-leaves/    # girsync's acyclic rw limiter, include/exclude filter, link classifier and hardlink facts, consumed directly by girsync so a high-level edit leaves them cached
 crates/sync-test-support/ # girsync-coupled option/cache/planner fixtures shared by girsync and sled2redb; keeps crates/tempdir/ girsync-free
-crates/report/src/    # Summary/Meter/StoppedBy counters + REPORT / PROGRESS / SUMMARY formatting and emission, phase timer
-src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
+crates/report/src/    # Summary/Meter/StoppedBy counters + record data plane, REPORT / PROGRESS / SUMMARY emission, phase timer (plan_record lives in the scope reporter)
+src/biz.rs            # re-exports girpr_model::region::Region as Biz; ids/channels/base URLs live in crates/model/
 crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
 crates/util/          # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, server-path containment
@@ -38,10 +38,10 @@ src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files
 src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)
 src/repair/phases/plan.rs    # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
 src/repair/purge.rs          # Collapse files-cleanup: plan_purge, apply_purge, keep_set, classify_purge_path (step 5, 7)
-src/repair/scope/     # the path scope and the byte ceilings: filter, ledger, limits, report (step 4, ceilings)
+src/repair/scope/     # the path scope and the byte ceilings: filter, limits, report (step 4, ceilings); ledger.rs is a thin alias for girpr-report's Meter/StoppedBy
 src/repair/phases/check.rs   # --check-only size+MD5 verification loop (step 6.5)
 src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mode, reuse vs download (step 6)
-src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction
+src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction (salvage_order_refs in production; salvage_order is test-only)
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
 crates/lock/          # the single-writer lock (outside the install)
 crates/audio/         # audio scan-file read/write + effective selection (acyclic leaf)
@@ -67,18 +67,20 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--repair-mode <auto|inplace|temp|discard>]  (how each file is written; default auto)
       [--max-ram-bytes <N>]                    (cap the RAM the in-place repair may stage)
       [--scan]                                 (read the install once, for exact plan figures)
-      [--log-level error|warn|info|debug|trace] [--log-file-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>]
+      [--log-level error|warn|info|debug|trace] [--log-file-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>] [--no-log-file]
 ```
 
-The path scope, the byte ceilings, `--print-plan`/`--plan-out` and the endpoint
-overrides are [`docs/04`](04-scope-limitation-spec.md)'s tier; the README's flag table is
+The path scope, the byte ceilings, `--fail-fast`, `--purge-only`,
+`--print-plan`/`--plan-out` and the endpoint overrides are
+[`docs/04`](04-scope-limitation-spec.md)'s tier; the README's flag table is
 the whole list.
 
 Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args — clap-level
 included, so the code remaps clap's default 2 — unusable game path, non-chunk
 `default_download_mode`), 2 metadata/network, 3 write/verify (counted per-file repair
 failures via `Ok(summary, 3)` with `SUMMARY`, plus fatal config.ini / audio-scan write,
-files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage. `--help`
+files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage,
+5 a requested enforcement ceiling bound the run (`SUMMARY stopped=…`, `limited=1`). `--help`
 is the only other 0. Fatal
 errors carry their class via `config::RunFailure` at the raise site; per-file verify
 failures continue and skip the post-phase instead. Automation: `tracing` diagnostics
@@ -90,24 +92,25 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Spec step | Code | Provenance |
 |---|---|---|
 | Local version | `util::read_game_version` (1) | Starward |
-| Server metadata (`game_config`/`game_branch`/`chunk_build` latest + optional local) | `repair::metadata::fetch` + `hyp::HypClient` (2) | Starward |
-| Effective audio + scan-file write | `repair::audio::{resolve_effective_audio,write_scan_file}` (1) | Starward |
-| Begin `REPORT` | `report::format_report_line` (2.5) | Starward |
+| Server metadata (`game_config`/`game_branch`/`chunk_build` latest + optional local) | `repair::phases::metadata::fetch` + `hyp::HypClient` (2) | Starward |
+| Effective audio + scan-file write | `girpr_audio::{resolve_effective_audio,write_scan_file}` (1), aliased as `audio` in `src/repair/mod.rs` | Starward |
+| Begin `REPORT` | `report::report_record` + `report::emit` (2.5) | Starward |
 | Manifest fetch/verify/parse | `repair::phases::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
-| Work list + reuse map | `repair::phases::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
+| Work list + reuse map | `repair::phases::plan::build_plan` (4) + `repair::phases::manifest::local_reuse_map` → `sophon::build_local_chunk_map` keyed by path, chunk md5+size (3) | Starward |
 | Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (fetched in the plan phase, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
-| Single-writer lock | `girpr_lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 1 (6) | — |
+| Single-writer lock | `girpr_lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 1 (5, taken in the execute phase) | — |
 | Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode **streamed straight into the file**, digested on the way past → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
 | Check-only | `repair::phases::check::verify_plan` (6.5) | Starward |
 | Post deletes/config | `repair::phases::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
 | Files-cleanup after | `repair::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` + the legacy in-install `girpr.lock` + the cleaned blacklist) |
-| Summary | `report::format_summary_line`, emitted by `main` (8) | — |
+| Summary | `report::summary_record` + `report::emit`, emitted by `main` (8) | — |
 
-Concurrency: `tokio::Semaphore(jobs)` over files; a single `reqwest::Client` with a fixed
+Concurrency: a bounded spawn/join window over files (`repair::file::join_file_tasks`, at most
+`jobs` tasks in flight); a single `reqwest::Client` with a fixed
 connection-pool cap (see `crates/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
-with fixed-size buffers. Retries: 5× linear backoff on manifest/chunk/file ops.
+with fixed-size buffers. Retries: 5× with jittered exponential backoff on manifest/chunk/file ops.
 
 ## 4. Testing
 
@@ -134,9 +137,11 @@ with fixed-size buffers. Retries: 5× linear backoff on manifest/chunk/file ops.
   (`CARGO_BIN_EXE_girpr`) to pin the process exit codes — every argument error is
   `1`, never clap's `2`, and `--help` is `0`. No game directory is touched.
 - **The bundle-backed suite** (`tests/artifact_bridge.rs`, [`docs/06`](06-artifact-bridge-spec.md)):
-  `#[ignore]`d, and it drives the real binary over a captured bundle — each
-  capture is exercised in every write mode, asserting that the modes produce the same
-  file and that the in-place one writes less.
+  `#[ignore]`d, and it drives the real binary over a captured bundle — a `--print-plan`
+  pre-pass plus one real run per capture, the repair captures asking for
+  `--repair-mode inplace` explicitly. It asserts the patched bytes, the exact fetched-chunk
+  set and the reported download bytes against the bundle's ground truth; the other write
+  modes are tested on crafted fixtures, not here.
 - **The streaming invariant** (`crates/fetch/src/sophon/stream.rs`): an always-on unit test
   (`the_streamed_decode_writes_in_pieces_not_one_buffer`) asserts that a decoded
   chunk reaches the sink in more than one write, every byte arrives, and no single
@@ -149,7 +154,8 @@ with fixed-size buffers. Retries: 5× linear backoff on manifest/chunk/file ops.
 `tracing` to stderr (`--log-level`, with `RUST_LOG` adding to
 it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`).
 Both layers are built in `src/logging.rs` over the shared
-policy in `crates/log/` — the same policy the two dev tools follow. The two
+policy in `crates/log/` — the same policy the three dev tools (`gircap`, `girsync`,
+`sled2redb`) follow. The two
 levels are separate: `--log-level` only affects stderr, `--log-file-level` only
 the file. A log file that cannot be opened degrades to a warning and a sink,
 never a failure. Where the file goes, in order: `--no-log-file` (none at all),
@@ -176,7 +182,7 @@ persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` r
 
 **The two write modes, and what each one is for:**
 
-| | `inplace` (default) | `temp` (`--repair-mode temp`) |
+| | `inplace` (`auto` picks this when the target is writable) | `temp` (`--repair-mode temp`) |
 |---|---|---|
 | the target file | is written where it lies: the wrong bytes are replaced in place | is **never modified**: the repair is assembled in `{path}_tmp` and swapped in with an atomic rename |
 | an interrupted run | leaves a file that fails the same check; the next run re-verifies and continues | leaves the target exactly as it was, plus a partial `*_tmp` the next run resumes by length |
@@ -202,7 +208,7 @@ them, which is the one term the decode cannot remove.
 
 | item | why not now |
 |---|---|
-| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is a pure function (`repair::reuse::salvage_order`) to swap, and the writer does not know which tier produced the order |
+| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is a pure function (`repair::reuse::salvage_order_refs`, with test-only `salvage_order`) to swap, and the writer does not know which tier produced the order |
 | a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves a read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about, and the read is mostly served by the page cache |
 | cross-file salvage (a chunk from any local file, not just the same path) | mutually exclusive with an in-place repair absent a file-level order: repairing a donor destroys a donee's source. The reuse map is same-file-only, so the conflict is latent — but it must be settled before anyone adds it |
 | reclaim-on-demand (delete files mid-run to make room) | the in-place repair removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and its own doc |

@@ -28,14 +28,16 @@ matched case-insensitively, `_` is accepted for `-`, and the display names `chin
 `english` / `english(us)` / `japanese` / `korean` are aliases; anything else is a usage error
 (exit 1), as is mixing `none` with a language. Unknown flags, missing/duplicate-incompatible
 values and `jobs = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
-`jobs ≥ 1` (a modest default; lower for HDDs, higher for SSDs), flags `--purge-before`, `--purge-after`,
-`--check-only`, `--dry-run`.
+`jobs ≥ 1` (a modest default; lower for HDDs, higher for SSDs; values above a hard
+cap are a usage error), flags `--purge-before`, `--purge-after`, `--check-only`,
+`--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
 `1` usage/config error, `2` metadata/network error (including a malformed manifest
 path or chunk range, refused at plan time), `3` write/verify error,
-`4` check-only found damage; a begin `REPORT` line (versions + API-sourced
-fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
-both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
+`4` check-only found damage, `5` a requested enforcement ceiling bound the run;
+a begin `REPORT` line (versions + API-sourced fields, Step 2.5) and a machine-readable
+final `SUMMARY` line (counts + bytes + exit), both mirrored to the log, plus `PROGRESS`
+ticks and a `PLAN` line when asked, and structured logs (per-file start/skip/repair/fail
 with reason). Fatal errors carry their class at the raise site (`config::RunFailure`), so the
 exit code matches the class even for post-phase write failures. Per-file verify
 failures are the exception: they continue across files and return `Ok(summary, 3)`
@@ -57,14 +59,14 @@ failures are the exception: they continue across files and return `Ok(summary, 3
 2. Read `res_category_dir` ignore list if game config names it (see step 2): file of JSON lines
    `{"category":"<matching_field>","is_delete":true}` → ignore set. An absent file is an
    empty set; an unreadable one is an error. Same rule for the blacklist file.
-  3. Determine effective audio langs: explicit flag wins, including `--audio none`
-   (explicit empty = game-only, scan file overwritten with an empty list); else read
-   audio scan file (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean`
-   → map to `zh-cn|en-us|ja-jp|ko-kr`). A **missing** scan file defaults to `{en-us}`
-   automation so the game launches — Starward/Collapse use game-only when the scan file
-   is missing, and `none` opts into that behavior explicitly).
-   A **readable empty** file is the game-only selection written by `--audio none` and is
-   kept as-is. An **unreadable** file is an error, not a default. A non-empty file
+  3. Determine effective audio langs: explicit `--audio` wins, including `--audio none`
+   (explicit empty = game-only, scan file overwritten with an empty list); an omitted flag
+   keeps the detected selection. The scan file comes from the server's
+   `audio_pkg_scan_dir` and holds display names (`Chinese|English(US)|Japanese|Korean`
+   → `zh-cn|en-us|ja-jp|ko-kr`). An **absent** scan file — or an unconfigured scan dir —
+   defaults to `{en-us}` so automation gets a launchable game; an **unreadable** file is
+   an error, never a silent default. A **readable empty** file is the game-only selection
+   written by `--audio none` and is kept as-is (`resolve_effective_audio`). A non-empty file
    whose lines name none of the supported display names is also an error (exit 1) naming
    the file and the first unrecognized line — an empty result would read as game-only
    and hide the selected language from the purge keep set. An unrecognized line beside
@@ -79,9 +81,9 @@ failures are the exception: they continue across files and return `Ok(summary, 3
 
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
-   `audio_scan_dir, audio_cache_dir, audio_res_dir, res_category_dir, blacklist_dir (+enable flag),
-   default_download_mode`. Assert chunk-capable: `default_download_mode` must be exactly
-   `DOWNLOAD_MODE_CHUNK` (the only value this tool can patch — `DOWNLOAD_MODE_FILE` and
+   `audio_pkg_scan_dir, audio_pkg_cache_dir, audio_pkg_res_dir, res_category_dir,
+   blacklist_dir (+enable_resource_blacklist), default_download_mode`. Assert chunk-capable:
+   `default_download_mode` must be exactly `DOWNLOAD_MODE_CHUNK` (the only value this tool can patch — `DOWNLOAD_MODE_FILE` and
    `DOWNLOAD_MODE_LDIFF` need the 7z/hdiff paths v1 does not implement). Anything else, including
    an empty/missing value, aborts with exit 1 rather than failing later at `getBuild`.
 2. `GET getGameBranches?launcher_id=&language=&game_ids[]=` → pick entry for game id →
@@ -110,11 +112,11 @@ Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`;
 For each wanted manifest in latest build (filter: drop `matching_field ∈ ignore_set`; drop every
 `*-??` audio field except selected audio langs; keep `game` + selected):
 1. `manifest{id,checksum,compressed_size}` + `manifest_download{url_prefix}`, `chunk_download{url_prefix}`.
-2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 linear backoff).
+2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 with jittered exponential backoff).
 3. The blob is **streamed**: it is zstd-decoded as it arrives into a buffer sized by the
    API's `uncompressed_size`, so the compressed body is never resident and the decode never
    has to grow the buffer → compute MD5 of **decompressed** bytes → must equal `checksum`
-   (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still
+   (case-insensitive); mismatch → retry whole fetch up to 5× with jittered exponential backoff → still
    mismatch → abort (exit 2).
 
    The reported size is a **hint, not a promise**: it is a raw number out of the API's JSON
@@ -393,9 +395,10 @@ optimization).
    `game_dir` when combining it with `--purge-after`/`--purge-only`.
 
 ### Step 8 — Report
-Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
-download_bytes, deleted_extra_bytes}` (numeric-only; the versions were already
-reported at Step 2.5). Exit code per §1. Rerun is safe
+Log + stdout summary: `{total, skipped, repaired, failed, download_bytes,
+deleted_extra_bytes, exit}` (numeric-only; the versions were already
+reported at Step 2.5; conditional keys such as `limited` and `stopped` appear only when
+their flag is active). Exit code per §1. Rerun is safe
 (skips intact files, and re-verifies the rest: the in-place path finds the chunks that
 are already right where they belong, the temp path resumes the `*_tmp` prefix).
 
@@ -451,7 +454,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
 | Interrupted run | the in-place path re-verifies and continues (the chunks that are already right stay right); the temp path resumes by length; a leftover `*_tmp` is purged only via `--purge-before`/`--purge-after` |
-| A manifest whose chunks do not tile the file | validated at plan time; the hole is zero-filled and logged |
+| A manifest whose chunks do not tile the file | checked and logged at plan time; the hole is zero-filled |
 | Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |
 | The volume fills while a file grows | the file fails, is counted, retried and reported; `--repair-mode temp` is the mode for a volume with no room for the growth |
 | A read-only attribute on a game file | cleared before the write, the way the launcher does it |

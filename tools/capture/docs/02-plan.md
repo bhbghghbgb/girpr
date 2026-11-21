@@ -17,7 +17,7 @@ goes stale the moment a module is added.
 
 | decision | value |
 |---|---|
-| workspace membership | **workspace member** — `members = [".", "tools/sync", "tools/capture"]`, same as `girsync` |
+| workspace membership | **workspace member** — the root `Cargo.toml` lists the product, the shared `crates/*` leaves, the dev tools and gircap's own mechanics/test-support crates; `default-members` keeps a plain root build to the product |
 | artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and fully regenerable |
 | `--audio` default | **`en-us`** — a launchable-install default, and it widens the selection pool (§0.1) |
 | per-class variants | **no individual flags**; `--per-class N` only, default 1 |
@@ -71,13 +71,17 @@ tools/capture/
 │   ├── cli/mod.rs        # clap surface
 │   ├── exit/mod.rs       # ExitCode enum + the exit-code table
 │   ├── failure/mod.rs    # Failure, its four constructors, the failure summary
-│   ├── config/mod.rs     # the resolved run plan: tags, classes, budgets, paths
+│   ├── config/
+│   │   ├── mod.rs        # the resolved run plan: tags, classes, budgets, paths
+│   │   └── tests.rs      # plan-resolution and validation tests
 │   ├── biz/mod.rs        # launcher/game ids, hyp+sophon bases, channel tuple
 │   ├── (no hash/ dir)    # md5/sha256, hex, gzip rule and zstd helpers moved to the
 │   │                     # logic-free tools/capture/hash/ crate; `pub use gircap_hash
 │   │                     # as hash` keeps every crate::hash::* path unchanged
 │   ├── run/mod.rs        # command dispatch: the four entry points
-│   ├── report/mod.rs     # stdout data plane (single owner of println!)
+│   ├── report/
+│   │   ├── mod.rs        # stdout data plane (single owner of println!)
+│   │   └── tests.rs      # record ordering, escaping and event-name tests
 │   ├── logging/mod.rs    # tracing init + the log file (JSON lines), over the shared log policy
 │   ├── http/
 │   │   ├── mod.rs        # thin re-export facade over gircap-http + the two policy modules
@@ -95,41 +99,59 @@ tools/capture/
 │   ├── hyp/
 │   │   ├── mod.rs        # the HoYoPlay endpoints + getBuild + the captured bodies
 │   │   └── types.rs      # DTOs, incl. the fields most clients drop
+│   ├── pathmap.rs        # logical→on-disk escapes (device names) and the run-wide store
+│   ├── paths.rs          # the shape rules for values that name something in a bundle
+│   ├── rejections.rs     # refused manifest paths/chunk ids, kept as evidence
+│   ├── tasks.rs          # the ordered-join helper for concurrent fetches
 │   ├── manifest/
 │   │   ├── mod.rs        # zstd -> verify -> decode; the decoded-graph arithmetic
 │   │   ├── fetch.rs      # one manifest per (field, build), and filing each where it belongs
 │   │   ├── proto.rs      # prost structs + opaque field 6
 │   │   ├── dump.rs       # full JSON/gz dump + paths.tsv sidecar
-│   │   └── diff.rs       # path diff, reuse pool, scoring, stats reconciliation
+│   │   ├── diff.rs       # path diff, reuse pool, scoring, stats reconciliation
+│   │   └── tests.rs      # decode, verification and diff tests
 │   ├── select/
 │   │   ├── mod.rs        # scoring + admission
-│   │   ├── classes.rs    # the six patch-shape predicates
+│   │   ├── classes.rs    # the patch-shape predicates
 │   │   ├── budget.rs     # smallest-first under --max-download-bytes
 │   │   ├── decide.rs     # the selection decision, and the narration that reports it
-│   │   └── require.rs    # --require-class, and the one pass that builds its detail
+│   │   ├── require.rs    # --require-class, and the one pass that builds its detail
+│   │   └── tests.rs      # scoring and admission tests
 │   ├── blobs/
 │   │   ├── mod.rs        # content-addressed store, streaming fetch, A6 rows
 │   │   ├── plan.rs       # the retention plan, A12 and the byte ceiling, before any fetch
 │   │   ├── fill.rs       # execute the plan, or record that there is nothing to fill
 │   │   ├── props.rs      # container sniff, md5/sha256, streaming measurement
-│   │   └── chunks.rs     # the three sets: materialize_old / _new / patch_fetch
+│   │   ├── chunks.rs     # the three sets: materialize_old / _new / patch_fetch
+│   │   └── tests.rs      # store and measurement tests
 │   ├── assemble/
-│   │   ├── mod.rs        # build a file from chunks; old, new, and patch flow
+│   │   ├── mod.rs        # the assembly facade and re-exports
+│   │   ├── assembly.rs   # build a side from chunks, and the REUSE/FETCH patch flow
+│   │   ├── source.rs     # where each reused chunk's bytes come from
+│   │   ├── types.rs      # plan entries, patchmaps, totals, expectations, outcomes
 │   │   └── ranges.rs     # range algebra + gap/overlap checks
 │   ├── emit/
-│   │   ├── mod.rs        # artifact writer; document + tree helpers
+│   │   ├── mod.rs        # artifact writer; document/tree helpers, api/ docs, diff/candidates + matrix
 │   │   ├── tree.rs       # the part of the tree that exists before any chunk arrives
 │   │   ├── fixture.rs    # game/, expected/, scan/ from the stored chunks
 │   │   ├── gamedir.rs    # config.ini + audio scan file + variant files
-│   │   ├── index.rs      # MANIFEST.json, candidates.json, chunks/index.json, checksums, README
-│   │   ├── selfcheck.rs  # the A1-A17 + A19 assertion log
-│   │   └── closeout.rs   # the four documents with an ordering constraint, and A16's two passes
+│   │   ├── index.rs      # MANIFEST.json, checksums.json, the file entry, README rendering
+│   │   ├── selfcheck.rs  # the A1–A17, A19 and A21–A23 assertion log (A18/A20 are verify-only)
+│   │   └── closeout.rs   # the close-out documents with an ordering constraint, and A16's two passes
 │   └── verify/
-│       ├── mod.rs        # `verify` + `list`, offline
-│       └── materialize.rs# `materialize`, rebuild from chunks/ with no network
+│       ├── mod.rs        # `verify` / `materialize` / `list`, offline
+│       ├── bundle.rs     # opening a bundle and its recorded manifest
+│       ├── checks.rs     # the re-derived A6/A7/A8/A11/A18/A20 checks
+│       ├── list.rs       # walking a root and inventorying bundles
+│       ├── report.rs     # the verify report and re-derived-id sets
+│       ├── materialize.rs# `materialize`, rebuild from chunks/ with no network
+│       └── tests.rs      # verify, list and materialize tests
 └── tests/
     ├── common/mod.rs     # thin shim over the gircap-only test-support library (mock, world builders, shared-bundle publisher); the mock borrows nothing from girpr
+    ├── bundle_consistency.rs # the matrix, patchmaps and bundle discovery must describe each other
+    ├── bundle_shapes.rs  # expensive whole-capture shapes (ignored; run with --run-ignored only)
     ├── capture_layout.rs # end-to-end artifact shape + selfcheck green + document pins
+    ├── case_coverage.rs  # gates tools/case_coverage.py against the bundle it measures
     ├── cli_contract.rs   # argv -> exit code, the process-level contract
     ├── matrix.rs         # class predicates + greedy admission + budget
     ├── measured_fixture.rs # the synthetic corpus the costs are measured against
@@ -139,18 +161,24 @@ tools/capture/
 ```
 
 The largest modules are `src/report/mod.rs`
-and `src/select/mod.rs`; `src/http/mod.rs` is the transport layer itself — the
-fetcher, its retry policy and body ceiling, the request log, the tag probe and
-the negative probes — and the orchestrator (`src/run.rs`) is one of the smaller
-ones, because each phase of a capture lives in the module that owns the work it
-does.
+and `src/select/mod.rs`. `src/http/mod.rs` is only a thin re-export facade over
+the logic-free `gircap-http` crate (the transport, retrying fetcher, body
+ceiling and request log) plus the two modules that carry gircap's own policy,
+`probe` and `negative`; the mechanics live in `tools/capture/http/`. The
+orchestrator (`src/run/mod.rs`) is one of the smaller modules, because each
+phase of a capture lives in the module that owns the work it does.
 
 ### Dependencies
 
-`clap`, `tokio`, `url`, `serde`, `serde_json`, `prost`, `zstd`, `md5`,
-`sha2`, `flate2`, `tracing`, `tracing-subscriber`, `tracing-appender`, `chrono`.
-`reqwest` is no longer a direct dependency: the transport is owned by the
-logic-free `gircap-http` crate, which gircap depends on directly.
+The direct dependency set is the CLI/runtime/report stack (`clap`, `tokio`,
+`serde`, `serde_json`, `tracing`, `tracing-subscriber`, `tracing-appender`,
+`chrono`), the file/format helpers (`url`, `prost`, `flate2`, `walkdir`,
+`ini_core`, `percent-encoding`), typed errors (`thiserror`), the gircap-owned
+`gircap-http` / `gircap-hash`, and the shared logic-free leaves. `reqwest` is no
+longer a direct dependency: the transport is owned by the logic-free
+`gircap-http` crate, which gircap depends on directly. MD5/SHA-256 are spelled
+by `girpr-digest` and the digests and zstd decoding live in `gircap-hash`; zstd
+is a dev-dependency here only for tests that build frames.
 
 `tokio` is requested with only `rt-multi-thread`, `macros` and `time`, which
 also brings `rt`. `reqwest` (via `gircap-http`) resolves tokio with `net`,
@@ -166,8 +194,8 @@ anything observable (spec §3.7), so an xxh64 implementation would be unused cod
 asserting something false.
 
 Deliberately **not** `anyhow`, and not reqwest's `json` or `stream` features:
-every failure in this crate is a `Result<T, String>` or a
-`Result<T, io::Error>` re-wrapped through `Failure`, all decoding is
+failures are typed (`Failure`, `UsageError`, `ApiError`, derived with
+`thiserror`) and re-wrapped through `Failure`, all decoding is
 `serde_json::from_slice`, and nothing reads a streaming body. A dependency that
 is declared and never used is a dependency a reader has to check the crate for.
 
@@ -214,6 +242,9 @@ log chatter mixed in.
 | `tests/measured_fixture` | the measured costs and cheapest-candidate-per-class, against a synthetic corpus sized to reproduce them | never |
 | `tests/offline_bundle` | a bundle built by the crate's own writers, read back through its own readers | never |
 | `tests/schema` | `schema_version` present everywhere, the gzip decision recorded, `checksums.json` covers the tree, the patchmap arithmetic | never |
+| `tests/bundle_consistency` | the matrix, patchmaps and bundle discovery describe the same bundle | never |
+| `tests/bundle_shapes` | expensive whole-capture shapes (metadata-only, lying manifest, mis-served chunk); ignored, run with `--run-ignored only` | never |
+| `tests/case_coverage` | gates `tools/case_coverage.py` against the bundle it measures | never |
 | `tests/bundle_diff` | two captures of one fixture agree, once the never-deterministic fields are normalised | never |
 | live (manual) | a capture against the real API, and `girpr`'s `artifact_bridge` against the result | yes, deliberately |
 
@@ -232,12 +263,13 @@ any change to it:
   of a captured bundle to check that *every* recorded URL, manifest and chunk CDN
   included, is a loopback address the mock owns. "Touches no network" is proven,
   not asserted.
-- **no `#[ignore]`** — nothing is silently skipped. The expensive suites are run
-  by hand, not ignored into the default run.
+- **no silently skipped checks** — the expensive whole-capture cases in
+  `tests/bundle_shapes.rs` are `#[ignore]`d and run by hand with
+  `--run-ignored only`; an ignored case is named, not hidden in the default run.
 - **no fixture files under `tests/`** — the directory holds only Rust sources,
   and every fixture is generated at test time.
 
-**Cheap enough to gate every commit.** No ignored tests, no sleeps and no
+**Cheap enough to gate every commit.** The default run has no sleeps and no
 retry loops — which is the property that makes the suite usable as a gate rather
 than something run occasionally. The runner is `cargo nextest run`, and it runs
 **each test in its own process**: the isolation is the point, so the mock's
@@ -302,7 +334,7 @@ nobody mistakes them for tidying.
 
 | | why |
 |---|---|
-| Renaming, renumbering or removing **A1–A20** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_bridge` and any recorded bundle refer to them. |
+| Renaming, renumbering or removing **A1–A23** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_bridge` and any recorded bundle refer to them. |
 | Changing `SCHEMA_VERSION` or any document's required fields | [`01-artifact-schema.md`](01-artifact-schema.md); a reader must reject an unknown value rather than guess. |
 | Any dependency on `girpr`, or a `Command` against its binary | the independence invariant, spec §2. A grep over `tools/capture/src/` must keep returning doc comments only. |
 | Turning on `clippy::pedantic` crate-wide | clippy is clean today on the default lints, which is worth preserving. Enabling pedantic in one commit rewrites the whole crate. If wanted, adopt lint groups one at a time. |

@@ -26,9 +26,11 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
    `crates/fetch/src/hyp.rs`, `crates/fetch/src/retry.rs`,
    `crates/util/src/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
-   `src/repair/{scan,reuse,purge,audio,mod}.rs`, `crates/lock/src/lib.rs`,
+   `src/repair/{scan,reuse,purge,mod}.rs`, `crates/audio/src/lib.rs`
+   (aliased as `girpr_audio` in `src/repair/mod.rs`), `crates/lock/src/lib.rs`,
    `src/repair/file/{mod,temp,inplace,mode}.rs`,
-   `src/repair/scope/{report,limits,ledger,filter}.rs`.
+   `src/repair/scope/{report,limits,filter}.rs` and the thin `ledger.rs` alias
+   over `crates/report/src/ledger.rs`.
 2. For each site, traced where the value comes from:
    - **server** — a protobuf field, a `getBuild`/`getGameConfigs` JSON field, a
      URL/prefix, or a path in a manifest;
@@ -45,9 +47,10 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
    followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
 
-In those regions, `audio.rs` and `lock.rs` are on the plan/write paths: the
-former has no production `unwrap`/`expect`/`panic!`, and the latter's only
-direct index is the bounded `head[..read]` in `may_write_body` (listed below).
+In those regions, the audio leaf (`crates/audio/src/lib.rs`) and
+`crates/lock/src/lib.rs` are on the plan/write paths: the former has no
+production `unwrap`/`expect`/`panic!`, and the latter's only direct index is the
+bounded `head[..read]` in `may_write_body` (listed below).
 
 ---
 
@@ -126,8 +129,9 @@ zero-length cases added with this audit:
 - `repair::file::inplace::tests::an_overflowing_staged_payload_saturates` and
   `the_staged_payload_boundary_saturates`.
 - Integration: `a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs`
-  and `a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking` in
-  `tests/repair_offline.rs`.
+  in `tests/repair_scan.rs` and
+  `a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking` in
+  `tests/repair_plan.rs`.
 - Zero-length probes:
   `a_legitimate_empty_file_passes_every_mode_untouched` and
   `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate`.

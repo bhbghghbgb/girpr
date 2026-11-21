@@ -89,8 +89,9 @@ must not depend on `girpr` and must not invoke it, so the bridge lives on the
 ## 2. Placement
 
 **A `#[ignore]`d integration test in the `girpr` package** —
-`tests/artifact_bridge.rs`, with the server in a module beside it — not a new
-workspace member and not a `src/bin/`.
+`tests/artifact_bridge.rs`, with the replay server in a shared library module
+(`crates/test-fixtures/src/artifact_server.rs`, §2.1) rather than beside it — not a
+new workspace member and not a `src/bin/`.
 
 The deciding constraint is Cargo's `CARGO_BIN_EXE_<name>`, which is set only
 when building a test, bench or example target. An integration test in the
@@ -114,9 +115,13 @@ nothing about the surface.
 
 ```rust
 // tests/artifact_bridge.rs
-use girpr_test_fixtures::artifact_server as server;
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
+#[path = "common/run_lock.rs"]
+mod run_lock;
+
+use girpr_test_fixtures::artifact_server as server;
+use server::{Bridge, Bundle, Origins};
 ```
 
 The replay server used to be a `#[path = "artifact_bridge/server.rs"] mod server;`
@@ -165,12 +170,13 @@ cargo build -p gircap
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
 
-The cases run in parallel: each capture has its own scratch tree (§6.3) and its
-own listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
-`success-output` override in `.config/nextest.toml` prints each case's
-precondition and summary lines even though it passes, so `--no-capture` is not
-needed either. To reproduce one failure, put the case in the filter of the same
-command:
+One verified bundle and one listener set are shared per process, and a run lock
+serializes the cases against them; each case still makes its own scratch tree
+(§6.3) and checkpoints the shared request log (§6.2), so no `--test-threads`
+limit is needed. The `success-output` override for this binary's cases in
+`.config/nextest.toml` prints each case's precondition and summary lines even
+though it passes, so `--no-capture` is not needed either. To reproduce one
+failure, put the case in the filter of the same command:
 
 ```
 cargo nextest run -p girpr --run-ignored only -E 'test(<one-capture-case>)'
@@ -244,10 +250,12 @@ skip — a corrupt bundle is a real problem and must not hide behind a green run
 
 ## 4. The server
 
-An ephemeral `127.0.0.1:<port>` listener per route family. **One listener per
-route family** — the only load-bearing requirement is that *manifests and
-chunks are on different ports* (§4.1's `build_id` invariant), and extra
-listeners buy nothing that one port plus a `build_id` check inside it does not.
+An ephemeral `127.0.0.1:<port>` listener per route family — hyp metadata,
+`getBuild`, manifests and chunks. **One listener per route family** — the only
+load-bearing requirement is that *manifests and chunks are on different ports*
+(§4.1's `build_id` invariant), and extra listeners buy nothing that one port
+plus a `build_id` check inside it does not. One listener set is bound per process
+and shared by the cases (§6.2).
 
 | request | served from | rewritten? |
 |---|---|---|
@@ -289,13 +297,16 @@ route is then indistinguishable from production's, and the bridge still proves
 
 The invariant this buys is the one worth stating out loud:
 
-> **every blob request's `<build_id>` must equal the build whose manifest
-> declared that id.**
+> **a blob request's `<build_id>` must name the build that declared the id.**
 
-A blob request for the same id under the other build's prefix is a `404`
-(`blob_wrong_build`), so a shim that got the prefixes crossed would produce a
-`404` it had manufactured itself — which is precisely the failure the two ports
-exist to make impossible.
+For manifests that is enforced strictly: the index is keyed by `(build_id, id)`,
+so an id one build declared is not served under the other build's prefix. For
+chunks the bundle records no per-build declaration — chunk URLs come from the
+*latest* build's `chunk_download.url_prefix` — so the check is that the request
+carries the latest build's id. A request under a build that did not declare it is
+a `404` (`blob_wrong_build`), so a shim that got the prefixes crossed would
+produce a `404` it had manufactured itself — which is precisely the failure the
+separate ports exist to make impossible.
 
 The rewrite is otherwise deliberately narrow. Everything else in the body passes
 through untouched, and two fields are **load-bearing and must not change**:
@@ -311,10 +322,14 @@ reads it.
 ### 4.2 How a manifest id resolves to a file
 
 The live ids are `manifest_<16hex>_<32hex>`; the bundle stores archives under
-*field* names (`manifests/<tag>/game.manifest.zst`). So there is a translation,
-and the `id → (tag, field)` map is built **while rewriting the body** — the loop
-over `manifests[]` is already there, and the rewrite is where every id in the
-bundle passes through. **404 anything absent from that map.**
+*matching field* names (`manifests/<tag>/game.manifest.zst`). So there is a
+translation, and the `(build_id, id) → (tag, field, archive)` map is built
+**while rewriting the body** — the loop over `manifests[]` is where every id
+passes through, and it already reads each entry's `matching_field`. Both builds
+may declare the same id, so the key includes the build; keying by id alone would
+let one build's declaration overwrite the other's. **404 anything absent from
+that map**, with a distinct recorded shape for an id declared under the other
+build.
 
 Doing it with a filesystem scan over `manifests/*/*.meta.json` instead would be
 slower and would answer a different question: it would find any archive in the
@@ -360,16 +375,16 @@ Measured against the live endpoints, the route families answer failure
 Three consequences for the shim:
 
 1. **Replay status, content-type and body from `api/error_shapes.json`**, and
-   synthesize only the fields that document marks volatile — `RequestId`,
-   `HostId`, `Key`, and the body length that follows from `Key`. `girpr` calls
-   `.error_for_status()` and never reads the body, so **status and content-type
-   are the contract and the body is fidelity**, for a human reading the shim's
-   log.
+   synthesize only the fields that document marks volatile — `RequestId` and
+   `Key`, and the body length that follows from `Key`. `HostId` is recorded
+   empty and is left as recorded. `girpr` calls `.error_for_status()` and never
+   reads the body, so **status and content-type are the contract and the body is
+   fidelity**, for a human reading the shim's log.
 2. **A bundle that predates the file has no `error_shapes.json`.** The shim then
-   404s with `application/xml` — the measured shape — and the bridge **logs that
-   the not-found assertions were skipped for lack of evidence** rather than
-   passing them silently. Inventing the statuses would make this document's claim
-   about the API unfounded.
+   404s with `application/xml` — the measured shape — and **reports that its
+   not-found shapes are synthesized** rather than passing them off as replayed
+   evidence. Inventing the statuses would make this document's claim about the
+   API unfounded.
 3. **A 404 costs almost nothing.** `girpr` retries only `408 | 429 | 5xx`
    (`sophon::retryable`), so a 404 is asked **once, with no backoff**. A run
    against a real bundle with one chunk 404'd went from a slow run with many
@@ -388,11 +403,12 @@ audio fields the capture stored. Do not hardcode a language.
 
 *(measured)* the `getBuild` body carries a `game` manifest plus a set of
 language manifests for this biz (`zh-cn`, `en-us`, `ja-jp` and `ko-kr` are among
-those captured). `sophon::select_manifests` drops every field whose name is a
-short token containing a hyphen, then re-adds only the selected languages; the
-bundle's scan file selects `en-us`, and only the blobs the capture stored are
-present. So a run fetches **`game` + `en-us`** — and it does so **for both
-builds**: once for the latest build and once for the local build (the one the
+those captured). `sophon::select_manifests` drops every field in the scan's
+res-category ignore set or whose name is a short token containing a hyphen, then
+re-adds only the selected languages; the bundle's scan file selects `en-us`, and
+only the blobs the capture stored are present. So a run fetches **`game` +
+`en-us`**, and it does so **for both builds**: once for the latest build and
+once for the local build (the one the
 installed game names, for the chunk-reuse map — the bridge's scratch tree always
 installs one), with the `--print-plan` pre-pass (§6.1) repeating the fetches —
 while the other language fields are never requested.
@@ -430,7 +446,8 @@ gets a process of its own, so there the cache is per case.
 
 `SUMMARY` is byte-level. For the **fetch set** — "these chunks were requested
 and none of the others was" — **the server's own record of what it was asked for
-is the clean source**: `Vec<(Kind, id)>` behind a mutex, appended before each
+is the clean source**: a `Mutex<Vec<Hit>>` on the server, each hit carrying the
+route kind, the id and the `<build_id>` path segment, appended before each
 response is written. A byte count cannot see a chunk that was fetched when it
 should have been reused *locally*, and that is exactly the failure the fetch-set
 assertion exists to catch.
@@ -470,7 +487,7 @@ could not say which run downloaded what.
 run over all of them sums to the same number but cannot be compared per capture.
 
 Per capture, against a **fresh scratch copy of that capture's file** (§6.3) and
-**its own listeners** (§6.2 for why):
+the **shared listener set** (§6.2 for why):
 
 | flag | why | which runs |
 |---|---|---|
@@ -481,14 +498,16 @@ Per capture, against a **fresh scratch copy of that capture's file** (§6.3) and
 | `--purge-only` | the files-cleanup, without the repair loop | `removed` only |
 | `--jobs 1` | one planned file; determinism over throughput | all |
 | `--fail-fast` | a shim fault should stop the run, not spend the budget discovering the same 404 on every remaining file | all |
-| `--output json` | NDJSON, so the driver reads records by name — `report`, `plan`, `summary` — rather than scraping `key=value` | all |
+| `--output json` | NDJSON, so the driver reads the `plan` and `summary` records by name rather than scraping `key=value` | all |
+| `--log-file <scratch>/girpr.log` | keeps the trace log out of the build directory; the pre-pass gets its own file (§4.7) | all |
 | `--repair-mode inplace` | the mode is **asked for**, so the run's path is the one the claim is about rather than the one the mode resolver happens to pick | all but `removed` |
 
 **Every capture gets `--include`, `removed` included.** `--purge-only --include
 <that path>` is precisely the request that deletes a path the new manifest
 dropped, and `scoped=1` is only reachable with a scope flag. `removed` is the
-only capture that gets `--purge-only` and the only one that does not get
-`--max-files` (there is no repair plan to bound).
+only capture that gets `--purge-only`. No run sets `--max-files`: the scope
+selects exactly one path, so such a ceiling would be vacuous — and for the
+deletion capture the repair plan is empty by construction.
 
 **`--audio` is omitted, deliberately.** An explicit audio selection under an
 active path scope is refused when the scan file falls outside that scope, and
@@ -537,31 +556,36 @@ its pre-pass prints
 PLAN files=0 est_download_bytes=0 est_write_bytes=… est_extra_bytes=… purge_files=1 purge_bytes=… scoped=1
 ```
 
-So for that capture the **purge counters are the pre-pass assertion**: `files=0`
-(the path is correctly absent from the repair plan) and `purge_files=1` with
-`purge_bytes` equal to the patchmap's `old.size` (the cleanup found it and
-priced it). Asserting `files=1` here would fail forever for a reason that has
-nothing to do with the bridge.
+So for that capture the **pre-pass asserts `files=0`** (the path is correctly
+absent from the repair plan; `scoped=1` still holds). The purge byte figures are
+asserted on the real run: `deleted_extra_bytes` equals the patchmap's
+`old.size`, and the download total is zero — the cleanup found the path, priced
+it, and fetched nothing. Asserting `files=1` in the pre-pass here would fail
+forever for a reason that has nothing to do with the bridge.
 
-### 6.2 Isolation is per capture, because the tests run in parallel
+### 6.2 Isolation is per capture, against a shared bridge
 
-**Rust runs `#[test]`s in parallel, and `cargo nextest` runs each of them in its
-own process.** A shared scratch tree, a shared listener and a shared request log
-mean concurrent `girpr` processes fighting over one tree: two runs would patch
-the same path, one run's fetch set would see the other's requests, and a diff
-would compare a tree some other run had already changed. The failure would be
-intermittent and would look like a product bug.
+**One verified bundle and one listener set are bound per process**, on a runtime
+that outlives the test runtimes; every case in that process uses them. A shared
+scratch tree or an uncheckpointed request log would still let one run patch
+another's file or see another's requests — an intermittent failure that looks
+like a product bug — so the cases take a run lock for the whole test, and each
+checkpoints the shared log. Under `cargo nextest` each case gets its own process,
+the lock is uncontended, and the fixture is per case.
 
 So, **per capture:**
 
-- **its own listeners** (its own manifest and chunk ports, its own hyp/sophon
-  origins), so the `build_id` invariant of §4.1 is per-capture too;
-- **its own request log** and **its own log file** for the pre-pass.
+- **its own scratch tree** and **its own log files**, including a separate one
+  for the pre-pass;
+- **its own checkpoint into the shared request log** — the case records where
+  its requests begin and reads the log from there (§4.7), so the fetch-set
+  assertion sees only this run's ids. The `build_id` invariant itself is the
+  server's own contract, tested against the mini-bundle in
+  `tests/artifact_server.rs` (§1.2), not re-asserted by the bridge.
 
 **The served-bytes cache stays shared within a process** (§4.6) because it holds
-nothing capture-specific. Under `cargo test` the per-capture bridges share one
-process and so one cache; under `cargo nextest` each case is a process of its
-own and gets its own.
+nothing capture-specific. Under `cargo test` the cases share one process and so
+one cache; under `cargo nextest` each case gets a process of its own.
 
 ### 6.3 The bundle is the fixture; a copy is the working tree
 
@@ -679,13 +703,16 @@ tests/
   artifact_bridge.rs            the #[ignore]d driver + Gate 2 + the cases
   artifact_bridge/
     bundle.rs                   the matrix and the patchmaps — the records
-    server.rs                   Bundle, Bridge, routes, request log, error shapes
   artifact_server.rs            the server's own tests, against a mini-bundle
   repair_machinery.rs           the repair's own decisions, on crafted fixtures
+  common/run_lock.rs            run-lock cleanup shared with other integrations
+crates/test-fixtures/src/
+  artifact_server.rs            Bundle, Bridge, routes, request log, error shapes
 ```
 
-All are **test-only**; nothing under `src/` changes. `crates/fetch/src/sophon/` carries a
-note that a trace log can be parsed for `chunk downloaded chunk=<id>` — that note
+Everything here is **test-only** or lives in the test-fixtures library crate;
+nothing under `src/` changes. `crates/fetch/src/sophon/stream.rs` carries a note
+that a trace log can be parsed for `chunk downloaded chunk=<id>` — that note
 stays accurate, and that line remains the documented last resort rather than what
 the bridge actually reads.
 

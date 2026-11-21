@@ -311,9 +311,11 @@ Which tags the API actually serves, with no blob downloads.
   "requested": ["<new tag>", "<old tag>", "<tag>"],
   "results": [
     { "tag": "<old tag>", "in_diff_tags": true, "http": 200, "retcode": 0,
-      "build_id": "<build id>", "tag_echoed": "<old tag>", "served": true },
+      "build_id": "<build id>", "tag_echoed": "<old tag>", "served": true,
+      "already_fetched": true },
     { "tag": "<unknown tag>", "in_diff_tags": false, "http": 200, "retcode": -202,
-      "build_id": null, "tag_echoed": null, "served": false }
+      "build_id": null, "tag_echoed": null, "served": false,
+      "already_fetched": false }
   ],
   "summary": { "requested": <count>, "served": <count>, "not_in_diff_tags_but_served": <count> } }
 ```
@@ -321,6 +323,12 @@ Which tags the API actually serves, with no blob downloads.
 `served` is the load-bearing fact: `diff_tags` is a patch-support list, not a
 retention list (spec §3.4), so a capture may pin a pair the API still serves but
 `diff_tags` no longer names.
+
+`already_fetched` is provenance, not a verdict: it is `true` when this row's
+answer was reused from a `getBuild` the run had already made for the captured
+pair, and `false` when a dedicated probe was sent. A `true` row therefore has no
+matching `kind: "probe"` entry in `api/requests.ndjson`, which is what makes the
+two documents reconcilable.
 
 ---
 

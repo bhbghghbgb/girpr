@@ -23,8 +23,8 @@ Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 
 - `repair::phases::plan::build_plan` builds the work list from the **whole live `game` manifest**
   — every common path in the live pair, and many more across the audio fields;
-- `file::repair_all` spawns one task per planned file and downloads whatever is
-  not intact — on the order of **tens of gigabytes**;
+- `file::repair_all` runs one task per planned file (bounded to the `--jobs`
+  window) and downloads whatever is not intact — on the order of **tens of gigabytes**;
 - `--purge-after` / `--purge-before` delete **everything the live manifest does
   not contain**, which for a fixture that small is most of it.
 
@@ -57,10 +57,12 @@ An end-to-end check against a bundle has three per-capture assertions, not one:
 
 **Assertion 3 cannot be made from the data plane at all.** `SUMMARY` is
 byte-level by design — that is what makes assertions 1 and 2 cheap and
-diffable — and per-chunk request detail exists only as `trace` lines in
-`<exe-dir>/logs/girpr_<ts>.log`. It needs a **request log**: run at
-`--log-level trace` and grep it for the ids, or make the requests observable
-another way (a server under test can record them itself).
+diffable — and per-chunk request detail exists only as `trace` lines in the log
+file (by default `logs/girpr_<ts>.log` beside the executable in a release build).
+It needs a **request log**: the file's level is set by `--log-file-level trace`
+(the console `--log-level` is a separate filter), then grep it for the ids, or
+make the requests observable another way (a server under test can record them
+itself).
 
 The key-adjacent fact that *is* on the data plane is `local_manifest` (§6):
 `unavailable` means `getBuild(local)` could not be served, so the reuse map was
@@ -89,7 +91,7 @@ touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_rels()` both see the narrowed world |
+| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so the plan length reported as `files_total` and `expected_rels()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
 | `repair::phases::check::verify_plan` | already narrowed |
 | `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
@@ -97,18 +99,20 @@ touches a path by name has to participate:
 | `repair::phases::post::delete_deprecated` | skip any hidden path |
 | `repair::phases::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
 | `util::write_config_ini` (from `repair::phases::post::run`) | **not bumped** — see below |
-| `repair::phases::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
+| `repair::write_explicit_audio` → `audio::write_scan_file` (execute phase) | refused under a scope — see §3 A1 guard 2 |
 
 A content glob such as `mods/*` hides the files under `mods` but not `mods`
 itself, so an empty `mods` directory is still visible and may be swept; a
 directory is hidden only when the glob matches the directory path itself.
 
 There are two ways to make a path invisible to the purge: filter inside the
-purge walk (`classify_purge_path` gains a scope argument and returns `Keep`
-*before* the manifest check), or push every hidden path into `server_keep`. The
-first is the better fit. `classify_purge_path` is a pure function with an
-exhaustive unit test, and a scope parameter keeps it one; widening `server_keep`
-grows a `HashSet<String>` to hold a large part of the install, turns a pure
+purge walk (the classifier takes the scope verdict and returns `Keep` *before*
+the manifest check — the test-facing `classify_purge_path` computes the verdict
+itself, while the walk passes it to `classify_purge_path_visible`), or push every
+hidden path into `server_keep`. The first is the better fit. The classifier is a
+pure function with exhaustive unit tests, and a scope input keeps it one;
+widening `server_keep` grows a `HashSet<String>` to hold a large part of the
+install, turns a pure
 classifier into one that needs an answer computed elsewhere first, and gets the
 emptied-dir sweep wrong for free — an emptied directory has no files left to
 classify.
@@ -194,7 +198,8 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
 the same string `phases::plan::build_plan` stores; `util::path::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
-`--include`. The semantics are `girsync`'s, including
+`--include`. The matching rules live in the shared `girpr-filter` crate so they
+cannot drift from `girsync`'s: `match_options(false)`, i.e.
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
 false, case_sensitive: false }`.
 
@@ -234,7 +239,8 @@ misused:
    time**, listing the count. Silent agreement is correct, but silence should be
    visible once.
 
-`glob` resolves offline (`Cargo.lock` carries it via `girsync`).
+`glob` resolves offline through the shared `girpr-filter` crate (the same rules
+`girsync` uses), not through a second, locally spelled glob dependency.
 
 ### B1 · `--max-files <N>` — **P0** — pre-flight refusal
 
@@ -261,12 +267,13 @@ est_download_bytes(rel) = Σ c.compressed_size
 
 That is character-for-character the capture's `patch_fetch` definition and
 therefore its `totals.download_bytes`. Because capture invariant **A6** asserts
-`len(raw blob) == compressed_size` while `file/mod.rs` counts
-`stats.download_bytes += blob.len()`, the estimate and the runner's counter are
-the same quantity by construction. This is the figure without `--scan`, and
-there it is an upper bound: the map describes the local *old* build, so a chunk
-already correct in a partially updated target is counted even though the
-in-place path keeps it.
+`len(raw blob) == compressed_size` while the streaming writer (`file/temp.rs`)
+counts `stats.download_bytes += digest.compressed_bytes`, the estimate and the
+runner's counter are the same quantity by construction. This is the figure
+without `--scan`: an over-approximation of what a working reuse path needs (the map describes the
+local *old* build, so a chunk already correct in a partially updated target is
+counted even though the in-place path keeps it) — and not a floor on traffic,
+because a reuse slice that fails its MD5 turns into a download.
 
 **`--scan` replaces that formula with the path the run will really take.** Per
 file it resolves the mode at plan time — temp when requested or the target is
@@ -291,9 +298,9 @@ file fetches its correct chunks too, and only the runtime hard stop bounds it.
   changes after the scan, downloads more than predicted. Refusing on the
   estimate alone would therefore not bound anything. A
   live reservation on `Summary` trips at the real ceiling; in-flight and
-  remaining files are dropped, their `*_tmp` left in place — S3 resume-by-length
-  means an aborted run is not a corrupt run, it is a run that did less — and the
-  run exits `5`.
+  remaining files are dropped, their `*_tmp` left in place — the temp path
+  resumes by length, so an aborted run is a smaller run rather than a corrupt
+  one — and the run exits `5`.
 
 The reservation is a compare-and-swap taken **before** each fetch, not a
 check-then-add: under `--jobs N` a check overshoots by up to N−1 chunks,
@@ -312,7 +319,7 @@ crossed the wire.
 
 The only ceiling that *cannot* be a refusal, and the reason it exists:
 **`download_bytes` does not count most of the disk the run touches.** Every
-reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
+reuse-copy (`copy_reuse_pieces`, called by `try_reuse_slice`) and every
 downloaded-chunk write lands in the install — the target itself on the
 in-place path, `{path}_tmp` on the temp path — and none of it appears in
 `SUMMARY.download_bytes`. A zero-reuse run writes its entire payload to disk
@@ -333,10 +340,14 @@ than no purge: it leaves a tree that is neither the old install nor the new one.
 Refusal is therefore the only acceptable shape. It is answerable because the purge
 plan is built before anything is deleted.
 
-Once planned: if `Σ candidate sizes > N`, delete nothing, exit `5`. The
-post-repair purge pass re-checks against its own re-planned candidates before
-deleting, so the bound does not rest on the pipeline's current promise that a
-successful repair promotes every `*_tmp` it creates.
+Once planned: if `Σ candidate sizes > N`, delete nothing, exit `5`. A walk or
+stat failure makes the candidate list incomplete, so `total_bytes` is only a
+lower bound; with a delete ceiling set that also refuses (naming
+`purge_errors`), rather than comparing an untrustworthy figure. The
+post-repair purge pass re-checks against its own re-planned candidates (and
+applies the same incomplete-plan rule) before deleting, so the bound does not
+rest on the pipeline's current promise that a successful repair promotes every
+`*_tmp` it creates.
 
 **Interaction with `--purge-before`.** `--purge-before` exists to free room for
 the repair, so refusing it because the ceiling is low would defeat its purpose.
@@ -392,14 +403,22 @@ reached first, and `stopped=` says which.
 many bytes is simply not limited by it; there is nothing to report and
 nothing to refuse.
 
+**The same family includes `--max-ram-bytes <N>`.** It bounds the RAM the
+in-place repair may stage while moving bytes inside a file; a file that cannot
+get its reservation is written in the other direction instead of failing, so
+it is a runtime budget rather than a refusal. Being a manually requested
+ceiling it still sets `limited=1`, and its peak is reported as the conditional
+`SUMMARY ram_bytes=` key. The full flag table is in `README.md`.
+
 ### C1 · `--print-plan` + `--plan-out <FILE>` — **P0** — observability
 
 **`--dry-run` does not cover this,** for concrete reasons:
 
-1. **Cost.** `--dry-run` is not cheap. `repair_one_file` runs `util::file_len`
-   and then `util::md5::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
-   `--dry-run` on a real install **full-file MD5s every planned file** — on a
-   full-size install, exactly the cost the limitation is meant to avoid.
+1. **Cost.** `--dry-run` is not cheap. The in-place writer runs a whole-file
+   scan (`util::scan_reader`, length plus full-file MD5) and checks the MD5
+   *before* it reaches `if ctx.dry_run { … }`, so a `--dry-run` on a real install
+   **full-file MD5s every planned file** — on a full-size install, exactly the cost
+   the limitation is meant to avoid.
    `--print-plan` stops before the repair loop entirely, so it pays none of it.
 2. **Plane.** `--dry-run` answers on **stderr / the log file**, via `tracing`.
    Asserting on it means scraping a log with `--log-level debug` turned up. The
@@ -411,13 +430,17 @@ nothing to refuse.
 
 **What it does.** Run the phases up to and including the plans, emit the `PLAN`
 line, and stop. Nothing after the plan is executed: no purge, no repair, no
-post-phase. It returns before `create_dir_all`, so it is read-only by
-construction — and it short-circuits `--dry-run` for the same reason.
+post-phase. It returns before `create_dir_all`, so it is read-only **with
+respect to the install** — the one thing the plan half writes is the requested
+`--plan-out` artifact — and it short-circuits `--dry-run` for the same reason.
 
 ```
 PLAN files=<N> est_download_bytes=<bytes> est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 \
      max_chunk_bytes=<bytes> scoped=1
 ```
+
+Under `--scan` a `scan_bytes=` key appears between the estimates and the purge
+figures.
 
 `--plan-out <FILE>` writes the per-file detail as **JSON** —
 `{"repair": [{rel, size, chunks_total, est_download_bytes, mode, extra_bytes}], "purge": [{rel,
@@ -460,11 +483,13 @@ and `HypClient::new_with_bases` takes them. The flag spelling matches `gircap`'s
 so that one invocation works against either tool.
 
 **The caveat is the important part.** `--sophon-base` redirects **`getBuild`
-only**. Manifest and chunk URLs are not built from the configured base at all —
-`sophon::fetch_manifest` and `sophon::stream_chunk_to` both call
-`sophon::join_url(prefix, id)` on a `url_prefix` read out of the **response
-body** (`manifest_download.url_prefix`, `chunk_download.url_prefix`). Pointing
-the flag at a mock therefore redirects the metadata call and leaves every
+only** (`--hyp-base` covers the HoYoPlay metadata calls: `getGameConfigs`,
+`getGameBranches`, `getBuild`, `getGameDeprecatedFileConfigs`). Manifest and
+chunk URLs are not built from the configured base at all —
+`sophon::fetch_manifest` and `sophon::stream_chunk_to` both resolve a base from
+a `url_prefix` read out of the **response body**
+(`manifest_download.url_prefix`, `chunk_download.url_prefix`) and append the id.
+Pointing a flag at a mock therefore redirects the metadata call and leaves every
 manifest and chunk fetch wherever the mock's own body says.
 
 Consequently a consumer needs a thin **artifact-serving shim**: serve
@@ -482,12 +507,12 @@ sleeps. One failing file costs **a long stretch of pure sleeping** before any
 connection timeout is counted. Across a real plan that is hours of wall clock,
 and every failure reports the same thing.
 
-`--fail-fast` stops spawning new file tasks and aborts the rest once one file has
-exhausted its retries. Mechanism 1 alone cannot help the *first* file, so the flag
-also caps a file at **one** attempt: the flag is an explicit "tell me fast", and a
-user who wants the full retry budget does not pass it. Counter semantics are
-unchanged, `files_failed` stays honest, and the run reaches its `SUMMARY`
-promptly.
+`--fail-fast` caps every file at **one** attempt from the outset and, once one
+file fails, stops starting new file tasks and aborts the in-flight retries.
+Mechanism 1 alone cannot help the *first* file, hence the one-attempt cap: the
+flag is an explicit "tell me fast", and a user who wants the full retry budget
+does not pass it. Counter semantics are unchanged, `files_failed` stays honest,
+and the run reaches its `SUMMARY` promptly.
 
 Only worth setting for `5xx`-shaped failures: `girpr` retries only
 `408 | 429 | 5xx`, so a 4xx costs nothing on its own.
@@ -506,56 +531,59 @@ version would be the launcher desync the ordering exists to prevent, and on an
 already-current install it is a no-op anyway. `SUMMARY config_bumped=0` says
 so.
 
-### E3 · `--max-chunk-bytes <N>` — **P2**
+### E3 · `--max-chunk-bytes <N>` — **P2, not shipped**
 
-One job left, and it is real:
+One job is left, and it is real:
 
 - **Targeting.** A measured capture shows the largest real Genshin chunk to be
-  far bigger than any small synthetic fixture reaches, and the same measurement
-  makes the flag a way to *deliberately* exercise the largest-chunk branch.
+  far bigger than any small synthetic fixture reaches. A ceiling on chunk size
+  would be a way to *deliberately* exercise the largest-chunk branch; today the
+  same effect comes from `--include`-ing the file that carries that chunk.
 
 The chunk path is **streamed**: the body is decoded as it arrives and the
 decoded bytes are written into the target as they are produced, so the peak
 per active chunk is one read window, not the chunk. Skipping files whose
-largest chunk exceeds `N` bounds nothing about RAM any more.
+largest chunk exceeds `N` would bound nothing about RAM any more.
 
-`PLAN max_chunk_bytes=` reports this number today without enforcing it — it is
-printed because printing it costs one line.
+There is no `--max-chunk-bytes` flag today. `PLAN max_chunk_bytes=` reports the
+largest compressed chunk in the plan unconditionally, without enforcing a
+ceiling — it is printed because printing it costs one line.
 
-### E4 · `--no-skip-intact` — **P2**
+### E4 · `--no-skip-intact` — **P2, not shipped**
 
-`repair_one_file`'s fast path is `size + full-file MD5`. On a full-size install
-that is a full-size read before a single byte is downloaded — the largest fixed
-cost in the tool. Under a path scope it is paid only for the files the scope selected,
-which is already a large improvement. This flag skips the check and forces every
-selected file down the download path, so a test can exercise reuse and downloading
-*without* paying for the hash. Deliberately not a production flag: it forfeits
-the skip, which is the main reason the tool is low-disk.
+There is no `--no-skip-intact` flag today. The skip check is `size + full-file
+MD5`; on a full-size install that is a full-size read before a single byte is
+downloaded — the largest fixed cost in the tool. Under a path scope it is paid
+only for the files the scope selected, which is already a large improvement.
+Such a flag would skip the check and force every selected file down the download
+path, so a test could exercise reuse and downloading *without* paying for the
+hash. Deliberately not a production flag: it forfeits the skip, which is the main
+reason the tool is low-disk.
 
-### E5 · `--manifest-field <NAME>` (repeatable) — **P2**
+### E5 · `--manifest-field <NAME>` (repeatable) — **P2, not shipped**
 
-`sophon::select_manifests` returns the `game` field plus one per selected audio
-language, each carrying many further file entries. Capping to `game` cuts fetch
-and parse cost when the audio manifests cannot hold the file under test. Low value — `--audio none` plus `--audio en-us` already spans it — and it
-adds a third way to say "which manifests", so it should be cut if the surface
-needs trimming.
+There is no `--manifest-field` flag today. `sophon::select_manifests` returns
+the `game` field plus one per selected audio language, each carrying many
+further file entries; languages are chosen with `--audio`. Capping to `game`
+would cut fetch and parse cost when the audio manifests cannot hold the file
+under test. Low value — `--audio none` plus `--audio en-us` already spans it —
+and it would add a third way to say "which manifests", so it should stay cut
+unless the surface needs it.
 
 ---
 
 ## 4. Pipeline order
 
 ```
-metadata ──▶ manifests ──▶ build_plan ──▶ purge plan ──┐
-                              │                          │
-                          scope filter (A1)          purge plan
-                              ▼                          │
-                        ┌─────────────┐                  │
-                        │ assert      │  ◀── exit 5 on ──┘
-                        │ ceilings    │      violation
-                        │ (B1 B2 B4)  │
-                        └──────┬──────┘
-                               ▼  exit 0-or-execute
-                    purge-before ──▶ repair loop ──▶ post
+metadata -> manifests -> build_plan (scope filter A1) -> purge plan
+                                                           |
+                                                           v
+                                               assert ceilings (B1 B2 B4)
+                                                    /                  \
+                                       exit 5 on violation         exit 0-or-execute
+                                                                          |
+                                                                          v
+                                                     purge-before -> repair loop -> post
 ```
 
 **Filter before assert.** The ceilings are checked on the *filtered* plan, so
@@ -568,24 +596,29 @@ correct answer rather than a limitation of the design.
 **Assert before everything mutates.** The purge plan is built here too, so a
 `--max-delete-bytes` refusal happens before a single byte is deleted.
 
-**A refusal has no partial state, except one.** For B1, B2's pre-flight half and
-B4: nothing has been written when the run exits `5` — no directory created, no
-`_tmp` opened, no file deleted, no `config.ini` touched. The single exception is
-B2's, B3's and B5's runtime hard stop, which by definition fires mid-flight and
-leaves `*_tmp` behind. That is safe, but it is state, and `SUMMARY stopped=`
-must say so rather than leaving it to be discovered.
+**A refusal has no partial state, except for work already done.** For B1, B2's
+pre-flight half and B4's up-front check: nothing has been written when the run
+exits `5` — no directory created, no `_tmp` opened, no file deleted, no
+`config.ini` touched. Two cases differ. A runtime hard stop (B2, B3, B5) fires
+mid-flight and leaves `*_tmp` behind; the post-repair `--max-delete-bytes`
+re-check refuses only that cleanup pass, after the repair and any earlier pass
+have already run. That is safe, but it is state, and `SUMMARY stopped=` must say
+so rather than leaving it to be discovered.
 
 ### 4.1 Read-only modes
 
-`RunCtx::readonly()` already unifies `--dry-run` and `--check-only`, and every
-delete/write is gated on it. Ceilings apply in read-only modes too — that is
-where they are most useful, since a read-only run is the natural first probe,
-and a ceiling there costs nothing and refuses for free.
+`RunCtx::readonly()` unifies `--dry-run` and `--check-only`; the post-phase has
+its own `ctx.dry_run` discipline for the steps it owns, and `--print-plan` is
+read-only by construction (it returns before the execution phase, though it
+does write its `--plan-out` artifact in the plan half). Ceilings apply in
+read-only modes too — that is where they are most useful, since a read-only run
+is the natural first probe, and a ceiling there costs nothing and refuses for
+free.
 
 | | `--dry-run` | `--check-only` | `--print-plan` |
 |---|---|---|---|
 | `--include` | predicts exactly the narrowed work | verifies exactly the narrowed set | reports exactly the narrowed set |
-| `--max-files N` | refuses before the hash storm | refuses before verifying | reports `files=` and refuses if over |
+| `--max-files N` | refuses before the hash storm | refuses before verifying | refuses before the `PLAN` line; `plan_files=` is on `SUMMARY` |
 | exit on a tripped ceiling | `5` | `5` | `5` |
 
 `--check-only` keeps its `0`/`4` semantics — a ceiling narrows *what is
@@ -633,18 +666,23 @@ flags, not prose. The one thing a refusal has and a normal run does not is that
 every value in it is `0` except the plan-derived ones, which is itself the proof
 that nothing was written.
 
-**`stopped=` names the flag.** The value is the flag that bound
-(`--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`), not a
-vocabulary word. `stopped=--max-write-bytes` is self-describing, scales with
-the number of ceilings, and says more than a flat vocabulary word could.
+**`stopped=` names the flag.** The value is the flag that bound —
+`--max-download-bytes`, `--max-write-bytes`, `--max-verified-download-bytes`,
+`--max-verified-write-bytes`, or `--max-delete-bytes` (the last when the
+post-repair cleanup pass was refused) — not a vocabulary word.
+`stopped=--max-write-bytes` is self-describing, scales with the number of
+ceilings, and says more than a flat vocabulary word could.
 
 ---
 
 ## 6. `SUMMARY` additions
 
-Emitted **only when the corresponding limit is active**, which is what keeps the
-machine contract non-breaking: an unflagged run's output is byte-identical to a
-run that never passes the flag.
+The keys below are emitted **only when the corresponding limit is active**,
+which is what keeps the machine contract non-breaking: an unflagged run's output
+is byte-identical to a run that never passes the flag. Other conditional keys
+(`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`, `ram_bytes=`,
+`damaged_chunks=`) belong to other features and are specified in `README.md`
+and the `girpr_report::summary` source; they follow the same discipline.
 
 ### 6.1 Two numbers for every byte count
 
@@ -681,7 +719,7 @@ question a budget asks.
 | `write_bytes=<N>` | `--max-write-bytes` **or** `--max-verified-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
 | `write_bytes_spent=<N>` | `--max-write-bytes` active. The bytes that **landed in the install**, the bytes of an attempt that later failed its digest included: the disk the run took, which is what the ceiling bounds. `write_bytes` is the other half — the bytes written from sources that passed their gate |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
-| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so different stops cannot share a value |
+| `stopped=<the flag>` | a runtime hard stop fired, or the post-repair delete pass was refused. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes`, `--max-delete-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so different stops cannot share a value; the first ceiling to bind keeps it |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves `download_bytes` and the plan's estimate while still exiting `0` |
 
 `download_bytes` is **not** in this table: it is one of the fixed keys, and it is
@@ -707,22 +745,29 @@ src/repair/phases/plan.rs
 src/repair/purge.rs
                 PurgePlan, PurgeCandidate, plan_purge, apply_purge
 src/repair/scope/
-  mod.rs      re-exports; the assertion that turns a plan into pass/refuse
+  mod.rs      re-exports (PathScope, Limits, Preflight), no policy of its own
   filter.rs   PathScope, is_visible, compile_patterns     (pure)
-  limits.rs   Limits (files / download / write / verified / delete) (pure)
-  ledger.rs   Meter, StoppedBy, the runtime reservations the hard stops read
+  limits.rs   Limits (files / download / write / verified / delete / ram)
+              + the pre-flight assertion that turns a plan into pass/refuse (pure)
+  ledger.rs   thin alias re-exporting Meter and StoppedBy from girpr-report;
+              no policy or type is defined here
   report.rs   PLAN line + --plan-out JSON
+crates/report/src/ledger.rs
+                Meter, StoppedBy, and the runtime reservations the hard stops read
 ```
 
-The plan is **complete before anything mutates**: the repair work list *and* the
-purge candidate list are both built up front, so "how much would this delete?" is
+The plan is **complete before the install mutates** (the only earlier write is
+the requested `--plan-out` artifact): the repair work list *and* the purge
+candidate list are both built up front, so "how much would this delete?" is
 answerable and "how much would this run download?" is known before the first
-write. The layout mirrors `tools/sync/src/rw/` (`mod.rs` wiring, `limits.rs`
-pure config, `gate.rs` counting) and `girsync`'s `planner/` → `apply` split.
+install write. The layout mirrors `crates/sync-leaves/src/rw/` (`mod.rs` wiring,
+`limits.rs` pure config, `gate.rs` counting) and `girsync`'s `planner/` →
+`commands/sync/apply/` split.
 
-`plan_purge` also derives the emptied-directory set during the same walk (a
-per-directory kept-count map, deepest-first, `game_dir` excluded), so
-`remove_emptied_dirs` does not re-walk. Equivalent to "try `remove_dir` on every
+`plan_purge` also derives the emptied-directory set during the same walk (the
+ancestors of kept files as a set, then the remaining directories sorted
+deepest-first with `game_dir` excluded), so `remove_emptied_dirs` does not
+re-walk. Equivalent to "try `remove_dir` on every
 directory" — a dir with kept content fails `remove_dir` harmlessly — but decided
 up front, which is the property the scope work needs. A directory the active
 scope hides is not added to the sweep set at all (it has no file to mark its
@@ -732,19 +777,20 @@ itself, so an empty `mods` directory is still visible and may be swept; a
 directory is hidden only when the glob matches the directory path itself.
 
 The pure modules unit-test without a filesystem, exactly like
-`purge::classify_purge_path` and `phases::plan::build_plan` do. The impure part is
-the ledger and the gate calls in `file/mod.rs`.
+`purge::classify_purge_path_visible` (and the test-facing `classify_purge_path`)
+and `phases::plan::build_plan` do. The impure part is the ledger in the report
+crate and the gate calls in `file/mod.rs`.
 
-Touch points outside the two directories, all one-line insertions at an existing
-branch:
+Touch points outside the scope directory:
 
 | file | change |
 |---|---|
 | `src/cli.rs` | flags + `into_ctx` |
-| `src/config.rs` | `PathScope` + `Limits` on `RunCtx` |
-| `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
-| `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move |
-| `src/repair/file/mod.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
+| `src/config.rs` | `PathScope` + `Limits` on `RunCtx`; `readonly()` and `api_bases()` |
+| `src/repair/mod.rs` | `plan_phase` / `execute_phase` split with `PlanOutcome`; build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` and the audio scan-file write |
+| `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move; post-repair delete-ceiling re-check |
+| `src/repair/file/mod.rs` | download/write reservation calls and their hard stops + fail-fast |
+| `crates/report/src/ledger.rs` | `Meter`, `StoppedBy` and the runtime reservation methods |
 | `crates/report/src/summary.rs` | the conditional `SUMMARY` keys |
 | `README.md` | flag table, machine-contract table, exit-code table |
 

@@ -821,6 +821,8 @@ gircap capture
   [--sophon-base <URL>]                       (testing seam; see --hyp-base)
   [--max-response-bytes <bytes>]              (default 67108864; one response
                                              body's ceiling)
+  [--max-decompressed-bytes <bytes>]          (default: one decompressed body's
+                                             ceiling; recorded in MANIFEST.json)
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file-level LV] [--log-file P]
   [--no-log-file] [--output text|json]
 
@@ -1185,7 +1187,7 @@ patchmaps; `added` contributes its whole-file download cost.
 
 | decision | value | where |
 |---|---|---|
-| workspace membership | **workspace member** (`members = [".", "tools/sync", "tools/capture"]`), matching `girsync` | [`02-plan.md`](02-plan.md) §0 |
+| workspace membership | **workspace member** — the root `Cargo.toml` lists the product, the shared `crates/*` leaves, the dev tools and gircap's own mechanics/test-support crates; `default-members` keeps a plain root build to the product | [`02-plan.md`](02-plan.md) §0 |
 | artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and regenerable | [`02-plan.md`](02-plan.md) §0 |
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
