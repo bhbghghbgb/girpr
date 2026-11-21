@@ -12,7 +12,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Consolidate root integration test binaries | todo | | |
+| T01 | Consolidate root integration test binaries | in_progress | | |
 | T02 | Memory cache seam for girsync record/FS cases | todo | | |
 | T03 | Structured repair diagnostics to drop log-only spawns | todo | | |
 | T04 | Pure log-announcement helper to drop cli_contract spawns | todo | | |
