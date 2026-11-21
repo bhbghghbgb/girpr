@@ -11,7 +11,10 @@ path = "src/lib.rs"
 
 # The same tools-only policy gircap itself uses: the mock asserts with
 # `unwrap`/`expect` throughout, so the workspace's `unwrap_used`/`expect_used`
-# warnings would be noise for a test-only crate.
+# warnings would be noise for a test-only crate. The `gircap-` prefix, the
+# `tools/capture/` home and this local lint table are a deliberate deviation
+# from the shared-crate convention (which uses `girpr-<policy>` in `crates/`
+# and `[lints] workspace = true`); do not "correct" them.
 [lints.rust]
 unsafe_code = "deny"
 

@@ -10,7 +10,10 @@ name = "gircap_http"
 path = "src/lib.rs"
 
 # The same tools-only policy gircap itself uses: this crate holds mechanics, not
-# a repair path, so `unwrap_used`/`expect_used` warnings would be noise.
+# a repair path, so `unwrap_used`/`expect_used` warnings would be noise. The
+# `gircap-` prefix, the `tools/capture/` home and this local lint table are a
+# deliberate deviation from the shared-crate convention (which uses
+# `girpr-<policy>` in `crates/` and `[lints] workspace = true`); do not "correct" them.
 [lints.rust]
 unsafe_code = "deny"
 

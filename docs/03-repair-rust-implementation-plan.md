@@ -26,6 +26,8 @@ crates/tempdir/       # the shared scratch-directory policy: a name nothing coll
 crates/test-fixtures/ # facade-free offline HoYoPlay/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
 crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
 crates/sync-cache/    # the dev tools' redb hash cache, its postcard wire codec and digest vocabulary; consumed directly by girsync and sled2redb
+crates/sync-leaves/    # girsync's acyclic rw limiter, include/exclude filter, link classifier and hardlink facts, consumed directly by girsync so a high-level edit leaves them cached
+crates/sync-test-support/ # girsync-coupled option/cache/planner fixtures shared by girsync and sled2redb; keeps crates/tempdir/ girsync-free
 crates/report/src/    # Summary/Meter/StoppedBy counters + REPORT / PROGRESS / SUMMARY formatting and emission, phase timer
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated

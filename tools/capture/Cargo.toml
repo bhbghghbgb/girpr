@@ -57,6 +57,14 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # probe decision or artifact writer, depends on no program crate (only the
 # logic-free `girpr-digest` and `gircap-http` leaves), and invokes no binary.
 # The zstd_measure/zstd_measure_from pair stays deliberately duplicated there.
+#
+# The three gircap-owned crates below (`gircap-http`, `gircap-hash`,
+# `gircap-test-support`) deliberately deviate from the shared-crate convention:
+# they use the `gircap-` prefix, live under `tools/capture/` rather than
+# `crates/`, and set their own tools-only lint policy instead of
+# `[lints] workspace = true`. That convention is for crates shared between
+# programs; these hold gircap's own mechanics and test fixtures, so a later
+# session should not "correct" the prefix, the location or the lint table.
 
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for

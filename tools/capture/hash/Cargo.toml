@@ -17,7 +17,10 @@ test-support = []
 
 # The same tools-only policy gircap and gircap-http use: this crate holds
 # mechanics, not a repair path, so `unwrap_used`/`expect_used` warnings would be
-# noise. `clippy::all` and denied `unsafe_code` still apply.
+# noise. `clippy::all` and denied `unsafe_code` still apply. The `gircap-`
+# prefix, the `tools/capture/` home and this local lint table are a deliberate
+# deviation from the shared-crate convention (which uses `girpr-<policy>` in
+# `crates/` and `[lints] workspace = true`); do not "correct" them.
 [lints.rust]
 unsafe_code = "deny"
 

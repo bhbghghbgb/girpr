@@ -46,6 +46,7 @@ machine rather than the code.
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `crates/sync-cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
+| `crates/sync-leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
 | `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
@@ -435,7 +436,9 @@ stdout line and the phase timer. It also owns the mutually recursive
 binary depend on it directly, so an edit to repair leaves it cached. It reuses
 `crates/report-core/` for the ordered-JSON and line-writing mechanics and keeps
 this binary's event-first order, unsigned counts and 1/0 flags distinct from
-the other two report planes. `crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
+the other two report planes.
+
+`crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
 chunk streaming, manifest filter, local chunk map and attempt loop; the repair
 code depends on it directly, so an edit to the repair, report or CLI leaves the
 whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
@@ -470,7 +473,12 @@ holds only program-free
 fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
 `crates/sync-test-support/` and are taken only by `girsync` and `sled2redb`,
 which already depend on girsync — so a scratch directory never drags girsync
-into the repair binary's or `gircap`'s test builds. This package's integration
+into the repair binary's or `gircap`'s test builds. girsync's own acyclic
+production leaves — the rw limiter, the include/exclude filter policy, the link
+classifier and the hardlink facts — live in `crates/sync-leaves/` and are taken
+directly by `girsync` and its own integration tests, so an edit to a planner or
+command leaves them cached; it is girsync-only and shares no program policy.
+This package's integration
 fixtures — the offline HoYoPlay/Sophon mock, the manifest/chunk builders and
 the run-lock cleanup — live in `crates/test-fixtures/`, reached through thin
 shims under `tests/common/`; the crate borrows only narrow leaves, never the

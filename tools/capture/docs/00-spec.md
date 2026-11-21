@@ -43,6 +43,19 @@ main tool, and never imports its code.
 | A gircap-owned mechanics crate, not a twelfth shared leaf | `gircap-http` (`tools/capture/http/`): the reqwest transport, the retrying fetcher, the request log and the error-body budget. gircap depends on it directly, so an edit to emit/blobs/manifest leaves this crate and its native tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no probe decisions, no artifact writing — and depends on no program crate (only the shared logic-free leaves `girpr-retry` and `girpr-digest`), and invokes no binary. gircap keeps the three narrow seams on its side: the digesting-file trait, the fixed `User-Agent` value and the ordered-join loop's consumers |
 | A second gircap-owned mechanics crate, still not a shared leaf | `gircap-hash` (`tools/capture/hash/`): the one-pass/one-shot digests, hex spelling, gzip rule and bounded zstd decode/measure helpers. gircap depends on it directly, so an edit to emit/blobs/manifest leaves it and its native zstd tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no artifact writing — and depends on no program crate (only the shared logic-free `girpr-digest` and the logic-free `gircap-http` leaf), and invokes no binary. gircap keeps the `--gzip-threshold` and `--max-decompressed-bytes` flags, every call site and all artifact bytes on its side; the `zstd_measure`/`zstd_measure_from` pair stays deliberately duplicated there |
 
+Three deviations from the shared-crate convention are deliberate and must not be
+"corrected" by a later session. The gircap-owned crates (`gircap-http`,
+`gircap-hash`, `gircap-test-support`) use the `gircap-` prefix, live under
+`tools/capture/` rather than `crates/`, and set their own tools-only lint policy
+(denied `unsafe_code` plus `clippy::all`, without the workspace's `unwrap_used`
+and `expect_used` warns) instead of `[lints] workspace = true`. That convention
+is for crates *shared between programs*; these hold gircap's own mechanics and
+test fixtures. The prefix keeps ownership explicit, the location keeps them in
+gircap's tree, and the local lint policy keeps assertion-heavy mechanics and
+tests quiet — a panic here is a failed developer run, not a failed repair of a
+user's install. None of this weakens the boundary above: these crates still
+depend on no program crate and invoke no binary.
+
 The intent is **do not couple**. Two tools that must stay independent should not
 end up depending on each other in order to prove one of them works, and the
 artifact is the whole interface between them: a bundle on disk, read by whoever

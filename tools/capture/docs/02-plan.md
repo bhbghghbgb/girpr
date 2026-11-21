@@ -63,6 +63,7 @@ tools/capture/
 ├── Cargo.toml            # package gircap
 ├── README.md             # orientation only — no spec duplication
 ├── docs/                 # 00-spec, 01-artifact-schema, this file, 03-design-notes, 04-bundle-differ
+├── test-support/         # gircap-only dev library: the offline mock and fixture builders, reached through the thin tests/common/mod.rs shim so they compile once; borrows nothing from the repair binary
 ├── src/
 │   ├── main.rs           # shim: parse -> tracing -> run -> records -> exit
 │   ├── lib.rs            # module map + re-exports + VERSION + SCHEMA_VERSION
@@ -127,7 +128,7 @@ tools/capture/
 │       ├── mod.rs        # `verify` + `list`, offline
 │       └── materialize.rs# `materialize`, rebuild from chunks/ with no network
 └── tests/
-    ├── common/mod.rs     # local mock server (own code; borrows nothing from girpr)
+    ├── common/mod.rs     # thin shim over the gircap-only test-support library (mock, world builders, shared-bundle publisher); the mock borrows nothing from girpr
     ├── capture_layout.rs # end-to-end artifact shape + selfcheck green + document pins
     ├── cli_contract.rs   # argv -> exit code, the process-level contract
     ├── matrix.rs         # class predicates + greedy admission + budget
