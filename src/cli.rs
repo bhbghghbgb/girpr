@@ -434,6 +434,14 @@ mod tests {
         parse_audio_selection(&owned)
     }
 
+    /// The argument prefix every pure CLI case shares; `extra` holds only the
+    /// flags the case is about.
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["girpr", "--game-path", ".", "--biz", "hk4e_global"];
+        argv.extend_from_slice(extra);
+        Args::parse_from(argv)
+    }
+
     #[test]
     fn audio_lang_normalizes_aliases_and_rejects_unknown() {
         assert_eq!(normalize_audio_lang("zh-cn"), Some("zh-cn".to_string()));
@@ -482,66 +490,36 @@ mod tests {
 
     #[test]
     fn zero_jobs_is_a_usage_error() {
-        let args = Args::parse_from([
-            "girpr",
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "0",
-        ]);
-        let err = args.into_ctx().unwrap_err().to_string();
+        let err = parse(&["--jobs", "0"]).into_ctx().unwrap_err().to_string();
         assert!(err.contains("--jobs must be >= 1"), "{err}");
     }
 
+    /// `--jobs` and `--io-threads` share one file window and one ceiling: the
+    /// explicit value is carried unchanged, the largest accepted value reaches
+    /// the window, and out-of-range values fail with the same flag-named error.
     #[test]
-    fn an_out_of_range_jobs_is_a_usage_error_naming_the_flag_through_either_spelling() {
-        let parse = |flag: &str, jobs: usize| {
-            Args::parse_from([
-                "girpr",
-                "--game-path",
-                ".",
-                "--biz",
-                "hk4e_global",
-                flag,
-                &jobs.to_string(),
-            ])
-        };
-
+    fn jobs_flags_share_the_file_window_and_the_ceiling() {
         for flag in ["--jobs", "--io-threads"] {
+            // Both spellings carry the same explicit file window.
+            let args = parse(&[flag, "8"]);
+            assert_eq!(args.jobs, Some(8), "{flag}");
+            assert_eq!(args.into_ctx().unwrap().jobs, 8, "{flag}");
+
             // The largest accepted value still reaches the file window unchanged.
-            assert_eq!(parse(flag, MAX_JOBS).into_ctx().unwrap().jobs, MAX_JOBS);
+            let ctx = parse(&[flag, &MAX_JOBS.to_string()]).into_ctx().unwrap();
+            assert_eq!(ctx.jobs, MAX_JOBS, "{flag}");
 
             for jobs in [MAX_JOBS + 1, usize::MAX] {
-                let err = parse(flag, jobs).into_ctx().unwrap_err().to_string();
+                let err = parse(&[flag, &jobs.to_string()])
+                    .into_ctx()
+                    .unwrap_err()
+                    .to_string();
                 assert!(
                     err.contains(&format!("--jobs must be <= {MAX_JOBS}")),
                     "{flag} {jobs}: {err}"
                 );
             }
         }
-    }
-
-    #[test]
-    fn jobs_and_its_alias_produce_the_same_file_window() {
-        let parse = |flag: &str| {
-            Args::parse_from([
-                "girpr",
-                "--game-path",
-                ".",
-                "--biz",
-                "hk4e_global",
-                flag,
-                "8",
-            ])
-        };
-        let primary = parse("--jobs");
-        let alias = parse("--io-threads");
-        assert_eq!(primary.jobs, Some(8));
-        assert_eq!(alias.jobs, Some(8));
-        assert_eq!(primary.into_ctx().unwrap().jobs, 8);
-        assert_eq!(alias.into_ctx().unwrap().jobs, 8);
     }
 
     #[test]
@@ -559,16 +537,7 @@ mod tests {
              {warning}"
         );
 
-        let args = Args::parse_from([
-            "girpr",
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--jobs",
-            "1000",
-        ]);
-        assert_eq!(args.into_ctx().unwrap().jobs, 1000);
+        assert_eq!(parse(&["--jobs", "1000"]).into_ctx().unwrap().jobs, 1000);
     }
 
     #[test]
@@ -609,7 +578,7 @@ mod tests {
     #[test]
     fn omitted_audio_is_not_explicit_and_defaults_jobs_to_4() {
         assert_eq!(DEFAULT_JOBS, 4, "the documented default stays 4");
-        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
+        let args = parse(&[]);
         assert_eq!(args.jobs, None, "the default is not an explicit value");
         let ctx = args.into_ctx().unwrap();
         assert!(!ctx.audio_explicit);
@@ -622,8 +591,7 @@ mod tests {
         // The default is `auto`, and the *absence* of the flag is tracked
         // separately: the `SUMMARY repair_mode=` key is emitted only when
         // the flag was passed.
-        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
-        let ctx = args.into_ctx().unwrap();
+        let ctx = parse(&[]).into_ctx().unwrap();
         assert_eq!(ctx.repair_mode, RepairMode::Auto);
         assert!(!ctx.repair_mode_explicit);
     }
@@ -636,16 +604,7 @@ mod tests {
             ("temp", RepairMode::Temp),
             ("discard", RepairMode::Discard),
         ] {
-            let args = Args::parse_from([
-                "girpr",
-                "--game-path",
-                ".",
-                "--biz",
-                "hk4e_global",
-                "--repair-mode",
-                flag,
-            ]);
-            let ctx = args.into_ctx().unwrap();
+            let ctx = parse(&["--repair-mode", flag]).into_ctx().unwrap();
             assert_eq!(ctx.repair_mode, want, "{flag}");
             assert!(ctx.repair_mode_explicit, "{flag}");
             assert_eq!(ctx.repair_mode.as_str(), flag);
@@ -671,20 +630,10 @@ mod tests {
 
     #[test]
     fn the_ram_budget_is_none_unless_it_was_asked_for() {
-        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
-        let ctx = args.into_ctx().unwrap();
+        let ctx = parse(&[]).into_ctx().unwrap();
         assert_eq!(ctx.ram_budget(), None);
 
-        let args = Args::parse_from([
-            "girpr",
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--max-ram-bytes",
-            "1048576",
-        ]);
-        let ctx = args.into_ctx().unwrap();
+        let ctx = parse(&["--max-ram-bytes", "1048576"]).into_ctx().unwrap();
         assert_eq!(ctx.ram_budget(), Some(1_048_576));
         assert!(ctx.limits.is_active());
     }
