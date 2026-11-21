@@ -30,7 +30,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T16 | gircap: blobs + manifest crates | skipped | | §F25/F27 premise stale: wire types already in girpr-proto, zstd helpers in acyclic `hash` leaf; blobs/manifest deep in gircap SCC (blobs→manifest→emit→blobs, manifest↔emit, http↔manifest) with no T14-style acyclic logic-free leaf; §A2 fails |
 | T17 | gircap: small production leaves | completed | 07dcd08e, bfe9c2d2 | New logic-free `gircap-hash` (tools/capture/hash) owns zstd/flate2/md-5 mechanics; gircap direct dep + `pub use gircap_hash as hash`; zstd_measure pair stays duplicated (§A13); gzip test seam behind test-support feature. §A2 verified empirically (emit edit leaves hash+http Fresh). Other candidates skipped (tasks=shim, exit/log/report=§F37 keepers, encoding/paths no heavy dep, pathmap/rejections use SCHEMA_VERSION). §A5/§F39 seams updated; no nextest filter changes. Review G2 clean; bfe9c2d2 added gircap-hash to nextest inventory comment |
 | T18 | Split the disjoint halves of `girpr-digest` | skipped | | Named §A2 payoff impossible: sled2redb no longer hex-only — it reaches the streaming sink via girpr-sync-cache (stream.rs imports Algorithms/Sink) → girsync; editing stream still rebuilds sled2redb through a real dep, not a facade. §F34 premise stale post-T11/T06 |
-| T19 | `girpr-log` split payoff assessment | in_progress | | |
+| T19 | `girpr-log` split payoff assessment | skipped | | All three programs consume level+filter+plan+install and install tracing, so the facade stays an ancestor of every target and no rebuild edge shrinks (§A2); test-support already feature-gated (§F35); §F35 confirmed against current code |
 
 ## Reviews
 
@@ -43,6 +43,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | F | T11, T12 | done | Checkpoint F (T13 skipped, not reviewed). Both completed, no fix/revert; byte contracts, redb pin, util↔cache SCC, policies, direct consumers all verified; §A2 confirmed empirically. 2 follow-ups raised |
 | G1 | T14 | done | Checkpoint G1 (T15 skipped, not reviewed). T14 completed; §A2/§A5/§F40/§F39 verified; one cleanup fix (0670b7c9 removed dead duplicate mechanics files). 3 follow-ups raised |
 | G2 | T17 | done | Checkpoint G2 (T16 skipped, not reviewed). T17 completed; §A2/§A5/§A6/§F40 verified; one doc fix (bfe9c2d2 nextest inventory comment). 3 follow-ups raised |
+| H | T18, T19 | done | Checkpoint H. Both tasks skipped before implementation (T18 stale payoff, T19 §A2 fails) — nothing to review, no fix/revert commits |
 
 ## Follow-ups
 
