@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "crates/audio", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
+members = [".", "crates/audio", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util-counter", "crates/util-hash", "crates/util-ini", "crates/util-path", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -148,13 +148,14 @@ girpr-lock = { path = "crates/lock" }
 # depends on the crate directly; the attempt loop and the test HTTP seam kept
 # with it stay local to the fetch side.
 girpr-fetch = { path = "crates/fetch" }
-# The low-level scan/hash/path/ini/atomic mechanics. They live in their own
-# crate so an edit to the repair, report or CLI modules above leaves them
-# cached; this binary (and every test that links it) depends on the crate
-# directly. The `test-support` feature is enabled only by the dev-dependency
-# below, so the unit-test-only junction/symlink fixtures stay out of shipped
-# builds.
-girpr-util = { path = "crates/util" }
+# The low-level path/atomic, hash/scan and ini mechanics. They live in narrow
+# leaf crates so an edit to one leaves the others (and the consumers that use
+# only those others) cached; this binary depends on each one directly. The
+# `test-support` features are enabled only by the dev-dependencies below, so the
+# unit-test-only fixtures and scan helpers stay out of shipped builds.
+girpr-util-path = { path = "crates/util-path" }
+girpr-util-hash = { path = "crates/util-hash" }
+girpr-util-ini = { path = "crates/util-ini" }
 # Only the `Stream`/`StreamExt` traits and `stream::iter` are used, never the
 # `join!`/`select!`-style macros, so the default `async-await-macro` feature
 # (and its `futures-macro` proc-macro) is not compiled. `std` is still needed:
@@ -191,9 +192,11 @@ girpr-fetch = { path = "crates/fetch", features = ["test-support"] }
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
-# The junction/symlink fixture helpers the repair tests share with util's own
-# unit tests. The feature is off in the normal dependency above.
-girpr-util = { path = "crates/util", features = ["test-support"] }
+# The junction/symlink fixture helpers and the slice-digest helpers the repair
+# tests share with the narrow crates' own unit tests. The features are off in
+# the normal dependencies above.
+girpr-util-path = { path = "crates/util-path", features = ["test-support"] }
+girpr-util-hash = { path = "crates/util-hash", features = ["test-support"] }
 # Test-only features; Cargo unions these with the normal features for a test
 # build, so `cargo build` still compiles just the runtime.
 # `test-util`: paused-time tests check the progress guard's cadence and its

@@ -32,7 +32,10 @@ crates/report/src/    # Summary/Meter/StoppedBy counters + record data plane, RE
 src/biz.rs            # re-exports girpr_model::region::Region as Biz; ids/channels/base URLs live in crates/model/
 crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
-crates/util/          # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, server-path containment
+crates/util-path/     # server-path containment, atomic publish, shared junction/symlink fixtures
+crates/util-hash/     # md5 helpers and the one-read file scan
+crates/util-ini/      # config.ini read/write, ignore/blacklist files
+crates/util-counter/  # the saturating atomic byte counter
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
 src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)

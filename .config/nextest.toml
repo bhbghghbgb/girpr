@@ -1,9 +1,10 @@
 # The workspace's test runner.
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
-# `girpr-fetch`, `girpr-lock`, `girpr-audio`, `girpr-util`, `girpr-log`, `girpr-report`, `girpr-tempdir`,
-# `girpr-sync-cache`, `girpr-sync-leaves`, `gircap`, `gircap-http`, `gircap-hash`,
-# `girsync` and `sled2redb`.
+# `girpr-fetch`, `girpr-lock`, `girpr-audio`, `girpr-util-path`,
+# `girpr-util-hash`, `girpr-util-ini`, `girpr-util-counter`, `girpr-log`,
+# `girpr-report`, `girpr-tempdir`, `girpr-sync-cache`, `girpr-sync-leaves`,
+# `gircap`, `gircap-http`, `gircap-hash`, `girsync` and `sled2redb`.
 # This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
@@ -39,8 +40,8 @@ experimental = ["setup-scripts"]
 #   writing (see `tools/sync/src/commands/sync/apply/copy.rs::test_no_fsync`).
 #   The bytes, size/mtime checks and cache records are unchanged.
 # * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
-#   rename (see `crates/util/src/ini.rs::test_no_fsync`). The temp-file write and
-#   rename are unchanged.
+#   rename (see `crates/util-ini/src/ini.rs::test_no_fsync`). The temp-file write
+#   and rename are unchanged.
 # * `GIRSYNC_TEST_HEARTBEAT_ENTRIES=<n>` — lowers the walk's heartbeat period
 #   from its production 2000 (see `tools/sync/src/scan.rs::heartbeat_entries`),
 #   so a small fixture can trip the heartbeat. Unlike the hooks above this is
@@ -120,19 +121,25 @@ success-output = "immediate"
 # The junction cases report a host-dependent skip on stderr and then pass, so
 # their skip line must be visible under the plain gate too.
 #
-# The filter names the binary as well as the cases, for the same reason the
+# The filter names the binary as well as the case, for the same reason the
 # bridge filter below does: a `test(=name)` predicate on its own matches the
-# same name in *any* binary, so a test elsewhere that happened to share one of
-# these names would silently inherit the override. `package(=girpr-util)` and
-# `binary(=girpr_util)` pin the two cases to the util crate's own test binary.
+# same name in *any* binary, so a test elsewhere that happened to share that
+# name would silently inherit the override. `package(=girpr-util-ini)` and
+# `binary(=girpr_util_ini)` pin the config case to the ini leaf's test binary;
+# the containment case lives in the path leaf's binary below.
 [[profile.default.overrides]]
 filter = """
-    package(=girpr-util)
-    and binary(=girpr_util)
-    and (
-        test(=ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
-        or test(=path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
-    )
+    package(=girpr-util-ini)
+    and binary(=girpr_util_ini)
+    and test(=ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
+"""
+success-output = "immediate"
+
+[[profile.default.overrides]]
+filter = """
+    package(=girpr-util-path)
+    and binary(=girpr_util_path)
+    and test(=path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
 """
 success-output = "immediate"
 
@@ -141,23 +148,23 @@ success-output = "immediate"
 # the switch that turns that skip into a failure.
 [[profile.default.overrides]]
 filter = """
-    package(=girpr-util)
-    and binary(=girpr_util)
+    package(=girpr-util-ini)
+    and binary(=girpr_util_ini)
     and test(=ini::tests::config_bump_refuses_a_dangling_symlink_game_dir)
 """
 success-output = "immediate"
 
-# The Unix symlink cases report the same host-dependent skip on stderr and then
-# pass, so their skip lines must be visible under the plain gate too. A host
-# that refuses a symlink cannot run them, and a silent pass would read as
+# The Unix symlink case reports the same host-dependent skip on stderr and then
+# passes, so its skip line must be visible under the plain gate too. A host
+# that refuses a symlink cannot run it, and a silent pass would read as
 # coverage the run never had.
 #
-# The filter names the binary as well as the cases, for the same reason the
+# The filter names the binary as well as the case, for the same reason the
 # filters above do.
 [[profile.default.overrides]]
 filter = """
-    package(=girpr-util)
-    and binary(=girpr_util)
+    package(=girpr-util-path)
+    and binary(=girpr_util_path)
     and test(=path::tests::contained_join_resolves_a_symlink_and_refuses_the_escape)
 """
 success-output = "immediate"

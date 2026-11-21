@@ -73,7 +73,10 @@ machine rather than the code.
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
-| `crates/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
+| `crates/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
+| `crates/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
+| `crates/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
+| `crates/util-counter/` | the saturating atomic byte counter | `add_saturating` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | a case per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | a case per usage error class |
 | `tests/common/mod.rs` | thin shims over the two shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
@@ -432,9 +435,11 @@ identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
 glob-filter rules to this binary and `girsync`, pinning one glob version and one
-set of matching rules for both. `crates/util/` holds this binary's low-level
-scan, digest, path, atomic-publish and config.ini mechanics; the repair, report
-and CLI code depend on it directly, so an edit there leaves it cached for them.
+set of matching rules for both. `crates/util-path/`, `crates/util-hash/`,
+`crates/util-ini/` and `crates/util-counter/` hold this binary's low-level
+containment, atomic-publish, scan/digest, config.ini and counter mechanics. They
+are separate leaves: the repair, report, fetch, audio and CLI code depend only
+on the ones they use, so an edit to one leaf leaves the others cached.
 `crates/report/` holds this binary's run counters, record data plane, every
 stdout line and the phase timer. It also owns the mutually recursive
 `Summary`/`Meter`/`StoppedBy` group, so the old `report::summary` ↔

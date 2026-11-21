@@ -723,7 +723,9 @@ dependencies = [
  "girpr-tempdir",
  "girpr-test-fixtures",
  "girpr-test-support",
- "girpr-util",
+ "girpr-util-hash",
+ "girpr-util-ini",
+ "girpr-util-path",
  "prost",
  "reqwest",
  "serde",
@@ -744,7 +746,7 @@ dependencies = [
  "anyhow",
  "girpr-audio-language",
  "girpr-tempdir",
- "girpr-util",
+ "girpr-util-path",
  "tracing",
 ]
 
@@ -784,7 +786,8 @@ dependencies = [
  "girpr-model",
  "girpr-proto",
  "girpr-retry",
- "girpr-util",
+ "girpr-util-hash",
+ "girpr-util-path",
  "prost",
  "reqwest",
  "serde",
@@ -825,7 +828,7 @@ dependencies = [
  "chrono",
  "girpr-fs-identity",
  "girpr-tempdir",
- "girpr-util",
+ "girpr-util-path",
 ]
 
 [[package]]
@@ -865,7 +868,7 @@ dependencies = [
  "clap",
  "girpr-log",
  "girpr-report-core",
- "girpr-util",
+ "girpr-util-counter",
  "serde",
  "serde_json",
  "tokio",
@@ -961,18 +964,39 @@ dependencies = [
 ]
 
 [[package]]
-name = "girpr-util"
+name = "girpr-util-counter"
+version = "0.1.0"
+
+[[package]]
+name = "girpr-util-hash"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "girpr-digest",
- "girpr-fs-names",
- "girpr-log",
  "girpr-tempdir",
  "md-5",
+]
+
+[[package]]
+name = "girpr-util-ini"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-log",
+ "girpr-tempdir",
+ "girpr-util-path",
  "serde_json",
- "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "girpr-util-path"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-fs-names",
+ "girpr-tempdir",
+ "tempfile",
 ]
 
 [[package]]

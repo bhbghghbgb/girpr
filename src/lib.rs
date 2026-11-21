@@ -39,8 +39,10 @@
 //! `Meter`/`StoppedBy` group that was mutually recursive with `Summary`; the
 //! HoYoPlay/Sophon fetch path (`hyp`, `sophon`) and the attempt loop (`retry`)
 //! live in `girpr-fetch`, the audio scan-file boundary in `girpr-audio`, and the
-//! low-level scan/hash/path helpers in `girpr-util`. This crate depends on all
-//! four directly under module aliases, so edits here leave their code cached.
+//! low-level scan/hash/path/ini/counter mechanics in narrow `girpr-util-*`
+//! leaves. This crate depends on all of them directly under module aliases, so
+//! edits here leave their code cached, and an edit to one leaf leaves the others
+//! cached too.
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
 //! run config → [`run`] → print `SUMMARY` → flush the log → return the exit
@@ -70,10 +72,16 @@ use girpr_report as report;
 // call site pointing at the same names, while the facade depends on the crate
 // directly rather than only re-exporting it.
 use girpr_fetch::{hyp, retry, sophon};
-// The low-level mechanics live in a separate crate so an edit to `repair`,
-// `report` or `cli` leaves them cached. The alias keeps every existing
-// `crate::util::…` call site pointing at the same names.
-use girpr_util as util;
+// The low-level mechanics live in narrow leaf crates so an edit to `repair`,
+// `report` or `cli` leaves them cached, and an edit to one leaf leaves the
+// others cached. This local alias keeps every existing `crate::util::…` call
+// site pointing at the same names; there is no facade crate to force an edit
+// to one leaf through every consumer.
+mod util {
+    pub use girpr_util_hash::*;
+    pub use girpr_util_ini::*;
+    pub use girpr_util_path::*;
+}
 
 // The log policy crate, re-exported so that a caller can name the type
 // [`init_tracing`] returns without adding a dependency of its own: the policy
@@ -148,10 +156,10 @@ pub mod test_support {
     pub use crate::util::EMPTY_MD5;
     pub use girpr_lock::{Lock, lock_path, takes_lock};
 
-    // One refusal type across the product's tests and the util crate's
+    // One refusal type across the product's tests and the path leaf's
     // unit-test-only fixture helpers, so a test can pass its seam value
-    // straight into `girpr_util`'s junction/symlink classifiers.
-    pub use girpr_util::test_support::{FixtureRefusal, skip_fixture_refusal};
+    // straight into the junction/symlink classifiers.
+    pub use girpr_util_path::test_support::{FixtureRefusal, skip_fixture_refusal};
 
     /// `now` minus `age`, or `None` when this platform cannot represent the
     /// result.

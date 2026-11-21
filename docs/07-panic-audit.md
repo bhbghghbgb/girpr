@@ -24,7 +24,8 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
    production regions of:
    `crates/fetch/src/sophon/{stream,proto,map,filter}.rs`,
    `crates/fetch/src/hyp.rs`, `crates/fetch/src/retry.rs`,
-   `crates/util/src/{path,ini,md5,atomic}.rs`,
+   `crates/util-path/src/{path,atomic}.rs`, `crates/util-ini/src/ini.rs`,
+   `crates/util-hash/src/md5.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
    `src/repair/{scan,reuse,purge,mod}.rs`, `crates/audio/src/lib.rs`
    (aliased as `girpr_audio` in `src/repair/mod.rs`), `crates/lock/src/lib.rs`,
@@ -76,8 +77,8 @@ says which.
 | `src/repair/reuse.rs` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
 | `src/repair/scan.rs` `all_chunks_download_bytes` and `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
 | `src/repair/scan.rs` `scan_plan`; `src/repair/file/inplace.rs` `attempt_inplace_inner` and `patch_chunks` | `dest_ok[i]`, `source_ok[i]`, `sources[i]`, `captured[i]`, `bad[k]` | server manifest/plan | **Invariant**: every vector is built from `file.chunks.len()` or from `dest_ranges`/`source_ranges` over the same chunk list in the same function; `bad` is a subset of valid indices. |
-| `crates/util/src/md5.rs` `scan_reader` | range offset/length | server (plan/source ranges) | **Guarded/invariant**: ranges are interned per chunk; `offset + len ≤ 2^64-2` because both originate as non-negative `i64`; `[a..b]` is bounded by the block read (`b ≤ n ≤ buf.len()`); `order` indices come from `0..ranges.len()`. |
-| `crates/util/src/md5.rs` `read_range` | chunk size | server | Allocation is sized by the chunk. It is only called for a staged source **after** the scan proved the full range intact (`source_ok`), so a merely-declared huge size cannot reach it. **Invariant by gate**. |
+| `crates/util-hash/src/md5.rs` `scan_reader` | range offset/length | server (plan/source ranges) | **Guarded/invariant**: ranges are interned per chunk; `offset + len ≤ 2^64-2` because both originate as non-negative `i64`; `[a..b]` is bounded by the block read (`b ≤ n ≤ buf.len()`); `order` indices come from `0..ranges.len()`. |
+| `crates/util-hash/src/md5.rs` `read_range` | chunk size | server | Allocation is sized by the chunk. It is only called for a staged source **after** the scan proved the full range intact (`source_ok`), so a merely-declared huge size cannot reach it. **Invariant by gate**. |
 | `src/repair/file/temp.rs` `chunk_end` | chunk `offset + uncompressed_size` | server | **Guarded**: `u64::try_from` + `checked_add`; failure is a per-file error. |
 | `src/repair/file/temp.rs` `try_reuse_slice` (reuse copy) | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
 | `src/repair/file/mod.rs` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
