@@ -453,7 +453,7 @@ seam in the report plane takes scalar provenance values, so the report does not
 depend on the fetch crate. `tools/capture/http/` holds gircap's own logic-free
 HTTP mechanics — the reqwest transport, the retrying fetcher, the request log and
 the error-body budget; gircap depends on it directly, so an edit to its
-emit/blobs/manifest subsystems leaves the whole reqwest/wiremock tree cached. It
+emit/blobs/manifest subsystems leaves the whole reqwest tree cached. It
 owns no program policy: exit codes, tag probing, negative-probe inputs, region
 resolution and artifact writing stay in gircap, behind a narrow digesting-file
 trait and a fixed `User-Agent` value, so no capture logic crosses the boundary.

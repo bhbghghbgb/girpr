@@ -46,7 +46,6 @@ fn the_measured_global_urls_are_reproduced_exactly() {
 
 /// Canned replies, served on a dependency-free loopback server.
 mod canned {
-    use super::*;
     use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 
     /// A canned server. The loopback leaf owns the listener, the reply writer
@@ -59,7 +58,7 @@ mod canned {
     impl Mock {
         /// How many requests reached the server.
         pub async fn hits(&self) -> usize {
-            self.server.hits()
+            self.requests().await.len()
         }
 
         /// The requests recorded, for asserting what went on the wire.

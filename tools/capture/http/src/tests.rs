@@ -668,7 +668,6 @@ fn the_buffered_file_write_equals_the_string() {
 
 /// Canned replies, served on a dependency-free loopback server.
 mod canned {
-    use super::*;
     use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 
     /// A canned server. The loopback leaf owns the listener, the reply writer

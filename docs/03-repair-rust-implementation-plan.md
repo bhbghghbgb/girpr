@@ -15,7 +15,7 @@ one command split into phases — the coordinator (`mod.rs`) owns phase order an
 the exit-code contract, the submodules own the work.
 
 ```text
-Cargo.toml            # runtime: clap, chrono, tokio, reqwest, serde(+json), tracing(+subscriber, appender), anyhow, walkdir, futures-util, tempfile, plus the girpr-* path crates below; prost/zstd and wiremock are dev-only; no regex dependency
+Cargo.toml            # runtime: clap, chrono, tokio, reqwest, serde(+json), tracing(+subscriber, appender), anyhow, walkdir, futures-util, tempfile, plus the girpr-* path crates below; prost/zstd and the loopback mock are dev-only; no regex dependency
 src/main.rs           # shim: Args::try_parse (arg errors -> exit 1) -> logging::init_tracing -> repair::run -> SUMMARY -> exit
 src/lib.rs            # module map + re-exports
 src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx -> RunCtx
