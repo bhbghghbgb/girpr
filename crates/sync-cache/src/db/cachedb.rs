@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result, bail};
 use redb::{
-    Database, DatabaseError, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
-    ReadableTableMetadata, TableHandle, backends::InMemoryBackend,
+    Database, DatabaseError, ReadOnlyTable, ReadTransaction, ReadableTable, ReadableTableMetadata,
+    TableHandle, backends::InMemoryBackend,
 };
 use std::collections::HashMap;
 use std::fs::File;
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{Handle, SharedCache, memory_registry, redb_builder};
+use super::{Handle, ReadableCache, SharedCache, memory_registry, redb_builder};
 use crate::open::{
     is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
 };
@@ -1313,7 +1313,7 @@ mod tests {
     ///
     /// The names, not the rows: what matters about a table here is that it
     /// is there.
-    fn table_names(db: &impl ReadableDatabase) -> Vec<String> {
+    fn table_names(db: &impl ReadableCache) -> Vec<String> {
         let txn = db.begin_read().unwrap();
         let mut names: Vec<String> = txn
             .list_tables()

@@ -6,7 +6,7 @@ description = "Microbenchmarks of the file-system operations the test suite perf
 
 [dependencies]
 # Track the same redb pin the workspace cache uses (`tools/sync`).
-redb = "=4.6.0"
+redb = "=5.0.0"
 
 [profile.release]
 opt-level = 2

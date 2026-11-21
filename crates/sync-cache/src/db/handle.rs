@@ -1,8 +1,32 @@
 //! The [`Handle`] enum: the redb handle a [`super::CacheDb`] wraps,
 //! read/write or read-only.
 
-use redb::{Database, ReadableDatabase};
+use redb::{Database, ReadTransaction, ReadableDatabase, TransactionError};
 use std::sync::Arc;
+
+/// The slice of redb's `ReadableDatabase` this crate needs.
+///
+/// redb 5 sealed `ReadableDatabase`, so a type outside the crate can no longer
+/// implement it. This local trait keeps the same read-only surface over the
+/// three handles the crate reads through: a writable [`Database`], a
+/// [`redb::ReadOnlyDatabase`], and the [`Handle`] enum that erases the
+/// difference. The two redb types delegate to their sealed-trait methods;
+/// `Handle` dispatches to whichever variant it holds.
+pub(crate) trait ReadableCache {
+    fn begin_read(&self) -> Result<ReadTransaction, TransactionError>;
+}
+
+impl ReadableCache for Database {
+    fn begin_read(&self) -> Result<ReadTransaction, TransactionError> {
+        ReadableDatabase::begin_read(self)
+    }
+}
+
+impl ReadableCache for redb::ReadOnlyDatabase {
+    fn begin_read(&self) -> Result<ReadTransaction, TransactionError> {
+        ReadableDatabase::begin_read(self)
+    }
+}
 
 /// The redb handle a [`super::CacheDb`] wraps.
 ///
@@ -27,18 +51,11 @@ impl Handle {
     }
 }
 
-impl ReadableDatabase for Handle {
-    fn begin_read(&self) -> std::result::Result<redb::ReadTransaction, redb::TransactionError> {
+impl ReadableCache for Handle {
+    fn begin_read(&self) -> Result<ReadTransaction, TransactionError> {
         match self {
-            Handle::Writable(d) => d.begin_read(),
-            Handle::ReadOnly(d) => d.begin_read(),
-        }
-    }
-
-    fn cache_stats(&self) -> redb::CacheStats {
-        match self {
-            Handle::Writable(d) => d.cache_stats(),
-            Handle::ReadOnly(d) => d.cache_stats(),
+            Handle::Writable(d) => ReadableCache::begin_read(d.as_ref()),
+            Handle::ReadOnly(d) => ReadableCache::begin_read(d),
         }
     }
 }

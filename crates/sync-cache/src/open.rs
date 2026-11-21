@@ -124,7 +124,7 @@
 //! them.
 
 use anyhow::{Context, Result, bail};
-use redb::ReadableDatabase;
+use redb::ReadableTable;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::num::NonZeroUsize;
@@ -136,7 +136,7 @@ use tracing::{info, trace, warn};
 use crate::helpers;
 use crate::helpers::ts_now;
 
-use super::db::{CacheDb, redb_builder};
+use super::db::{CacheDb, ReadableCache, redb_builder};
 use super::lock::{TryLock, acquire as acquire_lock};
 use super::schema::{CACHE_VERSION, FileRec, Meta};
 use super::wire::decode_meta;
@@ -1278,7 +1278,7 @@ pub(super) fn read_meta_bytes(txn: &redb::ReadTransaction) -> Result<Option<Vec<
 }
 
 /// The `meta` row, or `None` when the table or the key is absent.
-pub(super) fn read_meta(db: &impl ReadableDatabase) -> Result<Option<Meta>> {
+pub(super) fn read_meta(db: &impl ReadableCache) -> Result<Option<Meta>> {
     let txn = db.begin_read().context("begin read (meta)")?;
     match read_meta_bytes(&txn)? {
         None => Ok(None),

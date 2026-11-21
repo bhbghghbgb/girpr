@@ -15,4 +15,4 @@ pub use cachedb::CacheDb;
 // write handle: the batch is not a second reading of the table, it is the same
 // reading of it.
 pub(super) use cachedb::visit_entry_keys;
-pub(super) use handle::Handle;
+pub(super) use handle::{Handle, ReadableCache};

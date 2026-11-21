@@ -17,8 +17,8 @@ workspace = true
 # to a planner, command or other subsystem leaves this crate — and `redb`,
 # `postcard` and `tempfile` — cached instead of recompiling them.
 # The hash cache file itself; pinned to the version the byte contract was
-# validated against (the sidecar lock keeps fail-fast open behaviour on 4.x).
-redb = "=4.6.0"
+# validated against (the sidecar lock keeps fail-fast open behaviour).
+redb = "=5.0.0"
 # The positional wire codec for the two cache rows. Only the serde-based
 # `to_extend` / `take_from_bytes` helpers are used, so the default heapless/cobs
 # surface is not needed; serde's `std` supplies String/Vec.
