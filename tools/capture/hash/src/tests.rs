@@ -378,7 +378,7 @@ fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
             .expect("reader");
     assert_eq!(from_slice, from_reader, "reader and slice must agree");
     assert_eq!(from_reader.len, payload.len() as u64);
-    assert_eq!(from_reader.md5, crate::hash::md5_hex(&payload));
+    assert_eq!(from_reader.md5, crate::md5_hex(&payload));
 
     // A truncated frame fails the same way from both sides, and both say
     // whether the magic was there.

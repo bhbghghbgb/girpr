@@ -1,0 +1,53 @@
+[package]
+name = "gircap-hash"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The logic-free digest and zstd mechanics owned by gircap: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure"
+
+[lib]
+name = "gircap_hash"
+path = "src/lib.rs"
+
+# `gzip` is the test-only reference encoder: gircap's own test modules use it to
+# assert that its streaming writer is byte-equal. It stays out of production
+# builds unless a consumer opts in through this feature.
+[features]
+test-support = []
+
+# The same tools-only policy gircap and gircap-http use: this crate holds
+# mechanics, not a repair path, so `unwrap_used`/`expect_used` warnings would be
+# noise. `clippy::all` and denied `unsafe_code` still apply.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+# Hex spelling and the byte-absorbing sink, shared with the repair binary and
+# girsync. A logic-free leaf: this crate publishes lowercase hex and owns the
+# algorithm choice; no flag, exit code or published shape crosses the boundary.
+girpr-digest = { path = "../../../crates/digest" }
+# The fetcher streams a blob into the caller's digesting file through the
+# logic-free `BodyFile` trait. gircap-http depends on no program crate, so this
+# edge stays a one-way mechanics-to-mechanics dependency.
+gircap-http = { path = "../http" }
+# MD5 is the manifest/CDN language; SHA-256 is what checksums.json publishes.
+md-5 = "0.11.0"
+# Bounded zstd decode and streaming measurement. This crate is the sole owner
+# of zstd for gircap's production path, so an edit to emit/blobs/manifest leaves
+# this crate and the native zstd tree cached.
+zstd = "0.14.4"
+# The gzip rule's reference/reader path; the streaming writer stays in gircap's
+# emit module. It owns no program policy here.
+flate2 = "1.1.11"
+# The `Encoding` wire enum's derives.
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+# The `Encoding` wire-spelling test serialises a value.
+serde_json = "1.0.154"
+# The scratch-directory helper, shared with the repair binary and girsync, so
+# the tree a test writes into is named and removed the same way everywhere.
+girpr-tempdir = { path = "../../../crates/tempdir" }

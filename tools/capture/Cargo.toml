@@ -7,8 +7,8 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its eleven path deps are leaf crates holding a
-# shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
+# the tree (docs/00-spec.md §2). Its eleven shared path deps are leaf crates
+# holding a shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
 # mechanics — gircap supplies its own event-first order, event field, value
@@ -48,6 +48,15 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # code, version pair, region value, probe decision or artifact writer, depends
 # on no program crate, and invokes no binary. The digesting-file trait, the fixed
 # User-Agent and the ordered-join loop's consumers stay in this package.
+#
+# The digest/zstd mechanics are likewise not a shared leaf: `gircap-hash` below
+# is gircap's own logic-free crate for the one-pass/one-shot digests, the hex
+# spelling, the gzip rule and the bounded zstd decode/measure helpers. gircap
+# depends on it directly so an edit to emit/blobs/manifest leaves it and its
+# native zstd tree cached. It owns no exit code, version pair, region value,
+# probe decision or artifact writer, depends on no program crate (only the
+# logic-free `girpr-digest` and `gircap-http` leaves), and invokes no binary.
+# The zstd_measure/zstd_measure_from pair stays deliberately duplicated there.
 
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for
@@ -77,6 +86,12 @@ path = "src/main.rs"
 # region resolution, artifact writing and exit-code mapping. It depends on no
 # girpr crate and invokes no binary (docs/00-spec.md §2).
 gircap-http = { path = "http" }
+# The digest/zstd mechanics crate is gircap's own logic-free leaf: the digests,
+# hex spelling, gzip rule and bounded zstd helpers compile once there and stay
+# cached across edits to emit/blobs/manifest in this package. gircap keeps the
+# gzip threshold flag, the report bytes and every call site here; it depends on
+# no program crate and invokes no binary (docs/00-spec.md §2).
+gircap-hash = { path = "hash" }
 clap = { version = "4.6.8", features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
@@ -135,8 +150,6 @@ girpr-proto = { path = "../../crates/proto" }
 # leaf: gircap keeps its own `Biz::resolve`, its `Endpoints` override seam and
 # its request builders. `clap` is on because `Biz` is the `--biz` flag type.
 girpr-model = { path = "../../crates/model", features = ["clap"] }
-zstd = "0.14.4"
-md-5 = "0.11.0"
 # Hex spelling of digests, shared with the repair binary and the converter. A
 # leaf mechanics crate: gircap still publishes lowercase hex strings and owns
 # its own algorithm set, it only borrows the spelling.
@@ -177,8 +190,15 @@ tracing-appender = "0.2.5"
 chrono = { version = "0.4.45", features = ["clock"] }
 
 [dev-dependencies]
+# gircap's own test modules exercise `hash::gzip`, the test-only reference
+# encoder that stays out of the shipped crate unless this feature is opted into.
+gircap-hash = { path = "hash", features = ["test-support"] }
 # `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
 serde_json = "1.0.154"
+# Only the unit/integration tests build zstd frames to feed the decode helpers.
+# Production zstd lives in `gircap-hash`, which gircap depends on directly, so
+# this native tree is not rebuilt when emit/blobs/manifest change.
+zstd = "0.14.4"
 # The shared read-only bundle fixture (`tests/common/mod.rs`) takes a real
 # cross-process file lock so parallel `nextest` processes capture the default
 # bundle once and then all read the same on-disk tree. Already in the lock file

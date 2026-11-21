@@ -684,6 +684,7 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "gircap-hash",
  "gircap-http",
  "gircap-test-support",
  "girpr-audio-language",
@@ -698,7 +699,6 @@ dependencies = [
  "girpr-retry",
  "girpr-tempdir",
  "ini_core",
- "md-5",
  "percent-encoding",
  "prost",
  "reqwest",
@@ -711,6 +711,20 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "wiremock",
+ "zstd",
+]
+
+[[package]]
+name = "gircap-hash"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "gircap-http",
+ "girpr-digest",
+ "girpr-tempdir",
+ "md-5",
+ "serde",
+ "serde_json",
  "zstd",
 ]
 

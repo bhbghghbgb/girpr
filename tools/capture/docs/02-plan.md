@@ -72,7 +72,9 @@ tools/capture/
 │   ├── failure/mod.rs    # Failure, its four constructors, the failure summary
 │   ├── config/mod.rs     # the resolved run plan: tags, classes, budgets, paths
 │   ├── biz/mod.rs        # launcher/game ids, hyp+sophon bases, channel tuple
-│   ├── hash/mod.rs       # md5/sha256 one-pass + one-shot, hex, gzip rule, zstd helpers
+│   ├── (no hash/ dir)    # md5/sha256, hex, gzip rule and zstd helpers moved to the
+│   │                     # logic-free tools/capture/hash/ crate; `pub use gircap_hash
+│   │                     # as hash` keeps every crate::hash::* path unchanged
 │   ├── run/mod.rs        # command dispatch: the four entry points
 │   ├── report/mod.rs     # stdout data plane (single owner of println!)
 │   ├── logging/mod.rs    # tracing init + the log file (JSON lines), over the shared log policy

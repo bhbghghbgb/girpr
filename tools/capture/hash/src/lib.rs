@@ -1,4 +1,12 @@
-//! Digests and the gzip decision.
+//! Digests and the gzip decision — the logic-free mechanics owned by `gircap`.
+//!
+//! This crate owns the one-pass/one-shot digests, the hex spelling, the gzip
+//! rule and the bounded zstd helpers. It holds no program policy — no exit
+//! codes, no version pairs, no artifact writing — and depends on no program
+//! crate (only the shared logic-free leaves `girpr-digest`, `gircap-http` and,
+//! in tests, `girpr-tempdir`), and invokes no binary. `gircap` depends on it
+//! directly so an edit to `emit`/`blobs`/`manifest` leaves this crate (and its
+//! native `zstd` tree) cached.
 //!
 //! Cross-cutting, and early: the manifest path hashes archives, the blob path
 //! hashes chunk bodies, assembly MD5s a rebuilt file, and the index writer
@@ -286,19 +294,20 @@ pub fn should_gzip(len: usize, threshold: u64) -> bool {
 
 /// gzip a body, in memory. **Test-only: this is the reference, not the path.**
 ///
-/// Production writes through [`crate::emit::write_json_gz`], which streams
+/// Production writes through `gircap::emit::write_json_gz`, which streams
 /// through the encoder and never holds the whole body. This function is
-/// `#[cfg(test)]` — and that is the point. The signature is
+/// test-only — and that is the point. The signature is
 /// `&[u8] -> Vec<u8>`, which is precisely the shape that invites someone to go
 /// back to serialising a 27 MB manifest decode into a `String` and compressing it
-/// in one shot. `cfg(test)` turns "please don't" into "you can't", and this stays
+/// in one shot. The `test-support` feature (or this crate's own `cfg(test)`)
+/// turns "please don't" into "you can't" for shipped builds, and this stays
 /// available because the gate that proves streaming is byte-equal needs something
 /// to compare against.
 ///
 /// The level is the flate2 default and is **not** a promise: nothing in the
 /// bundle depends on the compressed bytes being reproducible, which is exactly
 /// why the decompressed digest is the one recorded.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut enc = flate2::write::GzEncoder::new(
         Vec::with_capacity(bytes.len() / 4),
@@ -592,10 +601,11 @@ pub fn zstd_measure_from<R: std::io::Read>(
 }
 
 /// Fill `buf` up to its length, or as far as the reader gets. How many arrived.
-pub(crate) fn read_upto<R: std::io::Read>(
-    reader: &mut R,
-    buf: &mut [u8],
-) -> std::io::Result<usize> {
+///
+/// `pub` because gircap's chunk-sniffing path reads a frame's magic through the
+/// same helper: a single `read` may return fewer than four bytes, and the two
+/// callers must agree on what "filled" means.
+pub fn read_upto<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
         match reader.read(&mut buf[filled..])? {

@@ -43,9 +43,10 @@
 //! There is no dependency on the repair crate, no `Command` against its binary,
 //! no shared exit-code contract and no shared flags apart from the log ones.
 //! The only other shared vocabulary is the README's version strings
-//! (`docs/00-spec.md` §2), and the one shared crate is `girpr-log`
-//! (`crates/log/`): the log-file and log-level *policy*, which holds no logic
-//! of any program.
+//! (`docs/00-spec.md` §2). The shared crates are logic-free leaves (the log
+//! policy, digest mechanics, wire types and so on); `gircap-http` and
+//! `gircap-hash` are this tool's own logic-free mechanics crates, which it
+//! depends on directly so edits elsewhere leave their native trees cached.
 
 pub mod assemble;
 pub mod biz;
@@ -56,7 +57,11 @@ pub mod emit;
 mod encoding;
 pub mod exit;
 pub mod failure;
-pub mod hash;
+// The digest/zstd mechanics live in the logic-free `gircap-hash` crate, which
+// gircap depends on directly so an edit to emit/blobs/manifest leaves that crate
+// and its native zstd tree cached. The alias keeps every `crate::hash::*` path
+// resolving unchanged; no digest, zstd or report byte moves across the boundary.
+pub use gircap_hash as hash;
 pub mod http;
 pub mod hyp;
 pub mod logging;
