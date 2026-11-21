@@ -13,11 +13,14 @@
 //! below — the live and the settled byte figures, `local_manifest`, the write
 //! accounting, the fetch set — is on the public `Summary` data plane, so the
 //! counter-only cases drive `girpr::run` in-process and read the very
-//! `summary_record` the binary renders. The cases that assert on the **trace
-//! log** (write order, trim timing, the download records) still run the real
-//! binary: a file log is a process-level artifact. One of those keeps the
-//! deprecated `--io-threads` alias alive in this suite; `--output json` and
-//! the flag wiring are pinned in `cli_contract.rs`.
+//! `summary_record` the binary renders. The decisions that used to live only
+//! in the log (write direction, salvage figures, trim timing, tier choice,
+//! chunk accounting) are now on the in-process `RepairDiagnostics` surface,
+//! so those cases run the library too and assert on the values rather than
+//! on log prose. One case still runs the real binary and reads its **trace
+//! log**: a file log is a process-level artifact, and that one smoke also
+//! keeps the deprecated `--io-threads` alias alive in this suite. `--output
+//! json` and the flag wiring are pinned in `cli_contract.rs`.
 //!
 //! The server is the mock in `tests/common`: a local HoYoPlay + Sophon on
 //! `127.0.0.1`, no external network. The fixtures are described rather than
@@ -55,7 +58,7 @@ use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, ctx_for,
     field, lay_out, md5hex, scope, stamp_ago, stamp_ahead, temp_dir,
 };
-use girpr::test_support::{RepairMode, summary_record};
+use girpr::test_support::{RepairDiagnostics, RepairMode, summary_record, take_repair_diagnostics};
 use girpr::{RunExit, Summary};
 use girpr_tempdir::TempDir;
 
@@ -63,36 +66,30 @@ use girpr_tempdir::TempDir;
 // the harness
 // ---------------------------------------------------------------------------
 
-/// The file-log level a run asks for.
+/// The file-log level the one binary smoke asks for.
 ///
 /// The per-chunk download records parsed by [`downloaded_chunks`] are emitted
-/// at `trace`; everything else this suite asserts in the log is `debug` or
-/// above. So `Debug` is the default and trace is opt-in, which keeps the
-/// spawned binary from writing (and this harness from reading) a full trace
-/// log on every run.
+/// at `trace`, so the smoke has to opt into it. Every other case now reads
+/// structured diagnostics in-process and writes no log file at all.
 #[derive(Clone, Copy)]
 enum LogLevel {
-    Debug,
     Trace,
 }
 
 impl LogLevel {
     fn as_str(self) -> &'static str {
         match self {
-            LogLevel::Debug => "debug",
             LogLevel::Trace => "trace",
         }
     }
 }
 
-/// One `girpr` invocation's result, with its NDJSON records indexed by name.
+/// One `girpr` invocation's result, for the single binary smoke.
 struct Run {
     code: i32,
-    records: BTreeMap<String, serde_json::Value>,
     stdout: String,
     stderr: String,
-    /// Where the run's log file was written. Read lazily via [`Run::log`] so
-    /// the many runs that never inspect their log do not pay for the read.
+    /// Where the run's log file was written. Read lazily via [`Run::log`].
     log_path: PathBuf,
     log_cache: OnceLock<String>,
 }
@@ -103,40 +100,32 @@ impl Run {
         self.log_cache
             .get_or_init(|| std::fs::read_to_string(&self.log_path).unwrap_or_default())
     }
-
-    fn record(&self, event: &str) -> &serde_json::Value {
-        self.records
-            .get(event)
-            .unwrap_or_else(|| panic!("no {event} record in:\n{}", self.stdout))
-    }
-    fn num(&self, event: &str, key: &str) -> u64 {
-        self.record(event)[key]
-            .as_u64()
-            .unwrap_or_else(|| panic!("{event}.{key} is not a number in {:?}", self.record(event)))
-    }
 }
 
-/// The data-plane result of a case that only reads counters.
+/// The data-plane result of a case that drives the library in-process.
 ///
 /// This is the in-process counterpart of [`Run`]: it holds the one `SUMMARY`
 /// line the binary would have printed (rendered from the public [`Summary`] by
-/// [`summary_record`]) and the exit code. It deliberately has no `log()`: a
-/// case that asserts on the trace log must use [`Rig::run`] instead. The
-/// `event` argument on [`LibRun::num`]/[`LibRun::word`] is kept so converted
-/// cases can keep their assertions verbatim — there is only one record here,
-/// the terminal `SUMMARY`.
+/// [`summary_record`]), the exit code, and the structured decisions the run
+/// recorded. It deliberately has no `log()`: the one case that asserts on the
+/// trace log uses [`Rig::run_at_level`] instead. The `event` argument on
+/// [`LibRun::num`]/[`LibRun::word`] is kept so converted cases can keep their
+/// counter assertions verbatim — there is only one record here, the terminal
+/// `SUMMARY`.
 struct LibRun {
     code: i32,
     stdout: String,
     stderr: String,
+    diag: RepairDiagnostics,
 }
 
 impl LibRun {
-    fn new(summary: &Summary, code: RunExit) -> Self {
+    fn new(summary: &Summary, code: RunExit, diag: RepairDiagnostics) -> Self {
         Self {
             code: code.code(),
             stdout: summary_record(summary, code.code()).text(),
             stderr: String::new(),
+            diag,
         }
     }
 
@@ -165,10 +154,11 @@ fn flag_value<'a>(flags: &[&'a str], at: usize) -> &'a str {
 struct Rig {
     mock: MockServer,
     dir: TempDir,
-    /// Somewhere for the trace logs, **outside** the install: the install's
+    /// Somewhere for the trace log, **outside** the install: the install's
     /// tree is what the scope assertions compare, and a log file appearing in
-    /// it would look like the run added a file.
-    logs: TempDir,
+    /// it would look like the run added a file. Created lazily so only the one
+    /// binary smoke pays for a log temp tree.
+    logs: OnceLock<TempDir>,
     /// How many runs this rig has made, so each gets its own trace log.
     runs: std::sync::atomic::AtomicU64,
 }
@@ -189,7 +179,7 @@ impl Rig {
         Rig {
             mock,
             dir,
-            logs: temp_dir("machinery_log"),
+            logs: OnceLock::new(),
             runs: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -220,20 +210,16 @@ impl Rig {
         .expect("write config.ini");
     }
 
-    /// Run the real binary against the rig's install at the default `debug`
-    /// file-log level. Use [`Rig::run_at_level`] for the few runs whose log
-    /// assertions need `trace` records.
-    ///
-    /// `--io-threads` is the deprecated alias for `--jobs`; this rig keeps one
-    /// run on it so the integration suite still exercises the alias.
-    async fn run(&self, args: &[&str]) -> Run {
-        self.run_at_level(LogLevel::Debug, args).await
-    }
-
-    /// Run the real binary, writing the log file at the requested level.
+    /// Run the real binary, writing a trace log file. This is the suite's one
+    /// process-level smoke: the per-chunk download records are a log artifact,
+    /// and `--io-threads` (the deprecated alias for `--jobs`) is exercised
+    /// here so the integration suite still covers it.
     async fn run_at_level(&self, level: LogLevel, args: &[&str]) -> Run {
         let n = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let log = self.logs.join(format!("girpr-{n}.log"));
+        let log = self
+            .logs
+            .get_or_init(|| temp_dir("machinery_log"))
+            .join(format!("girpr-{n}.log"));
         let mut all: Vec<String> = vec![
             "--game-path".into(),
             self.game().display().to_string(),
@@ -250,9 +236,8 @@ impl Rig {
             "--log-file".into(),
             log.display().to_string(),
             // The log file's own level, which is a knob of its own: `--log-level`
-            // would only change the console. Only the per-chunk download
-            // records need `trace`; every other log assertion in this suite is
-            // satisfied by `debug`, so that is the default and trace is opt-in.
+            // would only change the console. The per-chunk download records
+            // this smoke reads are emitted at `trace`.
             "--log-file-level".into(),
             level.as_str().into(),
         ];
@@ -265,19 +250,8 @@ impl Rig {
         crate::common::remove_run_lock_for_args(&all);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        let mut records = BTreeMap::new();
-        for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
-            let v: serde_json::Value = serde_json::from_str(line)
-                .unwrap_or_else(|e| panic!("--output json line is not JSON ({e}): {line}"));
-            // Last one wins: `PROGRESS` ticks repeatedly and `SUMMARY` is
-            // terminal, so the newest record of a name describes the run.
-            if let Some(event) = v["event"].as_str() {
-                records.insert(event.to_string(), v);
-            }
-        }
         Run {
             code: out.status.code().expect("process must exit normally"),
-            records,
             stdout,
             stderr,
             log_path: log,
@@ -286,13 +260,13 @@ impl Rig {
     }
 
     /// Drive `girpr::run` in-process and return the `SUMMARY` a binary run
-    /// would have printed, for cases that only read counters.
+    /// would have printed together with the structured decisions it made.
     ///
     /// The install, biz, endpoint overrides and single job mirror what
     /// [`Rig::run_at_level`] spells on the command line; only the flags the
-    /// converted cases use are mapped onto the public fields of a `RunCtx`.
-    /// No process is spawned and no log file is written, so this is not a
-    /// substitute for the log-asserting cases.
+    /// cases use are mapped onto the public fields of a `RunCtx`. No process
+    /// is spawned and no log file is written; the decisions the run used to
+    /// report only in its log are read from its `RepairDiagnostics`.
     async fn run_lib(&self, flags: &[&str]) -> LibRun {
         let mut ctx = ctx_for(self.game(), &self.mock, 1);
         let mut i = 0;
@@ -334,8 +308,9 @@ impl Rig {
             }
             i += 1;
         }
+        let _ = take_repair_diagnostics();
         let (summary, code) = crate::common::run(ctx).await.expect("in-process run");
-        LibRun::new(&summary, code)
+        LibRun::new(&summary, code, take_repair_diagnostics())
     }
 }
 
@@ -654,11 +629,11 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
     };
     let mut scanned_args = vec!["--scan"];
     scanned_args.extend_from_slice(&args);
-    let scanned = scanned_rig.run(&scanned_args).await;
+    let scanned = scanned_rig.run_lib(&scanned_args).await;
 
     let plain_rig = Rig::start(&spec).await;
     plain_rig.at_local_version();
-    let plain = plain_rig.run(&args).await;
+    let plain = plain_rig.run_lib(&args).await;
 
     assert_eq!(scanned.code, 0, "{}\n{}", scanned.stdout, scanned.stderr);
     assert_eq!(
@@ -686,14 +661,22 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
         );
     }
     assert_eq!(
-        in_place_chunk_stats(scanned.log()),
-        in_place_chunk_stats(plain.log()),
+        (
+            scanned.diag.chunks_total,
+            scanned.diag.chunks_kept,
+            scanned.diag.chunks_reused,
+            scanned.diag.chunks_downloaded,
+        ),
+        (
+            plain.diag.chunks_total,
+            plain.diag.chunks_kept,
+            plain.diag.chunks_reused,
+            plain.diag.chunks_downloaded,
+        ),
         "the per-file chunk accounting must be identical"
     );
     assert!(
-        scanned
-            .log()
-            .contains("reusing the plan scan in the in-place writer"),
+        scanned.diag.plan_scan_reused,
         "the scanned run must take the guarded reuse on an unchanged file"
     );
 }
@@ -846,35 +829,6 @@ async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_chang
     );
 }
 
-/// The `chunks_*` figures from the one `repaired in place` line in a trace log.
-fn in_place_chunk_stats(log: &str) -> BTreeMap<&'static str, u64> {
-    let line = log
-        .lines()
-        .find(|l| l.contains("repaired in place"))
-        .unwrap_or_else(|| panic!("no `repaired in place` line in:\n{log}"));
-    [
-        "chunks_total",
-        "chunks_kept",
-        "chunks_reused",
-        "chunks_downloaded",
-    ]
-    .into_iter()
-    .map(|key| {
-        let marker = format!("{key}=");
-        let at = line
-            .find(&marker)
-            .unwrap_or_else(|| panic!("no {key} in: {line}"));
-        let value = line[at + marker.len()..]
-            .split_whitespace()
-            .next()
-            .unwrap_or_else(|| panic!("no value for {key} in: {line}"))
-            .parse()
-            .unwrap_or_else(|e| panic!("{key} is not a number in: {line} ({e})"));
-        (key, value)
-    })
-    .collect()
-}
-
 /// With no local manifest the reuse map is empty, so **every** chunk is
 /// fetched — the other side of the same boundary.
 ///
@@ -928,9 +882,9 @@ async fn the_three_tiers_produce_the_same_file() {
     let spec = shift_down(64);
     let want = lay_out(&spec.new[0].chunks);
 
-    // Staged: the default, with a budget the payload fits. This sub-run only
-    // reads counters (the staged byte figure) and file bytes, so it drives the
-    // library in-process; only the shortage sub-run below needs the log.
+    // Staged: the default, with a budget the payload fits. Every sub-run
+    // drives the library in-process; the shortage one reads its decision from
+    // the structured record rather than from the log.
     let staged = Rig::start(&spec).await;
     staged.at_local_version();
     let run = staged.run_lib(&["--max-ram-bytes", "1048576"]).await;
@@ -953,45 +907,33 @@ async fn the_three_tiers_produce_the_same_file() {
     // Ordered by shortage: the reservation is refused.
     let by_shortage = Rig::start(&spec).await;
     by_shortage.at_local_version();
-    let run = by_shortage.run(&["--max-ram-bytes", "16"]).await;
+    let run = by_shortage.run_lib(&["--max-ram-bytes", "16"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(by_shortage.read("game/shift.dat"), want);
     assert_eq!(run.num("summary", "ram_bytes"), 0, "nothing was staged");
     assert!(
-        run.log()
-            .contains("the moving bytes do not fit the RAM budget"),
-        "the refusal has to be said, not merely acted on\n{}",
-        run.log()
+        run.diag.ram_shortage,
+        "the refusal has to be recorded, not merely acted on"
     );
 }
 
 /// A refused reservation is a **shortage**, and `--max-ram-bytes 0` is a
-/// **mode**. They end up in the same tier and say different things.
+/// **mode**. They end up in the same tier and record different decisions.
 #[tokio::test]
 async fn a_refused_reservation_is_not_the_same_thing_as_staging_nothing() {
     let spec = shift_down(64);
 
     let by_mode = Rig::start(&spec).await;
     by_mode.at_local_version();
-    let run = by_mode.run(&["--max-ram-bytes", "0"]).await;
+    let run = by_mode.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        !run.log()
-            .contains("the moving bytes do not fit the RAM budget"),
-        "the mode is not a shortage\n{}",
-        run.log()
-    );
+    assert!(!run.diag.ram_shortage, "the mode is not a shortage");
 
     let by_shortage = Rig::start(&spec).await;
     by_shortage.at_local_version();
-    let run = by_shortage.run(&["--max-ram-bytes", "16"]).await;
+    let run = by_shortage.run_lib(&["--max-ram-bytes", "16"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        run.log()
-            .contains("the moving bytes do not fit the RAM budget"),
-        "the shortage has to be said\n{}",
-        run.log()
-    );
+    assert!(run.diag.ram_shortage, "the shortage has to be recorded");
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,12 +952,12 @@ async fn a_uniform_upward_shift_keeps_every_source_in_the_descending_order() {
     let spec = shift_up(64);
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        run.log().contains("ascending=false"),
-        "the content moved later, so the descending order is the one that keeps it\n{}",
-        run.log()
+    assert_eq!(
+        run.diag.ascending,
+        Some(false),
+        "the content moved later, so the descending order is the one that keeps it"
     );
     assert_eq!(
         rig.mock.chunk_hits(),
@@ -1031,12 +973,12 @@ async fn a_uniform_downward_shift_keeps_every_source_in_the_ascending_order() {
     let spec = shift_down(64);
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        run.log().contains("ascending=true"),
-        "the content moved earlier, so the ascending order is the one that keeps it\n{}",
-        run.log()
+    assert_eq!(
+        run.diag.ascending,
+        Some(true),
+        "the content moved earlier, so the ascending order is the one that keeps it"
     );
     assert_eq!(
         rig.mock.chunk_hits(),
@@ -1060,14 +1002,22 @@ async fn a_mixed_shift_keeps_the_larger_half() {
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
 
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        run.log()
-            .contains(&format!("salvaged={n_down} of={}", n_down + n_up)),
-        "the ascending order keeps the {n_down} that moved down, and not the \
-         {n_up} that moved up\n{}",
-        run.log()
+    assert_eq!(
+        run.diag.ascending,
+        Some(true),
+        "the ascending order keeps the {n_down} that moved down, and not the {n_up} that moved up"
+    );
+    assert_eq!(
+        run.diag.salvaged,
+        Some(n_down as u64),
+        "the order keeps the {n_down} that moved down"
+    );
+    assert_eq!(
+        run.diag.salvaged_of,
+        Some((n_down + n_up) as u64),
+        "and considers all {n_down} down plus {n_up} up chunks"
     );
     let asked = rig.mock.chunk_hits();
     assert_eq!(
@@ -1101,12 +1051,12 @@ async fn a_tie_goes_to_the_ascending_order() {
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
 
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
-    assert!(
-        run.log().contains("ascending=true"),
-        "a tie goes to the ascending order\n{}",
-        run.log()
+    assert_eq!(
+        run.diag.ascending,
+        Some(true),
+        "a tie goes to the ascending order"
     );
     assert_eq!(rig.read("game/tie.dat"), lay_out(&spec.new[0].chunks));
 }
@@ -1120,8 +1070,8 @@ async fn a_tie_goes_to_the_ascending_order() {
 /// write.
 ///
 /// The trim's outcome is not in the output contract — the file ends at the
-/// target size either way — so the log is where the outcome is visible, and
-/// the log is the documented place it is written.
+/// target size either way — so the decision is recorded on the in-process
+/// diagnostics rather than read back from a log line.
 #[tokio::test]
 async fn the_dead_tail_is_released_before_the_first_write() {
     let size = 64usize;
@@ -1142,19 +1092,13 @@ async fn the_dead_tail_is_released_before_the_first_write() {
 
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.log().contains("trimming the dead tail"),
-        "the dead tail is released before the first write\n{}",
-        run.log()
+        run.diag.dead_tail_trimmed,
+        "the dead tail is released before the first write"
     );
-    assert!(
-        !run.log()
-            .contains("a reuse candidate reaches past the target's end"),
-        "and it is not deferred as well\n{}",
-        run.log()
-    );
+    assert!(!run.diag.trim_deferred, "and it is not deferred as well");
     // The file ends at the target's size, with the tail gone.
     assert_eq!(rig.read("game/shrink.dat"), lay_out(&spec.new[0].chunks));
 }
@@ -1181,18 +1125,12 @@ async fn a_source_past_the_end_defers_the_trim() {
 
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.diag.trim_deferred, "the trim waits for the end");
     assert!(
-        run.log()
-            .contains("a reuse candidate reaches past the target's end"),
-        "the trim waits for the end\n{}",
-        run.log()
-    );
-    assert!(
-        !run.log().contains("trimming the dead tail"),
-        "and it is not released eagerly as well\n{}",
-        run.log()
+        !run.diag.dead_tail_trimmed,
+        "and it is not released eagerly as well"
     );
     assert_eq!(rig.read("game/shrink.dat"), lay_out(&spec.new[0].chunks));
 }
@@ -1215,15 +1153,11 @@ async fn a_file_that_does_not_shrink_is_not_trimmed() {
 
     let rig = Rig::start(&spec).await;
     rig.at_local_version();
-    let run = rig.run(&["--max-ram-bytes", "0"]).await;
+    let run = rig.run_lib(&["--max-ram-bytes", "0"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        !run.log().contains("trimming the dead tail")
-            && !run
-                .log()
-                .contains("a reuse candidate reaches past the target's end"),
-        "a file that does not shrink has no dead tail\n{}",
-        run.log()
+        !run.diag.dead_tail_trimmed && !run.diag.trim_deferred,
+        "a file that does not shrink has no dead tail"
     );
 }
 
