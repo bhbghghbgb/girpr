@@ -17,7 +17,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
 | T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
-| T06 | HTTP + Sophon fetch crate | in_progress | | |
+| T06 | HTTP + Sophon fetch crate | pending_review | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged |
 | T07 | Report plane crate | todo | | |
 | T08 | CLI / config crate for narrow tests | todo | | |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
@@ -125,6 +125,10 @@ that in the relevant task's `note` instead of silently proceeding):
   leaves out-edges to `sophon::{FileReuse,SophonChunk}`, `manifest::LocalChunkMap`,
   `config::RepairMode`, `file::Mode` and `report::Record`; a boundary around the
   whole SCC would be most of the product, so §A2 fails. Revisit only after the
-  needed subsystems are extracted as leaves: Sophon/chunk types (T06, itself
-  blocked by the `report/emit` hyp-type edge) and the report plane / `Record`
-  (T07). Do not re-attempt T04/T05 as leaf splits before then.
+  needed subsystems are extracted as leaves and the out-edges are severed.
+  Correction from T06 validation: fetch/Sophon is NOT part of this SCC (no
+  back-edge to report/config/repair), and the `report/emit` hyp-type edge is
+  severable with a borrowed-scalar `ReportProvenance` seam (T06) — T07 is not
+  gated by it. The remaining SCC out-edges are `manifest::LocalChunkMap`,
+  `config::RepairMode`, `file::Mode` and `report::Record`. Do not re-attempt
+  T04/T05 as leaf splits before those are addressed.
