@@ -19,7 +19,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | Replace wiremock with a std-only loopback HTTP mock | completed | b5eba55d, c2fb8120, 6a375e6b, 5e7b2735, 8a8d077e, e1dee308, 80053a67, ab98c622 (review fix) | 7 commits: dependency-free leaf + 4 site migrations + repair-server fold-in + manifest cleanup; wiremock gone from all 4 manifests; unique deps girpr 220→208, fetch 167→152, gircap 222→210, gircap-http 161→146; cargo tree -d 229→199; no wiremock smoke kept (wire compat not contractual); metadata.rs serve returns (TestServer,String), tests bind _origin to keep Drop-abort alive; capture malformed/probe/hyp/test-fixtures servers untouched (distinct contracts) |
 | T06 | Trial rust-lld for the test profile | completed | c603441b | Adopted: 1 config line in .cargo/config.toml (linker = rust-lld for x86_64-pc-windows-msvc) + comment; A/B/A/B clean nextest wall 436.4s→408.5s (~4-7%); all workspace targets linked, 2175 passed/11 skipped; profile.test debug/codegen untouched; host-dependent per §F4/§A7, revalidate per host/CI |
 | T07 | Pin the stable toolchain to an exact release | completed | 08d799c5 | 1 commit; channel=1.100.0 (exact rustc already in use, no compiler change, only one-time cache invalidation); README, tests/scripts/io-profile/README.md and rust-toolchain.toml comment updated; build + nextest 2175 passed/11 skipped; no MSRV floor; Cargo.toml [package] "stable" comment kept (accurate, avoids manifest-body change); .cargo/config.toml untouched; host-specific pointer §F3/§A8 |
-| T08 | Narrow `girpr-util` rebuild edges | pending_review | 3b502ee5, 70083a25, 33931270, 1f5dff56, 2e5b1ea9 | 5 commits: split into girpr-util-path/hash/ini/counter, facade deleted; ini.rs edit now leaves audio/fetch/report/lock Fresh (warmed state per §A11); isolated leaves 82 passed/2 skipped; full 2175 passed/11 skipped; fetch uses hash+path (report's "disjoint" claim slightly off); atomic lives in path, counter its own leaf; junction fixtures + FixtureRefusal behind girpr-util-path test-support, md5 slices behind girpr-util-hash test-support — preserve these seams; 3 visibility promotions for ini fixture helpers; nextest filters + doc tables updated |
+| T08 | Narrow `girpr-util` rebuild edges | completed | 3b502ee5, 70083a25, 33931270, 1f5dff56, 2e5b1ea9 | 5 commits: split into girpr-util-path/hash/ini/counter, facade deleted; ini.rs edit now leaves audio/fetch/report/lock Fresh (warmed state per §A11); isolated leaves 82 passed/2 skipped; full 2175 passed/11 skipped; fetch uses hash+path (report's "disjoint" claim slightly off); atomic lives in path, counter its own leaf; junction fixtures + FixtureRefusal behind girpr-util-path test-support, md5 slices behind girpr-util-hash test-support — preserve these seams; 3 visibility promotions for ini fixture helpers; nextest filters + doc tables updated |
 | T09 | Narrow the small rebuild-locality edges | todo | | |
 | T10 | Gate the fully-ignored `bundle_shapes` binary | todo | | |
 | T11 | Root dev-dependency hygiene and frozen manifest bodies | todo | | |
@@ -43,7 +43,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | C | T03, T04 | done | |
 | D | T05 | done | Review fix ab98c622 added missing gircap leaf-crate doc table entries |
 | E | T06, T07 | done | |
-| F | T08 | pending | |
+| F | T08 | done | |
 | G | T09, T10, T11 | pending | |
 | H | T12, T13 | pending | |
 | I | T14, T15 | pending | |
@@ -76,6 +76,8 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU15 | Document a deliberate toolchain-bump procedure (trigger/cadence/owner) | dropped | Process-doc nit |
 | FU16 | Revalidate the rust-lld linker win on the CI host | dropped | Caveat already in T06 note; near-duplicate of FU01 |
 | FU17 | Re-trial and scope linker config for other MSVC triples if support widens | dropped | Conditional future scope |
+| FU18 | Narrow the root's private mod util glob alias to per-leaf aliases | open | Clarity only; no rebuild-graph effect — likely drop at Phase 3 |
+| FU19 | Clarify the 3 promoted junction test-helper visibilities as test-only | open | No behavior/byte change; already behind test-support feature — likely drop |
 
 ## Persistent context
 
