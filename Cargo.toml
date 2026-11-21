@@ -205,10 +205,10 @@ girpr-util = { path = "crates/util", features = ["test-support"] }
 # the normal dependency above; tokio's `default` set is empty, so this withholds
 # no test feature.
 tokio = { version = "1.54.1", default-features = false, features = ["test-util", "process", "net", "io-util"] }
-# Canned reply servers in the HTTP unit tests. The library owns the listener,
-# request journal and invocation counts; the tests only script statuses/bodies
-# and assert on what it recorded.
-wiremock = "0.6"
+# The dependency-free loopback server behind the canned-reply unit tests. The
+# local helper keeps this product's own body-scripting contract; the fetch and
+# capture tests script the same leaf with their own replies and assertions.
+girpr-loopback-mock = { path = "crates/loopback-mock" }
 # Only the manifest fixture test encodes and decodes a canned Sophon body here;
 # the production paths do their prost/zstd work in `girpr-fetch`.
 prost = "0.14.6"

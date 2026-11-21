@@ -7,22 +7,18 @@
 //! This is deliberately a local helper, not a shared fixture: the fetch crate
 //! and both capture tools keep their own canned servers because each encodes
 //! a different contract. The listener, response writer and request journal
-//! belong to `wiremock`; this helper only scripts the body sequence.
+//! come from the dependency-free loopback leaf; this helper only scripts the
+//! body sequence.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use girpr_loopback_mock::{Reply, ScriptedServer};
 
-use wiremock::matchers::any;
-use wiremock::{Mock as Reply, MockServer, Request, ResponseTemplate};
-
-/// A canned server. The library's request journal is the only record of what
-/// was served; there is no hand-rolled accept loop or response writer here.
+/// A canned server. This helper's tests read the base URL only.
 pub(crate) struct Mock {
-    server: MockServer,
+    server: ScriptedServer,
 }
 
 impl Mock {
-    /// `http://127.0.0.1:<port>`, from the library.
+    /// `http://127.0.0.1:<port>`.
     pub(crate) fn uri(&self) -> String {
         self.server.uri()
     }
@@ -31,23 +27,11 @@ impl Mock {
 /// A throwaway HTTP server that answers the nth request with the nth body,
 /// repeating the last one. Every reply is `200 OK` with the body as its bytes.
 pub(crate) async fn serve_bodies(bodies: Vec<&'static str>) -> Mock {
-    let answers: Vec<Vec<u8>> = bodies
+    let replies = bodies
         .into_iter()
-        .map(|body| body.as_bytes().to_vec())
+        .map(|body| Reply::new(200, body))
         .collect();
-    assert!(
-        !answers.is_empty(),
-        "a canned server needs at least one body"
-    );
-    let cursor = Arc::new(AtomicUsize::new(0));
-    let server = MockServer::start().await;
-    let next = Arc::clone(&cursor);
-    Reply::given(any())
-        .respond_with(move |_req: &Request| {
-            let i = next.fetch_add(1, Ordering::SeqCst).min(answers.len() - 1);
-            ResponseTemplate::new(200).set_body_bytes(answers[i].clone())
-        })
-        .mount(&server)
-        .await;
-    Mock { server }
+    Mock {
+        server: ScriptedServer::start(replies),
+    }
 }
