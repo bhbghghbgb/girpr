@@ -1071,7 +1071,7 @@ mod tests {
                     // so a failure cannot turn into a hang. The timeout turns
                     // a spawn-order regression into a failure rather than a
                     // hang.
-                    tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+                    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
                         .await
                         .expect("the join loop observes the panic before the earlier task finishes")
                         .expect("the panic-observation sender is not dropped early");

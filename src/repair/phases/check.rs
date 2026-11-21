@@ -400,7 +400,7 @@ mod tests {
     /// a single known point instead of granting each wait its own fresh
     /// allowance. This bounds how long the test tolerates a broken gate; it is
     /// not a timing assertion, because every wait wakes on its notify.
-    const GATE_WAIT: Duration = Duration::from_secs(10);
+    const GATE_WAIT: Duration = Duration::from_secs(2);
 
     /// Time left before `deadline`, or `None` once it has passed. The slow
     /// check's release wait records an expired deadline (no positive time

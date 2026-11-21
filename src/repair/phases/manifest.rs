@@ -637,7 +637,7 @@ mod tests {
 
             let fetched = fetch_latest(&client, &backoff, &build, &audio_langs, &ignore, jobs);
             let observed = async {
-                tokio::time::timeout(Duration::from_secs(5), gate.wait_for(bound))
+                tokio::time::timeout(Duration::from_secs(2), gate.wait_for(bound))
                     .await
                     .expect("the fan-out reaches its bound");
                 assert_eq!(
@@ -702,7 +702,7 @@ mod tests {
         drop(fetched);
         drop(server);
 
-        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_idle())
+        tokio::time::timeout(Duration::from_secs(2), gate.wait_until_idle())
             .await
             .expect("the aborted gated connection releases its slot");
         assert_eq!(
@@ -731,7 +731,7 @@ mod tests {
         .await
         .expect("the manifest answers");
         assert_eq!(manifests.len(), 1);
-        tokio::time::timeout(Duration::from_secs(5), server.wait_until_idle())
+        tokio::time::timeout(Duration::from_secs(2), server.wait_until_idle())
             .await
             .expect("the finished connection is reaped without another accept");
     }

@@ -1313,7 +1313,7 @@ mod tests {
     /// not a timing bound, because the closure signals as soon as it runs.
     #[tokio::test]
     async fn a_blocking_task_starts_before_its_handle_is_awaited() {
-        const RECEIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+        const RECEIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = spawn_blocking_traced(move || {
             tx.send(()).expect("the test receiver is alive");
