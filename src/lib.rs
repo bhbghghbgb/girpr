@@ -117,7 +117,12 @@ pub use repair::scope::ledger::Meter;
 ///   tested against a fixed epoch that a clock could pass;
 /// - `FixtureRefusal` and `skip_fixture_refusal` report a fixture this host
 ///   cannot create, so a case skips out loud unless an opt-in variable makes
-///   that refusal a failure.
+///   that refusal a failure;
+/// - `RepairDiagnostics` and `take_repair_diagnostics` are the structured
+///   decisions an in-process run made (write direction, salvage figures, trim
+///   and tier choices, in-place chunk accounting), so a test can assert on
+///   them without spawning the binary and parsing its log file. The record is
+///   thread-local and read only here; a shipped run never looks at it.
 ///
 /// `Record` and `summary_record` repeat the root exports on purpose: a test can
 /// import everything it needs from this one module. That
@@ -128,6 +133,7 @@ pub mod test_support {
 
     pub use crate::config::RepairMode;
     pub use crate::hyp::terminal_retcode;
+    pub use crate::repair::diagnostics::RepairDiagnostics;
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
     pub use crate::retry::BackoffPolicy;
@@ -162,6 +168,20 @@ pub mod test_support {
     /// [`stamp_ago_from`] relative to the current clock.
     pub fn stamp_ago(age: Duration) -> Option<SystemTime> {
         stamp_ago_from(SystemTime::now(), age)
+    }
+
+    /// Drain the structured decisions the most recent in-process run on this
+    /// thread recorded, leaving a fresh record behind.
+    ///
+    /// Calling this before a run clears any leftovers; calling it after one
+    /// reads exactly that run's decisions. A shipped run writes to the same
+    /// thread-local but never calls this, so nothing it emits changes.
+    ///
+    /// The record is thread-local, so a caller must run the library on a
+    /// current-thread runtime (the default for `#[tokio::test]`); a
+    /// multi-thread runtime would record on worker threads and drain nothing.
+    pub fn take_repair_diagnostics() -> RepairDiagnostics {
+        crate::repair::diagnostics::take()
     }
 
     /// `now` plus `age`, or `None` when this platform cannot represent the

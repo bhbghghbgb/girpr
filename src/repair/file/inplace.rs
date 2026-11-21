@@ -16,6 +16,7 @@ use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
 use crate::config::RepairMode;
+use crate::repair::diagnostics;
 use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
 use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk, source_ok_by_range};
@@ -222,6 +223,7 @@ fn open_and_scan(
                 scan_age_secs = ?scan_age_secs,
                 "reusing the plan scan in the in-place writer"
             );
+            diagnostics::record_plan_scan_reused();
             util::Scan {
                 file_md5: v.file_md5,
                 file_len: v.file_len,
@@ -325,6 +327,7 @@ fn trim_dead_tail(
     if have > file.size.max(0) as u64 {
         if trim_is_free(file, &file.chunks, sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
+            diagnostics::record_dead_tail_trimmed();
             handle.set_len(file.size.max(0) as u64)?;
         } else {
             // The deferred trim: a reuse candidate reaches past the target's
@@ -336,6 +339,7 @@ fn trim_dead_tail(
                 "a reuse candidate reaches past the target's end: the trim is \
                  deferred to the end (the file grows during the repair)"
             );
+            diagnostics::record_trim_deferred();
         }
     }
     Ok(())
@@ -378,6 +382,7 @@ fn choose_tier<'a>(
                     payload,
                     "the moving bytes do not fit the RAM budget -> ordered tier"
                 );
+                diagnostics::record_ram_shortage();
                 (Tier::Ordered, None)
             }
         }
@@ -472,6 +477,7 @@ async fn patch_chunks(
                 of = chunks.len(),
                 "ordered tier"
             );
+            diagnostics::record_order(o.ascending, o.live_count() as u64, chunks.len() as u64);
             Some(o)
         }
     };
@@ -926,6 +932,7 @@ fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
         final_md5 = %md5,
         "repaired in place"
     );
+    diagnostics::record_chunk_stats(stats);
     Inplace::Repaired(stats.clone())
 }
 

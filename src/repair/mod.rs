@@ -44,6 +44,7 @@
 // so an edit to the repair, report or CLI modules leaves it cached and narrow
 // consumers can link it without this facade.
 use girpr_audio as audio;
+pub(crate) mod diagnostics;
 mod file;
 pub mod phases;
 pub mod purge;
