@@ -91,6 +91,22 @@ path = "src/lib.rs"
 name = "gircap"
 path = "src/main.rs"
 
+[features]
+# Empty opt-in for the hand-run `bundle_shapes` test target. No dependencies are
+# pulled in: the feature exists only to decide whether Cargo compiles and links
+# that one test binary.
+manual-tests = []
+
+[[test]]
+name = "bundle_shapes"
+path = "tests/bundle_shapes.rs"
+# All three cases are `#[ignore]`d and run by hand. Gating the target means a
+# normal build or test run no longer compiles and links this binary; the cases
+# and their on-disk assertions are unchanged. A crate-level cfg in the source
+# keeps the file inert if it is ever compiled without the feature. Run it with:
+#   cargo nextest run -p gircap --features manual-tests --test bundle_shapes --run-ignored only
+required-features = ["manual-tests"]
+
 [dependencies]
 # The HTTP mechanics crate is gircap's own logic-free leaf: the reqwest transport,
 # the retrying fetcher, the request log and the error-body budget live there, and

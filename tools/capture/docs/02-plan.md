@@ -149,7 +149,7 @@ tools/capture/
 └── tests/
     ├── common/mod.rs     # thin shim over the gircap-only test-support library (mock, world builders, shared-bundle publisher); the mock borrows nothing from girpr
     ├── bundle_consistency.rs # the matrix, patchmaps and bundle discovery must describe each other
-    ├── bundle_shapes.rs  # expensive whole-capture shapes (ignored; run with --run-ignored only)
+    ├── bundle_shapes.rs  # expensive whole-capture shapes (ignored; gated behind `manual-tests`)
     ├── capture_layout.rs # end-to-end artifact shape + selfcheck green + document pins
     ├── case_coverage.rs  # gates tools/case_coverage.py against the bundle it measures
     ├── cli_contract.rs   # argv -> exit code, the process-level contract
@@ -243,7 +243,7 @@ log chatter mixed in.
 | `tests/offline_bundle` | a bundle built by the crate's own writers, read back through its own readers | never |
 | `tests/schema` | `schema_version` present everywhere, the gzip decision recorded, `checksums.json` covers the tree, the patchmap arithmetic | never |
 | `tests/bundle_consistency` | the matrix, patchmaps and bundle discovery describe the same bundle | never |
-| `tests/bundle_shapes` | expensive whole-capture shapes (metadata-only, lying manifest, mis-served chunk); ignored, run with `--run-ignored only` | never |
+| `tests/bundle_shapes` | expensive whole-capture shapes (metadata-only, lying manifest, mis-served chunk); ignored and gated behind the empty `manual-tests` feature, run with `--features manual-tests --test bundle_shapes --run-ignored only` | never |
 | `tests/case_coverage` | gates `tools/case_coverage.py` against the bundle it measures | never |
 | `tests/bundle_diff` | two captures of one fixture agree, once the never-deterministic fields are normalised | never |
 | live (manual) | a capture against the real API, and `girpr`'s `artifact_bridge` against the result | yes, deliberately |
@@ -265,7 +265,10 @@ any change to it:
   not asserted.
 - **no silently skipped checks** — the expensive whole-capture cases in
   `tests/bundle_shapes.rs` are `#[ignore]`d and run by hand with
-  `--run-ignored only`; an ignored case is named, not hidden in the default run.
+  `cargo nextest run -p gircap --features manual-tests --test bundle_shapes
+  --run-ignored only`; an ignored case is named, not hidden in the default run.
+  The empty `manual-tests` feature gates the test target so a normal build or
+  test run does not compile or link that binary.
 - **no fixture files under `tests/`** — the directory holds only Rust sources,
   and every fixture is generated at test time.
 

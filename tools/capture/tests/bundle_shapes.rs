@@ -1,3 +1,5 @@
+#![cfg(feature = "manual-tests")]
+
 //! The bundle shapes that `capture_layout` cannot state without a separate
 //! world: what a metadata-only run actually writes (H4), what a manifest that
 //! lies about its arithmetic produces (K1), and what happens to a chunk the CDN
@@ -14,7 +16,7 @@
 //! failure. That is seconds per test, not milliseconds, and the default suite
 //! should not pay for it. Run them with:
 //!
-//! `cargo nextest run -p gircap --test bundle_shapes --run-ignored only`
+//! `cargo nextest run -p gircap --features manual-tests --test bundle_shapes --run-ignored only`
 //!
 //! **H4 asks for two things the implementation does not do.** A
 //! `--no-chunk-blobs` run skips fixture assembly, so it writes no `expected/`

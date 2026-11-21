@@ -62,6 +62,14 @@ The HTTP mechanics tests live with the mechanics in the `gircap-http` package
 (`cargo nextest run -p gircap-http`); the probe and negative cases, which depend
 on gircap's own contracts, remain in this package.
 
+The three whole-capture shape checks in `tests/bundle_shapes.rs` are `#[ignore]`d
+and hand-run. Their test target is gated behind the empty `manual-tests`
+feature, so a normal run does not compile or link that binary:
+
+```powershell
+cargo nextest run -p gircap --features manual-tests --test bundle_shapes --run-ignored only
+```
+
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
 environment variable — can reach the next one. The price is that the mock's
