@@ -42,7 +42,8 @@ machine rather than the code.
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
-| `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
+| `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
+| `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -419,8 +420,12 @@ keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
 glob-filter rules to this binary and `girsync`, pinning one glob version and one
 set of matching rules for both. All four share the test-only scratch-directory
-policy in `crates/tempdir/`. None of these carries a program's flags, exit-code
-values or published shapes.
+policy in `crates/tempdir/`, whose `test_support` holds only program-free
+fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
+`crates/sync-test-support/` and are taken only by `girsync` and `sled2redb`,
+which already depend on girsync — so a scratch directory never drags girsync
+into the repair binary's or `gircap`'s test builds. None of the shared crates
+carries a program's flags, exit-code values or published shapes.
 
 - **A release build always writes a log file; a debug build writes one only when
   it is asked to.** A release build's default is

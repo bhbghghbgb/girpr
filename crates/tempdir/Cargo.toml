@@ -17,9 +17,8 @@ workspace = true
 # out. tempfile owns the created directories; this crate stays a thin policy
 # wrapper around the shared root and the recognizable name prefix.
 tempfile = "3.27.0"
-# Shared test fixtures (the `test_support` module) build the option types the
-# dev tools' tests hand to girsync. This is a test-support surface only: the
-# crate itself is a dev-dependency of every project that uses it, so nothing
-# that ships links against either of these.
-girsync = { path = "../../tools/sync" }
-serde_json = "1.0.154"
+# Deliberately no dependency on girsync (or serde_json): the girsync-coupled
+# option/cache/planner fixtures used to live in `test_support`, which made every
+# program that took this crate as a dev-dependency inherit girsync's rebuilds.
+# Those fixtures now live in `girpr-sync-test-support`, taken only by the two
+# programs that already depend on girsync. This crate stays a girsync-free leaf.

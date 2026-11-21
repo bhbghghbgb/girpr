@@ -14,7 +14,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
+members = [".", "crates/audio-language", "crates/cli", "crates/digest", "crates/exit", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/log", "crates/model", "crates/proto", "crates/report-core", "crates/retry", "crates/sync-test-support", "crates/tempdir", "tools/sync", "tools/capture", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]

@@ -839,11 +839,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-sync-test-support"
+version = "0.1.0"
+dependencies = [
+ "girpr-tempdir",
+ "girsync",
+ "serde_json",
+]
+
+[[package]]
 name = "girpr-tempdir"
 version = "0.1.0"
 dependencies = [
- "girsync",
- "serde_json",
  "tempfile",
 ]
 
@@ -860,6 +867,7 @@ dependencies = [
  "girpr-fs-names",
  "girpr-log",
  "girpr-report-core",
+ "girpr-sync-test-support",
  "girpr-tempdir",
  "md-5",
  "postcard",
@@ -2103,6 +2111,7 @@ dependencies = [
  "clap",
  "girpr-cli",
  "girpr-digest",
+ "girpr-sync-test-support",
  "girpr-tempdir",
  "girsync",
  "md-5",

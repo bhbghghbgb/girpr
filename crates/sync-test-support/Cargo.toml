@@ -1,0 +1,26 @@
+[package]
+name = "girpr-sync-test-support"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared girsync test fixtures: builders for the option, cache and planner types the dev tools' tests hand to girsync"
+
+[lib]
+name = "girpr_sync_test_support"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# These fixtures exist only to compile girsync option/cache/planner types and to
+# read the NDJSON the tool emits. They live here rather than in girpr-tempdir so
+# that the scratch-directory policy stays a girsync-free leaf: programs that do
+# not otherwise use girsync (the repair binary and gircap) keep their test builds
+# out of girsync's rebuild cascade. Only girsync and sled2redb, which already
+# depend on girsync, take this crate as a dev-dependency.
+girsync = { path = "../../tools/sync" }
+serde_json = "1.0.154"
+# The fixture trees are still named and removed by the shared scratch-directory
+# policy; re-exported below so every call site keeps the same surface.
+girpr-tempdir = { path = "../tempdir" }
