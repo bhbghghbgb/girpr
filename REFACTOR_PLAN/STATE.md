@@ -26,7 +26,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T12 | Root `src/` unit-test cleanups | completed | 710c29a3, 0b494593, 9cb2fc97 | 3 commits: hand-rolled runtimes→#[tokio::test] (one cross-thread case kept manual); guards→2s except manifest.rs:537 kept 5s (deadline, not signal wait); CLI parse(extra)+table test (432→431 tests); audio-fixture sub-item SKIPPED — alias cases already loop-table and per-test temp dirs mean no cost saved; no sleeps, loaded-run guard check clean, no byte/production change |
 | T13 | Collapse duplicated root integration fixtures | completed | 81344b48, 7e312de9, 37610881 | 3 commits: F19 JSON/text pairs→3 merged tests with reseed_install helper (config bump contaminates second plane otherwise); F20 phase/precedence tables (process tests 11→8, premise partly pre-satisfied); F23 Clone derives at call sites (30 duplicate builds removed, no wall saving expected); process spawns/messages/bytes preserved; no pinned filter affected; 425 passed/6 skipped |
 | T14 | Group `artifact_server.rs` bundle tests | pending_review | fe0fea6b | 1 commit; 5 with_shapes tests→1 grouped test (one bundle + one bridge), 3 other shape tests untouched; tests 8→4, bundles 8→4, listeners 32→16; all 87 assertions preserved verbatim incl HTTP status/body/zstd; full TCP end-to-end case unchanged; no nextest filter named them; no OnceLock/sleeps/fixture growth; zstd_bytes intact; contracts 44 passed |
-| T15 | Remove cross-file duplicate process-level assertions | todo | | |
+| T15 | Remove cross-file duplicate process-level assertions | in_progress | | |
 | T16 | Fold tiny pure-test clusters | todo | | |
 | T17 | Leaf-crate test cleanups | todo | | |
 | T18 | Reduce row-reading redb reopens | todo | | |
