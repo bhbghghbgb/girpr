@@ -942,97 +942,105 @@ mod tests {
         assert_eq!(parsed, manifest, "the same message as the buffered one");
     }
 
-    /// The manifest's reported size is a **hint**, and a hint cannot ask for an
-    /// impossible allocation.
-    ///
-    /// `Vec::with_capacity` above `isize::MAX` panics, and a merely-large
-    /// value is an OOM abort — on a field out of the API's JSON that nothing
-    /// has checked. The clamp is what makes the reported size safe to act on.
+    /// The five pure policy cases, folded into one process so nextest spawns one
+    /// test instead of five. Every original assertion and message is kept; a
+    /// labelled subcase names the policy that failed.
     #[test]
-    fn the_manifest_size_hint_is_clamped() {
-        assert_eq!(manifest_size_hint(0), 0);
-        assert_eq!(manifest_size_hint(-5), 0, "a negative size is no size");
-        assert_eq!(
-            manifest_size_hint(16_827_424),
-            16_827_424,
-            "the real manifest's size passes through"
-        );
-        assert_eq!(
-            manifest_size_hint(i64::MAX),
-            MAX_MANIFEST_HINT,
-            "a bogus one cannot ask for an impossible allocation"
-        );
-        assert_eq!(
-            manifest_size_hint(MAX_MANIFEST_HINT as i64 + 1),
-            MAX_MANIFEST_HINT
-        );
-    }
-
-    /// The policy, pinned as a table rather than a prose claim: a retryable
-    /// status must be one where a second identical request could come back
-    /// different.
-    #[test]
-    fn only_transient_statuses_are_retryable() {
-        for s in [408, 429, 500, 502, 503, 504, 599] {
-            assert!(retryable(s), "{s} is transient and must be retried");
+    fn sophon_pure_policy_contracts() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            ("the_manifest_size_hint_is_clamped", &|| {
+                // The manifest's reported size is a **hint**, and a hint
+                // cannot ask for an impossible allocation. `Vec::with_capacity`
+                // above `isize::MAX` panics, and a merely-large value is an
+                // OOM abort — on an unchecked field out of the API's JSON.
+                assert_eq!(manifest_size_hint(0), 0, "zero stays zero");
+                assert_eq!(manifest_size_hint(-5), 0, "a negative size is no size");
+                assert_eq!(
+                    manifest_size_hint(16_827_424),
+                    16_827_424,
+                    "the real manifest's size passes through"
+                );
+                assert_eq!(
+                    manifest_size_hint(i64::MAX),
+                    MAX_MANIFEST_HINT,
+                    "a bogus one cannot ask for an impossible allocation"
+                );
+                assert_eq!(
+                    manifest_size_hint(MAX_MANIFEST_HINT as i64 + 1),
+                    MAX_MANIFEST_HINT,
+                    "one past the clamp stays clamped"
+                );
+            }),
+            ("only_transient_statuses_are_retryable", &|| {
+                // Pinned as a table rather than a prose claim: a retryable
+                // status must be one where a second identical request could
+                // come back different.
+                for s in [408, 429, 500, 502, 503, 504, 599] {
+                    assert!(retryable(s), "{s} is transient and must be retried");
+                }
+                // The blob routes answer a missing object with a 404 and an
+                // AliyunOSS `NoSuchKey` body. Retrying that cannot change the
+                // answer: the id came out of this build's own `getBuild`
+                // body, so it is not in a propagation window.
+                for s in [400, 401, 403, 404, 405, 410, 418, 451] {
+                    assert!(!retryable(s), "{s} is decided; retrying it changes nothing");
+                }
+            }),
+            (
+                "a_success_is_not_confused_with_a_retryable_failure",
+                &|| {
+                    // Success never reaches the verdict, which is only consulted
+                    // once a response has already been judged a failure. Pinning
+                    // it keeps someone from widening the rule to "not an error".
+                    assert!(!retryable(200), "200 is not retryable");
+                    assert!(!retryable(204), "204 is not retryable");
+                },
+            ),
+            (
+                "verdict_splits_retryable_statuses_from_decided_ones",
+                &|| {
+                    for status in [408, 429, 500, 503] {
+                        assert!(
+                            matches!(
+                                verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                                Retry::Retry(_)
+                            ),
+                            "{status} must be retried"
+                        );
+                    }
+                    for status in [400, 403, 404] {
+                        assert!(
+                            matches!(
+                                verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                                Retry::Fatal(_)
+                            ),
+                            "{status} must stop the fetch"
+                        );
+                    }
+                },
+            ),
+            (
+                "a_production_prefix_keeps_its_build_segment_when_an_id_is_joined",
+                &|| {
+                    // Production `url_prefix` values from `getBuild` end in the
+                    // build id, not in a `/`. Appending a blob must keep that
+                    // segment and add the id below it — joining straight onto a
+                    // slashless base would drop the build id.
+                    let prefix = "https://autopatchhk.yuanshen.com/client_app/sophon/chunks/cxhpq4g4rgg0/sMXGW2ll3Fuu";
+                    let id = "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d";
+                    let url = join_url(prefix, id).expect("the production prefix resolves");
+                    assert_eq!(
+                        url.as_str(),
+                        format!("{prefix}/{id}"),
+                        "the build id stays in the path and the blob id is appended below it"
+                    );
+                },
+            ),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
         }
-        // The blob routes answer a missing object with a 404 and an AliyunOSS
-        // `NoSuchKey` body. Retrying that cannot change the answer: the id came
-        // out of this build's own `getBuild` body, so it is not in a
-        // propagation window.
-        for s in [400, 401, 403, 404, 405, 410, 418, 451] {
-            assert!(!retryable(s), "{s} is decided; retrying it changes nothing");
-        }
-    }
-
-    /// A success is not a retryable status, and that is fine: success never
-    /// reaches the verdict, which is only consulted once a response has already
-    /// been judged a failure. Pinning it keeps someone from later widening the
-    /// rule to "not an error at all".
-    #[test]
-    fn a_success_is_not_confused_with_a_retryable_failure() {
-        assert!(!retryable(200));
-        assert!(!retryable(204));
-    }
-
-    /// The status classifier answers the verdict the loop acts on: a transient
-    /// status is worth another attempt, a decided one is not.
-    #[test]
-    fn verdict_splits_retryable_statuses_from_decided_ones() {
-        for status in [408, 429, 500, 503] {
-            assert!(
-                matches!(
-                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
-                    Retry::Retry(_)
-                ),
-                "{status} must be retried"
-            );
-        }
-        for status in [400, 403, 404] {
-            assert!(
-                matches!(
-                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
-                    Retry::Fatal(_)
-                ),
-                "{status} must stop the fetch"
-            );
-        }
-    }
-
-    /// Production `url_prefix` values from `getBuild` end in the build id, not
-    /// in a `/`. Appending a blob must keep that segment and add the id below
-    /// it — joining straight onto a slashless base would drop the build id.
-    #[test]
-    fn a_production_prefix_keeps_its_build_segment_when_an_id_is_joined() {
-        let prefix =
-            "https://autopatchhk.yuanshen.com/client_app/sophon/chunks/cxhpq4g4rgg0/sMXGW2ll3Fuu";
-        let id = "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d";
-        let url = join_url(prefix, id).expect("the production prefix resolves");
-        assert_eq!(
-            url.as_str(),
-            format!("{prefix}/{id}"),
-            "the build id stays in the path and the blob id is appended below it"
-        );
     }
 
     fn manifest_meta(base: &str) -> ChunkManifestMeta {
