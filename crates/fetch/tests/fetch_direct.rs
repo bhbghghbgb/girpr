@@ -1,10 +1,11 @@
-//! A narrow consumer of the fetch crate alone.
+//! A narrow integration consumer of the fetch crate alone.
 //!
-//! The rest of this crate's integration suite drives the whole repair facade.
-//! This target links only `girpr-fetch`, so an edit to the repair, report or
-//! CLI modules cannot rebuild it, and a fetch edit cannot rebuild the facade
-//! on its way through here. It also pins the two byte spellings that survive
-//! the fetch extraction: `chuncks` on the wire and the opaque tag 6.
+//! This is a `girpr-fetch` package target: it links only `girpr-fetch`, not the
+//! `girpr` repair facade, so an edit to the repair, report or CLI modules
+//! cannot rebuild it, and a fetch edit cannot rebuild the facade on its way
+//! through here. (A root-package test would link the facade implicitly even
+//! when it names only fetch types.) It also pins the two byte spellings the
+//! fetch crate owns: `chuncks` on the wire and the opaque tag 6.
 
 use girpr_fetch::sophon::stream::join_url;
 use girpr_fetch::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};

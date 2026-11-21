@@ -154,6 +154,10 @@ girpr-test-support = { path = "crates/test-support" }
 # process per test and skips doctests, so the helper must be a public library
 # surface that every test binary can reach through a thin shim.
 girpr-log = { path = "crates/log", features = ["test-support"] }
+# The facade's unit tests build `FileReuse` values by hand and need the
+# `ReuseEntry` alias. The feature is off in the normal dependency above, so only
+# test builds see the extra alias on girpr-fetch's public surface.
+girpr-fetch = { path = "crates/fetch", features = ["test-support"] }
 # The scratch-directory helper, shared with the two dev tools: one name, one
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.

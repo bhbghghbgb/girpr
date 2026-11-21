@@ -16,8 +16,10 @@ pub mod proto;
 pub mod stream;
 
 pub use self::filter::select_manifests;
-// Facade unit tests construct reuse entries directly, so this stays public in
-// the shipped crate (a dependency's `cfg(test)` is not on for its consumers).
+// The facade's unit tests construct reuse entries by hand, but a dependency's
+// `cfg(test)` is not on for its consumers. The `test-support` feature supplies
+// that seam instead, so the shipped crate does not expose this extra alias.
+#[cfg(feature = "test-support")]
 pub use self::map::ReuseEntry;
 pub use self::map::{FileReuse, build_local_chunk_map};
 pub use self::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest, WantedManifest};

@@ -12,6 +12,13 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+# `ReuseEntry` is re-exported at `sophon::` only for tests that need to build a
+# `FileReuse` by hand (the facade's unit tests). It is a dependency's `cfg(test)`
+# seam, not shipped API: the facade enables this feature through its
+# dev-dependency, so ordinary builds do not expose the extra alias.
+test-support = []
+
 [dependencies]
 anyhow = "1.0.104"
 serde = { version = "1.0.229", features = ["derive"] }
