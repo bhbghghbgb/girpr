@@ -184,115 +184,124 @@ where
 mod tests {
     use super::*;
 
+    /// The six retry-driver cases, folded into one process so nextest spawns one
+    /// test instead of six. Every original assertion and message is kept; a
+    /// labelled subcase names the behaviour that failed.
     #[tokio::test]
-    async fn success_on_the_first_try_stops_immediately() {
-        let backoff = BackoffPolicy::none();
-        let mut calls = 0;
-        let value = retry(5, &backoff, |_n| {
-            calls += 1;
-            async { Retry::Done(7) }
-        })
-        .await
-        .expect("the first attempt succeeds");
-        assert_eq!(value, 7);
-        assert_eq!(calls, 1);
-    }
-
-    #[tokio::test]
-    async fn success_after_retries_keeps_the_attempt_numbers() {
-        let backoff = BackoffPolicy::none();
-        let mut seen = Vec::new();
-        let value = retry(5, &backoff, |n| {
-            seen.push(n);
-            async move {
-                if n < 3 {
-                    Retry::Retry(anyhow::anyhow!("attempt {n}"))
-                } else {
-                    Retry::Done(n)
+    async fn retry_driver_contracts() {
+        for label in [
+            "success_on_the_first_try_stops_immediately",
+            "success_after_retries_keeps_the_attempt_numbers",
+            "fatal_stops_after_one_attempt",
+            "exhausting_the_attempts_returns_the_last_error",
+            "state_is_carried_from_one_attempt_to_the_next",
+            "a_fatal_state_answer_keeps_its_own_error",
+        ] {
+            println!("subcase: {label}");
+            match label {
+                "success_on_the_first_try_stops_immediately" => {
+                    let backoff = BackoffPolicy::none();
+                    let mut calls = 0;
+                    let value = retry(5, &backoff, |_n| {
+                        calls += 1;
+                        async { Retry::Done(7) }
+                    })
+                    .await
+                    .expect("the first attempt succeeds");
+                    assert_eq!(value, 7, "{label}: the returned value");
+                    assert_eq!(calls, 1, "{label}: the attempt count");
                 }
+                "success_after_retries_keeps_the_attempt_numbers" => {
+                    let backoff = BackoffPolicy::none();
+                    let mut seen = Vec::new();
+                    let value = retry(5, &backoff, |n| {
+                        seen.push(n);
+                        async move {
+                            if n < 3 {
+                                Retry::Retry(anyhow::anyhow!("attempt {n}"))
+                            } else {
+                                Retry::Done(n)
+                            }
+                        }
+                    })
+                    .await
+                    .expect("the third attempt succeeds");
+                    assert_eq!(value, 3, "{label}: the returned value");
+                    assert_eq!(seen, vec![1, 2, 3], "{label}: the attempt numbers");
+                }
+                "fatal_stops_after_one_attempt" => {
+                    let backoff = BackoffPolicy::none();
+                    let mut calls = 0;
+                    let err = retry(5, &backoff, |_n| {
+                        calls += 1;
+                        async { Retry::<()>::Fatal(anyhow::anyhow!("refused")) }
+                    })
+                    .await
+                    .expect_err("a fatal answer is an error");
+                    assert_eq!(calls, 1, "a fatal answer must not be attempted again");
+                    assert_eq!(err.to_string(), "refused", "{label}: the fatal error");
+                }
+                "exhausting_the_attempts_returns_the_last_error" => {
+                    let backoff = BackoffPolicy::none();
+                    let mut calls = 0;
+                    let err = retry(5, &backoff, |n| {
+                        calls += 1;
+                        async move { Retry::<()>::Retry(anyhow::anyhow!("attempt {n}")) }
+                    })
+                    .await
+                    .expect_err("all attempts fail");
+                    assert_eq!(calls, 5, "{label}: the attempt count");
+                    let chain = format!("{err:#}");
+                    assert!(chain.contains("after 5 attempts"), "{chain}");
+                    assert!(chain.contains("attempt 5"), "{chain}");
+                    assert!(
+                        !chain.contains("attempt 4"),
+                        "the last error is the one returned: {chain}"
+                    );
+                }
+                "state_is_carried_from_one_attempt_to_the_next" => {
+                    let backoff = BackoffPolicy::none();
+                    let value = retry_state(
+                        5,
+                        &backoff,
+                        Vec::new(),
+                        |mut carried: Vec<u32>, n| async move {
+                            carried.push(n);
+                            if n < 3 {
+                                RetryState::Retry(carried, anyhow::anyhow!("attempt {n}"))
+                            } else {
+                                RetryState::Done(carried)
+                            }
+                        },
+                    )
+                    .await
+                    .expect("the third attempt succeeds");
+                    assert_eq!(value, vec![1, 2, 3], "{label}: the carried state");
+                }
+                "a_fatal_state_answer_keeps_its_own_error" => {
+                    let backoff = BackoffPolicy::none();
+                    let mut calls = 0;
+                    let err = retry_state(5, &backoff, 0u32, |n, attempt| {
+                        calls += 1;
+                        async move {
+                            let _ = n;
+                            if attempt == 2 {
+                                RetryState::<(), u32>::Fatal(anyhow::anyhow!("final"))
+                            } else {
+                                RetryState::Retry(n, anyhow::anyhow!("again"))
+                            }
+                        }
+                    })
+                    .await
+                    .expect_err("a fatal answer ends the loop");
+                    assert_eq!(err.to_string(), "final", "{label}: the fatal error");
+                    // The closure is FnMut and its own counter is not the
+                    // loop's; the loop still stops on the fatal answer rather
+                    // than exhausting its attempts.
+                    assert_eq!(calls, 2, "{label}: the attempt count");
+                }
+                _ => unreachable!("unhandled subcase: {label}"),
             }
-        })
-        .await
-        .expect("the third attempt succeeds");
-        assert_eq!(value, 3);
-        assert_eq!(seen, vec![1, 2, 3]);
-    }
-
-    #[tokio::test]
-    async fn fatal_stops_after_one_attempt() {
-        let backoff = BackoffPolicy::none();
-        let mut calls = 0;
-        let err = retry(5, &backoff, |_n| {
-            calls += 1;
-            async { Retry::<()>::Fatal(anyhow::anyhow!("refused")) }
-        })
-        .await
-        .expect_err("a fatal answer is an error");
-        assert_eq!(calls, 1, "a fatal answer must not be attempted again");
-        assert_eq!(err.to_string(), "refused");
-    }
-
-    #[tokio::test]
-    async fn exhausting_the_attempts_returns_the_last_error() {
-        let backoff = BackoffPolicy::none();
-        let mut calls = 0;
-        let err = retry(5, &backoff, |n| {
-            calls += 1;
-            async move { Retry::<()>::Retry(anyhow::anyhow!("attempt {n}")) }
-        })
-        .await
-        .expect_err("all attempts fail");
-        assert_eq!(calls, 5);
-        let chain = format!("{err:#}");
-        assert!(chain.contains("after 5 attempts"), "{chain}");
-        assert!(chain.contains("attempt 5"), "{chain}");
-        assert!(
-            !chain.contains("attempt 4"),
-            "the last error is the one returned: {chain}"
-        );
-    }
-
-    #[tokio::test]
-    async fn state_is_carried_from_one_attempt_to_the_next() {
-        let backoff = BackoffPolicy::none();
-        let value = retry_state(
-            5,
-            &backoff,
-            Vec::new(),
-            |mut carried: Vec<u32>, n| async move {
-                carried.push(n);
-                if n < 3 {
-                    RetryState::Retry(carried, anyhow::anyhow!("attempt {n}"))
-                } else {
-                    RetryState::Done(carried)
-                }
-            },
-        )
-        .await
-        .expect("the third attempt succeeds");
-        assert_eq!(value, vec![1, 2, 3]);
-    }
-
-    #[tokio::test]
-    async fn a_fatal_state_answer_keeps_its_own_error() {
-        let backoff = BackoffPolicy::none();
-        let mut calls = 0;
-        let err = retry_state(5, &backoff, 0u32, |n, attempt| {
-            calls += 1;
-            async move {
-                let _ = n;
-                if attempt == 2 {
-                    RetryState::<(), u32>::Fatal(anyhow::anyhow!("final"))
-                } else {
-                    RetryState::Retry(n, anyhow::anyhow!("again"))
-                }
-            }
-        })
-        .await
-        .expect_err("a fatal answer ends the loop");
-        assert_eq!(err.to_string(), "final");
-        // The closure is FnMut and its own counter is not the loop's; the loop
-        // still stops on the fatal answer rather than exhausting its attempts.
-        assert_eq!(calls, 2);
+        }
     }
 }
