@@ -22,7 +22,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | completed | b6fe1c4d | New facade-free `girpr-test-fixtures` lib (~1400 lines); `tests/common/mod.rs` shrank 1521→~145-line shim; all 11 inline + 3 #[path] consumers unchanged; §A2 verified empirically (fixtures Fresh after repair edit). Dev: small glue (RunCtx/Limits/PathScope/RepairMode) still needs facade SCC — left for T10; §F29 counts stale. Review E clean |
 | T10 | Consolidate shared test seams and includes | completed | ee2066fd | Root facade-glue → `girpr-test-support` lib (compile-once, not rebuild-edge; T08 still SCC-blocked); artifact replay server → `girpr-test-fixtures`; gircap mock → `gircap-test-support` (independence table + manifest comment updated); girsync runner glue → sync-test-support. Six-harness merge skipped per §F32 (unfavourable trade-off). nextest filters unchanged; all suites pass. Review E clean |
-| T11 | girsync: extract the cache crate | todo | | |
+| T11 | girsync: extract the cache crate | in_progress | | |
 | T12 | girsync: extract the acyclic leaves | todo | | |
 | T13 | girsync: planner + effective cycle crate | todo | | |
 | T14 | gircap: extract the http subsystem crate | todo | | |
