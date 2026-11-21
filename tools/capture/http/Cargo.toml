@@ -1,0 +1,42 @@
+[package]
+name = "gircap-http"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The logic-free HTTP mechanics owned by gircap: the reqwest transport, the retrying fetcher, the request log and the error-body budget"
+
+[lib]
+name = "gircap_http"
+path = "src/lib.rs"
+
+# The same tools-only policy gircap itself uses: this crate holds mechanics, not
+# a repair path, so `unwrap_used`/`expect_used` warnings would be noise.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+# The clamped exponential retry schedule and the injectable sleep driver are the
+# shared mechanics leaf; gircap-http passes its own zero-jitter schedule and keeps
+# the attempt loop here.
+girpr-retry = { path = "../../../crates/retry" }
+# Hex spelling of bytes for the request log's header digests. Logic-free leaf:
+# no flag, no exit code, no published shape.
+girpr-digest = { path = "../../../crates/digest" }
+# The transport, the client and header maps. This crate is the sole owner of
+# reqwest for gircap's HTTP path; config still uses `reqwest::Url` directly, but
+# the fetcher/transport mechanics compile once here and stay cached across edits
+# to emit/blobs/manifest in the parent package.
+reqwest = "0.13.5"
+# The runtime for the ordered-join loop and the injectable timers the backoff
+# awaits; no `fs`/`io`/`net`/`process` features are requested here.
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+# Derive `Display`/`Error` for `ApiError` without changing its format strings.
+thiserror = "2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Millisecond RFC 3339 timestamps in the request log.
+chrono = { version = "0.4.45", features = ["clock"] }
+tracing = "0.1.44"

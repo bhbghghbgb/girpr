@@ -49,6 +49,7 @@ machine rather than the code.
 | `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
+| `tools/capture/http/` | the gircap-owned logic-free HTTP mechanics: the reqwest transport, the retrying fetcher, the request log and the error-body budget, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native tree cached; no program policy crosses the boundary | `Fetcher`, `Transport`, `RequestLog`, `RetryPolicy`, `Kind`, `ApiError`, `BodyFile`, `USER_AGENT` |
 | `crates/report/` | run counters + every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -439,7 +440,13 @@ code depends on it directly, so an edit to the repair, report or CLI leaves the
 whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
 types and keeps the original `chuncks` / opaque-tag-6 spellings. An interface
 seam in the report plane takes scalar provenance values, so the report does not
-depend on the fetch crate.
+depend on the fetch crate. `tools/capture/http/` holds gircap's own logic-free
+HTTP mechanics — the reqwest transport, the retrying fetcher, the request log and
+the error-body budget; gircap depends on it directly, so an edit to its
+emit/blobs/manifest subsystems leaves the whole reqwest/wiremock tree cached. It
+owns no program policy: exit codes, tag probing, negative-probe inputs, region
+resolution and artifact writing stay in gircap, behind a narrow digesting-file
+trait and a fixed `User-Agent` value, so no capture logic crosses the boundary.
 `crates/sync-cache/` holds the dev tools' redb hash cache: the schema, the
 positional `postcard` codec, the open/backup/publish protocol and the digest
 vocabulary that codec stores. `girsync` consumes it directly under a module

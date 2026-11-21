@@ -224,6 +224,15 @@ impl std::io::Write for HashingFile {
     }
 }
 
+// The narrow seam the fetcher streams through: this crate keeps the file, the
+// path and the digests; gircap-http only writes bytes and restarts on retry.
+// The byte path (and the retry-discard rule) is unchanged.
+impl gircap_http::BodyFile for HashingFile {
+    fn restart(&mut self) -> std::io::Result<()> {
+        HashingFile::restart(self)
+    }
+}
+
 /// Lowercase hex, two characters per byte.
 ///
 /// A thin shim over the shared digest mechanics so call sites keep one name for

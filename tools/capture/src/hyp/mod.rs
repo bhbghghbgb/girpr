@@ -633,6 +633,7 @@ mod attach_seq_tests {
 mod tests {
     use super::*;
     use crate::biz::BranchParams;
+    use crate::http::ApiErrorExitCode;
     use crate::http::{RequestLog, Transport};
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};

@@ -684,6 +684,7 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "gircap-http",
  "gircap-test-support",
  "girpr-audio-language",
  "girpr-cli",
@@ -711,6 +712,21 @@ dependencies = [
  "walkdir",
  "wiremock",
  "zstd",
+]
+
+[[package]]
+name = "gircap-http"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "girpr-digest",
+ "girpr-retry",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -77,14 +77,18 @@ tools/capture/
 │   ├── report/mod.rs     # stdout data plane (single owner of println!)
 │   ├── logging/mod.rs    # tracing init + the log file (JSON lines), over the shared log policy
 │   ├── http/
-│   │   ├── mod.rs        # module declarations + re-exports
-│   │   ├── error.rs      # ApiError
-│   │   ├── transport.rs  # RetryPolicy, SleepFuture, Sleep, RealSleep, RecordingSleep, DEFAULT_MAX_RESPONSE_BYTES, Transport
-│   │   ├── record.rs     # Kind, RequestRecord, ACCEPT, ACCEPT_ENCODING, header_map
-│   │   ├── log.rs        # RequestLog, now_rfc3339
-│   │   ├── fetcher.rs    # Fetcher, Fetched, Streamed, Destination + private helpers
-│   │   ├── probe.rs      # tag_probe.json + error_shapes.json
-│   │   └── negative.rs   # choosing the inputs for the negative probes
+│   │   ├── mod.rs        # thin re-export facade over gircap-http + the two policy modules
+│   │   ├── probe.rs      # tag_probe.json + error_shapes.json (gircap policy: stays local)
+│   │   ├── negative.rs   # choosing the inputs for the negative probes (stays local)
+│   │   └── tests.rs      # mechanics tests over the public seams (stays local)
+│   │
+│   │   The mechanics moved to the logic-free `tools/capture/http/` crate:
+│   │   error.rs (ApiError), transport.rs (RetryPolicy, SleepFuture, Sleep,
+│   │   RealSleep, RecordingSleep, DEFAULT_MAX_RESPONSE_BYTES, Transport),
+│   │   record.rs (Kind, RequestRecord, ACCEPT, ACCEPT_ENCODING, header_map),
+│   │   log.rs (RequestLog, now_rfc3339), error_bodies.rs, tasks.rs and
+│   │   fetcher.rs (Fetcher, Fetched, Streamed, Destination). gircap consumes it
+│   │   directly so an emit/blobs/manifest edit leaves it cached.
 │   ├── hyp/
 │   │   ├── mod.rs        # the 4 HoYoPlay endpoints + getBuild + the captured bodies
 │   │   └── types.rs      # DTOs, incl. the fields most clients drop

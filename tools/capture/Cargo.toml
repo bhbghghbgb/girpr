@@ -40,6 +40,14 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # is a gircap-only dev library that inverts onto this package's public seams. It
 # borrows nothing from the repair binary, so the "no shared fixtures" rule in
 # docs/00-spec.md §2 is unchanged.
+#
+# The HTTP mechanics are likewise not a twelfth shared leaf: `gircap-http` below
+# is gircap's own logic-free crate for the reqwest transport, the retrying
+# fetcher, the request log and the error-body budget. gircap depends on it
+# directly so an edit to emit/blobs/manifest leaves it cached; it owns no exit
+# code, version pair, region value, probe decision or artifact writer, depends
+# on no program crate, and invokes no binary. The digesting-file trait, the fixed
+# User-Agent and the ordered-join loop's consumers stay in this package.
 
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for
@@ -61,6 +69,14 @@ name = "gircap"
 path = "src/main.rs"
 
 [dependencies]
+# The HTTP mechanics crate is gircap's own logic-free leaf: the reqwest transport,
+# the retrying fetcher, the request log and the error-body budget live there, and
+# this package depends on it directly (not merely through a re-export) so an edit
+# to emit/blobs/manifest leaves that crate and its native tree cached. gircap
+# keeps the program policy on its side: probe decisions, negative-probe inputs,
+# region resolution, artifact writing and exit-code mapping. It depends on no
+# girpr crate and invokes no binary (docs/00-spec.md §2).
+gircap-http = { path = "http" }
 clap = { version = "4.6.8", features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
@@ -100,9 +116,12 @@ girpr-cli = { path = "../../crates/cli" }
 # nothing. `spawn`/`spawn_blocking`/`JoinSet` come with `rt`, which
 # `rt-multi-thread` already includes.
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
-# No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
-# or handed on as raw bytes, and nothing reads a streaming body. The `stream`
-# feature is what a future "hash the blob as it lands" would ask for.
+# Kept here for `config::validate_base`'s `reqwest::Url` (an http split does not
+# remove reqwest from the whole tool graph), while the fetcher/transport
+# mechanics that own the native tree live in `gircap-http`. No `json` and no
+# `stream`: every body is decoded with `serde_json::from_slice` or handed on as
+# raw bytes, and nothing reads a streaming body. The `stream` feature is what a
+# future "hash the blob as it lands" would ask for.
 reqwest = "0.13.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

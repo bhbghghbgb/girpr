@@ -220,16 +220,10 @@ fn open_log_file(path: &Path) -> std::io::Result<AppendFile> {
 
 /// The `User-Agent` every request carries.
 ///
-/// A generic Unity player string rather than one naming this tool: the API is a
-/// third party, and a request should not identify the client that made it. It is
-/// still sent as a real header rather than left to the client default, so a
-/// captured `api/requests.ndjson` records exactly what the CDN saw.
-pub const USER_AGENT: &str = "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)";
-
-/// The [`USER_AGENT`] string, owned where a [`String`] is wanted.
-pub fn user_agent() -> String {
-    USER_AGENT.to_string()
-}
+/// Owned by `gircap-http` (the fetcher sends it) and re-exported here so this
+/// module's own tests and callers keep the same path. The string is unchanged:
+/// a captured `api/requests.ndjson` records exactly what the CDN saw.
+pub use gircap_http::{USER_AGENT, user_agent};
 
 #[cfg(test)]
 mod tests {
