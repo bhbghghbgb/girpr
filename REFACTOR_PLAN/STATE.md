@@ -56,10 +56,10 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-03 | Extract `repair/audio.rs` into a leaf crate (clean leaf: girpr-audio-language/anyhow/tracing); verify §A2 with a narrow consumer, stop if no edge shrinks | batched:A | From review B; conditional, highest risk, do last |
 | FU-04 | Re-assess `logging.rs` / `retry.rs` with correct reasoning | dropped | Planning review: §F37 names retry a keeper, T19 showed logging is a program-wide facade ancestor — no §A2 edge |
 | FU-05 | Narrow audio/lock-only consumer test target so §A2 win shows in link count (current `tests/run_lock.rs` links full facade) | batched:A | From review B; makes FU-03 payoff observable |
-| FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` for the §A2 test-link win | batched:P | From review D |
+| FU-06 | Relocate `tests/fetch_direct.rs` into `crates/fetch/tests/` for the §A2 test-link win | done | Batch P, 07612002; verified fetch-package target links no girpr facade; byte assertions unchanged |
 | FU-07 | Add `girpr-report` to nextest crate-list comment in `.config/nextest.toml` | done | Batch D, 0051e2aa; comment only, no filter changed |
 | FU-08 | Restore README paragraph break around crate inventory | done | Batch D, 0051e2aa; review clean |
-| FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` | batched:P | From review D; same surface as FU-06 |
+| FU-09 | Narrow `ReuseEntry`'s unconditional `pub` in shipped `girpr-fetch` | done | Batch P, 07612002; alias gated behind test-support feature (note: struct still pub via pub mod map — FU-24) |
 | FU-10 | Refresh `tools/capture/docs/02-plan.md` layout tree (mock now in gircap-only `test-support/`) | done | Batch D, 0051e2aa; review clean |
 | FU-11 | Update `tools/sync/README.md` (fixtures now from `girpr-sync-test-support` via shim) | done | Batch D, 0051e2aa; review clean |
 | FU-12 | Narrow facade-coupled `girpr-test-support` glue | open | HELD by planning review: blocked by config↔repair SCC; compile-once win only, no rebuild edge until severed |
@@ -75,6 +75,9 @@ Planning review (Phase 3) decisions: 17 active items in batches D/P/G/H/A; FU-04
 | FU-21 | Audit remaining §F39 seams (docs/06-artifact-bridge-spec.md, tools/sled2redb/README.md) for new crates | open | From Batch D review; unbatched, doc-only, low priority |
 | FU-22 | Refresh stale line-number pointers in follow-up descriptions/report §F39 | open | From Batch D review; unbatched, code authoritative |
 | FU-23 | Consider mechanical check that every workspace crate appears in README table, layout tree, nextest crate-list comment | open | From Batch D review; unbatched, overlaps held NF-1 |
+| FU-24 | Fully hide `ReuseEntry` in shipped girpr-fetch by gating the struct/`pub mod map` path, not just the convenience alias | open | From Batch P review; FU-09 only removed the alias |
+| FU-25 | Add a comment/guard to the two facade cfg(test) modules importing `crate::sophon::ReuseEntry` explaining the test-support dev-feature dependency | open | From Batch P review; unbatched, doc-only |
+| FU-26 | Guard that `cargo build -p girpr` never enables test-support on girpr-fetch (CI assertion) | open | From Batch P review; unbatched, overlaps held NF-1 |
 
 ## Persistent context
 
