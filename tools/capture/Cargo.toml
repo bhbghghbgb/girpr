@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its eleven shared path deps are leaf crates
+# the tree (docs/00-spec.md §2). Its twelve shared path deps are leaf crates
 # holding a shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
@@ -34,9 +34,12 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # its `Endpoints` override seam and every URL builder in this crate) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
-# projects).
+# projects), and `girpr-loopback-mock` (a dependency-free loopback HTTP server
+# for canned replies, a dev-dependency shared by the repair, fetch and both
+# capture test suites; it holds no program logic and each caller keeps its own
+# scripting contract on top of it).
 #
-# The offline mock is **not** a twelfth shared leaf: `gircap-test-support` below
+# The offline mock is **not** a thirteenth shared leaf: `gircap-test-support` below
 # is a gircap-only dev library that inverts onto this package's public seams. It
 # borrows nothing from the repair binary, so the "no shared fixtures" rule in
 # docs/00-spec.md §2 is unchanged.
@@ -225,12 +228,12 @@ gircap-test-support = { path = "test-support" }
 # workspace. A dev-dependency, because nothing that ships creates a scratch
 # directory.
 girpr-tempdir = { path = "../../crates/tempdir" }
-# Canned reply servers in the HTTP unit tests. The library owns the listener,
-# request journal and invocation counts; the tests only script statuses/bodies
-# and assert on what it recorded. The malformed-response tests keep a small
-# raw-socket helper, because a well-behaved mock server cannot lie about
-# `Content-Length`.
-wiremock = "0.6"
+# Canned reply servers in the HTTP unit tests use the dependency-free loopback
+# leaf: it owns the listener, request journal and invocation counts, and these
+# tests script its statuses/bodies and assert on what it recorded. The
+# malformed-response tests keep a small raw-socket helper, because a
+# well-behaved mock server cannot lie about `Content-Length`.
+girpr-loopback-mock = { path = "../../crates/loopback-mock" }
 
 # Deliberately absent: `twox-hash`. The 16-hex manifest-id prefix is not a hash
 # of any observable input (docs/00-spec.md §3.7), so an xxh64 implementation

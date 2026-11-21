@@ -752,4 +752,8 @@ the bridge actually reads.
   each caller's own resolve policy, override seam and URL builders kept
   locally), are not that kind of sharing: they carry no
   program behavior, and the bridge
-  does not depend on `gircap`.
+  does not depend on `gircap`. `girpr-loopback-mock` (a dependency-free
+  loopback HTTP server for canned replies, used only as a dev-dependency by
+  the repair, fetch and capture test suites, with each caller keeping its own
+  scripting contract) is likewise a shared mechanics leaf, never a shared fake
+  server with a single policy.
