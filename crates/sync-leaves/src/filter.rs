@@ -41,8 +41,8 @@ pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>> {
 ///
 /// The case mode is not owned here. It is a run-wide setting that also selects
 /// the cache's case flag, the planner's pairing, the rename pass and the mkdir
-/// check, so it stays on [`crate::config::CommonOpts`]; this value is *built*
-/// from it, and the two have to agree.
+/// check, so it stays on girsync's `CommonOpts` config field; this value is
+/// *built* from it, and the two have to agree.
 #[derive(Debug, Clone)]
 pub struct Filter {
     includes: Vec<Pattern>,

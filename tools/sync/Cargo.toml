@@ -42,11 +42,6 @@ girpr-log = { path = "../../crates/log" }
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
 girpr-fs-names = { path = "../../crates/fs-names" }
-# The link-count and file-identity facts used by the copy guard and the cache's
-# publish claim. The leaf owns `same-file` and the Windows handle wrapper and
-# exposes both an error-returning and an option-returning shape; this crate
-# keeps the refusal policy and the plan-time seam around it.
-girpr-fs-identity = { path = "../../crates/fs-identity" }
 # The shared streaming digest mechanics: a byte-absorbing sink and a reader
 # helper parameterised by algorithm set and buffer size. This crate keeps its
 # own AlgoSet/DigestSet/HashAlg vocabulary and maps to the leaf at the call site.
@@ -60,6 +55,13 @@ walkdir = "2.5.0"
 # It also owns the digest vocabulary the wire format pins, so girsync's `hash`
 # module is a re-export of it and the cache never depends back on this lib.
 girpr-sync-cache = { path = "../../crates/sync-cache" }
+# The acyclic leaves (rw limits/gate, the include/exclude filter, the link and
+# hardlink facts) live in one upstream crate this lib and its tests depend on
+# directly. An edit to the planner, commands or config here leaves all four
+# leaves and tokio's semaphore cached instead of recompiling them. The crate is
+# consumed directly by its own integration tests too, so it is not merely
+# re-exported by this facade.
+girpr-sync-leaves = { path = "../../crates/sync-leaves" }
 # Path canonicalization for identity and link-target checks. It resolves links
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.
@@ -79,10 +81,6 @@ girpr-filter = { path = "../../crates/filter" }
 # record layouts; the leaf only writes the object in the order asked for.
 girpr-report-core = { path = "../../crates/report-core" }
 rayon = "1.12.0"
-# The rw counters use tokio's semaphore: std::sync::Semaphore is still unstable,
-# and this is a maintained, fair primitive. Only the `sync` feature is needed —
-# there is no async runtime here, every acquire uses the blocking form.
-tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2.5"

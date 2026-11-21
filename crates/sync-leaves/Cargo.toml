@@ -1,0 +1,38 @@
+[package]
+name = "girpr-sync-leaves"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared girsync leaves: rw limits, filter rules and filesystem link/identity helpers"
+
+[lib]
+name = "girpr_sync_leaves"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The rw counters use tokio's semaphore: std::sync::Semaphore is still unstable,
+# and this is a maintained, fair primitive. Only the `sync` feature is needed —
+# there is no async runtime here, every acquire uses the blocking form.
+tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
+# One rw pool for the whole run; the same primitive the commands install into.
+rayon = "1.12.0"
+# The rw thread-count warning and the filter's own errors are reported through
+# anyhow; the leaves do not own a program's exit or output policy.
+anyhow = "1.0.104"
+# Structured narration from the rw runtime.
+tracing = "0.1.44"
+# The shared include/exclude glob mechanics. This crate owns only girsync's
+# Filter/ExcludeMemo policy on top of them, so the glob version stays pinned in
+# the one place both tools compile against.
+girpr-filter = { path = "../filter" }
+# The link-count and file-identity facts the copy guard reads. The leaf owns
+# the platform wrappers; girsync keeps its refusal policy at its call sites.
+girpr-fs-identity = { path = "../fs-identity" }
+
+[dev-dependencies]
+# The leaves' own unit tests build fixture trees with the workspace's one
+# scratch-directory helper.
+girpr-tempdir = { path = "../tempdir" }

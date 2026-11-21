@@ -2,7 +2,7 @@
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
 # `girpr-fetch`, `girpr-lock`, `girpr-util`, `girpr-log`, `girpr-tempdir`,
-# `girpr-sync-cache`, `gircap`, `girsync` and `sled2redb`.
+# `girpr-sync-cache`, `girpr-sync-leaves`, `gircap`, `girsync` and `sled2redb`.
 # This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.
