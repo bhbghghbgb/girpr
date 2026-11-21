@@ -1,0 +1,7 @@
+# Use the toolchain's bundled lld as the MSVC linker on Windows. On the host
+# where this was measured, a clean workspace test run linked every test target
+# and finished faster than with the default linker. Linker performance is
+# host-dependent, so this is validated independently on each host (CI
+# included) rather than assumed to hold everywhere.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
