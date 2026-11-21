@@ -16,7 +16,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | `girpr-util` leaf crate | completed | 1665a69f, dd8c6d13 | Facade uses `use girpr_util as util` direct dep; §A2 payoff verified empirically (repair edit leaves util Fresh). Deviation: leaf also needs fs-names/tracing + dev log/tempdir beyond §F14; §F31 filters updated by content. Review B clean; dd8c6d13 fixed doc seams only |
 | T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
-| T05 | Plan / purge / scope decision crate | in_progress | | |
+| T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
 | T06 | HTTP + Sophon fetch crate | todo | | |
 | T07 | Report plane crate | todo | | |
 | T08 | CLI / config crate for narrow tests | todo | | |
@@ -118,3 +118,13 @@ that in the relevant task's `note` instead of silently proceeding):
   `repair/file` contains no zstd (real code in `sophon/stream.rs`) and no
   tempfile (only `phases/post.rs`, a DO-NOT-TOUCH atomic-publish item);
   reqwest/tokio are spread broadly, not concentrated in the writer.
+- **Product mid-level SCC blocks T04 and T05 (T05 validation, §A10/F13).**
+  `config`, `repair/file`, `repair/phases` (plan + manifest), `scope`
+  (ledger/report/limits/filter), `report` (summary/emit) and `sophon` chunk
+  types form one strongly-connected group. Moving `Meter`/`Summary` down alone
+  leaves out-edges to `sophon::{FileReuse,SophonChunk}`, `manifest::LocalChunkMap`,
+  `config::RepairMode`, `file::Mode` and `report::Record`; a boundary around the
+  whole SCC would be most of the product, so §A2 fails. Revisit only after the
+  needed subsystems are extracted as leaves: Sophon/chunk types (T06, itself
+  blocked by the `report/emit` hyp-type edge) and the report plane / `Record`
+  (T07). Do not re-attempt T04/T05 as leaf splits before then.
