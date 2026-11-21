@@ -19,7 +19,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
 | T06 | HTTP + Sophon fetch crate | pending_review | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged |
 | T07 | Report plane crate | pending_review | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged |
-| T08 | CLI / config crate for narrow tests | in_progress | | |
+| T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
 | T10 | Consolidate shared test seams and includes | todo | | |
 | T11 | girsync: extract the cache crate | todo | | |
@@ -135,3 +135,10 @@ that in the relevant task's `note` instead of silently proceeding):
   and no longer gates report splits. Remaining out-edges for a T04/T05 revisit
   are `manifest::LocalChunkMap`, `config::RepairMode` and `file::Mode`. Do not
   re-attempt T04/T05 as leaf splits before those are addressed.
+- **Narrow CLI tests are blocked by the shared harness (T08 validation, §F22).**
+  Both `tests/cli_contract.rs` and `tests/process.rs` declare `mod common;`, whose
+  fixture imports many `girpr::*` types and calls `girpr::run`, so a cli/config
+  crate would not remove a rebuild edge (§A2). `RunCtx` embeds `Limits`/`PathScope`
+  from the config↔repair SCC (§A10). Revisit T08 only after T09/T10 make the
+  shared test harness facade-free and that SCC is addressed. The §F22 claim that
+  cli_contract needs only `girpr::Args` is contradicted by the current code.
