@@ -38,7 +38,12 @@
 //!    post-phase, so `config.ini` never advances over a damaged install,
 //! 7. post-phase, then the caller prints `SUMMARY`.
 
-mod audio;
+// The audio scan-file boundary lives in its own acyclic leaf crate. The alias
+// keeps every existing `audio::…` call site (here and in `phases::metadata`)
+// pointing at the same names, while the facade depends on the crate directly
+// so an edit to the repair, report or CLI modules leaves it cached and narrow
+// consumers can link it without this facade.
+use girpr_audio as audio;
 mod file;
 pub mod phases;
 pub mod purge;

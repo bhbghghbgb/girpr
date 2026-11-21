@@ -37,9 +37,9 @@
 //! and the monotonic phase timer live in `girpr-report`, which also owns the
 //! `Meter`/`StoppedBy` group that was mutually recursive with `Summary`; the
 //! HoYoPlay/Sophon fetch path (`hyp`, `sophon`) and the attempt loop (`retry`)
-//! live in `girpr-fetch`, and the low-level scan/hash/path helpers in
-//! `girpr-util`. This crate depends on all three directly under module aliases,
-//! so edits here leave their code cached.
+//! live in `girpr-fetch`, the audio scan-file boundary in `girpr-audio`, and the
+//! low-level scan/hash/path helpers in `girpr-util`. This crate depends on all
+//! four directly under module aliases, so edits here leave their code cached.
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
 //! run config → [`run`] → print `SUMMARY` → flush the log → return the exit

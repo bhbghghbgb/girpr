@@ -766,6 +766,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "girpr-audio",
  "girpr-audio-language",
  "girpr-cli",
  "girpr-digest",
@@ -796,6 +797,17 @@ dependencies = [
  "walkdir",
  "wiremock",
  "zstd",
+]
+
+[[package]]
+name = "girpr-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-audio-language",
+ "girpr-tempdir",
+ "girpr-util",
+ "tracing",
 ]
 
 [[package]]

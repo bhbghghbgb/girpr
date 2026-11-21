@@ -7,7 +7,15 @@
 //!
 //! Who decides what ends up in the file (and whether it is written at all) is
 //! [`resolve_effective_audio`], which needs the server-side `GameConfig`; this
-//! module owns only the file format.
+//! crate owns only the file format and the read/write policy, not that decision.
+//!
+//! This is an acyclic leaf: its only dependencies are other shared leaves
+//! ([`girpr_audio_language`] for the code/display-name table and `girpr_util`
+//! for path containment and atomic publish) plus `anyhow`/`tracing`. Nothing
+//! here names a product data model, and the repair facade depends on the crate
+//! directly under a module alias. Narrow consumers — this crate's own tests and
+//! its integration tests — link it without the facade, so an edit to the
+//! repair, report or CLI modules leaves them cached.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -75,7 +83,7 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<
     if scan_dir.is_empty() {
         return Ok(None);
     }
-    let p = crate::util::contained_join(game_dir, scan_dir).context("audio scan file path")?;
+    let p = girpr_util::contained_join(game_dir, scan_dir).context("audio scan file path")?;
     let text = match std::fs::read_to_string(&p) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -162,10 +170,10 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
         .filter(|(code, _)| langs.contains(*code))
         .map(|(_, name)| *name)
         .collect();
-    let p = crate::util::contained_join(game_dir, scan_dir)?;
+    let p = girpr_util::contained_join(game_dir, scan_dir)?;
     // A partial file reads as an empty selection, so publish only the whole
     // list; the scan file is advisory, so it does not need a durable sync.
-    crate::util::atomic::write_atomic(&p, lines.join("\n").as_bytes(), false)
+    girpr_util::atomic::write_atomic(&p, lines.join("\n").as_bytes(), false)
 }
 
 #[cfg(test)]

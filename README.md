@@ -43,6 +43,7 @@ machine rather than the code.
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
+| `crates/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `crates/sync-cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
@@ -417,7 +418,11 @@ other error to the usage code each caller passes in, so no exit code or exit
 table is shared. `crates/audio-language/` supplies the lower + `_`→`-` token
 primitive and the four code/display-name pairs to this binary and `gircap`;
 each passes its own case-folding flavour and keeps its own alias map, `none`
-sentinel and validation, so no audio policy is shared. `crates/proto/` supplies
+sentinel and validation, so no audio policy is shared. `crates/audio/` holds
+this binary's audio scan-file read/write and effective-selection policy; the
+repair code depends on it directly under a module alias, so an edit to repair,
+report or CLI leaves it cached for the narrow test targets that link it
+without this facade. `crates/proto/` supplies
 the Sophon protobuf wire types to this binary and `gircap` — the three messages,
 their tags, the misspelled `chuncks` and opaque tag 6, so both decode one byte
 layout; each keeps its own decode boundary, dump format, validation and

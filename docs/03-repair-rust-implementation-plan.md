@@ -44,8 +44,8 @@ src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mod
 src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
 crates/lock/          # the single-writer lock (outside the install)
+crates/audio/         # audio scan-file read/write + effective selection (acyclic leaf)
 src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
-src/repair/audio.rs   # audio scan-file read/write + effective selection
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
 tests/artifact_bridge.rs  # the bundle-backed end-to-end suite (docs/06)

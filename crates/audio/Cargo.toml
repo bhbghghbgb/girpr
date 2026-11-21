@@ -1,0 +1,31 @@
+[package]
+name = "girpr-audio"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared audio scan-file read/write and effective-selection mechanics the girpr repair pipeline uses"
+
+[lib]
+name = "girpr_audio"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The error/context wrappers and the malformed-selection, unknown-line and
+# resolution warnings this boundary emits.
+anyhow = "1.0.104"
+tracing = "0.1.44"
+# The four code/display-name pairs and their canonical order, shared with the
+# capture tool so both write the same scan-file bytes. This crate keeps the
+# read/write and selection policy; the leaf owns only the constant table.
+girpr-audio-language = { path = "../audio-language" }
+# Server-controlled path containment and the atomic temp-then-rename publish.
+# These are low-level mechanics with no product policy, so an edit to the
+# repair, report or CLI modules leaves the whole audio boundary cached.
+girpr-util = { path = "../util" }
+
+[dev-dependencies]
+# The scratch directories the scan-file tests read and write through.
+girpr-tempdir = { path = "../tempdir" }
