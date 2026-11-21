@@ -25,7 +25,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T11 | girsync: extract the cache crate | completed | 87ce6cf6 | New upstream `girpr-sync-cache` leaf owns whole cache subtree + redb/postcard/tempfile and hash vocabulary (wire format); util↔cache cycle broken by moving ts_now/copy_dir_all/identity helpers down; direct consumers girsync (re-export alias) + sled2redb. §A2 verified empirically (cache/redb/postcard/tempfile Fresh after girsync edit). Dev: T12 must NOT re-extract hash from girsync — it now lives in sync-cache; no nextest filter changes needed. Review F clean |
 | T12 | girsync: extract the acyclic leaves | completed | a6503f7e | New `girpr-sync-leaves` holds rw/filter/link/hardlink verbatim; girsync direct dep + old-name re-exports; direct consumer `crates/sync-leaves/tests/direct.rs`; §A2 verified empirically (cache+leaves Fresh after planner edit). Dev: hash not extracted (T11 already moved to sync-cache); scan.rs left local — imports crate::util + crate::link, extracting would invert dep via util→cache (§A10/§A2); gate/policy unchanged. Review F clean |
 | T13 | girsync: planner + effective cycle crate | skipped | | planner/effective not a standalone 2-node SCC — sit in 6-module girsync SCC {cli,config,diff,effective,planner,report}; a legal whole-group move needs scan/util/hash too (broad, not narrow interface), §A2 fails; stop per task instruction |
-| T14 | gircap: extract the http subsystem crate | todo | | |
+| T14 | gircap: extract the http subsystem crate | in_progress | | |
 | T15 | gircap: emit + verify subsystem crates | todo | | |
 | T16 | gircap: blobs + manifest crates | todo | | |
 | T17 | gircap: small production leaves | todo | | |
