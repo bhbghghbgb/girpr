@@ -35,12 +35,16 @@ tracing = "0.1.44"
 # The region values, the digest/hex and protobuf byte mechanics, the shared
 # retry schedule and the low-level scan/digest helpers. This crate keeps its
 # own request policy, decode/verify seam and attempt loops; only the leaves
-# hold shared values or mechanics.
+# hold shared values or mechanics. The scan/digest helpers come from the hash
+# leaf directly, so a config or path edit leaves this fetch tree cached.
 girpr-model = { path = "../model" }
 girpr-digest = { path = "../digest" }
 girpr-proto = { path = "../proto" }
 girpr-retry = { path = "../retry" }
-girpr-util = { path = "../util" }
+girpr-util-hash = { path = "../util-hash" }
+# The clean-rel spelling used to key the local reuse map. It is a path leaf,
+# not the config writer, so an ini edit leaves this fetch tree cached.
+girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
 # The dependency-free loopback server the canned-reply helper scripts. This

@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
-use girpr_util::{self as util, Md5};
+use girpr_util_hash::Md5;
+use girpr_util_path as path_util;
 
 /// One reuse candidate: a slice of the local file that may hold a chunk's
 /// bytes, so it can be copied instead of downloaded.
@@ -141,7 +142,7 @@ pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Fi
             if f.is_folder {
                 continue;
             }
-            let key = match util::clean_rel(&f.file) {
+            let key = match path_util::clean_rel(&f.file) {
                 Ok(key) => key,
                 Err(e) => {
                     tracing::warn!(
