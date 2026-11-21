@@ -43,3 +43,11 @@ serde_json = "1.0.154"
 # Millisecond RFC 3339 timestamps in the request log.
 chrono = { version = "0.4.45", features = ["clock"] }
 tracing = "0.1.44"
+
+[dev-dependencies]
+# The mechanics tests build scratch directories and script canned replies on a
+# loopback server. Neither is needed by a shipped build of this crate; gircap's
+# own copy of the mock encodes different contracts and is deliberately not
+# borrowed here (docs/00-spec.md §2).
+girpr-tempdir = { path = "../../../crates/tempdir" }
+wiremock = "0.6"

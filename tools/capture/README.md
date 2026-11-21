@@ -55,8 +55,12 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p gircap   # 755 tests, three #[ignore]d for cost (752 run by default), no network
+cargo nextest run -p gircap   # 772 tests, three #[ignore]d for cost (769 run by default), no network
 ```
+
+The HTTP mechanics tests live with the mechanics in the `gircap-http` package
+(`cargo nextest run -p gircap-http`); the probe and negative cases, which depend
+on gircap's own contracts, remain in this package.
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an

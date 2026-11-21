@@ -16,11 +16,7 @@
 //! all — and the difference is the fact `diff_tags` does not carry.
 
 #[cfg(test)]
-use std::collections::BTreeMap;
-#[cfg(test)]
 use std::sync::Arc;
-#[cfg(test)]
-use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use crate::exit::ExitCode;

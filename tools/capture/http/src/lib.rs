@@ -67,6 +67,14 @@ pub use transport::{
     Transport, ZeroSleep,
 };
 
+// The mechanics tests live with the mechanics: this crate's own test target
+// links only reqwest/tokio and the fixtures it needs, so an edit to gircap's
+// emit/blobs/manifest leaves these tests cached instead of re-linking them
+// through the parent package's lib test target. The mock servers the tests use
+// are this crate's own copies (one process per test under nextest).
+#[cfg(test)]
+mod tests;
+
 /// The one `User-Agent` string sent on every request.
 ///
 /// A generic Unity player string rather than one naming the tool: the API is a

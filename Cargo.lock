@@ -735,12 +735,14 @@ dependencies = [
  "chrono",
  "girpr-digest",
  "girpr-retry",
+ "girpr-tempdir",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
