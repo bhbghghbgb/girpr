@@ -147,6 +147,30 @@ tokio = { version = "1.54.1", default-features = false, features = ["test-util",
 # and assert on what it recorded.
 wiremock = "0.6"
 
+# Debug/test builds are link-bound on low-core HDD hosts: the default of 256
+# codegen units produces hundreds of object files per crate for the linker to
+# open and relocate. Four units match a 4-core host. The test profile below
+# overrides this with a single unit, which measured even faster for its many
+# small test binaries.
+[profile.dev]
+codegen-units = 4
+
+# A workspace test run links dozens of binaries, each with the whole
+# dependency tree. With MSVC full debug info that means a 100-190 MB PDB per
+# binary; dropping it for tests cut the measured link time several-fold.
+# `dev` keeps full debug info for debugging the product binary; `release` is
+# unchanged.
+[profile.test]
+debug = 0
+codegen-units = 1
+# One codegen unit gives up intra-crate codegen parallelism, but leaves one
+# object file per crate for the linker to open and relocate. Cargo's job
+# parallelism across crates is the useful parallelism on a 4-core host.
+# The incremental cache is also a net loss on an HDD: ~140k tiny files must be
+# reloaded and rewritten for every test binary, costing more than a full
+# recompile, and it makes target/ grow on every edit.
+incremental = false
+
 # The shipped artifact is a single CLI binary, so trade build time for a
 # smaller, slightly faster one: thin LTO and one codegen unit, and no debug
 # info. Unwinding stays enabled so that `Drop`-based cleanup of locks and
