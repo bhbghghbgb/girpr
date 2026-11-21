@@ -25,8 +25,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T11 | Root dev-dependency hygiene and frozen manifest bodies | completed | e57340a9 | 1 commit; froze 3 deterministic bodies as const &[u8] with pinned length/body MD5/manifest checksum; removed root prost dev-dep + tokio test-util feature (unused); zstd KEPT — premise contradicted, zstd_bytes() in tests/artifact_server.rs compiled via contracts binary; prost/zstd already in normal tree via girpr-fetch so declaration hygiene, not crate-count win; 2176 passed/8 skipped |
 | T12 | Root `src/` unit-test cleanups | completed | 710c29a3, 0b494593, 9cb2fc97 | 3 commits: hand-rolled runtimes→#[tokio::test] (one cross-thread case kept manual); guards→2s except manifest.rs:537 kept 5s (deadline, not signal wait); CLI parse(extra)+table test (432→431 tests); audio-fixture sub-item SKIPPED — alias cases already loop-table and per-test temp dirs mean no cost saved; no sleeps, loaded-run guard check clean, no byte/production change |
 | T13 | Collapse duplicated root integration fixtures | completed | 81344b48, 7e312de9, 37610881 | 3 commits: F19 JSON/text pairs→3 merged tests with reseed_install helper (config bump contaminates second plane otherwise); F20 phase/precedence tables (process tests 11→8, premise partly pre-satisfied); F23 Clone derives at call sites (30 duplicate builds removed, no wall saving expected); process spawns/messages/bytes preserved; no pinned filter affected; 425 passed/6 skipped |
-| T14 | Group `artifact_server.rs` bundle tests | pending_review | fe0fea6b | 1 commit; 5 with_shapes tests→1 grouped test (one bundle + one bridge), 3 other shape tests untouched; tests 8→4, bundles 8→4, listeners 32→16; all 87 assertions preserved verbatim incl HTTP status/body/zstd; full TCP end-to-end case unchanged; no nextest filter named them; no OnceLock/sleeps/fixture growth; zstd_bytes intact; contracts 44 passed |
-| T15 | Remove cross-file duplicate process-level assertions | pending_review | a94eac24 | 1 commit; removed 1 duplicate process case after folding its only process-only assertion (getBuild via endpoint overrides) into base_precedence_and_env_fallback smoke; spawns 14→13, process tests 8→7; coverage verified in-process first (REPORT/SUMMARY via cli_contract goldens, scope via repair_scope); no nextest filter change; pinned repair_post + host-skips untouched; 420 passed/6 skipped; F22 premises partly stale (already reduced by earlier work) |
+| T14 | Group `artifact_server.rs` bundle tests | completed | fe0fea6b | 1 commit; 5 with_shapes tests→1 grouped test (one bundle + one bridge), 3 other shape tests untouched; tests 8→4, bundles 8→4, listeners 32→16; all 87 assertions preserved verbatim incl HTTP status/body/zstd; full TCP end-to-end case unchanged; no nextest filter named them; no OnceLock/sleeps/fixture growth; zstd_bytes intact; contracts 44 passed |
+| T15 | Remove cross-file duplicate process-level assertions | completed | a94eac24 | 1 commit; removed 1 duplicate process case after folding its only process-only assertion (getBuild via endpoint overrides) into base_precedence_and_env_fallback smoke; spawns 14→13, process tests 8→7; coverage verified in-process first (REPORT/SUMMARY via cli_contract goldens, scope via repair_scope); no nextest filter change; pinned repair_post + host-skips untouched; 420 passed/6 skipped; F22 premises partly stale (already reduced by earlier work) |
 | T16 | Fold tiny pure-test clusters | todo | | |
 | T17 | Leaf-crate test cleanups | todo | | |
 | T18 | Reduce row-reading redb reopens | todo | | |
@@ -46,7 +46,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | F | T08 | done | |
 | G | T09, T10, T11 | done | Review fix 1aa50d2c removed stale gircap-http edge from hash crate docs |
 | H | T12, T13 | done | |
-| I | T14, T15 | pending | |
+| I | T14, T15 | done | |
 | J | T16, T17 | pending | |
 | K | T18, T19 | pending | Split if T18 is pre-satisfied by T02 |
 | L | T20, T21 | pending | |
@@ -83,6 +83,8 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU22 | Optional merge of the 12 post.rs audio-move tests into one table test | open | Conditional on per-test spawn being material; F26/F35 want measurement first |
 | FU23 | Reseed install between rows of the phase table if state-dependent assertions are added | open | Future-conditional; current assertions are flag-only |
 | FU24 | Extend T13 reseed_install if the binary persists new local-state files | open | Maintenance note; currently resets config.ini + two fixture files |
+| FU25 | Finish F22 in-process rig dedup in repair_post/scan/plan | open | Constraint-blocked: repair_post host-skip/log-capture cases must stay untouched |
+| FU26 | Consider splitting the ~324-line merged T14 test | open | Only if failure triage proves painful; labels/messages already preserved |
 
 ## Persistent context
 
