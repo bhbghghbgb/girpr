@@ -308,11 +308,11 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- A **stable Rust toolchain**, selected by `rust-toolchain.toml` at the
-  repository root. There is no MSRV floor: edition 2024 is the only language
-  requirement. Any version number you may see in notes or tooling is a hint
-  that can be bumped at any time, never a cap on newer language features or
-  library versions. Network to HoYoPlay + Sophon CDNs (production runs only).
+- A **stable Rust toolchain**, pinned to an exact release by `rust-toolchain.toml`
+  at the repository root. There is no MSRV floor: edition 2024 is the only
+  language requirement. The pinned version can be bumped deliberately whenever a
+  newer release is needed, never a cap on newer language features or library
+  versions. Network to HoYoPlay + Sophon CDNs (production runs only).
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.

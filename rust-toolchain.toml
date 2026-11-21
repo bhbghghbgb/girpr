@@ -1,5 +1,5 @@
-# The whole workspace builds and tests on the stable Rust toolchain. There is
-# no MSRV floor: if a feature or a library needs a newer stable release, update
-# the toolchain rather than holding the workspace back.
+# The whole workspace builds and tests on the pinned stable release below.
+# There is no MSRV floor: if a feature or a library needs a newer stable
+# release, bump this deliberately rather than holding the workspace back.
 [toolchain]
-channel = "stable"
+channel = "1.100.0"

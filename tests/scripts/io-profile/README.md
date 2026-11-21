@@ -66,7 +66,7 @@ number of operations is fixed so the totals are comparable, but a single noisy
 run is still only worth a rough reading.
 
 The bench is a standalone workspace, so ordinary builds do not compile it. It
-is checked on the same stable toolchain as the rest of the workspace:
+is checked on the same pinned stable toolchain as the rest of the workspace:
 
 ```powershell
 cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
