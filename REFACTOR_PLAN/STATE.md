@@ -17,7 +17,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T03 | Cheapest product leaves batch | completed | 46ede904, dd8c6d13 | Split only `girpr-lock` (true leaf, direct consumers); other 6 left local. Review B: biz/phase/filter reasons sound; audio reason no longer holds now util is external (see FU-03); logging/retry reasons cite wrong constraints but low-payoff outcome defensible (FU-04). §A2 payoff verified empirically; dd8c6d13 fixed doc seams only |
 | T04 | Writer / file-repair crate | skipped | | Boundary crossed by three §A10/F13 cycles (report/summary↔ledger, config↔repair, scope↔phases) + wide interface needs most of repair moved down (§F15 stop); §F27 heavy-dep claim stale (zstd→sophon/stream.rs, tempfile→phases/post.rs only) |
 | T05 | Plan / purge / scope decision crate | skipped | | Cycle-bound like T04: plan/purge/scope in config↔repair↔file↔phases↔report SCC; moving Meter/Summary down still leaves OUT-edges to sophon, manifest::LocalChunkMap, config::RepairMode, file::Mode, Record — no clean leaf, §A2 fails |
-| T06 | HTTP + Sophon fetch crate | todo | | |
+| T06 | HTTP + Sophon fetch crate | in_progress | | |
 | T07 | Report plane crate | todo | | |
 | T08 | CLI / config crate for narrow tests | todo | | |
 | T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
