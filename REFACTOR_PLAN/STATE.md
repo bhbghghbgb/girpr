@@ -20,7 +20,7 @@ for reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | HTTP + Sophon fetch crate | completed | aff092c2 | New `girpr-fetch` leaf (hyp/sophon/retry); ReportProvenance severed via borrowed-scalar interface seam, no report move; new narrow `tests/fetch_direct.rs` direct consumer. §A2 verified empirically (repair edit leaves fetch Fresh). Dev: resolved earlier blocker claim — fetch not in SCC, provenance seam works, gircap unchanged. Review D clean |
 | T07 | Report plane crate | completed | 89091f68 | New `girpr-report` reuses report-core; resolved §F13 summary↔ledger cycle by moving whole 2-node group (§A10), facade alias + binary direct consumer; §A2 achieved, report byte tests pass. Dev: §F18 line count stale; no nextest filter edits needed; gircap unchanged. Review D clean |
 | T08 | CLI / config crate for narrow tests | skipped | | Narrow tests still link facade via `mod common;` (§A2 fails); cli/config crate would cut config↔repair SCC for Limits (§A10); §F22 premise "needs only girpr::Args" false. Revisit after T09/T10 de-dup the shared harness |
-| T09 | De-duplicate root `tests/common/mod.rs` inlining | todo | | |
+| T09 | De-duplicate root `tests/common/mod.rs` inlining | in_progress | | |
 | T10 | Consolidate shared test seams and includes | todo | | |
 | T11 | girsync: extract the cache crate | todo | | |
 | T12 | girsync: extract the acyclic leaves | todo | | |
