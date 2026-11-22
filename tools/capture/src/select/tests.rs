@@ -150,7 +150,6 @@ fn all_six() -> Vec<SizedCandidate> {
     )])
 }
 
-#[test]
 fn the_pool_is_built_from_every_row_with_its_shape_and_classes() {
     let pool = all_six();
     assert_eq!(pool.len(), 6);
@@ -177,7 +176,6 @@ fn the_pool_is_built_from_every_row_with_its_shape_and_classes() {
 
 /// An added path is charged the compressed bytes a fetch downloads, not its
 /// declared size on the new side.
-#[test]
 fn an_added_path_is_charged_its_compressed_download_size() {
     let pool = candidates(&[field(
         "game",
@@ -195,7 +193,6 @@ fn an_added_path_is_charged_its_compressed_download_size() {
 
 /// A removed path has no new side to fetch: its charge is still the bytes it
 /// occupies in `game/`.
-#[test]
 fn a_removed_path_is_still_charged_its_old_size() {
     let pool = all_six();
     let h = pool
@@ -206,7 +203,6 @@ fn a_removed_path_is_still_charged_its_old_size() {
 }
 
 /// A common path still charges `total_cost`, not either side's own size.
-#[test]
 fn a_common_path_is_still_charged_total_cost() {
     let pool = all_six();
     let d = pool
@@ -218,7 +214,6 @@ fn a_common_path_is_still_charged_total_cost() {
 
 /// A byte ceiling admits an added path by the compressed download cost, not by
 /// its declared size — whichever of the two the ceiling sits between.
-#[test]
 fn a_budget_admits_an_added_path_by_compressed_size_not_declared_size() {
     let pool = |declared: i64, download: u64| {
         candidates(&[field(
@@ -254,7 +249,6 @@ fn a_budget_admits_an_added_path_by_compressed_size_not_declared_size() {
     assert_eq!(r.budget_cost, 1_000);
 }
 
-#[test]
 fn the_pool_is_ordered_cheapest_first() {
     let costs: Vec<u64> = all_six().iter().map(SizedCandidate::budget_cost).collect();
     let mut sorted = costs.clone();
@@ -267,7 +261,6 @@ fn the_pool_is_ordered_cheapest_first() {
     assert_eq!(costs[0], 108, "a/identical: 54 old + 54 new");
 }
 
-#[test]
 fn one_capture_per_class_is_the_greedy_answer() {
     let s = select(&all_six(), 1, Budget::unlimited(), &[]);
     let mut got: Vec<(Class, String)> = s
@@ -298,7 +291,6 @@ fn one_capture_per_class_is_the_greedy_answer() {
 /// That is what makes the bundle's size predictable — one file per patch
 /// shape — and it is why `covered_by` only ever arises from a **forced**
 /// capture, which exists before the admission looks at the pool.
-#[test]
 fn no_candidate_answers_two_classes() {
     for c in all_six() {
         assert!(
@@ -314,7 +306,6 @@ fn no_candidate_answers_two_classes() {
 /// it — which is `covered_by`, and it is satisfied either way. What matters
 /// is that the file is captured once, not once per class it happens to
 /// answer.
-#[test]
 fn a_forced_capture_answers_its_class_without_being_selected_for_it() {
     let s = select(&all_six(), 1, Budget::unlimited(), &["d/in_place".into()]);
     let row = s
@@ -335,7 +326,6 @@ fn a_forced_capture_answers_its_class_without_being_selected_for_it() {
 /// The capture here is a **forced** one (`--files`), and the ceiling is too
 /// small for it. The class it would have answered has that same file as its
 /// only candidate, so the class cannot be funded either.
-#[test]
 fn a_class_whose_capture_was_refused_is_over_budget_not_absent() {
     let pool = all_six();
     // Enough for the cheapest capture and not enough for `d/in_place`.
@@ -369,7 +359,6 @@ fn a_class_whose_capture_was_refused_is_over_budget_not_absent() {
 /// This is the case the reverted series missed: checking each forced path
 /// against the caller's unspent budget admitted both, because `0 + 60` and
 /// `0 + 60` each fit a 100 B cap. The ledger has to be cumulative.
-#[test]
 fn forced_costs_are_checked_against_the_cumulative_budget_not_one_by_one() {
     let pool = candidates(&[field(
         "game",
@@ -401,7 +390,6 @@ fn forced_costs_are_checked_against_the_cumulative_budget_not_one_by_one() {
 /// A `break` on the first refusal would let `--files a --files b` with
 /// `a = 500 B`, `b = 100 B` under a 200 B cap capture neither and record
 /// neither. A refusal is about one path, not the rest of the list.
-#[test]
 fn a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it() {
     let pool = candidates(&[field(
         "game",
@@ -437,7 +425,6 @@ fn a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it() {
 /// `patchmaps/added.json`, and the second write replace the first while
 /// `captures_admitted` still said two. Numbering per class is what keeps
 /// the identity of a forced path distinct.
-#[test]
 fn two_forced_paths_of_one_class_get_distinct_ids() {
     let pool = candidates(&[field(
         "game",
@@ -477,7 +464,6 @@ fn two_forced_paths_of_one_class_get_distinct_ids() {
 /// the rejection record describes one patchmap while the funded capture writes
 /// another, and the two can overwrite each other in release builds. The ordinal
 /// has to be shared by every selection that could produce an id.
-#[test]
 fn a_refused_forced_path_and_a_funded_pick_do_not_share_an_id() {
     let pool = candidates(&[field(
         "game",
@@ -509,7 +495,6 @@ fn a_refused_forced_path_and_a_funded_pick_do_not_share_an_id() {
 /// A one-chunk file with no reuse is a degenerate patch: `added` already
 /// covers "the file is created whole", so the class set is legitimately
 /// empty. The row is still recorded as unscored, with nothing else under it.
-#[test]
 fn a_forced_path_that_answers_no_class_is_recorded_as_unscored() {
     let pool = candidates(&[field(
         "game",
@@ -540,7 +525,6 @@ fn a_forced_path_that_answers_no_class_is_recorded_as_unscored() {
 
 /// A class with no candidate is recorded as `unavailable` **with a reason**,
 /// rather than being dropped from the matrix.
-#[test]
 fn an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count() {
     let pool = candidates(&[field(
         "game",
@@ -577,7 +561,6 @@ fn an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count() {
 /// A forced capture answers its class *without* having been selected for it —
 /// which is `covered_by`, and it is satisfied either way. What matters is that
 /// the file is captured once, not once per class it happens to answer.
-#[test]
 fn a_class_with_candidates_already_captured_is_covered_by_not_recaptured() {
     // One file that satisfies two classes.
     let pool = candidates(&[field(
@@ -606,7 +589,6 @@ fn a_class_with_candidates_already_captured_is_covered_by_not_recaptured() {
 }
 
 /// `--per-class 2` takes a second candidate per class, cheapest first.
-#[test]
 fn per_class_two_admits_a_second_file_for_a_class() {
     let pool = candidates(&[field(
         "game",
@@ -654,7 +636,6 @@ fn per_class_two_admits_a_second_file_for_a_class() {
 /// Two admitted paths are then more than a `u64` holds. The summary total
 /// is a measurement next to the saturating ledger, so it must report the
 /// saturated number rather than panic (debug) or wrap (release).
-#[test]
 fn two_maximum_costs_report_the_saturated_ledger_not_an_overflow() {
     let cost = u64::MAX - 1;
     let pool = candidates(&[field(
@@ -686,7 +667,6 @@ fn two_maximum_costs_report_the_saturated_ledger_not_an_overflow() {
 
 /// A tight ceiling plus `--per-class 2` is the acceptance case: one fits,
 /// the second is recorded as over budget rather than dropped.
-#[test]
 fn per_class_two_under_a_tight_ceiling_tags_the_second_over_budget() {
     let mk = |p: &str, size: i64| row(p, State::Added, None, size);
     let pool = candidates(&[field(
@@ -707,7 +687,6 @@ fn per_class_two_under_a_tight_ceiling_tags_the_second_over_budget() {
     assert_eq!(s.bytes_admitted, 600);
 }
 
-#[test]
 fn a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent() {
     let pool = candidates(&[field(
         "game",
@@ -752,7 +731,6 @@ fn a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent()
     assert_eq!(s.bytes_admitted, 0);
 }
 
-#[test]
 fn unmet_reports_over_budget_and_unavailable_but_not_covered_by() {
     let pool = candidates(&[field(
         "game",
@@ -778,7 +756,6 @@ fn unmet_reports_over_budget_and_unavailable_but_not_covered_by() {
     assert_eq!(s.paths(), vec!["x/a"]);
 }
 
-#[test]
 fn the_matrix_has_exactly_one_row_per_class_in_admission_order() {
     let s = select(&all_six(), 1, Budget::unlimited(), &[]);
     assert_eq!(s.matrix.len(), Class::ALL.len());
@@ -788,7 +765,6 @@ fn the_matrix_has_exactly_one_row_per_class_in_admission_order() {
 
 /// The cheapest-first property is what makes the budget fund the most
 /// classes, so it is asserted as an invariant over many ceilings.
-#[test]
 fn admission_is_cheapest_first_for_every_ceiling() {
     let pool = all_six();
     for cap in [0, 42, 100, 1_000, 2_000, 10_000, 1_000_000, u64::MAX] {
@@ -812,7 +788,6 @@ fn admission_is_cheapest_first_for_every_ceiling() {
     }
 }
 
-#[test]
 fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
     let s = select(
         &all_six(),
@@ -834,7 +809,6 @@ fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
 /// `REQUIRED_ORDER` and `ALL` are the same list today, but the lookup must not
 /// rely on that: reordering either one would silently pair a class with another
 /// class's candidates. Every assertion here goes through the class itself.
-#[test]
 fn candidate_lists_are_keyed_by_class_not_by_array_position() {
     let pool = all_six();
     let by_class = candidates_by_class(&pool);
@@ -866,7 +840,6 @@ fn candidate_lists_are_keyed_by_class_not_by_array_position() {
 
 /// A folder row is dropped from the pool, so no `SizedCandidate` can describe a
 /// folder — the diff still carries the row for its counts and sidecar.
-#[test]
 fn candidates_exclude_folder_rows() {
     let diffs = [field(
         "game",
@@ -890,7 +863,6 @@ fn candidates_exclude_folder_rows() {
 }
 
 /// A run whose only change is a folder admits nothing for it.
-#[test]
 fn a_folder_only_change_admits_no_capture() {
     let diffs = [field("game", vec![folder_row("d/only", State::Added, 0)])];
     let decided = super::decide::decide(&diffs, 1, None, &[]);
@@ -902,7 +874,6 @@ fn a_folder_only_change_admits_no_capture() {
     assert!(!decided.selection.paths().contains(&"d/only"));
 }
 
-#[test]
 fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     let diffs = [field(
         "game",
@@ -950,7 +921,6 @@ fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     assert_eq!(rows[0]["classes"][0], Class::ReuseInPlace.id());
 }
 
-#[test]
 fn cost_tie_scoring_rank_and_admission_rank_can_differ() {
     // Equal total_cost and field, so `by_cost` breaks the tie by `moved` desc
     // (`b` first) while `candidates` breaks it by path (`a` first). The two
@@ -995,7 +965,6 @@ fn cost_tie_scoring_rank_and_admission_rank_can_differ() {
     assert_eq!(rows[1]["admission_rank"], 1);
 }
 
-#[test]
 fn every_common_row_carries_a_unique_admission_rank() {
     let diffs = [field(
         "game",
@@ -1034,7 +1003,6 @@ fn every_common_row_carries_a_unique_admission_rank() {
     assert_eq!(ranks, vec![1, 2, 3], "unique paths carry unique ranks");
 }
 
-#[test]
 fn one_sided_rows_are_not_in_the_scoring_table() {
     let diffs = [field(
         "game",
@@ -1055,13 +1023,11 @@ fn one_sided_rows_are_not_in_the_scoring_table() {
     assert_eq!(rows[0]["path"], "common");
 }
 
-#[test]
 fn classes_in_order_normalises_a_reader_supplied_list() {
     let got = classes_in_order(&["removed", "identical", "not_a_class"]);
     assert_eq!(got, vec![Class::Identical, Class::Removed]);
 }
 
-#[test]
 fn capture_ids_are_the_class_then_the_ordinal() {
     let c = SizedCandidate {
         candidate: all_six()[0].candidate.clone(),
@@ -1109,14 +1075,12 @@ fn rejection(id: &str) -> Rejection {
     }
 }
 
-#[test]
 fn capture_ids_are_unique_in_a_normal_selection() {
     let s = select(&all_six(), 1, Budget::unlimited(), &[]);
     assert_eq!(s.admitted.len(), 6, "one capture per class");
     debug_validate_unique_ids(&s).expect("one capture per class means unique, valid ids");
 }
 
-#[test]
 fn duplicate_admitted_capture_ids_are_reported() {
     let mut s = empty_selection();
     s.admitted.push(admission("identical"));
@@ -1126,7 +1090,6 @@ fn duplicate_admitted_capture_ids_are_reported() {
     assert!(err.contains("identical"), "{err}");
 }
 
-#[test]
 fn duplicate_rejected_capture_ids_are_reported() {
     let mut s = empty_selection();
     s.rejected.push(rejection("identical"));
@@ -1136,7 +1099,6 @@ fn duplicate_rejected_capture_ids_are_reported() {
     assert!(err.contains("identical"), "{err}");
 }
 
-#[test]
 fn an_admitted_id_may_not_equal_a_rejected_id() {
     let mut s = empty_selection();
     s.admitted.push(admission("identical"));
@@ -1147,7 +1109,6 @@ fn an_admitted_id_may_not_equal_a_rejected_id() {
     assert!(err.contains("identical"), "{err}");
 }
 
-#[test]
 fn capture_ids_must_be_single_file_stems() {
     for bad in ["", "a/b", "a\\b", "a..b"] {
         let mut s = empty_selection();
@@ -1156,4 +1117,170 @@ fn capture_ids_must_be_single_file_stems() {
             debug_validate_unique_ids(&s).expect_err("an id that is not a single stem is refused");
         assert!(err.contains("valid file stem"), "{err}");
     }
+}
+
+#[test]
+fn select_decision_cases() {
+    // Consolidated pure selection cases; each original case keeps its label and assertions.
+    check_case(
+        "the_pool_is_built_from_every_row_with_its_shape_and_classes",
+        the_pool_is_built_from_every_row_with_its_shape_and_classes,
+    );
+    check_case(
+        "an_added_path_is_charged_its_compressed_download_size",
+        an_added_path_is_charged_its_compressed_download_size,
+    );
+    check_case(
+        "a_removed_path_is_still_charged_its_old_size",
+        a_removed_path_is_still_charged_its_old_size,
+    );
+    check_case(
+        "a_common_path_is_still_charged_total_cost",
+        a_common_path_is_still_charged_total_cost,
+    );
+    check_case(
+        "a_budget_admits_an_added_path_by_compressed_size_not_declared_size",
+        a_budget_admits_an_added_path_by_compressed_size_not_declared_size,
+    );
+    check_case(
+        "the_pool_is_ordered_cheapest_first",
+        the_pool_is_ordered_cheapest_first,
+    );
+    check_case(
+        "one_capture_per_class_is_the_greedy_answer",
+        one_capture_per_class_is_the_greedy_answer,
+    );
+    check_case(
+        "no_candidate_answers_two_classes",
+        no_candidate_answers_two_classes,
+    );
+    check_case(
+        "a_forced_capture_answers_its_class_without_being_selected_for_it",
+        a_forced_capture_answers_its_class_without_being_selected_for_it,
+    );
+    check_case(
+        "a_class_whose_capture_was_refused_is_over_budget_not_absent",
+        a_class_whose_capture_was_refused_is_over_budget_not_absent,
+    );
+    check_case(
+        "forced_costs_are_checked_against_the_cumulative_budget_not_one_by_one",
+        forced_costs_are_checked_against_the_cumulative_budget_not_one_by_one,
+    );
+    check_case(
+        "a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it",
+        a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it,
+    );
+    check_case(
+        "two_forced_paths_of_one_class_get_distinct_ids",
+        two_forced_paths_of_one_class_get_distinct_ids,
+    );
+    check_case(
+        "a_refused_forced_path_and_a_funded_pick_do_not_share_an_id",
+        a_refused_forced_path_and_a_funded_pick_do_not_share_an_id,
+    );
+    check_case(
+        "a_forced_path_that_answers_no_class_is_recorded_as_unscored",
+        a_forced_path_that_answers_no_class_is_recorded_as_unscored,
+    );
+    check_case(
+        "an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count",
+        an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count,
+    );
+    check_case(
+        "a_class_with_candidates_already_captured_is_covered_by_not_recaptured",
+        a_class_with_candidates_already_captured_is_covered_by_not_recaptured,
+    );
+    check_case(
+        "per_class_two_admits_a_second_file_for_a_class",
+        per_class_two_admits_a_second_file_for_a_class,
+    );
+    check_case(
+        "two_maximum_costs_report_the_saturated_ledger_not_an_overflow",
+        two_maximum_costs_report_the_saturated_ledger_not_an_overflow,
+    );
+    check_case(
+        "per_class_two_under_a_tight_ceiling_tags_the_second_over_budget",
+        per_class_two_under_a_tight_ceiling_tags_the_second_over_budget,
+    );
+    check_case(
+        "a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent",
+        a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent,
+    );
+    check_case(
+        "unmet_reports_over_budget_and_unavailable_but_not_covered_by",
+        unmet_reports_over_budget_and_unavailable_but_not_covered_by,
+    );
+    check_case(
+        "the_matrix_has_exactly_one_row_per_class_in_admission_order",
+        the_matrix_has_exactly_one_row_per_class_in_admission_order,
+    );
+    check_case(
+        "admission_is_cheapest_first_for_every_ceiling",
+        admission_is_cheapest_first_for_every_ceiling,
+    );
+    check_case(
+        "a_forced_path_outside_the_manifests_is_skipped_not_fatal",
+        a_forced_path_outside_the_manifests_is_skipped_not_fatal,
+    );
+    check_case(
+        "candidate_lists_are_keyed_by_class_not_by_array_position",
+        candidate_lists_are_keyed_by_class_not_by_array_position,
+    );
+    check_case(
+        "candidates_exclude_folder_rows",
+        candidates_exclude_folder_rows,
+    );
+    check_case(
+        "a_folder_only_change_admits_no_capture",
+        a_folder_only_change_admits_no_capture,
+    );
+    check_case(
+        "candidates_document_carries_the_columns_and_a_one_based_rank",
+        candidates_document_carries_the_columns_and_a_one_based_rank,
+    );
+    check_case(
+        "cost_tie_scoring_rank_and_admission_rank_can_differ",
+        cost_tie_scoring_rank_and_admission_rank_can_differ,
+    );
+    check_case(
+        "every_common_row_carries_a_unique_admission_rank",
+        every_common_row_carries_a_unique_admission_rank,
+    );
+    check_case(
+        "one_sided_rows_are_not_in_the_scoring_table",
+        one_sided_rows_are_not_in_the_scoring_table,
+    );
+    check_case(
+        "classes_in_order_normalises_a_reader_supplied_list",
+        classes_in_order_normalises_a_reader_supplied_list,
+    );
+    check_case(
+        "capture_ids_are_the_class_then_the_ordinal",
+        capture_ids_are_the_class_then_the_ordinal,
+    );
+    check_case(
+        "capture_ids_are_unique_in_a_normal_selection",
+        capture_ids_are_unique_in_a_normal_selection,
+    );
+    check_case(
+        "duplicate_admitted_capture_ids_are_reported",
+        duplicate_admitted_capture_ids_are_reported,
+    );
+    check_case(
+        "duplicate_rejected_capture_ids_are_reported",
+        duplicate_rejected_capture_ids_are_reported,
+    );
+    check_case(
+        "an_admitted_id_may_not_equal_a_rejected_id",
+        an_admitted_id_may_not_equal_a_rejected_id,
+    );
+    check_case(
+        "capture_ids_must_be_single_file_stems",
+        capture_ids_must_be_single_file_stems,
+    );
+}
+
+fn check_case(label: &str, case: fn()) {
+    println!("case: {label}");
+    case();
 }
