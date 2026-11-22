@@ -64,79 +64,79 @@ pub fn logical_path_rule(value: &str) -> Option<(&'static str, String)> {
     path_rule(value, true)
 }
 
+/// gircap's path rule: no `CLOCK$`, and the raw stem is compared without the
+/// trailing-dot/space trim the repair binary applies. The shared validator owns
+/// the shape checks and their order; these parameters are this tool's rule.
+const DEVICE_NAMES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+
 fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> {
-    if value.is_empty() {
-        return Some(("path.empty", format!("{value:?} is an empty path")));
+    let policy = girpr_path_shape::ShapePolicy {
+        normalization: girpr_path_shape::Normalization::Strict,
+        device_names: DEVICE_NAMES,
+        device_trim: false,
+        reject_device: !allow_device,
+    };
+    match girpr_path_shape::validate(value, &policy) {
+        Ok(_) => None,
+        Err(problem) => Some(rule_for(problem, value)),
     }
-    if value.chars().any(char::is_control) {
-        return Some((
+}
+
+/// Map a lexical reason to this tool's byte-stable identifier and message.
+///
+/// The identifiers are published in `diagnostics/rejections.json`, so this
+/// mapping stays at the call site and the strings never change.
+fn rule_for(problem: girpr_path_shape::ShapeProblem, value: &str) -> (&'static str, String) {
+    use girpr_path_shape::ShapeProblem as P;
+    match problem {
+        P::Empty => ("path.empty", format!("{value:?} is an empty path")),
+        P::Control => (
             "path.control",
             format!("{value:?} contains a control character; a bundle path is printable text"),
-        ));
-    }
-    if value.contains('\\') {
-        return Some((
+        ),
+        P::Backslash => (
             "path.backslash",
             format!("{value:?} uses backslashes; bundle paths are /-separated"),
-        ));
-    }
-    if value.starts_with('/') {
-        return Some((
+        ),
+        P::Absolute => (
             "path.absolute",
             format!("{value:?} is absolute; paths are relative to the bundle root"),
-        ));
-    }
-    if value.contains(':') {
-        return Some((
+        ),
+        P::DrivePrefix | P::Colon => (
             "path.drive",
             format!(
                 "{value:?} looks like a drive-qualified path; paths are relative to the \
                  bundle root"
             ),
-        ));
-    }
-    if value.split('/').any(|c| c == "..") {
-        return Some(("path.parent", format!("{value:?} escapes the bundle root")));
-    }
-    if value.split('/').any(|c| c == ".") {
-        return Some((
+        ),
+        P::Parent => ("path.parent", format!("{value:?} escapes the bundle root")),
+        P::DotComponent => (
             "path.dot-component",
             format!(
                 "{value:?} has a `.` component; a bundle path names something in the \
                  bundle, and `.` names the directory it is in"
             ),
-        ));
-    }
-    // The shared crate owns the trailing-character check; this call site owns
-    // the rule: refuse the shape on every host, before anything is written.
-    if value
-        .split('/')
-        .any(girpr_fs_names::has_trailing_dot_or_space)
-    {
-        return Some((
+        ),
+        P::WindowsFold => (
             "path.windows-fold",
             format!(
                 "{value:?} has a component ending in `.` or a space; Windows folds such \
                  a name onto the one without it, so two paths could name one file"
             ),
-        ));
-    }
-    if !allow_device && value.split('/').any(is_windows_device_name) {
-        return Some((
+        ),
+        P::Device => (
             "path.device",
             format!(
                 "{value:?} names a Windows device; such a component opens the device \
                  instead of a file, so the bundle would not hold the bytes it lists"
             ),
-        ));
-    }
-    if value.split('/').any(|c| c.is_empty()) {
-        return Some((
+        ),
+        P::EmptyComponent | P::TrailingSeparator => (
             "path.empty-component",
             format!("{value:?} has an empty component (a doubled or trailing separator)"),
-        ));
+        ),
+        P::NoName => ("path.empty", format!("{value:?} is an empty path")),
     }
-    None
 }
 
 /// Whether one path component is a reserved DOS device name.
@@ -152,14 +152,9 @@ fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> 
 /// `manifests/<tag>`, so a device name there is the same failure one directory
 /// up.
 pub(crate) fn is_windows_device_name(component: &str) -> bool {
-    // gircap's rule: no `CLOCK$`, and the raw stem is compared without the
-    // trailing-dot/space trim the repair binary applies. The shared crate owns
-    // only the mechanism; these parameters are this tool's rule.
-    girpr_fs_names::is_reserved_device_name(
-        component,
-        &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"],
-        false,
-    )
+    // The same reserved set and raw-stem comparison the shape validator uses.
+    // The shared crate owns only the mechanism; the parameters are this tool's rule.
+    girpr_fs_names::is_reserved_device_name(component, DEVICE_NAMES, false)
 }
 
 /// Escape one path component so it cannot name a Windows device.
@@ -495,6 +490,32 @@ mod tests {
             escape_component("CON"),
             std::borrow::Cow::Owned(_)
         ));
+    }
+
+    /// The identifiers and messages are published bytes: the identifiers in
+    /// `diagnostics/rejections.json`, the messages in failure text. Pinning the
+    /// whole mapping catches a validator change that silently reworded one.
+    #[test]
+    fn the_stable_rule_ids_and_messages_do_not_drift() {
+        for (value, rule, fragment) in [
+            ("", "path.empty", "is an empty path"),
+            ("a\u{0}b", "path.control", "control character"),
+            ("a\\b", "path.backslash", "backslashes"),
+            ("/abs", "path.absolute", "is absolute"),
+            ("C:/x", "path.drive", "drive-qualified"),
+            ("ab:c", "path.drive", "drive-qualified"),
+            ("../x", "path.parent", "escapes the bundle root"),
+            ("./x", "path.dot-component", "`.` component"),
+            ("a/b.", "path.windows-fold", "folds"),
+            ("CON", "path.device", "device"),
+            ("a//b", "path.empty-component", "empty component"),
+            ("a/", "path.empty-component", "empty component"),
+        ] {
+            let (got_rule, got_message) =
+                relative_path_rule(value).unwrap_or_else(|| panic!("{value:?} must be refused"));
+            assert_eq!(got_rule, rule, "{value:?}");
+            assert!(got_message.contains(fragment), "{value:?}: {got_message:?}");
+        }
     }
 
     #[test]

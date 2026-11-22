@@ -68,71 +68,47 @@ pub fn file_len(path: &Path) -> FileLen {
 ///
 /// This is not a filesystem check; [`contained_join`] adds that.
 pub fn contained_rel(rel: &str) -> Result<PathBuf> {
-    let mut clean = PathBuf::new();
-    walk_rel_components(rel, |part| clean.push(part))?;
-    Ok(clean)
+    Ok(PathBuf::from(validate_rel(rel)?))
 }
 
-/// Validate the lexical shape of a server-controlled relative path and hand
-/// each component that names a file to `emit`.
+/// girpr's rule: the full reserved set (including `CLOCK$`) with trailing
+/// dot/space stripped before comparing. The shared validator owns the shape
+/// checks and their order; this is this program's device rule.
+const DEVICE_NAMES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];
+
+/// Validate a server-controlled rel and return the cleaned `/`-spelled form.
 ///
-/// The normalisation (`\` → `/`) and the whole-path checks happen once, here;
-/// `emit` only ever sees plain component names, so `a/./b` is accepted but
-/// `emit` receives `a` and `b` and never `.`.
-///
-/// The caller builds the cleaned form rather than returning the input: `a/./b`
-/// must not survive as `a/./b`, because the plan stores this string and every
-/// later comparison (the purge's expected set, the reuse map, the scope) works
-/// on the plain form. A leading `.` in particular would make the plan's rels
-/// disagree with the purge walk — which reports `game/foo.dat` — and the
-/// cleanup would delete the file this run just repaired.
-fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
-    // The shared crate owns the rewrite mechanic; this call site owns the
-    // normalisation policy: a rel is `/`-spelled on every host.
-    let normalized = girpr_fs_names::forward_slash(rel, true);
-    anyhow::ensure!(!normalized.is_empty(), "path is empty");
-    anyhow::ensure!(
-        !normalized.ends_with('/'),
-        "path has a trailing separator: {rel}"
-    );
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        anyhow::bail!("path has a drive prefix: {rel}");
-    }
-    let path = Path::new(&normalized);
-    anyhow::ensure!(
-        !path.has_root() && !path.is_absolute(),
-        "path is absolute: {rel}"
-    );
-    let mut named = false;
-    for c in path.components() {
-        match c {
-            Component::Normal(part) => {
-                let part = part
-                    .to_str()
-                    .with_context(|| format!("path is not UTF-8: {rel}"))?;
-                anyhow::ensure!(
-                    !has_windows_trailing_dot_or_space(part),
-                    "path has a Windows-trailing dot or space: {rel}"
-                );
-                anyhow::ensure!(
-                    !part.contains(':'),
-                    "path has a Windows alternate-stream separator: {rel}"
-                );
-                anyhow::ensure!(
-                    !is_windows_device_name(part),
-                    "path names a Windows device: {rel}"
-                );
-                named = true;
-                emit(part);
-            }
-            // `a/./b` is still contained; it just says nothing.
-            Component::CurDir => {}
-            _ => anyhow::bail!("path is not a plain relative path: {rel}"),
+/// The normalisation (`\` → `/`), the `.` removal and the empty-component
+/// collapse happen in the shared validator; the caller stores the string it
+/// returns. A leading `.` must not survive: the plan stores this spelling and
+/// the purge walk reports `game/foo.dat`, so a `./` left in the plan would
+/// make the cleanup delete the file this run just repaired.
+fn validate_rel(rel: &str) -> Result<String> {
+    let policy = girpr_path_shape::ShapePolicy {
+        normalization: girpr_path_shape::Normalization::Normalizing,
+        device_names: DEVICE_NAMES,
+        device_trim: true,
+        reject_device: true,
+    };
+    girpr_path_shape::validate(rel, &policy).map_err(|problem| rel_problem(problem, rel))
+}
+
+/// Map a lexical reason to this program's error wording.
+fn rel_problem(problem: girpr_path_shape::ShapeProblem, rel: &str) -> anyhow::Error {
+    use girpr_path_shape::ShapeProblem as P;
+    match problem {
+        P::Empty => anyhow::anyhow!("path is empty"),
+        P::TrailingSeparator => anyhow::anyhow!("path has a trailing separator: {rel}"),
+        P::DrivePrefix => anyhow::anyhow!("path has a drive prefix: {rel}"),
+        P::Absolute => anyhow::anyhow!("path is absolute: {rel}"),
+        P::WindowsFold => anyhow::anyhow!("path has a Windows-trailing dot or space: {rel}"),
+        P::Colon => anyhow::anyhow!("path has a Windows alternate-stream separator: {rel}"),
+        P::Device => anyhow::anyhow!("path names a Windows device: {rel}"),
+        P::Parent | P::DotComponent | P::Backslash | P::Control | P::EmptyComponent => {
+            anyhow::anyhow!("path is not a plain relative path: {rel}")
         }
+        P::NoName => anyhow::anyhow!("path names no file: {rel}"),
     }
-    anyhow::ensure!(named, "path names no file: {rel}");
-    Ok(())
 }
 
 /// Validate a server-controlled relative path and return the `/`-separated
@@ -145,16 +121,7 @@ fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
 /// sink (as `contained_join` does) leaves the gate comparing a different
 /// spelling, so `./a/b` can pass a scope that hides `a/b`.
 pub fn clean_rel(rel: &str) -> Result<String> {
-    // Share the component walk with `contained_rel` and build the `/` form as
-    // it goes: no `PathBuf`, and no second pass over the result.
-    let mut clean = String::new();
-    walk_rel_components(rel, |part| {
-        if !clean.is_empty() {
-            clean.push('/');
-        }
-        clean.push_str(part);
-    })?;
-    Ok(clean)
+    validate_rel(rel)
 }
 
 /// The `/`-separated rel spelling of an on-disk path under `base`.
@@ -299,22 +266,6 @@ pub fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
         Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
         _ => false,
     })
-}
-
-/// Is this component a name Windows reserves for a device in every directory?
-///
-/// The comparison uses the part before the first `.` — `NUL.txt` is still the
-/// `NUL` device — and ignores case, which NTFS does for these names too. It is
-/// allocation-free: no uppercased copy of the component is made.
-fn is_windows_device_name(part: &str) -> bool {
-    // girpr's rule: the full reserved set (including `CLOCK$`) and trailing
-    // dot/space stripped before comparing. The shared crate owns only the
-    // mechanism; this call site owns the rule.
-    girpr_fs_names::is_reserved_device_name(
-        part,
-        &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"],
-        true,
-    )
 }
 
 /// A base path resolved once, for callers that join many rel paths under it.
