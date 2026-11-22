@@ -42,7 +42,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T28 | Generic `AtomicPublish` leaf | skipped | | F33 validated skip: bytes-publish family already \`girpr-util-path::atomic\` (directly consumed); sync-cache's link-into-place + hold-record/bound/one-syscall-gap protocol and sled2redb's deliberately-unreclaimed namespace cannot be expressed by durable/noclobber parameters without collapsing keepers (§A5/A9/A13); \`_tmp\` resume excluded (N2). Do not re-propose F33 |
 | T29 | Generalized report plane | skipped | | F34 validated skip (pre-satisfied): \`girpr-report-core\` already parameterizes order/field vocabulary/renderer and is consumed directly by all three planes; further extraction would pull clap into a shared crate (forbidden), flip girsync's pinned alphabetical NDJSON bytes (§A5) or be a §A2 facade. Remaining field-model work is T45/F50 only. Stale premise: code uses \`why=\`, not \`because=\` |
 | T30 | Generic injected-fault seam | skipped | | F35 validated skip (pre-satisfied/keeper): typed \`TestHooks\` already a de-embedded local seam with one consumer; generic names would disconnect tests from production (task's HIGH-RISK blocker) while keeping domain names leaves a §A2 facade. Field names and env spellings (\`GIRSYNC_TEST_*\`, nextest-pinned) untouched. Do not force a shared fault crate |
-| T31 | Shared plan-action record crate | in_progress | | F36; NDJSON stream vs JSON document; exit/summary parsing |
+| T31 | Shared plan-action record crate | skipped | | F36 validated skip: the only shared mechanic is \`girpr-report-core\`'s ordered-JSON/line writer, already consumed directly by both planes; a value-only record type would be a §A2 facade (no overlapping field set) or force one format onto the other (§A5/A6). Stale pointers: code uses \`why=\` (not \`because=\`), report module is \`tools/sync/src/report/mod.rs\` |
 | T32 | Pluggable KV backend + in-memory mirror | todo | | F37; path-keyed, per-process, forgettable; cross-test leakage risk |
 | T33 | Generic batched durable writer | todo | | F38; test knobs + crash-safety invariants; medium-low value |
 | T34 | Generalized `RestartableSink` with blanket impls | todo | | F39; Send bound + `restart()` meaning differ between traits |
@@ -76,7 +76,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | I | T20, T21, T22 | done | No reviewable work - all three validated skips; F26/F27 shared retry drivers should not be re-dispatched |
 | J | T23, T24, T25 | done | No reviewable work - all three validated skips (forbidden cache, dead trait, pre-satisfied fold) |
 | K | T26, T27, T28 | done | No reviewable work - all three validated skips (content-free policy facade, single-consumer test runner, incompatible publish contracts) |
-| L | T29, T30, T31 | pending | |
+| L | T29, T30, T31 | done | No reviewable work - all three validated skips (pre-satisfied report core, local typed fault seam, no shared plan-action value) |
 | M | T32, T33, T34 | pending | |
 | N | T35, T36, T37 | pending | |
 | O | T38, T39, T40 | pending | |
