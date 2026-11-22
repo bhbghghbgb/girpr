@@ -62,19 +62,18 @@ machine rather than the code.
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
 | `crates/chunk-verify/` | the chunk-verification leaf: the verdict a scan produces, the range/owner remap the scan and the in-place writer share, and the verify pass that re-derives the finished file from a fresh read; no scan-planning policy, write-direction decision or published bytes, and the coarse-MTIME reuse guard stays with the writer | `Verdict`, `scan_ranges`, `source_ok_by_chunk`, `source_ok_by_range`, `verify_in_place`, `Verified` |
 | `crates/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
+| `crates/repair-plan/` | the repair-plan values and their pure decisions: work list, cleanup-plan values and path scope in one acyclic leaf so the scope tier consumes both plans without a back-edge; the facade keeps the fetch, walk, publish and byte-emitting policies | `RepairPlan`, `PlannedFile`, `Layout`, `FileId`, `build_plan`, `PurgePlan`, `PurgeCandidate`, `PurgeKeys`, `PathScope`, `LocalChunkMap`, `DownloadEstimate`, `PlanSummaryValues`, `check_scope_selection` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
-| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_rels`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
-| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
+| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3); the map's alias lives in `crates/repair-plan/` | `fetch_latest`, `local_reuse_map` |
+| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply; consumes the plan values from `crates/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `crates/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `crates/chunk-verify/` | `scan_plan`, `ScanReport` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
-| `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
-| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics over the shared `girpr-filter` rules (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
-| `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
+| `src/repair/scope/mod.rs` | scope-of-work facade: the ceiling tier; the path-scope value lives in `crates/repair-plan/` | `Limits`, `LimitHit` |
+| `src/repair/scope/limits.rs` | the pre-flight ceiling predicates over the two plan values (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
 | `crates/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
@@ -100,7 +99,7 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["phases::manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["phases::plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
+    D --> E["girpr_repair_plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
@@ -460,6 +459,16 @@ and the download estimate all consume that rule directly, so neither `file`
 nor `scan` owns the mode decision and the two estimates cannot disagree with
 the writer about which path a file takes. It re-exports nothing from the
 binary and depends only on the optional clap `ValueEnum` derive.
+`crates/repair-plan/` owns the values the plan half decides over: the work list
+(`RepairPlan`/`PlannedFile`/`Layout`), the cleanup-plan values (`PurgePlan`/
+`PurgeKeys`), the path scope, and the download estimate and `SUMMARY` figures
+derived from them. Putting both plans and the selector in one leaf breaks the
+old `scope ↔ plan/limits` back-edge: the ceiling predicates and the `PLAN`
+renderer consume the leaf directly, and the plan modules no longer import the
+scope tier. The "an `--include` selected nothing" rule and its typed diagnosis
+live here too; this binary keeps the usage-error mapping, the fetch, the purge
+walk, the publish and every emitted byte, so no report key, wording or flag
+condition moves. It re-exports nothing from the binary.
 `crates/model/` supplies the region
 identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region

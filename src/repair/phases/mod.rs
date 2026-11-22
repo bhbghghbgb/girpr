@@ -7,12 +7,15 @@
 //! |---|---|---|
 //! | local state + server metadata | `metadata` | steps 1–2 |
 //! | manifests + local chunk map | `manifest` | step 3 |
-//! | work list + purge candidates | `plan` | steps 4, 5, 7 |
+//! | work list + purge candidates | `girpr-repair-plan` | steps 4, 5, 7 |
 //! | `--check-only` verify | `check` | step 6.5 |
 //! | post-phase | `post` | step 7 |
+//!
+//! The plan values and their pure decision live in the `girpr-repair-plan`
+//! leaf; this facade keeps the fetch, walk, publish and byte-emitting policies
+//! that consume them.
 
 pub mod check;
 pub mod manifest;
 pub mod metadata;
-pub mod plan;
 pub mod post;

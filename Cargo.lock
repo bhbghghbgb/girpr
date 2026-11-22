@@ -720,6 +720,7 @@ dependencies = [
  "girpr-loopback-mock",
  "girpr-model",
  "girpr-proto",
+ "girpr-repair-plan",
  "girpr-repair-policy",
  "girpr-report",
  "girpr-retry",
@@ -887,6 +888,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-repair-plan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-chunk-cost",
+ "girpr-fetch",
+ "girpr-filter",
+ "girpr-util-path",
+ "tracing",
+]
+
+[[package]]
 name = "girpr-repair-policy"
 version = "0.1.0"
 dependencies = [
@@ -992,6 +1005,7 @@ name = "girpr-test-support"
 version = "0.1.0"
 dependencies = [
  "girpr",
+ "girpr-repair-plan",
  "girpr-repair-policy",
  "girpr-test-fixtures",
 ]

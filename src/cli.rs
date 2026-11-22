@@ -16,9 +16,10 @@ use girpr_log::Level;
 
 use crate::Biz;
 use crate::config::RunCtx;
-use crate::repair::scope::{Limits, PathScope};
+use crate::repair::scope::Limits;
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
+use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
 
 /// Concurrent file window used when `--jobs` is omitted.

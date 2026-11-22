@@ -5,8 +5,8 @@
 //! `write_at`, `copy_within`, `zero_fill`, plus `super::mode::{open_inplace,
 //! open_rw}` and `super::temp::write_downloaded_chunk`. Crate paths for
 //! `RepairMode`, the chunk-verify leaf's verdict/remap/verify names, `reuse`,
-//! `SophonChunk`, `util`, and
-//! `crate::repair::phases::plan::{PlannedFile, RepairPlan}`.
+//! `SophonChunk`, `util`, and the repair-plan leaf's `PlannedFile`, `RepairPlan`
+//! and `FileId`.
 
 use std::io::Write;
 use std::time::{Duration, SystemTime};
@@ -17,7 +17,6 @@ use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
 use crate::repair::diagnostics;
-use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
@@ -25,6 +24,7 @@ use anyhow::{Context, Result};
 use girpr_chunk_verify::{
     Verdict, Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
 };
+use girpr_repair_plan::FileId;
 use girpr_repair_policy::RepairMode;
 
 /// Repair one file **in place**.
@@ -1044,12 +1044,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::repair::phases::manifest::LocalChunkMap;
-    use crate::repair::phases::plan::RepairPlan;
     use crate::repair::scan::ScanReport;
     use crate::report::Summary;
     use crate::retry::BackoffPolicy;
     use crate::test_support::stamp_ago;
+    use girpr_repair_plan::LocalChunkMap;
+    use girpr_repair_plan::RepairPlan;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
     /// not ignored and then blamed on the re-open. A directory at the target

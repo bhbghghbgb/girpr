@@ -14,10 +14,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Biz;
-use crate::repair::scope::{Limits, PathScope};
+use crate::repair::scope::Limits;
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
 use girpr_exit::define_exit_table;
+use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
 
 // The table is generated from one list by the shared exit-table mechanism:

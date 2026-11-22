@@ -6,7 +6,7 @@
 //!
 //! | tier | module | question | failure if wrong |
 //! |---|---|---|---|
-//! | **path scope** | [`filter`] | which paths exist | a typo repairs the wrong files |
+//! | **path scope** | `girpr-repair-plan` | which paths exist | a typo repairs the wrong files |
 //! | **resource ceilings** | [`limits`] + [`ledger`] | how much work | a typo lets a 100 GB run through |
 //!
 //! The ceilings are worthless without the selector being right most of the
@@ -20,17 +20,19 @@
 //!
 //! | module | concern |
 //! |---|---|
-//! | [`filter`] | which paths exist (`--include` / `--exclude`) |
+//! | `girpr-repair-plan` | which paths exist (`--include` / `--exclude`) — the `PathScope` value |
 //! | [`limits`] | how much work is allowed (the pre-flight ceilings) |
 //! | [`ledger`] | how much work has been done (the runtime reservations) |
 //! | [`report`] | what the plan was, as a `PLAN` line and a JSON document |
+//!
+//! `PathScope` lives in the `girpr-repair-plan` leaf with the two plans it
+//! filters. This tier keeps the ceiling predicates over those values, so it
+//! consumes the leaf directly and the plan modules no longer point back here.
 
-pub mod filter;
 pub mod ledger;
 pub mod limits;
 pub mod report;
 
-pub use filter::PathScope;
 #[cfg(test)]
 pub use limits::LimitHit;
 pub use limits::{Limits, Preflight};

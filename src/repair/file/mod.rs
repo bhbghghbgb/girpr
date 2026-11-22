@@ -80,9 +80,8 @@ use crate::sophon::SophonChunk;
 use crate::util;
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
-use crate::repair::phases::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan, validate_chunk_ranges};
 use crate::repair::scan::ScanReport;
+use girpr_repair_plan::{FileId, LocalChunkMap, PlannedFile, RepairPlan, validate_chunk_ranges};
 
 mod inplace;
 mod mode;

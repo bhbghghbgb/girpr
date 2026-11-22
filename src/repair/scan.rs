@@ -32,12 +32,11 @@ use girpr_chunk_cost::projected_download_bytes;
 use girpr_chunk_verify::{Verdict, scan_ranges, source_ok_by_chunk};
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
-use crate::repair::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util;
 use crate::util::Md5;
+use girpr_repair_plan::{FileId, LocalChunkMap, PlannedFile, RepairPlan};
 
 /// The scan of the whole plan.
 #[derive(Debug, Clone, Default)]

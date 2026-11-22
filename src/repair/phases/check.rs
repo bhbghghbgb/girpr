@@ -22,9 +22,9 @@ use crate::config::RunFailure;
 use crate::report::{self, Summary};
 use crate::util;
 
-use super::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::scan::ScanReport;
 use girpr_chunk_verify::Verdict;
+use girpr_repair_plan::{FileId, PlannedFile, RepairPlan};
 
 /// Verify the whole plan; returns the number of damaged files.
 ///

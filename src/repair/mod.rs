@@ -17,7 +17,7 @@
 //!
 //! The run has two halves:
 //!
-//! **Plan** — metadata → `REPORT` → manifests → `plan::build_plan` → the
+//! **Plan** — metadata → `REPORT` → manifests → `girpr_repair_plan::build_plan` → the
 //! purge plan → the server's deprecated list. Nothing on disk has been touched
 //! at the end of this half, so every decision the run will act on is already
 //! made and inspectable. That is what lets the scope-of-work ceilings refuse
@@ -54,15 +54,20 @@ pub mod scope;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use girpr_repair_plan::{PurgePlan, RepairPlan};
 pub use phases::metadata::Meta;
-pub use phases::plan::RepairPlan;
-pub use purge::PurgePlan;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use anyhow::Context;
+
+// The plan values and their pure decisions live in an acyclic leaf. This module
+// keeps only the I/O, fetch, walk and publish policies that consume them.
+use girpr_repair_plan::{
+    DownloadEstimate, LocalChunkMap, PlanSummaryValues, PurgeKeys, check_scope_selection,
+};
 
 // The single-writer lock lives in its own leaf crate, so a repair-phase edit
 // leaves it cached and a lock-only test target can skip the product facade.
@@ -136,7 +141,7 @@ struct PlanPhase {
     /// The plan-derived keep inputs, folded once here and reused by the
     /// post-repair pass. `None` when no purge flag or `--print-plan` asked for
     /// a purge plan at all.
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    purge_keys: Option<Arc<PurgeKeys>>,
     /// The install scan, when `--scan` asked for it. Shared with the
     /// `--check-only` verifier so neither path deep-clones it.
     scan: Option<Arc<ScanReport>>,
@@ -146,7 +151,7 @@ struct PlanPhase {
     /// `'static`.
     deprecated: Arc<[String]>,
     /// The local chunk map, shared with the repair loop and the scan.
-    local_map: Arc<manifest::LocalChunkMap>,
+    local_map: Arc<LocalChunkMap>,
 }
 
 /// How [`plan_phase`] ends.
@@ -262,13 +267,12 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
 struct PlanWork {
     plan: Arc<RepairPlan>,
     purge_plan: Option<PurgePlan>,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    purge_keys: Option<Arc<PurgeKeys>>,
     deprecated: Arc<[String]>,
     scan: Option<Arc<ScanReport>>,
-    /// The per-file download estimate. One derivation feeds both the `PLAN`
-    /// total and the `--plan-out` document.
-    est_download_by_file: Vec<u64>,
-    est_download_bytes: u64,
+    /// The per-file download estimate, owned by the `girpr-repair-plan` leaf.
+    /// One derivation feeds both the `PLAN` total and the `--plan-out` document.
+    estimate: DownloadEstimate,
 }
 
 /// Steps 1 + 2 of the plan half: local state and server metadata, then the
@@ -303,13 +307,7 @@ async fn load_manifests_and_reuse(
     meta: &Meta,
     http: &reqwest::Client,
     summary: &mut Summary,
-) -> Result<
-    (
-        Vec<(String, Vec<SophonChunkFile>)>,
-        Arc<manifest::LocalChunkMap>,
-    ),
-    RunFailure,
-> {
+) -> Result<(Vec<(String, Vec<SophonChunkFile>)>, Arc<LocalChunkMap>), RunFailure> {
     let timer = PhaseTimer::start("manifest");
     let backoff = &ctx.backoff;
     let per_manifest = manifest::fetch_latest(
@@ -361,7 +359,7 @@ struct PlanInputs<'a> {
     root: Option<&'a util::PathRoot>,
     meta: &'a Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
-    local_map: &'a Arc<manifest::LocalChunkMap>,
+    local_map: &'a Arc<LocalChunkMap>,
 }
 
 /// Step 4: the work list, the purge candidates, the deprecated list, the scan,
@@ -388,12 +386,16 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest).await?;
 
     let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
-    ensure_scope_selected_something(
+    // The rule and its diagnosis live in the plan leaf; only the mapping to
+    // this program's usage error stays here.
+    if let Err(e) = check_scope_selection(
         &ctx.path_scope,
         &plan,
         purge_candidates,
         purge_plan.as_ref(),
-    )?;
+    ) {
+        return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
+    }
 
     let deprecated = load_deprecated(ctx, meta).await;
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
@@ -422,8 +424,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         purge_keys,
         deprecated,
         scan,
-        est_download_by_file: estimate.by_file,
-        est_download_bytes: estimate.bytes,
+        estimate,
     }))
 }
 
@@ -437,18 +438,11 @@ async fn plan_work_and_purge(
     game_dir: &Path,
     meta: &Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
-) -> Result<
-    (
-        Arc<RepairPlan>,
-        Option<Arc<purge::PurgeKeys>>,
-        Option<PurgePlan>,
-    ),
-    RunFailure,
-> {
+) -> Result<(Arc<RepairPlan>, Option<Arc<PurgeKeys>>, Option<PurgePlan>), RunFailure> {
     let scope = &ctx.path_scope;
     let timer = PhaseTimer::start("plan");
     let plan = Arc::new(
-        phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
+        girpr_repair_plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
             .map_err(RunFailure::metadata)?,
     );
     tracing::info!(
@@ -496,7 +490,7 @@ async fn plan_work_and_purge(
         // nothing asserts through a scoped subscriber. A test that needed them
         // would use `spawn_blocking_traced`.
         let (keys, plan) = tokio::task::spawn_blocking(move || {
-            let keys = purge::PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
+            let keys = PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
             let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
             (keys, plan)
         })
@@ -515,46 +509,10 @@ async fn plan_work_and_purge(
     Ok((plan, purge_keys, purge_plan))
 }
 
-/// Step 4.2: an `--include` that selected **nothing at all** is a typo, and a
-/// typo that costs 130 GB to discover is the failure mode this whole feature
-/// exists to remove. Exit `1` — a property of the request — rather than `5`,
-/// which means the request was well-formed and the answer was too big.
-///
-/// "Nothing at all" spans both plans, which is why this runs after 4.1. An
-/// empty *repair* plan on its own is not a typo: a path that is on disk but
-/// absent from the new manifest — the ordinary "removed upstream" case, and
-/// `gircap`'s `removed` capture — is in no repair plan by construction, and
-/// `--purge-only --include <that path>` is precisely the request that deletes
-/// it. (This also means a new `--include` on a `--print-plan` run reports
-/// `files=0 purge_files=1` instead of erroring, which is what "print the
-/// plan" should do.)
-fn ensure_scope_selected_something(
-    scope: &scope::PathScope,
-    plan: &RepairPlan,
-    purge_candidates: usize,
-    purge_plan: Option<&PurgePlan>,
-) -> Result<(), RunFailure> {
-    if !scope.has_includes() || !plan.is_empty() || purge_candidates != 0 {
-        return Ok(());
-    }
-    // Say which of the two plans came back empty: the diagnosis differs, and
-    // so does the fix the user needs.
-    let message = if purge_plan.is_some() {
-        format!(
-            "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
-             candidates either; check the glob spelling (`*` also crosses `/`) or the \
-             installed version",
-            scope.describe_includes(),
-        )
-    } else {
-        format!(
-            "--include '{}' matched no file in the live manifest (plan_files=0); \
-             check the glob spelling (`*` also crosses `/`) or the installed version",
-            scope.describe_includes(),
-        )
-    };
-    Err(RunFailure::usage(anyhow::anyhow!("{message}")))
-}
+/// Step 4.2 is now `girpr_repair_plan::check_scope_selection`: the rule and
+/// its typed diagnosis live with the two plans they decide over. Exit `1` — a
+/// property of the request — rather than `5`, and the caller owns only the
+/// mapping to this binary's usage error.
 
 /// Step 4.3: the server's deprecated-file list.
 ///
@@ -594,7 +552,7 @@ async fn scan_if_requested(
     game_dir: &Path,
     root: Option<&util::PathRoot>,
     plan: &Arc<RepairPlan>,
-    local_map: &Arc<manifest::LocalChunkMap>,
+    local_map: &Arc<LocalChunkMap>,
 ) -> Option<Arc<ScanReport>> {
     if !ctx.scan {
         return None;
@@ -611,53 +569,22 @@ async fn scan_if_requested(
     ))
 }
 
-/// The download estimate: `Σ compressed_size` over the chunks the local reuse
-/// map cannot supply, split per file.
+/// The download estimate and the `SUMMARY` values it derives now live in the
+/// `girpr-repair-plan` leaf as [`DownloadEstimate`] and [`PlanSummaryValues`].
 ///
-/// It is exactly `gircap`'s `patch_fetch` formula, and because capture
-/// invariant A6 says `len(blob) == compressed_size` it is the same quantity the
-/// runner counts — but it is a **lower bound, not a promise**: `try_reuse_slice`
-/// falls back to a download whenever a local slice fails its MD5, so a file
-/// estimated at 0 bytes can still download its whole body. That is why the
-/// runtime hard stop exists alongside this.
-///
-/// Under `--scan` the estimate is the **exact** figure for the write path each
-/// file takes: the chunks that are wrong where they belong and have no intact
-/// source the chosen direction keeps. It resolves the mode itself, including a
-/// requested `temp`, so this is one rule for every mode.
-///
-/// The split is computed once, per file, and both consumers fold it: the `PLAN`
-/// total and the `--plan-out` document. A second derivation would be a second
-/// answer.
-struct DownloadEstimate {
-    by_file: Vec<u64>,
-    bytes: u64,
-}
-
-/// The plan-phase values [`estimate_download`] derives for `SUMMARY`.
-///
-/// Kept apart from [`DownloadEstimate`] so that type stays about bytes: these
-/// are the report-shaped facts, not figures the write path uses.
-struct PlanSummaryValues {
-    /// `Some(bytes)` when the `ctx.limits.download_bytes` ceiling asked for the
-    /// figure, so the caller can log and report it without re-deriving the
-    /// condition.
-    reported_bytes: Option<u64>,
-    /// The scan's damaged-chunk count, when a scan ran.
-    damaged_chunks: Option<u64>,
-    /// The plan size, for `SUMMARY plan_files`.
-    files_total: u64,
-    /// Whether any ceiling was requested, for `SUMMARY limited=1`.
-    limited: bool,
-}
-
+/// The estimate is exactly `gircap`'s `patch_fetch` formula, but a **lower
+/// bound, not a promise**: a local slice that fails its MD5 falls back to a
+/// download, so the runtime hard stop still enforces the ceiling. Under
+/// `--scan` it is the exact figure for each file's write path, with the mode
+/// resolved by the repair-policy leaf. The split is computed once and both
+/// consumers fold it: the `PLAN` total and the `--plan-out` document.
 fn estimate_download(
     ctx: &RunCtx,
     scan: Option<&ScanReport>,
     plan: &Arc<RepairPlan>,
     game_dir: &Path,
     root: Option<&util::PathRoot>,
-    local_map: &Arc<manifest::LocalChunkMap>,
+    local_map: &Arc<LocalChunkMap>,
 ) -> (DownloadEstimate, PlanSummaryValues) {
     let by_file = match scan {
         Some(s) => s.est_download_bytes_by_file(plan, game_dir, root, ctx.repair_mode, local_map),
@@ -720,8 +647,8 @@ async fn publish_plan(
     let plan = &work.plan;
     let purge_plan = work.purge_plan.as_ref();
     let scan = work.scan.as_deref();
-    let est_download_by_file = &work.est_download_by_file;
-    let est_download_bytes = work.est_download_bytes;
+    let est_download_by_file = &work.estimate.by_file;
+    let est_download_bytes = work.estimate.bytes;
     // Publishing only costs anything when it produces a plan; an ordinary run's
     // call is a no-op and must not add a zero-duration line.
     let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
@@ -1066,7 +993,7 @@ async fn run_check_only(
 async fn run_purge_only(
     ctx: &RunCtx,
     game_dir: &Path,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &Arc<[String]>,
@@ -1119,7 +1046,7 @@ async fn run_repair(ctx: &RunCtx, mut inputs: file::RepairInputs) -> Summary {
 async fn run_post(
     ctx: &RunCtx,
     game_dir: &Path,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &Arc<[String]>,

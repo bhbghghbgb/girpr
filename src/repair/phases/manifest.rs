@@ -19,28 +19,19 @@
 //! selection order is settled, the remaining fetches are dropped instead of
 //! waited out.
 
-use std::collections::HashMap;
 use std::pin::Pin;
 
 use anyhow::Context;
 use futures_util::{Stream, StreamExt};
+use girpr_repair_plan::LocalChunkMap;
 use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
 use crate::hyp::ChunkManifestMeta;
 use crate::retry::BackoffPolicy;
-use crate::sophon::{self, FileReuse, SophonChunkFile, WantedManifest};
+use crate::sophon::{self, SophonChunkFile, WantedManifest};
 
 use crate::config::RunFailure;
-
-/// `path -> FileReuse`, built from the local build's manifests. Keyed by
-/// path only: reuse is same-file-only (S2).
-///
-/// This map is keyed by the **local manifest's** rel, not by a
-/// [`crate::repair::phases::plan::FileId`]. It is a producer-owned lookup that
-/// records what an earlier install had, so it cannot become a field on a
-/// planned file without joining the two manifests at plan time.
-pub type LocalChunkMap = HashMap<String, FileReuse>;
 
 /// The most manifests fetched at once.
 ///

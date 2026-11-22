@@ -21,8 +21,9 @@
 
 use std::collections::HashSet;
 
-use girpr::test_support::{BackoffPolicy, Limits, PathScope};
+use girpr::test_support::{BackoffPolicy, Limits};
 use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
+use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
 
 // Host-relative fixture timestamps. The implementation lives behind the

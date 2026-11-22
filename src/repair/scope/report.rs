@@ -27,10 +27,9 @@ use girpr_chunk_cost::projected_download_bytes;
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode_from_target};
 use serde::Serialize;
 
-use crate::repair::phases::plan::{FileId, RepairPlan};
-use crate::repair::purge::PurgePlan;
 use crate::report::Record;
 use crate::util;
+use girpr_repair_plan::{FileId, PurgePlan, RepairPlan};
 
 /// How one planned file would be written, and what it costs in disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,8 +446,6 @@ impl<'a> PlanDocument<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::phases::plan::{FileId, PlannedFile};
-    use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
     #[cfg(unix)]
     use crate::test_support::FixtureRefusal;
@@ -456,6 +453,7 @@ mod tests {
     use crate::util::symlink_support::{
         require_symlink, symlink_fixture_decision, try_symlink_dir,
     };
+    use girpr_repair_plan::{FileId, PlannedFile, PurgeCandidate};
     use std::sync::Arc;
 
     /// The names left in a directory, so a test can assert that no temp file

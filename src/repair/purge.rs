@@ -20,83 +20,8 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use walkdir::WalkDir;
 
-use crate::repair::phases::plan::RepairPlan;
-use crate::repair::scope::PathScope;
 use crate::util::path::{path_key, rel_from_base};
-
-/// One file the files-cleanup has decided to delete.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PurgeCandidate {
-    /// `/`-separated rel path in the on-disk (walk) spelling. Classification
-    /// compares its `path_key`, so the spelling can differ in case from the
-    /// manifest entry that kept it.
-    pub rel: String,
-    /// Absolute-or-game-relative path to remove.
-    pub path: PathBuf,
-    pub bytes: u64,
-}
-
-/// The complete, unexecuted files-cleanup decision.
-///
-/// Built by `plan_purge`, consumed by `apply_purge`. Everything the run will
-/// delete is here before the first byte is deleted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PurgePlan {
-    /// Delete candidates, sorted by path so a rerun's log is comparable.
-    pub files: Vec<PurgeCandidate>,
-    /// Directories the purge empties, deepest first; `game_dir` excluded.
-    pub dirs: Vec<PathBuf>,
-    /// `files` summed — the number a delete-bytes ceiling is checked against.
-    pub total_bytes: u64,
-    /// On-disk paths (files **and** directories) kept **only** because the
-    /// path scope hides them. Zero on an unflagged run; the "scope and a purge
-    /// flag agree" warn is driven off this.
-    pub hidden: u64,
-    /// Walk or metadata failures that made the candidate list incomplete.
-    ///
-    /// A purge that could not read part of the install still deletes what it
-    /// can see, but `total_bytes` is then a lower bound: the caller must not
-    /// treat it as the whole delete set. `--max-delete-bytes` therefore
-    /// refuses an incomplete plan instead of comparing that lower bound. Zero
-    /// for a complete plan, and for the documented "`game_dir` is not there
-    /// yet" case, which is an empty plan rather than a failure.
-    pub errors: u64,
-}
-
-/// The plan-derived keep inputs to the files-cleanup, folded once per run.
-///
-/// `expected` comes from [`RepairPlan::expected_rels`], `server_keep` from
-/// [`keep_set`], and `blacklist` from the launcher's `blacklist_dir`. All three
-/// are keyed with [`path_key`] so the walked rel (folded once per file) meets
-/// them in the same spelling.
-///
-/// [`RepairPlan`] is immutable after construction and shared by `Arc` across the
-/// before/after passes, so this cache cannot go stale within one run. The walked
-/// candidates are deliberately **not** part of it: the filesystem can change
-/// between passes, so each pass recomputes them.
-#[derive(Debug, Clone)]
-pub struct PurgeKeys {
-    expected: HashSet<String>,
-    server_keep: HashSet<String>,
-    blacklist: HashSet<String>,
-}
-
-impl PurgeKeys {
-    /// Fold the three keep inputs once for a run.
-    pub fn new(
-        plan: &RepairPlan,
-        server_keep: &HashSet<String>,
-        blacklist: &HashSet<String>,
-    ) -> Self {
-        // The expected set is keyed straight from the plan's rels: an owned
-        // raw-spelling set would only be re-keyed into a second one.
-        Self {
-            expected: plan.expected_rels().map(path_key).collect(),
-            server_keep: server_keep.iter().map(|r| path_key(r)).collect(),
-            blacklist: blacklist.iter().map(|r| path_key(r)).collect(),
-        }
-    }
-}
+use girpr_repair_plan::{PathScope, PurgeCandidate, PurgeKeys, PurgePlan};
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
 /// See <https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263>
@@ -145,9 +70,9 @@ struct WalkResult {
 /// The keep inputs were folded once per run; this pass only walks and keys the
 /// paths it meets.
 fn walk_and_classify(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> WalkResult {
-    let expected = &keys.expected;
-    let server_keep = &keys.server_keep;
-    let blacklist = &keys.blacklist;
+    let expected = keys.expected();
+    let server_keep = keys.server_keep();
+    let blacklist = keys.blacklist();
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
@@ -418,7 +343,7 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
-/// [`super::phases::plan::build_plan`] and the purge walk). The set is fixed,
+/// `girpr_repair_plan::build_plan` and the purge walk). The set is fixed,
 /// so it is built once and shared rather than allocated per call.
 pub fn keep_set() -> &'static HashSet<String> {
     static KEEP: OnceLock<HashSet<String>> = OnceLock::new();
@@ -534,8 +459,8 @@ fn file_name(rel: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::phases::plan::PlannedFile;
     use crate::repair::scope::{LimitHit, Limits, Preflight};
+    use girpr_repair_plan::{PlannedFile, RepairPlan};
     use girpr_tempdir::TempDir;
     use std::sync::Arc;
 
@@ -903,9 +828,9 @@ mod tests {
                 classify_purge_path_visible(
                     rel,
                     scope.is_visible(rel),
-                    &keys.expected,
-                    &keys.server_keep,
-                    &keys.blacklist,
+                    keys.expected(),
+                    keys.server_keep(),
+                    keys.blacklist(),
                 ),
                 want,
                 "{rel}"

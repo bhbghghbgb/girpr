@@ -32,8 +32,8 @@ use crate::util::path::{
 
 use super::metadata::Meta;
 use crate::repair::purge;
-use crate::repair::scope::PathScope;
 use crate::repair::spawn_blocking_traced;
+use girpr_repair_plan::{PathScope, PurgeKeys, PurgePlan};
 
 /// Run the post-phase.
 ///
@@ -54,8 +54,8 @@ use crate::repair::spawn_blocking_traced;
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
-    before_purge: Option<&purge::PurgePlan>,
+    purge_keys: Option<Arc<PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &Arc<[String]>,
@@ -86,8 +86,8 @@ pub async fn run(
 async fn run_inner(
     ctx: &RunCtx,
     game_dir: &Path,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
-    before_purge: Option<&purge::PurgePlan>,
+    purge_keys: Option<Arc<PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &Arc<[String]>,
@@ -158,8 +158,8 @@ async fn run_inner(
 async fn purge_after_pass(
     ctx: &RunCtx,
     game_dir: &Path,
-    purge_keys: Option<Arc<purge::PurgeKeys>>,
-    before_purge: Option<&purge::PurgePlan>,
+    purge_keys: Option<Arc<PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
     summary: &Summary,
 ) -> Result<Option<PostOutcome>, RunFailure> {
     if !(ctx.purge_after || ctx.purge_only) {
@@ -293,7 +293,7 @@ async fn spawn_audio_move(
 
 /// Run the blocking purge delete on the blocking pool. The plan is moved, not
 /// cloned, so the worker threads only pay for the filesystem work.
-async fn spawn_apply_purge(plan: purge::PurgePlan, dry_run: bool) -> Result<u64, RunFailure> {
+async fn spawn_apply_purge(plan: PurgePlan, dry_run: bool) -> Result<u64, RunFailure> {
     spawn_blocking_traced(move || purge::apply_purge(&plan, dry_run))
         .await
         .map_err(|e| {
@@ -310,8 +310,8 @@ async fn spawn_apply_purge(plan: purge::PurgePlan, dry_run: bool) -> Result<u64,
 /// The split out of [`purge_after_pass`] keeps the exit-class decision testable
 /// without a filesystem that can make the planner panic.
 async fn spawn_purge_plan(
-    planning: impl FnOnce() -> purge::PurgePlan + Send + 'static,
-) -> Result<purge::PurgePlan, RunFailure> {
+    planning: impl FnOnce() -> PurgePlan + Send + 'static,
+) -> Result<PurgePlan, RunFailure> {
     spawn_blocking_traced(planning).await.map_err(|e| {
         RunFailure::write(anyhow::anyhow!(
             "purge planning task failed before the post-repair cleanup: {e}"
@@ -1456,9 +1456,9 @@ mod tests {
         }
     }
 
-    fn purge_keys() -> Arc<purge::PurgeKeys> {
-        let plan = crate::repair::phases::plan::RepairPlan::from_files("5.0", Vec::new());
-        Arc::new(purge::PurgeKeys::new(
+    fn purge_keys() -> Arc<PurgeKeys> {
+        let plan = girpr_repair_plan::RepairPlan::from_files("5.0", Vec::new());
+        Arc::new(PurgeKeys::new(
             &plan,
             purge::keep_set(),
             &std::collections::HashSet::new(),
