@@ -55,7 +55,7 @@ walkdir = "2.5.1"
 # modules here leaves the whole cache and its native dependency tree cached.
 # It also owns the digest vocabulary the wire format pins, so girsync's `hash`
 # module is a re-export of it and the cache never depends back on this lib.
-girpr-sync-cache = { path = "../../crates/sync-cache" }
+girsync-cache = { path = "cache" }
 # The acyclic leaves (rw limits/gate, the include/exclude filter, the link and
 # hardlink facts) live in one upstream crate this lib and its tests depend on
 # directly. An edit to the planner, commands or config here leaves all four
@@ -71,7 +71,7 @@ dunce = "1.0.5"
 # `tools/sled2redb` crate, so this package's graph is sled-free.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# The digest vocabulary and streaming sink live in `girpr-sync-cache` (above),
+# The digest vocabulary and streaming sink live in `girsync-cache` (above),
 # which pins them in its wire format; `md-5` remains a dev-dependency for the
 # tests that build digests by hand.
 # The shared --include/--exclude glob rules, used by this crate and by girpr.

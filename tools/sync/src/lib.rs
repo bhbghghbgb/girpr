@@ -52,8 +52,8 @@
 // an edit to the planner, commands or config above leaves all four leaves and
 // their rw-native dependencies cached. The crate is also consumed directly by
 // its own integration tests, without this facade.
-pub use girpr_sync_cache as cache;
 pub use girpr_sync_leaves::{filter, hardlink, link, rw};
+pub use girsync_cache as cache;
 pub mod cli;
 pub mod commands;
 pub mod config;

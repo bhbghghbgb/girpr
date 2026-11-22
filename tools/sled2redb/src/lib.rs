@@ -9,7 +9,7 @@
 //! and writes a new redb file through the cache crate's **public** API; hex
 //! digests are decoded to raw bytes and unknown algorithms pass through
 //! untouched. The only thing that moved is the crate boundary: `crate::cache`
-//! and `crate::hash` paths became `girpr_sync_cache::…` paths, while
+//! and `crate::hash` paths became `girsync_cache::…` paths, while
 //! `crate::util` became `girsync::util`.
 //!
 //! ## The binary's arguments and its one conversion record

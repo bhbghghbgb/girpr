@@ -2,7 +2,7 @@
 //!
 //! Reads a legacy `<root>/girpr-cache` sled directory (JSON values, hex
 //! digests under the `\0meta` reservation) and writes a new redb file with
-//! the binary codec from [`girpr_sync_cache`]. Hex digests are decoded to raw
+//! the binary codec from [`girsync_cache`]. Hex digests are decoded to raw
 //! bytes; unknown algorithms pass through untouched.
 //!
 //! **The finished cache is moved into place once it is whole.** The new cache
@@ -35,7 +35,7 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 use tracing::info;
 
-use girpr_sync_cache::hash::DigestSet;
+use girsync_cache::hash::DigestSet;
 
 /// Reserved sled key holding the schema meta blob.
 const OLD_META_KEY: &str = "\0meta";
@@ -166,7 +166,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
     let old =
         sled::open(sled_dir).with_context(|| format!("open sled db {}", sled_dir.display()))?;
     let mut case_sensitive = true;
-    let mut recs: Vec<(String, girpr_sync_cache::FileRec)> = Vec::new();
+    let mut recs: Vec<(String, girsync_cache::FileRec)> = Vec::new();
     for kv in old.iter() {
         let (k, v) = kv.context("read sled entry")?;
         if k.as_ref() == OLD_META_KEY.as_bytes() {
@@ -190,7 +190,7 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
         }
         recs.push((
             rel,
-            girpr_sync_cache::FileRec {
+            girsync_cache::FileRec {
                 kind: o.kind,
                 size: o.size,
                 mtime_ns: o.mtime_ns,
@@ -224,12 +224,12 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
 pub fn write_records(
     temp: &Path,
     case_sensitive: bool,
-    recs: &[(String, girpr_sync_cache::FileRec)],
+    recs: &[(String, girsync_cache::FileRec)],
 ) -> Result<Converted> {
-    let cache = girpr_sync_cache::open_db(
+    let cache = girsync_cache::open_db(
         temp,
         case_sensitive,
-        girpr_sync_cache::CacheOpen::ReadWrite {
+        girsync_cache::CacheOpen::ReadWrite {
             ignore_cache: false,
             backup_first: false,
             retain: None,
@@ -256,7 +256,7 @@ pub fn write_records(
     // here too: the finished database is about to move onto its final name,
     // and an orphaned sidecar would be residue in the user's folder.
     drop(cache);
-    girpr_sync_cache::remove_lock_sidecar(temp)
+    girsync_cache::remove_lock_sidecar(temp)
         .with_context(|| format!("remove lock sidecar of {}", temp.display()))?;
     Ok(out)
 }
@@ -279,7 +279,7 @@ fn replace_destination(temp: NamedTempFile, dst: &Path) -> Result<()> {
         // A legacy sled directory has to go before a file can take its name.
         // A conversion that failed before this point never got here, so the
         // previous cache is still intact on that path.
-        girpr_sync_cache::remove_cache_path(dst)?;
+        girsync_cache::remove_cache_path(dst)?;
     }
     // Capture the name before the persist consumes the handle. On error the
     // returned `PersistError` still owns the NamedTempFile, so dropping the
@@ -337,7 +337,7 @@ fn claim_temp_sibling(dst: &Path) -> Result<NamedTempFile> {
 /// nothing about, still needs taking with it. A sidecar that is already gone
 /// is not a failure, so a failure before the cache was opened passes through.
 fn cleanup_temp(primary: anyhow::Error, temp: &Path) -> anyhow::Error {
-    match girpr_sync_cache::remove_lock_sidecar(temp) {
+    match girsync_cache::remove_lock_sidecar(temp) {
         Ok(()) => primary,
         Err(cleanup) => {
             let summary = format!("{primary}");

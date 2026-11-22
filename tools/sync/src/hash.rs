@@ -6,4 +6,4 @@
 //! facade re-exports every public item, so `crate::hash::X` paths are unchanged
 //! for the planner, the apply phase and the CLI.
 
-pub use girpr_sync_cache::hash::*;
+pub use girsync_cache::hash::*;
