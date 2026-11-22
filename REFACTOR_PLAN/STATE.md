@@ -67,10 +67,10 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01, T02 | done | T01 completed (no fixes needed); T02 skip endorsed |
 | B | T03, T04, T05 | done | T03 completed (no fixes); T04 skip + follow-up endorsed; T05 note confirmed accurate |
-| C | T06 | pending | |
+| C | T06 | done | No reviewable work — T06 validated skip; follow-up endorsed at checkpoint D |
 | D | T07, T08 | done | Both completed (no fixes); T06 follow-up endorsed; gircap seams correctly untouched (leaves are girpr-only) |
 | E | T09, T10 | done | T09 completed (no fixes); T10 skip endorsed; report-only drift suggestion rejected (report deleted at cleanup) |
-| F | T11, T12, T13 | pending | |
+| F | T11, T12, T13 | done | No reviewable work — all three validated skips (T11/T12 pre-satisfied or stale premise, T13 near-forbidden) |
 | G | T14, T15, T16 | pending | |
 | H | T17, T18, T19 | pending | |
 | I | T20, T21, T22 | pending | |
