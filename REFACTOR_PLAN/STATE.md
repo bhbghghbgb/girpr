@@ -59,7 +59,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T45 | `girpr-report-model` leaf | skipped | | F50 validated skip (target exhausted): event placement already \`girpr-report-core::Order\`; three \`Val\` vocabularies are deliberately incompatible byte-pinned contracts (girpr Str/UInt/Int with 1/0 flags, gircap Str/Int/Bool + percent-encoding, girsync full JSON Value), and per-tool key tables are pinned data (§A5/A6). A shared model is a content-free §A2 facade or reintroduces collisions. Do not reopen absent a fourth identical consumer |
 | T46 | Narrow CLI leaf extension (OutputFormat + LogArgs) | skipped | | F51 validated skip: three log/--output flag sets are byte-different pinned help (A5/N8 flag sets stay local), three OutputFormats are divergent report-plane types (A6) whose promotion is a §A2 facade/cycle, and log policy already lives in \`girpr-log\` (LogOptions/EnvOptions/LogPlan). Stale premise: no \`cli_contract\` nextest filter exists |
 | T47 | `bounded_decode` in girpr-digest assessment | skipped | | F52 validated skip (re-confirms N7): two shapes are async/write/hash vs sync/read/hex-string with distinct error text (keeper); hosting a zstd wrapper in \`girpr-digest\` pushes native zstd-sys rebuild into ~13 dependents (§A2/F48). Streaming always-on test and distinct messages intact. Do not fold \`zstd_measure_from\` into \`zstd_measure\` |
-| T48 | `girpr-fs` composition leaf | todo | | F53; reparse classification is domain logic, one deliberate unsafe call |
+| T48 | `girpr-fs` composition leaf | in_progress | | F53; reparse classification is domain logic, one deliberate unsafe call |
 
 ## Reviews
 
