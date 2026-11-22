@@ -46,7 +46,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T32 | Pluggable KV backend + in-memory mirror | skipped | | F37 validated skip: restatement of closed F28/T23 - one KV implementation (redb file vs in-memory), sealed redb handle forces a local trait, single-implementer §A2 facade otherwise. Registry already path-keyed/per-process/forgettable (\`OnceLock\`); generalizing key/lifetime is the cross-test leakage to stop (§A10). Stale premise: row capture is thread-local, not process-global. Do not re-dispatch |
 | T33 | Generic batched durable writer | skipped | | F38 validated skip: only writer is \`girpr-sync-cache::CacheWrite\` (single consumer; §A2 facade); a generic shape must expose \`GIRSYNC_TEST_*\` durability knobs (§A11) or leave all policy local, while pre-drop commit ordering is a call-site crash-safety invariant (§A13/N15). Revisit only if a second batched writer appears |
 | T34 | Generalized `RestartableSink` with blanket impls | skipped | | F39 validated skip: only acyclic common home is \`girpr-digest\`, which deliberately hosts \`BodyFile\` to break a cycle; unifying couples fetch's zstd path to gircap's HTTP body seam. \`Send\` bounds and \`restart()\` responsibilities (truncate+re-digest vs seek-only vs clear) diverge by contract (§A5/A12). No safe narrower boundary |
-| T35 | Shared capture-buffer primitive | pending_review | ace02d2a | F40; \`girpr_log::test_support::CaptureBuffer\` (storage + Write + snapshot only); \`logs_of\` strict UTF-8 and sync \`SharedBuffer\` lossy text + MakeWriter stay local; no new crate/leaf so no gircap inventory or A14 seam change; suggested follow-up: third test-local copy in girsync \`apply/phases.rs\` \`capture_log\` not migrated |
+| T35 | Shared capture-buffer primitive | completed | ace02d2a | F40; \`girpr_log::test_support::CaptureBuffer\` (storage + Write + snapshot only); \`logs_of\` strict UTF-8 and sync \`SharedBuffer\` lossy text + MakeWriter stay local; no new crate/leaf so no gircap inventory or A14 seam change; suggested follow-up: third test-local copy in girsync \`apply/phases.rs\` \`capture_log\` not migrated |
 | T36 | Generic parse→plan→dispatch command harness | skipped | | F41 validated skip: each harness names program-private construction (gircap independence §A4 blocker), three incompatible typed outcomes, and a common surface would be a §A2 facade breaking \`GIRSYNC_TEST_CACHE\`/nextest isolation (§A10/F2/F32). T27 split/T30 fault seams not absorbed |
 | T37 | Shared precondition/skip policy | skipped | | F42 validated skip: only a thin assert/eprintln shell is shared; wording, required-case switch, Injected/Host distinction and macro-vs-function control flow ARE the policy and must stay local (§A5/A10). A shared core is a parameter-bag facade (§A2) with cycle/placement cost (§A12). Wording and nextest filters untouched |
 | T38 | Scratch/fixture support (merge vs split assessment) | todo | | F43; both directions high-risk — likely validated skip |
@@ -78,7 +78,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | K | T26, T27, T28 | done | No reviewable work - all three validated skips (content-free policy facade, single-consumer test runner, incompatible publish contracts) |
 | L | T29, T30, T31 | done | No reviewable work - all three validated skips (pre-satisfied report core, local typed fault seam, no shared plan-action value) |
 | M | T32, T33, T34 | done | No reviewable work - all three validated skips (single-implementer KV facade, single-consumer batched writer, divergent sink contracts) |
-| N | T35, T36, T37 | pending | |
+| N | T35, T36, T37 | done | T35 completed (no fixes); T36/T37 skips confirmed |
 | O | T38, T39, T40 | pending | |
 | P | T41, T42, T43 | pending | |
 | Q | T44, T45, T46 | pending | |
@@ -103,6 +103,9 @@ A planning review batches the survivors only after every task is settled.
 | FU09 | Record gircap URL construction as a deliberate keeper so §F21 is not re-dispatched; weigh any shared uppercase percent-encoder against §N8 and §A14 cost (from T16) | open | Reviewer-endorsed: F21's remainder is the recorded URL-join keeper (§A9/§N8) |
 | FU10 | Consider the shared validator's whole-string colon check vs the old product per-component check: for a value violating both an earlier trailing-dot rule and a later colon rule, product error wording changed (from review G) | open | Low priority; caller-local, non-published text; no test regressed |
 | FU11 | Optionally migrate girsync's fourth hand-written NonZeroUsize check in `backup_policy` (`--backup-retain`) to `girpr-value-ranges` (from T19) | open | Reviewer-endorsed, non-blocking; preserve its distinct wording/exit-3 class |
+| FU12 | Migrate the third test-local capture-buffer copy in girsync `capture_log` (`tools/sync/src/commands/sync/apply/phases.rs`) to `CaptureBuffer` via a dev-dependency (from T35) | open | Reviewer-endorsed, non-blocking; keep its local subscriber/bytes |
+| FU13 | Add a direct unit test in `crates/log` for `CaptureBuffer`'s Write/snapshot byte fidelity (from review N) | open | Non-blocking; currently covered only indirectly |
+| FU14 | Add a brief comment at the `unwrap_or_else(into_inner)` call sites noting intentional parity with the sync consumer (from review N) | open | Non-blocking cosmetic |
 
 ## Persistent context
 
