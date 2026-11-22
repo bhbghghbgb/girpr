@@ -621,7 +621,6 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
- "fs2",
  "gircap-hash",
  "gircap-http",
  "gircap-test-support",
