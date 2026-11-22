@@ -49,7 +49,7 @@ machine rather than the code.
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
-| `crates/sync-leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
+| `tools/sync/leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
 | `crates/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
@@ -543,7 +543,7 @@ fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
 which already depend on girsync — so a scratch directory never drags girsync
 into the repair binary's or `gircap`'s test builds. girsync's own acyclic
 production leaves — the rw limiter, the include/exclude filter policy, the link
-classifier and the hardlink facts — live in `crates/sync-leaves/` and are taken
+classifier and the hardlink facts — live in `tools/sync/leaves/` and are taken
 directly by `girsync` and its own integration tests, so an edit to a planner or
 command leaves them cached; it is girsync-only and shares no program policy.
 This package's integration
@@ -663,7 +663,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   table, and the command above checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
   deliberately absent: for a repair run a panic is a failed run, while for a
   dev tool it is a failed developer run, and those paths may assert. There is no
-  `unsafe` in `crates/sync-leaves/src/hardlink.rs`: its link-count and file-identity
+  `unsafe` in `tools/sync/leaves/src/hardlink.rs`: its link-count and file-identity
   facts come from the shared `girpr-fs-identity` leaf, which uses the
   `same-file`/`winapi-util` seams. The deliberate `unsafe` is the test that
   sets an environment variable in `tools/sync/tests/cli_dispatch.rs`, annotated

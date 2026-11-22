@@ -49,7 +49,7 @@ A copy takes both rw permits; it takes **src first**, and a thread holding dst
 takes nothing further. Every wait-for edge therefore points forward along
 `src → dst` and the graph is acyclic.
 
-`crates/sync-leaves/src/rw/gate.rs`'s `RwLimiter::acquire_copy` is the only place
+`tools/sync/leaves/src/rw/gate.rs`'s `RwLimiter::acquire_copy` is the only place
 in this workspace where a wrong edit can *hang* a run rather than fail one. A copy
 waiting for dst while holding src is the only operation that ever holds one gate
 while waiting for another, so changing the order — or letting a third gate into
@@ -764,7 +764,7 @@ each dispatch site readable at a glance.
 
 **Do not touch the `--rw-threads*` family, `RwLimiter`, or the lock order.** See
 the lock-ordering section above. The tests are good
-(`crates/sync-leaves/src/rw/gate.rs`'s unit tests plus
+(`tools/sync/leaves/src/rw/gate.rs`'s unit tests plus
 `tests/rw_threads/limiter.rs`); leave them alone.
 
 **Do not convert `FileRec.kind` to an enum.** It is the obvious companion to

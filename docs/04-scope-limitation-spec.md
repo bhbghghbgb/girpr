@@ -760,7 +760,7 @@ The plan is **complete before the install mutates** (the only earlier write is
 the requested `--plan-out` artifact): the repair work list *and* the purge
 candidate list are both built up front, so "how much would this delete?" is
 answerable and "how much would this run download?" is known before the first
-install write. The layout mirrors `crates/sync-leaves/src/rw/` (`mod.rs` wiring,
+install write. The layout mirrors `tools/sync/leaves/src/rw/` (`mod.rs` wiring,
 `limits.rs` pure config, `gate.rs` counting) and `girsync`'s `planner/` →
 `commands/sync/apply/` split.
 
