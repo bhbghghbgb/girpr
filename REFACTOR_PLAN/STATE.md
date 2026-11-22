@@ -36,7 +36,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T22 | Shared retry decision vocabulary / `drive_attempts` | skipped | | F27 validated skip: shared vocabulary is a §A2 thin enum (girpr already has local \`Retry<T>\`, gircap an inline bool); \`drive_attempts\` would lose gircap's per-attempt logging, body retention budget and exhaustion text (§A5). Keep classifiers/jitter local. Only a third loss-free driver consumer would justify revisiting |
 | T23 | Generic verified KV cache assessment | skipped | | F28 validated skip: one specialized redb schema; product deliberately has no manifest cache. A generic row trait would hide the literal-byte pin / \`FMT_V2\`/\`CACHE_VERSION\`/closed \`kind\` registry (§A5/N15), tempt the forbidden cache (§A13/N5), and be a single-implementer facade blocked by redb's sealed handle API. No reopening warranted |
 | T24 | Generic engine `Plan`/`Execute`/`Verify` trait shape | skipped | | F29 validated skip: no engines trait exists; an order/executor/transport-free \`Plan\`/\`Execute\` trait is an unconsumed §A2 dead facade, adoption would regress girsync's named-phase invariant and A6/A7/A8/A12 boundaries, and a generic \`Verify\` cannot enforce A13's two-independent-observations without collapsing to a tautology. Reopen only for a genuinely new fourth consumer |
-| T25 | `girpr-path-identity` crate | in_progress | | F30; three named questions, two fold rules; canonicalization split |
+| T25 | `girpr-path-identity` crate | skipped | | F30 validated skip (pre-satisfied): \`girpr-fs-names::fold_ascii_case(value, fold_case)\` already Parameterized with no default; both \`path_key\` rules (girsync \`true\`, product \`cfg!(windows)\`) consume it directly; the three identity questions are already named at their real callers, two girsync-only. Do not re-dispatch F30 |
 | T26 | Generic `EvidencePolicy` with `CannotTell` | todo | | F31; collapsing CannotTell into equality is the false-clean bug |
 | T27 | Split sync-test-support fixtures into generic runner | todo | | F32; env pinning + nextest isolation must survive (A10, F2) |
 | T28 | Generic `AtomicPublish` leaf | todo | | F33; one-syscall gaps + hold records; `_tmp` resume excluded (N2) |
@@ -74,7 +74,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | G | T14, T15, T16 | done | T14 completed (no fixes); T15/T16 skips confirmed; three follow-ups endorsed |
 | H | T17, T18, T19 | done | T19 completed (no fixes); T17/T18 skips confirmed; ordinal drift covered by FU03 |
 | I | T20, T21, T22 | done | No reviewable work - all three validated skips; F26/F27 shared retry drivers should not be re-dispatched |
-| J | T23, T24, T25 | pending | |
+| J | T23, T24, T25 | done | No reviewable work - all three validated skips (forbidden cache, dead trait, pre-satisfied fold) |
 | K | T26, T27, T28 | pending | |
 | L | T29, T30, T31 | pending | |
 | M | T32, T33, T34 | pending | |
