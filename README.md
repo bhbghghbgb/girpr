@@ -58,6 +58,7 @@ machine rather than the code.
 | `src/biz.rs` | re-export of `girpr-model`'s region identity as `Biz`; the ids, channel tuples and base URLs live in `crates/model/` | `Biz`, `Biz::endpoints`, `Biz::channel_tuple` |
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
+| `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -430,7 +431,12 @@ without this facade. `crates/proto/` supplies
 the Sophon protobuf wire types to this binary and `gircap` — the three messages,
 their tags, the misspelled `chuncks` and opaque tag 6, so both decode one byte
 layout; each keeps its own decode boundary, dump format, validation and
-normalisation, so no program logic is shared. `crates/model/` supplies the region
+normalisation, so no program logic is shared. `crates/chunk-identity/` supplies
+the chunk-identity value types to this binary and `gircap` — an owned
+digest/length key, a borrowed view that allocates nothing per comparison and a
+case-insensitive parse, plus the digest-lowercasing rule a caller applies at
+its own decode boundary; each keeps its own index, collision policy, first-match
+order and published bytes, so no selection rule is shared. `crates/model/` supplies the region
 identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
