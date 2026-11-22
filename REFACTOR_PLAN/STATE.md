@@ -112,7 +112,7 @@ A planning review batches the survivors only after every task is settled.
 
 ### Follow-up batch plan (planning review)
 
-- **Batch A — docs/comments (low risk; no bytes/features/gircap-independence exposure):** FU03, FU05, FU06, FU07, FU17.
+- **Batch A — docs/comments (low risk; no bytes/features/gircap-independence exposure):** FU03, FU05, FU06, FU07, FU17. Impl commit: `32693a80`.
 - **Batch B — mechanical migrations + hygiene (small, local):** FU11, FU12, FU13, FU15. Guardrails: preserve `--backup-retain` wording/exit-3 (FU11); add `test-support` as a dev-dependency only and leave nextest filters/FQNs unchanged (FU12/FU13); revalidate no root source uses chrono (FU15).
 - **Dormant / record-only — keep `open`, no session:** FU01, FU02, FU04, FU08, FU09.
 - **Dropped:** FU10, FU14, FU16.
