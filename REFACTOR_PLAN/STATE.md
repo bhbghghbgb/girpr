@@ -54,7 +54,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T40 | Time/stamp leaf with named formats | completed | d445fee0c2e69c5db735bfa25e6bf84f2b8b0cb1, c7322ec6 | F45; new acyclic \`girpr-time\` leaf owns four distinct named formats (compact, RFC3339-millis-Z, RFC3339-Secs-Z found in \`manifest.captured_at\`, RFC3339/lock body); removed \`girpr-log\` wrappers to avoid a facade; **gircap leaf inventory now seventeen**; all format bytes unchanged |
 | T41 | Shared line-sink primitive | skipped | | F46 validated skip: emission is intentionally divergent (report-core propagates errors/ordered plane vs log/gircap/product ignore errors, different writer abstractions and prefixes); a shared sink collapses a §A9 keeper or is a thin §A2 facade over \`writeln!\`, and moving \`write_line\` reduces report-core cohesion. Line emission stays divergent across planes |
 | T42 | Shared IO read-buffer policy | skipped | | F47 validated skip (premise incomplete): at least three independent \`512 * 1024\` call-site constants (util-hash, sync-cache, \`src/repair/file/mod.rs\`), not one policy; \`girpr-digest::hash_reader\` deliberately takes a caller-owned buffer. A shared constant pollutes a mechanics-only leaf (§A2) or needs a new low-value crate with full A14 seams; independent tuning is a keeper (§A9) |
-| T43 | `girpr-primitives` consolidation assessment | in_progress | | F48; rebuild domain is the value — likely skip |
+| T43 | `girpr-primitives` consolidation assessment | skipped | | F48 validated skip: merged leaves have disjoint consumer sets, so any single-part edit rebuilds a strict superset (never fewer variants, §A2); folding loopback-mock into cli pulls clap into every consumer and exit+audio-language couples exit-code vs artifact-byte contracts. No co-change coupling in history |
 | T44 | Narrow loopback hit-count/assertion extension | todo | | F49; domain servers stay independent (N6) |
 | T45 | `girpr-report-model` leaf | todo | | F50; bool vs 1/0, percent-encoding, pinned key order (A5/A6) |
 | T46 | Narrow CLI leaf extension (OutputFormat + LogArgs) | todo | | F51; pinned help/exit codes, `--version` presence differs |
@@ -80,7 +80,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | M | T32, T33, T34 | done | No reviewable work - all three validated skips (single-implementer KV facade, single-consumer batched writer, divergent sink contracts) |
 | N | T35, T36, T37 | done | T35 completed (no fixes); T36/T37 skips confirmed |
 | O | T38, T39, T40 | done | T40 completed with corrective commit c7322ec6 (stale gircap spec dependency descriptions); T38/T39 skips confirmed |
-| P | T41, T42, T43 | pending | |
+| P | T41, T42, T43 | done | No reviewable work - all three validated skips (divergent line emission, per-call-site buffer tuning, rebuild-domain trap) |
 | Q | T44, T45, T46 | pending | |
 | R | T47, T48 | pending | |
 
