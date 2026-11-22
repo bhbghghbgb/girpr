@@ -1,6 +1,6 @@
-# Repair findings & verdict - Low-disk Genshin repair/patch (Starward vs Collapse)
+# Repair findings & verdict - Low-disk GI repair/patch (Starward vs Collapse)
 
-Scope: Genshin Impact only (`hk4e_cn` / `hk4e_global` / `hk4e_bilibili`), Rust tool, automation-friendly
+Scope: GI only (`hk4e_cn` / `hk4e_global` / `hk4e_bilibili`), Rust tool, automation-friendly
 (no UI), minimize disk usage before / during / after patching. Repair-capable: local files may be
 corrupt or any older version; after the run the game must be at the current live version.
 
@@ -10,13 +10,13 @@ corrupt or any older version; after the run the game must be at the current live
 
 - Local version: `src/Starward.RPC/GameInstall/GamePackageService.cs:GetLocalGameVersionAsync`
   reads `config.ini` (`game_version=` regex, last match). Missing file = install.
-- Metadata API: `src/Starward.Core/HoYoPlay/HoYoPlayClient.cs` — `BuildUrl` builds the HoYoPlay
+- Metadata API: `src/Starward.Core/HoYoPlay/HoYoPlayClient.cs` — `BuildUrl` builds the HYP
   URLs; the Sophon `getBuild`/`getPatchBuild` URLs are built in the same file by
   `GetGameChunkBuildAsync` / `GetGameSophonChunkBuildAsync` / `GetGameSophonPatchBuildAsync`.
   - CN host `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/{api}?launcher_id=...&language=...`,
     global `https://sg-hyp-api.hoyoverse.com/...`. Launcher IDs
     (`src/Starward.Core/HoYoPlay/LauncherId.cs`): CN `jGHBHlcOq1`, global `VYTpXlbWo8`,
-    bili-Genshin `umfgRO5gh5`. Game IDs (`GameId.cs`): `hk4e_cn=1Z8W5NHUQb`,
+    bili-GI `umfgRO5gh5`. Game IDs (`GameId.cs`): `hk4e_cn=1Z8W5NHUQb`,
     `hk4e_global=gopR6Cufr3`, `hk4e_bilibili=T2S0Gz4Dr2`.
   - Used endpoints: `getGameConfigs` (exe name, audio scan/cache/res dirs, `default_download_mode`,
     `res_category_dir`, `blacklist_dir`, flags), `getGameBranches` (branch/package_id/password/tag/
@@ -51,7 +51,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
   `Helper/Extension.cs:GetChunkAndIfAltAsync` (`GET {ChunksBaseUrl}/{ChunkName}` + alt fallback).
   Repair/download chunk identity is MD5-only (`ChunkDecompressedHashMd5`); `xxh64` parsed from the
   chunk name is only a preload/diff-staging resume probe, not the repair hash.
-- Genshin glue (`RepairManagement/Genshin/Fetch.cs:BuildPrimaryManifest`) fakes the legacy `pkg_version`
+- GI glue (`RepairManagement/Genshin/Fetch.cs:BuildPrimaryManifest`) fakes the legacy `pkg_version`
   from the Sophon manifest (HoYo removed scattered zips in a recent release): `SophonAssetDictRef` map +
   `PkgVersionProperties{remoteName,fileSize,md5}` per asset + per-VO `Audio_*_pkg_version` from
   `audio_lang_14`. `Fetch.Persistent.cs` additionally queries the **game dispatcher**
@@ -59,7 +59,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
   override Sophon entries (`IsRequireForcePersistent`); writes `..._persist` revisions and updates
   `data_revision/res_revision/.../audio_revision/ChannelName/ScriptVersion/PatchDone` after repair.
   Branch URLs come from `Helper/Metadata/PresetConfig.cs:SophonChunkUrls` after `EnsureReassociated`.
-- So Collapse's API surface is strictly larger: HoYoPlay-equivalent launcher resource API **plus**
+- So Collapse's API surface is strictly larger: HYP-equivalent launcher resource API **plus**
   dispatcher + persistent manifests + `audio_lang_14` + `ctable.dat` handling + plugin/SDK/WPF zip
   enumeration for cleanup.
 
@@ -131,7 +131,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
     `GenshinInstall.PkgVersion.cs` + dispatcher persistent via `Fetch.Persistent.cs` +
     plugin/SDK/WPF zip entries via `SimpleZipArchiveReader`), diffed against full
     `EnumerateFiles("*", AllDirectories)`. Protected: server `FilesCleanupIgnoreList` regexes
-    (`PresetConfig.cs`, normally `[]` for Genshin — `GenshinInstall.cs` sets none) matched
+    (`PresetConfig.cs`, normally `[]` for GI — `GenshinInstall.cs` sets none) matched
     against `RelativePath` via `WhereMatchPattern` (`PatternMatcher.cs`, case-insensitive,
     non-matching kept) **plus** per-line `^Audio_<entry>_pkg_version$` built from
     `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs`). Note the base-class
@@ -153,7 +153,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
 ## 4. Verdict
 
 **Adopt Starward's `Repair-in-Chunk-mode` as the patching core, plus Collapse's extra-file purge as a
-pre/post phase. Specific to Genshin, minimal API surface = Starward HoYoPlay + Sophon chunk only.**
+pre/post phase. Specific to GI, minimal API surface = Starward HYP + Sophon chunk only.**
 
 Reasons:
 1. Meets the hard constraint: Starward Repair is version-agnostic (latest chunk build + full-file MD5
@@ -168,12 +168,12 @@ Reasons:
    chunk path's `*_tmp` staging is available as a mode for an install that wants the target
    left untouched. Collapse's preload-then-apply and patch-blob retention use strictly more
    transient space.
-3. Smallest implementation: HoYoPlay `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
+3. Smallest implementation: HYP `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
    dedup] → manifest download/verify/parse → per-file repair → **Starward-handling post-phase**
    (`getGameDeprecatedFileConfigs` delete + audio cache→res move + `config.ini` bump).
    No dispatcher (`res_versions`/`data_versions`), no persistent
    revisions, no `ctable` juggling, no hdiff/7z pipeline, no SDK/WPF/plugin zips, no speed limiter, no
-   quota dialog. Collapse's extras are launcher conveniences, not needed to leave a launchable Genshin.
+   quota dialog. Collapse's extras are launcher conveniences, not needed to leave a launchable GI.
 4. Collapse contributes the one thing Starward lacks: full extra-file purge by set-difference
    (**Collapse-handling**, `GetUnusedFileInfoList` parity scoped to v1 — no SDK/WPF/dispatcher union).
    Cheap to implement, big low-disk win before/after patching, and directly replicates the user's

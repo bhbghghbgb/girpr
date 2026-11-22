@@ -483,7 +483,7 @@ and `HypClient::new_with_bases` takes them. The flag spelling matches `gircap`'s
 so that one invocation works against either tool.
 
 **The caveat is the important part.** `--sophon-base` redirects **`getBuild`
-only** (`--hyp-base` covers the HoYoPlay metadata calls: `getGameConfigs`,
+only** (`--hyp-base` covers the HYP metadata calls: `getGameConfigs`,
 `getGameBranches`, `getBuild`, `getGameDeprecatedFileConfigs`). Manifest and
 chunk URLs are not built from the configured base at all —
 `sophon::fetch_manifest` and `sophon::stream_chunk_to` both resolve a base from
@@ -535,7 +535,7 @@ so.
 
 One job is left, and it is real:
 
-- **Targeting.** A measured capture shows the largest real Genshin chunk to be
+- **Targeting.** A measured capture shows the largest real GI chunk to be
   far bigger than any small synthetic fixture reaches. A ceiling on chunk size
   would be a way to *deliberately* exercise the largest-chunk branch; today the
   same effect comes from `--include`-ing the file that carries that chunk.

@@ -18,35 +18,33 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Host {
     /// Mainland + Bilibili.
-    Mihoyo,
+    Mhy,
     /// International.
-    Hoyoverse,
+    Hyv,
 }
 
 impl Host {
     /// The host key the repair binary's `production_bases` has always taken.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Host::Mihoyo => "mihoyo",
-            Host::Hoyoverse => "hoyoverse",
+            Host::Mhy => "mihoyo",
+            Host::Hyv => "hoyoverse",
         }
     }
 
-    /// Base for the four HoYoPlay JSON endpoints.
+    /// Base for the four HYP JSON endpoints.
     pub const fn hyp_base(self) -> &'static str {
         match self {
-            Host::Mihoyo => "https://hyp-api.mihoyo.com/hyp/hyp-connect/api",
-            Host::Hoyoverse => "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api",
+            Host::Mhy => "https://hyp-api.mihoyo.com/hyp/hyp-connect/api",
+            Host::Hyv => "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api",
         }
     }
 
     /// Base for the Sophon `getBuild` JSON endpoint.
     pub const fn sophon_base(self) -> &'static str {
         match self {
-            Host::Mihoyo => "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api",
-            Host::Hoyoverse => {
-                "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api"
-            }
+            Host::Mhy => "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api",
+            Host::Hyv => "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api",
         }
     }
 }
@@ -99,17 +97,17 @@ impl Region {
     /// Which API family serves this region.
     pub const fn host(self) -> Host {
         match self {
-            Region::Hk4eCn | Region::Hk4eBilibili => Host::Mihoyo,
-            Region::Hk4eGlobal => Host::Hoyoverse,
+            Region::Hk4eCn | Region::Hk4eBilibili => Host::Mhy,
+            Region::Hk4eGlobal => Host::Hyv,
         }
     }
 
-    /// HoYoPlay `launcher_id`.
+    /// HYP `launcher_id`.
     pub const fn launcher_id(self) -> &'static str {
         self.endpoints().1
     }
 
-    /// HoYoPlay `game_id`, sent as `game_ids[]`.
+    /// HYP `game_id`, sent as `game_ids[]`.
     pub const fn game_id(self) -> &'static str {
         self.endpoints().2
     }
@@ -152,7 +150,7 @@ impl std::fmt::Display for Region {
 /// own boundary; the string itself is a fact of the API, so it lives here.
 pub const DOWNLOAD_MODE_CHUNK: &str = "DOWNLOAD_MODE_CHUNK";
 
-/// The single HoYoPlay endpoint that carries the `channel`/`sub_channel` pair.
+/// The single HYP endpoint that carries the `channel`/`sub_channel` pair.
 ///
 /// Sending the pair to any other endpoint is not the documented request. Each
 /// program keeps its own request builder; both key the rule off this name.
@@ -173,7 +171,7 @@ mod tests {
                 "1",
                 "1",
                 "hyp_mihoyo",
-                Host::Mihoyo,
+                Host::Mhy,
             ),
             (
                 Region::Hk4eGlobal,
@@ -183,7 +181,7 @@ mod tests {
                 "1",
                 "0",
                 "hyp_hoyoverse",
-                Host::Hoyoverse,
+                Host::Hyv,
             ),
             (
                 Region::Hk4eBilibili,
@@ -193,7 +191,7 @@ mod tests {
                 "14",
                 "0",
                 "hyp_mihoyo",
-                Host::Mihoyo,
+                Host::Mhy,
             ),
         ] {
             assert_eq!(region.as_str(), id);
@@ -210,26 +208,26 @@ mod tests {
 
     #[test]
     fn host_keys_and_bases_are_the_production_strings() {
-        assert_eq!(Host::Mihoyo.as_str(), "mihoyo");
-        assert_eq!(Host::Hoyoverse.as_str(), "hoyoverse");
+        assert_eq!(Host::Mhy.as_str(), "mihoyo");
+        assert_eq!(Host::Hyv.as_str(), "hoyoverse");
         assert_eq!(
-            Host::Mihoyo.hyp_base(),
+            Host::Mhy.hyp_base(),
             "https://hyp-api.mihoyo.com/hyp/hyp-connect/api"
         );
         assert_eq!(
-            Host::Mihoyo.sophon_base(),
+            Host::Mhy.sophon_base(),
             "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api"
         );
         assert_eq!(
-            Host::Hoyoverse.hyp_base(),
+            Host::Hyv.hyp_base(),
             "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api"
         );
         assert_eq!(
-            Host::Hoyoverse.sophon_base(),
+            Host::Hyv.sophon_base(),
             "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api"
         );
-        assert_eq!(Region::Hk4eCn.endpoints().0, Host::Mihoyo.as_str());
-        assert_eq!(Region::Hk4eGlobal.endpoints().0, Host::Hoyoverse.as_str());
+        assert_eq!(Region::Hk4eCn.endpoints().0, Host::Mhy.as_str());
+        assert_eq!(Region::Hk4eGlobal.endpoints().0, Host::Hyv.as_str());
     }
 
     #[test]

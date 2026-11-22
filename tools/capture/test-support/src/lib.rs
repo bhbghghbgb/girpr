@@ -2,7 +2,7 @@
 //!
 //! No dependency, no fixture file, and nothing borrowed from the
 //! repair binary's own mock: the synthetic manifests, the chunk bodies, the
-//! `getBuild` bodies and the four HoYoPlay bodies are all *constructed here*,
+//! `getBuild` bodies and the four HYP bodies are all *constructed here*,
 //! from a [`World`] the test writes. That is the point — a fixture file checked
 //! into the tree is a fixture that can only test what it happened to contain,
 //! and a mock that shares code with the code under test is a mock that agrees
@@ -23,7 +23,7 @@
 //!
 //! | prefix   | what it answers                                    |
 //! |----------|----------------------------------------------------|
-//! | `/hyp`   | the four HoYoPlay endpoints                        |
+//! | `/hyp`   | the four HYP endpoints                             |
 //! | `/sophon`| `getBuild`                                          |
 //! | `/cdn`   | manifest archives and chunk blobs                  |
 //!
@@ -833,7 +833,7 @@ impl Build {
     }
 }
 
-/// The whole synthetic world: the builds, and what the four HoYoPlay endpoints
+/// The whole synthetic world: the builds, and what the four HYP endpoints
 /// say about them.
 ///
 /// The branch head is `new`; `old` must appear in `diff_tags` or the tool will

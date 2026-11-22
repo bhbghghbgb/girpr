@@ -1,14 +1,14 @@
-# Repair spec - Repair-by-Chunk (language agnostic) - Genshin low-disk patcher
+# Repair spec - Repair-by-Chunk (language agnostic) - GI low-disk patcher
 
-Goal: bring a possibly-corrupt, possibly-any-older-version Genshin install to the current live
+Goal: bring a possibly-corrupt, possibly-any-older-version GI install to the current live
 version with minimal extra disk usage, unattended (args + exit code + logs).
 
 Non-goals (v1): hdiff/patch-diff updates, 7z package installs, predownload, speed limit, SDK/WPF
 downloads, dispatcher persistent revisions, quota dialogs, hardlinks, UI/progress bars.
 
-## 0. Constants (Genshin)
+## 0. Constants (GI)
 
-- HoYoPlay hosts: CN `https://hyp-api.mihoyo.com`, global `https://sg-hyp-api.hoyoverse.com`,
+- HYP hosts: CN `https://hyp-api.mihoyo.com`, global `https://sg-hyp-api.hoyoverse.com`,
   path prefix `/hyp/hyp-connect/api/`. Query always `?launcher_id={L}&language=en-us`.
   Launcher IDs: CN `jGHBHlcOq1`, global `VYTpXlbWo8`, bili `umfgRO5gh5`.
   Game IDs: `hk4e_cn=1Z8W5NHUQb`, `hk4e_global=gopR6Cufr3`, `hk4e_bilibili=T2S0Gz4Dr2`.
@@ -89,7 +89,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
 2. `GET getGameBranches?launcher_id=&language=&game_ids[]=` → pick entry for game id →
    `main{package_id,branch,password,tag,diff_tags[]}`. `latest = main.tag`.
 3. `GET getBuild?branch=&package_id=&password=` (no `tag`) → latest chunk build
-   `{build_id,tag,manifests[]}`. If server returns retcode -202 → abort (Genshin must be chunk mode).
+   `{build_id,tag,manifests[]}`. If server returns retcode -202 → abort (GI must be chunk mode).
 4. If local version known: `GET getBuild?...&tag={local}` → local chunk build, best-effort
    (failure → proceed with `local=null`; costs only dedup, not correctness).
 5. Emit the begin `REPORT` line to stdout (mirrored to the log), so a parser sees
@@ -106,7 +106,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
    returns the wrong set. It is the only one of these API calls that carries them.
 
-Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
+Each HYP response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
 
 ### Step 3 — Fetch + verify + parse manifests (latest [+ local])
 For each wanted manifest in latest build (filter: drop `matching_field ∈ ignore_set`; drop every
@@ -143,7 +143,7 @@ For each latest file `F{path,size,md5,chunks[]}`:
 - Build `chunk_plan[]`: for each chunk `C{offset,uncompressed_size,uncompressed_md5}`:
   `reuse = (local_F contains chunk with same (uncompressed_md5, uncompressed_size))`
   → record `(reuse_path=game_dir/local_F.path, reuse_offset)`, else `reuse=null`.
-  (Cross-file dedup by md5 is allowed but optional; same-file covers ~all Genshin wins.)
+  (Cross-file dedup by md5 is allowed but optional; same-file covers ~all GI wins.)
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
   drop listed paths from the work list. They stay part of the expected install:
   the files-cleanup keeps them (Step 7), so a blacklist entry excludes repair,
@@ -452,7 +452,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | Whole-file MD5 mismatch | the temp path deletes `_tmp` and retries the file ×5; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
-| Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
+| Missing server diff support (-202) | abort (GI is chunk-only; no legacy path in v1) |
 | Interrupted run | the in-place path re-verifies and continues (the chunks that are already right stay right); the temp path resumes by length; a leftover `*_tmp` is purged only via `--purge-before`/`--purge-after` |
 | A manifest whose chunks do not tile the file | checked and logged at plan time; the hole is zero-filled |
 | Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |

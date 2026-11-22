@@ -17,7 +17,7 @@ each tool passes its own rule flags), the retry schedule/sleep driver
 mechanism (each tool supplies its own codes and meanings), the clap-error to
 usage-code mapping (each tool passes its own usage code) and the audio-language
 mechanics (each tool keeps its own alias map, sentinel and validation), plus the
-test scratch-directory policy.** It talks to the real HoYoPlay + Sophon
+test scratch-directory policy.** It talks to the real HYP + Sophon
 APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding one real file per test-matrix
 variant, every API response and manifest behind it, every chunk blob needed to
 materialize the old file, the current file, and the patch between them, and

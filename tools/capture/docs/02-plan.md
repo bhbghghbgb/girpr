@@ -97,7 +97,7 @@ tools/capture/
 │   │   fetcher.rs (Fetcher, Fetched, Streamed, Destination). gircap consumes it
 │   │   directly so an emit/blobs/manifest edit leaves it cached.
 │   ├── hyp/
-│   │   ├── mod.rs        # the HoYoPlay endpoints + getBuild + the captured bodies
+│   │   ├── mod.rs        # the HYP endpoints + getBuild + the captured bodies
 │   │   └── types.rs      # DTOs, incl. the fields most clients drop
 │   ├── pathmap.rs        # logical→on-disk escapes (device names) and the run-wide store
 │   ├── paths.rs          # the shape rules for values that name something in a bundle

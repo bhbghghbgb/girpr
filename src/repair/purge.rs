@@ -326,7 +326,7 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// Everything else in this set's sense (exe, res-category / audio-scan
 /// bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT kept:
 /// Collapse's `GenshinInstall.GetUnusedFileInfoList` protects only
-/// `FilesCleanupIgnoreList` (empty for Genshin) plus the
+/// `FilesCleanupIgnoreList` (empty for GI) plus the
 /// `Audio_*_pkg_version` regexes, and this tool maximizes free space — if the
 /// user wants anything else kept, that needs an explicit `--keep` flag
 /// (not implemented in v1).

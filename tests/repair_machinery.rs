@@ -22,7 +22,7 @@
 //! keeps the deprecated `--io-threads` alias alive in this suite. `--output
 //! json` and the flag wiring are pinned in `cli_contract.rs`.
 //!
-//! The server is the mock in `tests/common`: a local HoYoPlay + Sophon on
+//! The server is the mock in `tests/common`: a local HYP + Sophon on
 //! `127.0.0.1`, no external network. The fixtures are described rather than
 //! hardcoded (`FixtureSpec`), so a shape is a **description** and the cost of
 //! a case is the size of the description.

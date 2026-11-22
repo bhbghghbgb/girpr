@@ -11,7 +11,7 @@ autotests = false
 # `rust-version` floor: edition 2024 and the stable compiler are the only
 # requirement, so newer language features and library versions are never
 # blocked by an old minimum.
-description = "Genshin Impact low-disk repair patcher (Starward chunk-repair core + Collapse extra purge)"
+description = "GI low-disk repair patcher (Starward chunk-repair core + Collapse extra purge)"
 
 [[bin]]
 name = "girpr"
@@ -171,7 +171,7 @@ girpr-fs-identity = { path = "crates/fs-identity" }
 # directly instead of linking this whole facade. The lock policy and its FNV
 # key are unchanged; the leaf owns only the file/identity mechanics it reads.
 girpr-lock = { path = "crates/lock" }
-# The HoYoPlay/Sophon fetch path and the DTOs it decodes. They live in their own
+# The HYP/Sophon fetch path and the DTOs it decodes. They live in their own
 # crate so an edit to the repair, report or CLI modules below leaves the whole
 # reqwest/zstd/prost tree cached. This binary (and the tests that link it)
 # depends on the crate directly; the attempt loop and the test HTTP seam kept
@@ -197,7 +197,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 tempfile = "3.27"
 
 [dev-dependencies]
-# The shared offline HoYoPlay/Sophon mock, fixture builders and lock-cleanup
+# The shared offline HYP/Sophon mock, fixture builders and lock-cleanup
 # helpers for the root integration binaries. They used to be inlined by
 # `mod common;` into every binary; the public library surface lets each binary
 # keep a thin shim and compiles the mechanics once. This crate is facade-free,

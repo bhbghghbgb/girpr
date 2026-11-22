@@ -1799,9 +1799,9 @@ pub struct Capture {
 pub struct Biz_ {
     /// The `--biz` value.
     pub id: String,
-    /// HoYoPlay launcher id.
+    /// HYP launcher id.
     pub launcher_id: String,
-    /// HoYoPlay game id.
+    /// HYP game id.
     pub game_id: String,
     /// Channel.
     pub channel: String,
@@ -1809,7 +1809,7 @@ pub struct Biz_ {
     pub sub_channel: String,
     /// CPS name.
     pub cps: String,
-    /// The HoYoPlay base used.
+    /// The HYP base used.
     pub hyp_base: String,
     /// The Sophon base used.
     pub sophon_base: String,

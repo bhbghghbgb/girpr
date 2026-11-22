@@ -132,7 +132,7 @@ through a `use` shim in both binaries so the replay mechanics compile
 once. The `#[path]` on `bundle.rs` stays: that module has no other consumer, so
 there is nothing to share it with.
 
-The server remains a **distinct** fake HTTP server from the offline HoYoPlay/
+The server remains a **distinct** fake HTTP server from the offline HYP/
 Sophon mock in the same crate — different route family, different request log,
 different contract — and shares no code with it. Keeping it a library module (not
 an inlined `mod server;`) is what keeps it out of `repair_offline.rs` and

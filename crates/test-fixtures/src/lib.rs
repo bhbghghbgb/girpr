@@ -1,7 +1,7 @@
 //! Offline mock API for integration/e2e tests.
 //!
 //! Spins a tiny HTTP server on `127.0.0.1:<ephemeral>` (no external network)
-//! that mimics the live HoYoPlay + Sophon shapes used by `girpr`:
+//! that mimics the live HYP + Sophon shapes used by `girpr`:
 //!
 //! - `GET <hyp>/getGameConfigs` -> `{"launch_configs":[...]}`
 //! - `GET <hyp>/getGameBranches` -> `{"game_branches":[...]}`

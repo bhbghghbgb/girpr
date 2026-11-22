@@ -278,7 +278,7 @@ pub struct CapturePlan {
     /// Ceiling on one decompressed body, in bytes. Applied to every zstd decode
     /// and recorded in `MANIFEST.json` so a bundle can be decoded the same way.
     pub max_decompressed_bytes: u64,
-    /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
+    /// HYP base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
     pub sophon_base: Option<String>,

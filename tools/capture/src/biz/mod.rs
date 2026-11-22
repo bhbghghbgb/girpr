@@ -37,7 +37,7 @@ pub use crate::encoding::percent;
 /// seam stay here, at this tool's call site.
 pub use girpr_model::region::Host;
 
-/// The four HoYoPlay endpoints `gircap` addresses.
+/// The four HYP endpoints `gircap` addresses.
 ///
 /// `channel` / `sub_channel` are sent on [`HypEndpoint::GameDeprecatedFileConfigs`]
 /// **only**. Measured 2026-10-14: sending them anywhere else is not the documented
@@ -79,9 +79,9 @@ impl HypEndpoint {
 pub struct Biz {
     /// The flag's value.
     pub id: BizId,
-    /// HoYoPlay `launcher_id`.
+    /// HYP `launcher_id`.
     pub launcher_id: &'static str,
-    /// HoYoPlay `game_id`, sent as `game_ids[]`.
+    /// HYP `game_id`, sent as `game_ids[]`.
     pub game_id: &'static str,
     /// `channel`, written to `config.ini` and sent to the deprecated-files call.
     pub channel: &'static str,
@@ -116,7 +116,7 @@ impl Biz {
         self.id.as_str()
     }
 
-    /// The HoYoPlay base for this region.
+    /// The HYP base for this region.
     pub const fn hyp_base(&self) -> &'static str {
         self.host.hyp_base()
     }
@@ -150,7 +150,7 @@ impl Biz {
 /// a test of the mock rather than of the request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints<'a> {
-    /// Base for the four HoYoPlay endpoints.
+    /// Base for the four HYP endpoints.
     pub hyp: &'a str,
     /// Base for the Sophon `getBuild` endpoint.
     pub sophon: &'a str,
@@ -192,7 +192,7 @@ impl<'a> Endpoints<'a> {
         }
     }
 
-    /// Build a HoYoPlay URL for one endpoint.
+    /// Build a HYP URL for one endpoint.
     ///
     /// `language` is sent on every endpoint — measured, and it is what makes the
     /// response a launcher's rather than a default locale's.
@@ -428,9 +428,9 @@ mod tests {
 
     #[test]
     fn cn_and_bilibili_share_a_host_family() {
-        assert_eq!(Biz::resolve(BizId::Hk4eCn).host, Host::Mihoyo);
-        assert_eq!(Biz::resolve(BizId::Hk4eBilibili).host, Host::Mihoyo);
-        assert_eq!(Biz::resolve(BizId::Hk4eGlobal).host, Host::Hoyoverse);
+        assert_eq!(Biz::resolve(BizId::Hk4eCn).host, Host::Mhy);
+        assert_eq!(Biz::resolve(BizId::Hk4eBilibili).host, Host::Mhy);
+        assert_eq!(Biz::resolve(BizId::Hk4eGlobal).host, Host::Hyv);
         assert_eq!(
             Biz::resolve(BizId::Hk4eCn).hyp_base(),
             "https://hyp-api.mihoyo.com/hyp/hyp-connect/api"

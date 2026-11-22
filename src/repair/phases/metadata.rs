@@ -1,6 +1,6 @@
 //! Local state + server metadata (docs/02 steps 1–2).
 //!
-//! Four HoYoPlay calls: `getGameConfigs` and `getGameBranches` run as one
+//! Four HYP calls: `getGameConfigs` and `getGameBranches` run as one
 //! wave, then `getBuild(latest)` and `getBuild(local, best-effort)` as another,
 //! while the local files are read in parallel. The deprecated-file list is *not*
 //! fetched here: `repair::plan_phase` fetches it (for a run that reaches the
@@ -294,7 +294,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
     if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
         return Err(RunFailure::usage(anyhow::anyhow!(
-            "game download mode {:?} is not chunk mode; chunk repair not supported (unexpected for Genshin)",
+            "game download mode {:?} is not chunk mode; chunk repair not supported (unexpected for GI)",
             config.default_download_mode
         )));
     }

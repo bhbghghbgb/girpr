@@ -19,7 +19,7 @@
 //! `--log-file`, so no default log can land beside the binary in `target/`.
 //!
 //! The data-plane goldens at the end are the other kind of case: they need the
-//! mock HoYoPlay/Sophon server in `tests/common`, because `REPORT`/`PLAN` are
+//! mock HYP/Sophon server in `tests/common`, because `REPORT`/`PLAN` are
 //! only emitted once the metadata has been fetched. They pin the *sequence* of
 //! records and each record's field keys, never a value, so a wording change
 //! that keeps the contract passes and a reordered or duplicated record fails.

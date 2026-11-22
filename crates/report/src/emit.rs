@@ -130,7 +130,7 @@ impl Drop for ProgressGuard {
 /// once, and the formatter turns the group into the `REPORT` record.
 /// [`report_record`] is the only reader.
 ///
-/// The API-derived values are borrowed as scalars rather than as the HoYoPlay
+/// The API-derived values are borrowed as scalars rather than as the HYP
 /// DTOs that carry them. That is the seam between the two planes: the report
 /// plane renders whatever the caller extracts and does not depend on the
 /// fetch crate or the shape of its DTOs. The rendered bytes are unchanged.
@@ -164,7 +164,7 @@ pub struct ReportProvenance<'a> {
 /// The one-time begin report, written right after the metadata calls. Parsers
 /// get it before any repair starts: `local_version` is the on-disk `config.ini`
 /// value (`none` when absent), `latest_version` is the "will be updated to" tag;
-/// the rest come from the HoYoPlay/Sophon APIs, not from config. `audio_langs`
+/// the rest come from the HYP/Sophon APIs, not from config. `audio_langs`
 /// is the effective set.
 ///
 /// Provenance: Starward `GameInstallService.cs:788-849` (the same field set the

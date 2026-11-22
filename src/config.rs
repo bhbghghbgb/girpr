@@ -175,7 +175,7 @@ pub struct RunCtx {
     /// How the data plane is rendered: `key=value` lines (the default) or NDJSON.
     /// One [`crate::Record`] per line either way.
     pub output: OutputFormat,
-    /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
+    /// Offline/test endpoint overrides. When `Some`, the HYP / Sophon
     /// APIs are fetched from these bases instead of the production CDNs
     /// (e.g. a local mock server in `tests/`). `None` = production, unless
     /// the `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE` env vars are set (used by

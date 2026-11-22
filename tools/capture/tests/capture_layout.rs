@@ -1429,7 +1429,7 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
     // **Only the ordering that is real.** Only `getGameBranches` carries the
     // `package_id` that `getBuild` needs, so `branches < builds` is the invariant;
     // anything asserting which of two *concurrent* requests the mock happened to
-    // accept first would be a test of the mock. The four HoYoPlay endpoints are
+    // accept first would be a test of the mock. The four HYP endpoints are
     // issued together, because none of them depends on another. Arrival order at
     // the mock is causal here: `getBuild` cannot be issued before the branch that
     // supplies its `package_id` has been answered.

@@ -320,7 +320,7 @@ struct ReuseCall<'a, W: Write + Seek> {
 ///
 /// V1-SIMPLIFICATION (S2, see README): same-file-only reuse. Starward maps each
 /// chunk to any local file via `OriginalFileFullPath/Offset` (cross-file dedup);
-/// we only reuse slices from the same path, which covers ~all Genshin wins at a
+/// we only reuse slices from the same path, which covers ~all GI wins at a
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360

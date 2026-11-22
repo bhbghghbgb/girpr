@@ -53,7 +53,7 @@ fn zero_backoff_from(value: Option<&str>) -> bool {
 
 /// `gircap capture` — fetch from the live APIs and write a bundle.
 ///
-/// Writes the `api/` documents first: the four HoYoPlay bodies and both
+/// Writes the `api/` documents first: the four HYP bodies and both
 /// `getBuild`s byte-exact, plus the generated tag probe, and
 /// `api/requests.ndjson` beside them. Manifests, chunks and the `game/` fixture
 /// follow.

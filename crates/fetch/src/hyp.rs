@@ -6,7 +6,7 @@ use crate::retry::{BackoffPolicy, Retry, retry};
 use girpr_model::region::Region as Biz;
 use girpr_model::region::{CHANNEL_ENDPOINT, Host};
 
-/// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
+/// Minimal HYP client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
 /// Endpoint shapes follow `HoYoPlayClient` (hyp vs sophon bases, `launcher_id` +
 /// `language` query) — see
@@ -284,7 +284,7 @@ impl HypClient {
         Self::new_with_bases(biz, hyp_base, sophon_base, BackoffPolicy::real())
     }
 
-    /// Test/offline constructor: point the HoYoPlay + Sophon APIs at a mock
+    /// Test/offline constructor: point the HYP + Sophon APIs at a mock
     /// server (e.g. `http://127.0.0.1:<port>/hyp/hyp-connect/api`). Production
     /// code must use [`HypClient::new`].
     pub fn new_with_bases(
@@ -320,7 +320,7 @@ impl HypClient {
         self.sophon_base.clone()
     }
 
-    /// Build a HoYoPlay API URL.
+    /// Build a HYP API URL.
     ///
     /// NOTE(starward-parity): `with_channel` appends the **per-launcher**
     /// `channel`/`sub_channel` (`LauncherConfig.Channel` / `.SubChannel`:
@@ -523,7 +523,7 @@ fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> S
     url
 }
 
-/// The only `default_download_mode` this tool can patch. Genshin reports
+/// The only `default_download_mode` this tool can patch. GI reports
 /// `DOWNLOAD_MODE_CHUNK`; the other two (`DOWNLOAD_MODE_FILE`,
 /// `DOWNLOAD_MODE_LDIFF`) need the 7z/hdiff paths that v1 does not implement.
 /// See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode`.
@@ -535,8 +535,8 @@ pub use girpr_model::region::DOWNLOAD_MODE_CHUNK;
 /// here, so this binary keeps its own resolve policy for the host key.
 pub fn production_bases(host: &str) -> (String, String) {
     let family = match host {
-        "mihoyo" => Host::Mihoyo,
-        _ => Host::Hoyoverse,
+        "mihoyo" => Host::Mhy,
+        _ => Host::Hyv,
     };
     (
         family.hyp_base().to_string(),

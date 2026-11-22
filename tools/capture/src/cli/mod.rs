@@ -30,8 +30,8 @@ pub const NEW_TAG_LATEST: &str = "latest";
 #[command(
     name = "gircap",
     version,
-    about = "Capture live HoYoPlay/Sophon artifacts as a self-contained offline fixture bundle",
-    long_about = "gircap fetches from the live HoYoPlay and Sophon APIs and writes a self-contained \
+    about = "Capture live HYP/Sophon artifacts as a self-contained offline fixture bundle",
+    long_about = "gircap fetches from the live HYP and Sophon APIs and writes a self-contained \
 artifact bundle: a real game_dir fixture holding one real file per test-matrix variant, every API \
 response and manifest behind it, every chunk blob needed to materialize the old file, the current \
 file and the patch between them, and ground truth for the result.\n\nIt is a capture tool. It never \
@@ -221,7 +221,7 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "BYTES", default_value_t = crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES)]
     pub max_decompressed_bytes: u64,
 
-    /// Override the HoYoPlay base. Testing seam: points every endpoint at a
+    /// Override the HYP base. Testing seam: points every endpoint at a
     /// local server. Defaults to the production base for `--biz`.
     #[arg(long, value_name = "URL")]
     pub hyp_base: Option<String>,

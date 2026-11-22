@@ -53,7 +53,7 @@ pub struct IdParts {
     /// *Measured* 2026-10-14: the 16-hex prefix is not xxh64 of the compressed
     /// blob, the decompressed blob, the checksum, the id, the URL, or
     /// `build_id + id`. Collapse's cache validator assumes it is an xxh64, so
-    /// for Genshin that validation can never pass. It is recorded, never checked.
+    /// for GI that validation can never pass. It is recorded, never checked.
     pub prefix_semantics: &'static str,
     /// The trailing 32 hex, which *is* the archive's MD5.
     pub suffix_32hex: String,

@@ -1,4 +1,4 @@
-//! The four HoYoPlay endpoints and Sophon's `getBuild`.
+//! The four HYP endpoints and Sophon's `getBuild`.
 //!
 //! **M2.** Every body is captured **byte-exact** rather than re-serialized, so a
 //! reader can `diff` a captured file against a fresh request and see nothing. The
@@ -32,7 +32,7 @@ pub use types::{
     Wrapper,
 };
 
-/// The language every HoYoPlay endpoint is asked in.
+/// The language every HYP endpoint is asked in.
 ///
 /// `gircap` captures bytes, not locales, and the responses are byte-exact either
 /// way. `en-us` is the international launcher's own default, so a capture made
@@ -271,7 +271,7 @@ impl<'a> HypClient<'a> {
         self.fetcher.log()
     }
 
-    /// Fetch one HoYoPlay endpoint, byte-exact.
+    /// Fetch one HYP endpoint, byte-exact.
     pub async fn endpoint(&self, endpoint: HypEndpoint) -> Result<CapturedBody, ApiError> {
         let url = self
             .endpoints

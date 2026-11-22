@@ -1,6 +1,6 @@
-# girpr — Genshin Impact low-disk repair patcher
+# girpr — GI low-disk repair patcher
 
-Brings a possibly-corrupt, possibly-any-older-version Genshin install to the
+Brings a possibly-corrupt, possibly-any-older-version GI install to the
 current live version with minimal extra disk. **Unattended by design:**
 args in, exit code + `REPORT`/`SUMMARY` stdout lines out, no UI.
 
@@ -50,14 +50,14 @@ machine rather than the code.
 | `crates/sync-test-support/` | the girsync-coupled test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `crates/sync-cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
 | `crates/sync-leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
-| `crates/test-fixtures/` | the facade-free offline HoYoPlay/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
+| `crates/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
 | `tools/capture/http/` | the gircap-owned logic-free HTTP mechanics: the reqwest transport, the retrying fetcher, the request log and the error-body budget, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native tree cached; no program policy crosses the boundary | `Fetcher`, `Transport`, `RequestLog`, `RetryPolicy`, `Kind`, `ApiError`, `BodyFile` (re-exported from `crates/digest/`), `USER_AGENT` |
 | `tools/capture/hash/` | the gircap-owned logic-free digest/zstd mechanics: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native zstd tree cached; no program policy crosses the boundary | `md5_hex`, `sha256_hex`, `DualDigest`, `HashingFile`, `hex_bytes`, `Encoding`, `should_gzip`, `zstd_decompress`, `zstd_measure` |
 | `crates/report/` | run counters, the report-owned runtime ledger (`Meter`/`StoppedBy`) the hard stops read, every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | re-export of `girpr-model`'s region identity as `Biz`; the ids, channel tuples and base URLs live in `crates/model/` | `Biz`, `Biz::endpoints`, `Biz::channel_tuple` |
-| `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
+| `crates/fetch/` (`hyp`) | HYP + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
@@ -321,7 +321,7 @@ the completed `*_tmp` prefix and continuing it.
   at the repository root. There is no MSRV floor: edition 2024 is the only
   language requirement. The pinned version can be bumped deliberately whenever a
   newer release is needed, never a cap on newer language features or library
-  versions. Network to HoYoPlay + Sophon CDNs (production runs only).
+  versions. Network to HYP + Sophon CDNs (production runs only).
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
@@ -389,7 +389,7 @@ cargo build --release
 | `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
 | `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable (release builds only) | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. An unopenable file is a stderr warning, never a failure |
 | `--no-log-file` | off | Write no log file at all. Turns the default off in a release build, and says so explicitly in a debug build. Cannot be combined with `--log-file`: the two say opposite things about the same file. The console is unaffected |
-| `--hyp-base <URL>` | production | Point the HoYoPlay API at another base (overrides `GIRPR_HYP_BASE`) |
+| `--hyp-base <URL>` | production | Point the HYP API at another base (overrides `GIRPR_HYP_BASE`) |
 | `--sophon-base <URL>` | production | Point Sophon `getBuild` at another base (overrides `GIRPR_SOPHON_BASE`) |
 
 `--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest
@@ -506,7 +506,7 @@ binary depend on it directly, so an edit to repair leaves it cached. It reuses
 this binary's event-first order, unsigned counts and 1/0 flags distinct from
 the other two report planes.
 
-`crates/fetch/` holds this binary's HoYoPlay client, Sophon manifest fetch,
+`crates/fetch/` holds this binary's HYP client, Sophon manifest fetch,
 chunk streaming, manifest filter, local chunk map and attempt loop; the repair
 code depends on it directly, so an edit to the repair, report or CLI leaves the
 whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
@@ -547,7 +547,7 @@ classifier and the hardlink facts — live in `crates/sync-leaves/` and are take
 directly by `girsync` and its own integration tests, so an edit to a planner or
 command leaves them cached; it is girsync-only and shares no program policy.
 This package's integration
-fixtures — the offline HoYoPlay/Sophon mock, the manifest/chunk builders and
+fixtures — the offline HYP/Sophon mock, the manifest/chunk builders and
 the run-lock cleanup — live in `crates/test-fixtures/`, reached through thin
 shims under `tests/common/`; the crate borrows only narrow leaves, never the
 repair facade, so a repair edit leaves the mock cached. The facade-coupled run

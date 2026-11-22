@@ -1,6 +1,6 @@
 //! Offline integration / e2e tests for `girpr`.
 //!
-//! Everything runs against a local mock HoYoPlay + Sophon server
+//! Everything runs against a local mock HYP + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
 //! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
 //! mock, so a sandbox without internet still passes. Three cases drive the

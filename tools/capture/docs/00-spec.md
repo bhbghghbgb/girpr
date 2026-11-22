@@ -11,7 +11,7 @@ bug.
 
 ## 1. What this is
 
-`gircap` fetches from the **live** HoYoPlay + Sophon APIs and writes a
+`gircap` fetches from the **live** HYP + Sophon APIs and writes a
 **self-contained artifact bundle** containing:
 
 1. a real `game_dir` fixture holding **one real file per test-matrix variant**,
@@ -99,7 +99,7 @@ All of the following were **measured** against `hk4e_global`. Anything in this
 section marked *(measured)* is an observation, not an assumption, and `gircap`
 records it in the artifact as evidence.
 
-### 3.1 HoYoPlay (JSON, cheap — always captured verbatim)
+### 3.1 HYP (JSON, cheap — always captured verbatim)
 
 | Endpoint | URL | Node |
 |---|---|---|
@@ -235,7 +235,7 @@ on the specific file that broke.
 not xxh64 of the compressed blob, the decompressed blob, the checksum, the id,
 the URL, or `build_id + id`. Collapse's cache validator
 (`Hi3Helper.Sophon/Helper/Extension.cs:TryReadFromCached`) assumes it is an
-xxh64, so for Genshin that validation can never pass and the cache is re-fetched
+xxh64, so for GI that validation can never pass and the cache is re-fetched
 every time. `gircap` records the prefix verbatim, asserts **only** the 32-hex
 suffix, and labels the prefix `opaque` in the artifact so a later reader does not
 repeat the mistake.

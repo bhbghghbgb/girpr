@@ -1,6 +1,6 @@
-//! girpr — Genshin Impact low-disk repair patcher.
+//! girpr — GI low-disk repair patcher.
 //!
-//! Brings a possibly-corrupt, possibly-any-older-version Genshin install to the
+//! Brings a possibly-corrupt, possibly-any-older-version GI install to the
 //! current live version with minimal extra disk. Unattended by design: args in,
 //! exit code + `REPORT`/`PROGRESS`/`SUMMARY` stdout lines out, no UI.
 //!
@@ -37,7 +37,7 @@
 //! channel tuple). The run counters, the record data plane, every stdout line
 //! and the monotonic phase timer live in `girpr-report`, which also owns the
 //! `Meter`/`StoppedBy` group that was mutually recursive with `Summary`; the
-//! HoYoPlay/Sophon fetch path (`hyp`, `sophon`) and the attempt loop (`retry`)
+//! HYP/Sophon fetch path (`hyp`, `sophon`) and the attempt loop (`retry`)
 //! live in `girpr-fetch`, the audio scan-file boundary in `girpr-audio`, and the
 //! low-level scan/hash/path/ini/counter mechanics in narrow `girpr-util-*`
 //! leaves. This crate depends on all of them directly under module aliases, so

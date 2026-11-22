@@ -1,4 +1,4 @@
-# Repair spec - Rust implementation plan - `girpr` v1 (Genshin low-disk repair patcher)
+# Repair spec - Rust implementation plan - `girpr` v1 (GI low-disk repair patcher)
 
 Implements `docs/02-repair-chunk-spec.md`. Findings:
 `docs/01-repair-findings-and-verdict.md`.
@@ -23,14 +23,14 @@ src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit c
 src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
 crates/log/           # the shared log policy: log file path, log levels, env vars (shared by girpr and the three dev tools)
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
-crates/test-fixtures/ # facade-free offline HoYoPlay/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
+crates/test-fixtures/ # facade-free offline HYP/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
 crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
 crates/sync-cache/    # the dev tools' redb hash cache, its postcard wire codec and digest vocabulary; consumed directly by girsync and sled2redb
 crates/sync-leaves/    # girsync's acyclic rw limiter, include/exclude filter, link classifier and hardlink facts, consumed directly by girsync so a high-level edit leaves them cached
 crates/sync-test-support/ # girsync-coupled option/cache/planner fixtures shared by girsync and sled2redb; keeps crates/tempdir/ girsync-free
 crates/report/src/    # Summary/Meter/StoppedBy counters + record data plane, REPORT / PROGRESS / SUMMARY emission, phase timer (plan_record lives in the scope reporter)
 src/biz.rs            # re-exports girpr_model::region::Region as Biz; ids/channels/base URLs live in crates/model/
-crates/fetch/src/hyp.rs        # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
+crates/fetch/src/hyp.rs        # HYP client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
 crates/util-path/     # server-path containment, atomic publish, shared junction/symlink fixtures
 crates/util-hash/     # md5 helpers and the one-read file scan
@@ -123,7 +123,7 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
   audio-lang mapping and flag validation, API URL/query building (per-launcher
   `channel`/`sub_channel`, `getBuild` tag encoding), local chunk-map build, manifest
   filter, work-list build/dedup, expected-set/purge classification, audio scan file,
-  REPORT/PROGRESS/SUMMARY formatting, HoYoPlay wrapper and int-or-string parsing.
+  REPORT/PROGRESS/SUMMARY formatting, HYP wrapper and int-or-string parsing.
 - **Integration tests** (`tests/repair_offline.rs`): a dedicated `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`
   on `127.0.0.1:<ephemeral>` (`crates/test-fixtures`, reached through the thin
@@ -165,7 +165,7 @@ never a failure. Where the file goes, in order: `--no-log-file` (none at all),
 then `--log-file`, then `GIRPR_LOG_FILE`, then the timestamped default. The
 default itself is a release build's only: a debug build writes no file unless
 one was asked for.
-- `hyp` (debug): every HoYoPlay/Sophon JSON call with full request URL, retcode,
+- `hyp` (debug): every HYP/Sophon JSON call with full request URL, retcode,
   node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
 - `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual
   decompressed MD5, parsed file/chunk counts; (trace) per-chunk download byte counts.
@@ -216,6 +216,6 @@ them, which is the one term the decode cannot remove.
 | cross-file salvage (a chunk from any local file, not just the same path) | mutually exclusive with an in-place repair absent a file-level order: repairing a donor destroys a donee's source. The reuse map is same-file-only, so the conflict is latent — but it must be settled before anyone adds it |
 | reclaim-on-demand (delete files mid-run to make room) | the in-place repair removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and its own doc |
 | an incremental protobuf parse of the manifest | the manifest's *decoded* bytes (the measured game manifest for a release build) must be resident for `prost` to parse them — the remaining term is protobuf, not zstd. The wire form is a sequence of `0x0A <varint len> <bytes>`, so each entry could be parsed on its own as the bytes arrive, but that needs the *read* side of the decoder (an async→sync bridge) and a small wire reader that must agree with `prost` on field order, unknown fields and framing. A separate piece of work with its own risk profile |
-| hard-link dedup of byte-identical manifest paths | permanent space rather than transient, NTFS-only (exFAT, where Genshin installs often live, has no hard links), and it interacts with the in-place write: rewriting one link rewrites both |
+| hard-link dedup of byte-identical manifest paths | permanent space rather than transient, NTFS-only (exFAT, where GI installs often live, has no hard links), and it interacts with the in-place write: rewriting one link rewrites both |
 | a compressed chunk cache on disk | strictly more disk, retained on purpose — the opposite of what this tool is for |
 

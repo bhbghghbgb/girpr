@@ -1,8 +1,8 @@
-//! HoYoPlay + Sophon fetch mechanics for the girpr repair pipeline.
+//! HYP + Sophon fetch mechanics for the girpr repair pipeline.
 //!
 //! This crate holds the two heavy halves of the product's download path:
 //!
-//! - [`hyp`] — the HoYoPlay JSON client (`getGameConfigs`, `getGameBranches`,
+//! - [`hyp`] — the HYP JSON client (`getGameConfigs`, `getGameBranches`,
 //!   `getBuild`, `getGameDeprecatedFileConfigs`) and the DTOs it decodes;
 //! - [`sophon`] — the chunk-manifest protobuf wrapper, the manifest filter,
 //!   the streaming fetch/decode/verify path and the local chunk-reuse map.

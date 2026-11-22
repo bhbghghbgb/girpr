@@ -60,7 +60,7 @@ fn jobs_long_help() -> String {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
+#[command(name = "girpr", about = "GI low-disk repair patcher")]
 pub struct Args {
     /// Game install directory (contains config.ini, *_Data, ...)
     #[arg(long)]
@@ -276,7 +276,7 @@ pub struct Args {
     #[arg(long, conflicts_with = "log_file")]
     pub no_log_file: bool,
 
-    /// Point the HoYoPlay API at this base URL instead of the production CDN.
+    /// Point the HYP API at this base URL instead of the production CDN.
     /// Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects
     /// `getGameConfigs`/`getGameBranches`/`getBuild`/`getGameDeprecatedFileConfigs`
     /// only — the manifest and chunk URLs come from `url_prefix` inside the

@@ -7,7 +7,7 @@
 //! several-hundred-line replay server compiles once instead of being inlined
 //! into both binaries. It is deliberately a module of its own, with its own
 //! route family and request log: it is a different fake HTTP server from the
-//! offline HoYoPlay/Sophon mock in this crate's root, and the two stay distinct.
+//! offline HYP/Sophon mock in this crate's root, and the two stay distinct.
 //!
 //! **What it does.** Opens one `gircap` artifact bundle **read-only** and serves
 //! its bytes on ephemeral `127.0.0.1` ports, so the real `girpr` binary can be
@@ -1002,7 +1002,7 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
     let _ = socket.shutdown().await;
 }
 
-/// The three HoYoPlay calls, served verbatim: nothing in them carries a
+/// The three HYP calls, served verbatim: nothing in them carries a
 /// `url_prefix`, so there is nothing to rewrite.
 fn hyp_response(served: &Served, path: &str) -> Response {
     let name = path

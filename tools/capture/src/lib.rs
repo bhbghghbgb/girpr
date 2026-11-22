@@ -1,7 +1,7 @@
 //! # `gircap` — live-artifact capture for `girpr` testing
 //!
 //! Dev-only. Not a patcher, not part of the repair binary, sharing no code with
-//! it. `gircap` talks to the live HoYoPlay + Sophon APIs and writes a
+//! it. `gircap` talks to the live HYP + Sophon APIs and writes a
 //! self-contained artifact bundle: a real `game_dir` fixture, every API response
 //! and manifest behind it, every chunk blob needed to materialize the old file,
 //! the current file and the patch between them, and ground truth for the result.
@@ -20,7 +20,7 @@
 //! | [`run`] | command dispatch: the four entry points |
 //! | [`biz`] | launcher/game ids, API bases, the channel tuple |
 //! | [`http`] | [`http::Fetcher`]: retries, timeout, headers, request log |
-//! | [`hyp`] | the four HoYoPlay endpoints + Sophon `getBuild` |
+//! | [`hyp`] | the four HYP endpoints + Sophon `getBuild` |
 //! | [`manifest`] | fetch → zstd → verify → decode → dump → diff |
 //! | [`paths`] | the shape rule for values that name something inside a bundle |
 //! | [`select`] | scoring, variant classes, budget admission |
