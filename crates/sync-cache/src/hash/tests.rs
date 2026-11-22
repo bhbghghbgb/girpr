@@ -1050,10 +1050,11 @@ fn the_any_of_refusal_names_the_any_of_flag() {
 #[test]
 fn a_digest_is_the_same_however_the_bytes_were_split() {
     let dir = girpr_tempdir::TempDir::new("girsync_hash", "split");
-    // Longer than `CHUNK` is not practical here, but it must exceed one
-    // buffer's worth of a *small* file to make "chunk bigger than the file"
-    // a real case rather than a trivially-true one.
-    let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    // Stay under `CHUNK` so `hash_file` reads the file in one shot and its
+    // read buffer stays bigger than the file — the "chunk bigger than the
+    // file" shape. 8 KB still spans many 64-byte md5/sha256 blocks, so
+    // feeding one byte at a time is a real streaming split, not a trivial case.
+    let body: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
     let path = write(&dir, "f.bin", &body);
 
     for set in [
