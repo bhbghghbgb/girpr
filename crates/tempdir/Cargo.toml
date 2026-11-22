@@ -20,5 +20,5 @@ tempfile = "3.27.0"
 # Deliberately no dependency on girsync (or serde_json): the girsync-coupled
 # option/cache/planner fixtures used to live in `test_support`, which made every
 # program that took this crate as a dev-dependency inherit girsync's rebuilds.
-# Those fixtures now live in `girpr-sync-test-support`, taken only by the two
+# Those fixtures now live in `girsync-test-support`, taken only by the two
 # programs that already depend on girsync. This crate stays a girsync-free leaf.

@@ -1,16 +1,22 @@
 [package]
-name = "girpr-sync-test-support"
+name = "girsync-test-support"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared girsync test fixtures: builders for the option, cache and planner types the dev tools' tests hand to girsync"
+description = "The girsync-owned test fixtures: builders for the option, cache and planner types the dev tools' tests hand to girsync"
 
 [lib]
-name = "girpr_sync_test_support"
+name = "girsync_test_support"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+# The same tools-only policy girsync and its other crates use: these fixtures
+# hold no repair path, so `unwrap_used`/`expect_used` warnings would be noise.
+# `clippy::all` and denied `unsafe_code` still apply.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
 
 [dependencies]
 # These fixtures exist only to compile girsync option/cache/planner types and to
@@ -19,7 +25,7 @@ workspace = true
 # not otherwise use girsync (the repair binary and gircap) keep their test builds
 # out of girsync's rebuild cascade. Only girsync and sled2redb, which already
 # depend on girsync, take this crate as a dev-dependency.
-girsync = { path = "../../tools/sync" }
+girsync = { path = ".." }
 serde_json = "1.0.154"
 # The in-process CLI runner glue parses argv through clap's `Parser` trait.
 clap = "4.6.9"
@@ -30,8 +36,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 # The fixture trees are still named and removed by the shared scratch-directory
 # policy; re-exported below so every call site keeps the same surface.
-girpr-tempdir = { path = "../tempdir" }
+girpr-tempdir = { path = "../../../crates/tempdir" }
 # The capture-buffer storage primitive. It owns the bytes and `Write` only; this
 # crate keeps its own lossy text rendering and installs girsync's subscriber
 # stack, so sharing it pulls no program crate into the log leaf.
-girpr-log = { path = "../log", features = ["test-support"] }
+girpr-log = { path = "../../../crates/log", features = ["test-support"] }

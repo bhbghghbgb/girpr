@@ -947,19 +947,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "girpr-sync-test-support"
-version = "0.1.0"
-dependencies = [
- "clap",
- "girpr-log",
- "girpr-tempdir",
- "girsync",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "girpr-tempdir"
 version = "0.1.0"
 dependencies = [
@@ -1051,11 +1038,11 @@ dependencies = [
  "girpr-fs-names",
  "girpr-log",
  "girpr-report-core",
- "girpr-sync-test-support",
  "girpr-tempdir",
  "girpr-value-ranges",
  "girsync-cache",
  "girsync-leaves",
+ "girsync-test-support",
  "md-5",
  "rayon",
  "serde",
@@ -1093,6 +1080,19 @@ dependencies = [
  "rayon",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "girsync-test-support"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "girpr-log",
+ "girpr-tempdir",
+ "girsync",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2288,10 +2288,10 @@ dependencies = [
  "clap",
  "girpr-cli",
  "girpr-digest",
- "girpr-sync-test-support",
  "girpr-tempdir",
  "girsync",
  "girsync-cache",
+ "girsync-test-support",
  "md-5",
  "serde",
  "serde_json",

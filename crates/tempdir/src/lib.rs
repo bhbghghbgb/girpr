@@ -77,7 +77,7 @@
 ///
 /// This module deliberately has no dependency on any program: it builds no
 /// girsync option/cache/planner types. Those fixtures live in
-/// `girpr-sync-test-support` instead, so a program that does not otherwise use
+/// `girsync-test-support` instead, so a program that does not otherwise use
 /// girsync is not pulled into its rebuild cascade merely for a scratch dir.
 pub mod test_support;
 

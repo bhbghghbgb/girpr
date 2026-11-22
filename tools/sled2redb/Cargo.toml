@@ -57,4 +57,4 @@ sha2 = "0.11.1"
 girpr-tempdir = { path = "../../crates/tempdir" }
 # The girsync-coupled fixtures shared with `girsync`'s test suites. This crate
 # already depends on girsync normally, so the fixtures add no new program edge.
-girpr-sync-test-support = { path = "../../crates/sync-test-support" }
+girsync-test-support = { path = "../sync/test-support" }

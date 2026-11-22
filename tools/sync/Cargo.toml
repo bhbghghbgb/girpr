@@ -110,4 +110,4 @@ girpr-tempdir = { path = "../../crates/tempdir" }
 # live in `girpr-tempdir::test_support`. This crate already depends on girsync,
 # so it is the right place for them; the scratch-directory crate stays free of
 # girsync for the programs that do not otherwise use it.
-girpr-sync-test-support = { path = "../../crates/sync-test-support" }
+girsync-test-support = { path = "test-support" }

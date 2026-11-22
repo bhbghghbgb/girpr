@@ -9,7 +9,7 @@
 //! keeps working unchanged.
 //!
 //! The girsync-coupled half of the old module (the option/cache/planner
-//! builders) now lives in `girpr-sync-test-support`, which depends on girsync.
+//! builders) now lives in `girsync-test-support`, which depends on girsync.
 //! Keeping it out of this crate is the point: `girpr-tempdir` stays a
 //! girsync-free leaf, so a program that does not otherwise depend on girsync no
 //! longer inherits it just for a scratch directory.
