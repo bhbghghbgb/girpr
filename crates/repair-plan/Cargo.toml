@@ -1,0 +1,20 @@
+[package]
+name = "girpr-repair-plan"
+version = "0.1.0"
+edition = "2024"
+description = "Repair-plan values and the pure decisions over the work list, purge plan and scope"
+
+[lib]
+name = "girpr_repair_plan"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+tracing = "0.1.44"
+girpr-chunk-cost = { path = "../chunk-cost" }
+girpr-fetch = { path = "../fetch" }
+girpr-filter = { path = "../filter" }
+girpr-util-path = { path = "../util-path" }

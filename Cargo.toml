@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "crates/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "crates/chunk-verify", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/repair-policy", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util-counter", "crates/util-hash", "crates/util-ini", "crates/util-path", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
+members = [".", "crates/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "crates/chunk-verify", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/repair-plan", "crates/repair-policy", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util-counter", "crates/util-hash", "crates/util-ini", "crates/util-path", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -127,6 +127,12 @@ girpr-chunk-verify = { path = "crates/chunk-verify" }
 # same decision directly, and neither `file` nor `scan` owns it. `clap` is
 # enabled because this binary exposes `--repair-mode` as the enum's value type.
 girpr-repair-policy = { path = "crates/repair-policy", features = ["clap"] }
+# The repair-plan values and the pure decisions over them: the work list, the
+# cleanup-plan values, the path scope, and the download/summary figures. They
+# live in one acyclic leaf so the scope tier can consume both plans without the
+# plan modules pointing back at the facade. This binary keeps the fetch, walk,
+# publish and byte-emitting policies and consumes the values directly.
+girpr-repair-plan = { path = "crates/repair-plan" }
 # The shared region identity, ids and base URLs. The leaf holds only values;
 # this binary keeps its `Biz` resolve/request policy at its own call sites.
 # `clap` is enabled because `Biz` is this binary's `--biz` flag type.
