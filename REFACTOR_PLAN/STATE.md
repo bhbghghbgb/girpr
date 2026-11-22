@@ -12,7 +12,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | `girpr-chunk-identity` leaf (+ digest normalization placement) | in_progress | | F4+F8; parsed-bytes vs string, collision/order policy stays local |
+| T01 | `girpr-chunk-identity` leaf (+ digest normalization placement) | pending_review | f831b5af, 950fb9cf, d9a49602, 401fb580 | F4+F8; leaf `girpr-chunk-identity` added, digest normalization stays at gircap decode boundary; borrowed view keeps spelling-exact Eq/Hash (case-insensitive via `matches`/`parse`); no byte/first-match/collision drift; gircap leaf inventory 12→13 |
 | T02 | `girpr-chunk-layout` leaf | todo | | F5; fatal vs data violation semantics must diverge per caller |
 | T03 | `girpr-chunk-cost` download-projection fold | todo | | F6; published PLAN/SUMMARY figure and ranking key |
 | T04 | `girpr-reuse-decision` leaf | todo | | F7; `usable_len` real-vs-u64::MAX asymmetry is load-bearing |
