@@ -51,7 +51,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T37 | Shared precondition/skip policy | skipped | | F42 validated skip: only a thin assert/eprintln shell is shared; wording, required-case switch, Injected/Host distinction and macro-vs-function control flow ARE the policy and must stay local (§A5/A10). A shared core is a parameter-bag facade (§A2) with cycle/placement cost (§A12). Wording and nextest filters untouched |
 | T38 | Scratch/fixture support (merge vs split assessment) | skipped | | F43 validated skip (both directions): merge reintroduces girsync rebuild cascade into girpr/gircap test builds and breaks gircap independence (§F2/§A4/A11/N6); split adds three dev-dep edges/shims/seams for concerns consumed only by root girpr test binaries, multiplying rebuild domains without removing edges (§A2). Note: fixtures now module-split; revalidate against individual files if ever reopened |
 | T39 | Umbrella `test-support` facade assessment | skipped | | F44 validated skip (measured, A11): an umbrella would force all consumers onto \`girpr-log/test-support-async\` (tokio rt) and \`girpr-report/clap\` plus tokio \`test-util\`, collapsing the deliberate log feature split (§A2). Two \`girpr-log\` variants (tokio-free / tokio-bearing) exist today and must stay; \`girpr-test-support\` is run glue, not the pre-satisfied umbrella |
-| T40 | Time/stamp leaf with named formats | pending_review | d445fee0c2e69c5db735bfa25e6bf84f2b8b0cb1 | F45; new acyclic \`girpr-time\` leaf owns four distinct named formats (compact, RFC3339-millis-Z, RFC3339-Secs-Z found in \`manifest.captured_at\`, RFC3339/lock body); removed \`girpr-log\` wrappers to avoid a facade; **gircap leaf inventory now seventeen**; all format bytes unchanged |
+| T40 | Time/stamp leaf with named formats | completed | d445fee0c2e69c5db735bfa25e6bf84f2b8b0cb1, c7322ec6 | F45; new acyclic \`girpr-time\` leaf owns four distinct named formats (compact, RFC3339-millis-Z, RFC3339-Secs-Z found in \`manifest.captured_at\`, RFC3339/lock body); removed \`girpr-log\` wrappers to avoid a facade; **gircap leaf inventory now seventeen**; all format bytes unchanged |
 | T41 | Shared line-sink primitive | todo | | F46; must not pull serde into every log consumer (A6) |
 | T42 | Shared IO read-buffer policy | todo | | F47; caller-owned-buffer seam + small-buffer equivalence test |
 | T43 | `girpr-primitives` consolidation assessment | todo | | F48; rebuild domain is the value — likely skip |
@@ -79,7 +79,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | L | T29, T30, T31 | done | No reviewable work - all three validated skips (pre-satisfied report core, local typed fault seam, no shared plan-action value) |
 | M | T32, T33, T34 | done | No reviewable work - all three validated skips (single-implementer KV facade, single-consumer batched writer, divergent sink contracts) |
 | N | T35, T36, T37 | done | T35 completed (no fixes); T36/T37 skips confirmed |
-| O | T38, T39, T40 | pending | |
+| O | T38, T39, T40 | done | T40 completed with corrective commit c7322ec6 (stale gircap spec dependency descriptions); T38/T39 skips confirmed |
 | P | T41, T42, T43 | pending | |
 | Q | T44, T45, T46 | pending | |
 | R | T47, T48 | pending | |
@@ -106,6 +106,7 @@ A planning review batches the survivors only after every task is settled.
 | FU12 | Migrate the third test-local capture-buffer copy in girsync `capture_log` (`tools/sync/src/commands/sync/apply/phases.rs`) to `CaptureBuffer` via a dev-dependency (from T35) | open | Reviewer-endorsed, non-blocking; keep its local subscriber/bytes |
 | FU13 | Add a direct unit test in `crates/log` for `CaptureBuffer`'s Write/snapshot byte fidelity (from review N) | open | Non-blocking; currently covered only indirectly |
 | FU14 | Add a brief comment at the `unwrap_or_else(into_inner)` call sites noting intentional parity with the sync consumer (from review N) | open | Non-blocking cosmetic |
+| FU15 | Remove the now-unused direct `chrono = "0.4.45"` dependency from the root `girpr` package (from review O) | open | Non-blocking optional cleanup; pre-existing before T40, no source usage |
 
 ## Persistent context
 
