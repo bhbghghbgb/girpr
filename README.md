@@ -77,6 +77,7 @@ machine rather than the code.
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
 | `crates/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
+| `crates/path-shape/` | the shared lexical relative-path shape validator: component checks and their order only, with each caller's normalization and device rule and its own mapping from reasons to wording and byte-stable identifiers | `validate`, `ShapePolicy`, `Normalization`, `ShapeProblem` |
 | `crates/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
 | `crates/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
 | `crates/util-counter/` | the saturating atomic byte counter | `add_saturating` |
@@ -413,7 +414,12 @@ and `sled2redb`, and `crates/fs-names/`, which supplies the Windows path-name an
 canonical-path mechanics — device names, trailing dot/space, ASCII case fold,
 forward slash and verbatim-free canonicalization — to this binary, `gircap` and
 `girsync`; each caller passes its own reserved set and rule flags, so no program
-rule is shared. `crates/retry/` supplies the
+rule is shared. `crates/path-shape/` supplies the lexical relative-path shape
+validator to this binary and `gircap`: the component checks and their order are
+shared, while each caller passes its own normalization policy and device rule
+and maps a reason to its own error wording and, where it publishes one, its own
+byte-stable refusal identifier. The repair's `./` cleanup spelling and the
+capture's published rule IDs stay with their callers. `crates/retry/` supplies the
 retry schedule factory and injectable sleep driver to this binary and `gircap`;
 each passes its own delay, jitter and cap and keeps its own attempt loop, so
 neither retry policy is shared. `crates/exit/` supplies the exit-table generation

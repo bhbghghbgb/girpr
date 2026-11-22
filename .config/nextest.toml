@@ -2,6 +2,7 @@
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
 # `girpr-fetch`, `girpr-lock`, `girpr-audio`, `girpr-chunk-cost`, `girpr-chunk-identity`, `girpr-util-path`,
+# `girpr-path-shape`,
 # `girpr-util-hash`, `girpr-util-ini`, `girpr-util-counter`, `girpr-log`,
 # `girpr-report`, `girpr-tempdir`, `girpr-sync-cache`, `girpr-sync-leaves`,
 # `gircap`, `gircap-http`, `gircap-hash`, `girsync` and `sled2redb`.

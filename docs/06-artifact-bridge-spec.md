@@ -738,7 +738,10 @@ the bridge actually reads.
   (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (Windows
   path-name and canonical-path mechanics — device names, trailing dot/space,
   ASCII case fold, forward slash and verbatim-free canonicalization —
-  parameterised by each caller's rule) and `girpr-retry` (the retry schedule
+  parameterised by each caller's rule), `girpr-path-shape` (the lexical
+   relative-path shape validator — component checks and their order only, with
+   each caller's normalization and device rule and its own reason-to-wording
+   and stable-identifier mapping), and `girpr-retry` (the retry schedule
   factory and sleep driver, parameterised by each caller's delay, jitter and
   cap), and `girpr-exit` (the exit-table generation mechanism, parameterised by
   each caller's own codes and meanings), and `girpr-cli` (the clap-error to
