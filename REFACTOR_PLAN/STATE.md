@@ -95,10 +95,10 @@ All others are dropped. Each batch gets one implementation session then one revi
 | FU32 | Restore a one-line manifest comment for the cross-process bundle lock | dropped | Rationale already in gircap-test-support docs |
 | FU33 | Correct the stale F36 example pointer in the report | dropped | Report is deleted at final cleanup |
 | FU34 | Consider success-output override for live per-case progress in merged tests | dropped | failure-output=final already adequate |
-| FU35 | Add explicit forget_memory_cache in FU07 test to document cold-cache intent | open | Defensive only; fresh-dst approach already stronger — prune |
-| FU36 | Strengthen FU08 precondition from is_some() to expected chunk count | open | Low value; current guard closes the reported hole — prune |
-| FU37 | Add explicit regression for Drop with no in-flight connection | open | Path exercised incidentally by existing canned-server tests — prune |
-| FU38 | Replace regression test's yield-spin with a channel readiness signal | open | Defensive only; current test stable — prune |
+| FU35 | Add explicit forget_memory_cache in FU07 test to document cold-cache intent | dropped | Defensive only; fresh-dst already yields a cold row |
+| FU36 | Strengthen FU08 precondition from is_some() to expected chunk count | dropped | is_some() already rules out vacuous parity |
+| FU37 | Add explicit regression for Drop with no in-flight connection | dropped | Path exercised incidentally by existing tests |
+| FU38 | Replace regression test's yield-spin with a channel readiness signal | dropped | Cosmetic/defensive; current test stable |
 
 ## Persistent context
 
