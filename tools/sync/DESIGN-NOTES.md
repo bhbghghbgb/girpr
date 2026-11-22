@@ -175,7 +175,7 @@ other.
 `HashAlg` is a closed enum and the parser refuses everything else, so
 what a run may **ask for** is settled at compile time. What a cache row **holds**
 is not: a cache written by a newer build may carry a digest under a name this one
-has never heard of, and that row has to stay readable. `crates/sync-cache/src/wire.rs`
+has never heard of, and that row has to stay readable. `tools/sync/cache/src/wire.rs`
 therefore keeps algorithm names inline rather than behind an id registry, and `DigestSet`'s
 custom deserializer never refuses one.
 
@@ -407,7 +407,7 @@ algorithms — so a slot lookup would report a corrupt row as clean. That is the
 false clean, reached from the other side, and the coverage check cannot see it
 because the row genuinely does hold a digest under that name.
 
-**Enforced by:** the enforcement tests in `crates/sync-cache/src/hash/tests.rs`
+**Enforced by:** the enforcement tests in `tools/sync/cache/src/hash/tests.rs`
 cover a known name in the foreign arm found under any ASCII-case spelling, an
 unknown name matched exactly and by no algorithm, a right-length known name still
 going to its slot,
