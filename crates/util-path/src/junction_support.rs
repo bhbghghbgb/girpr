@@ -50,7 +50,7 @@ pub(super) enum JunctionOutcome {
 /// the reparse point, which is exactly the dangling case.
 ///
 /// A failure to spawn `cmd` keeps its `std::io::Error`, so the raw OS code
-/// is still available to [`junction_skip_reason`]. `mklink` itself exits
+/// is still available to `junction_skip_reason`. `mklink` itself exits
 /// with `1` and prints a localized message, not the Win32 code, for every
 /// refusal. A non-zero exit therefore becomes an `Other` error: its cause
 /// cannot be proved, so the test fails loudly instead of guessing that the
@@ -59,10 +59,10 @@ pub(super) enum JunctionOutcome {
 /// A path `cmd` would rewrite is refused before the command line is built,
 /// so a fixture path can never be silently changed: the refusal names the
 /// path and the reason, and it is an ordinary error rather than a spawn
-/// failure, so [`junction_skip_reason`] cannot read it as a proven host
+/// failure, so `junction_skip_reason` cannot read it as a proven host
 /// refusal.
 ///
-/// The command's outcome is handled by [`junction_result`], split from the
+/// The command's outcome is handled by `junction_result`, split from the
 /// command's execution so a test can drive both branches without running
 /// `mklink`.
 ///
@@ -375,6 +375,7 @@ pub fn junction_fixture_decision(e: std::io::Error, required: bool, refusal: Fix
 }
 
 /// What the shared decision did, for a case that drives it directly.
+#[cfg(test)]
 pub(super) enum JunctionDecision {
     /// The case skipped: the host refused the fixture.
     Skipped,
@@ -388,6 +389,7 @@ pub(super) enum JunctionDecision {
 /// The decision fails a broken fixture by panicking, so a case that drives it
 /// catches that panic: the outcome says whether the case skipped or failed,
 /// and the failure carries the message the panic showed.
+#[cfg(test)]
 pub(super) fn drive_junction_decision(
     e: std::io::Error,
     required: bool,
@@ -402,6 +404,7 @@ pub(super) fn drive_junction_decision(
 }
 
 /// The message of a caught panic.
+#[cfg(test)]
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     payload
         .downcast_ref::<String>()

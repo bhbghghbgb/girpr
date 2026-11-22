@@ -10,6 +10,12 @@ use crate::common::{
 };
 use girpr_tempdir::TempDir;
 
+/// One base-precedence row: its label, flags and environment overrides.
+type PrecedenceRow<'a> = (&'a str, Vec<&'a str>, Vec<(&'a str, &'a str)>);
+
+/// One phase row: its label, flags, log name and assertion.
+type PhaseRow<'a> = (&'a str, &'a [&'a str], &'a str, fn(&str, &GameFixture));
+
 /// Run the shipped binary with the reading end of its stdout pipe gone.
 ///
 /// The pipe is dropped immediately after the child exists, so the run's first
@@ -343,7 +349,7 @@ async fn base_precedence_and_env_fallback() {
     // second drops the flags so the seam every offline e2e run uses is still
     // exercised. Each row keeps its own assertion message as the label.
     let (mock, _dir, _, game) = start_standard_install("base_precedence").await;
-    let rows: &[(&str, Vec<&str>, Vec<(&str, &str)>)] = &[
+    let rows: &[PrecedenceRow<'_>] = &[
         (
             "the flag must win over the env var",
             vec![
@@ -478,7 +484,7 @@ async fn phase_completion_timings_follow_the_flags() {
         assert!(!body.contains("phase=publish"), "no --print-plan:\n{body}");
     }
 
-    let rows: &[(&str, &[&str], &str, fn(&str, &GameFixture))] = &[
+    let rows: &[PhaseRow<'_>] = &[
         ("--scan full run", &["--scan"], "full.log", full_phases),
         (
             "--check-only",

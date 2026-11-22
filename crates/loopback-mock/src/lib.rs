@@ -259,7 +259,7 @@ fn serve_one(
         }
     }
 
-    let mut parts = request_line.trim_end().split_whitespace();
+    let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_owned();
     let target = parts.next().unwrap_or_default().to_owned();
 

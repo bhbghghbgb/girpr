@@ -43,6 +43,9 @@ impl Reply {
     }
 }
 
+/// The caller-owned routing policy this server drives.
+type Route = Arc<dyn Fn(&str) -> Option<Reply> + Send + Sync>;
+
 /// Requests currently being served, with a gate that holds them until the
 /// test lets go, so a concurrency bound is observed instead of timed.
 pub(crate) struct InFlight {
@@ -179,7 +182,7 @@ where
     let base = format!("http://{}", listener.local_addr().expect("addr"));
     let live = Arc::new(AtomicUsize::new(0));
     let idle = Arc::new(Notify::new());
-    let route: Arc<dyn Fn(&str) -> Option<Reply> + Send + Sync> = Arc::new(route);
+    let route: Route = Arc::new(route);
     let spawned_live = Arc::clone(&live);
     let spawned_idle = Arc::clone(&idle);
 
@@ -218,10 +221,7 @@ where
 }
 
 /// Answer one request on `socket`.
-async fn handle_connection(
-    mut socket: TcpStream,
-    route: Arc<dyn Fn(&str) -> Option<Reply> + Send + Sync>,
-) {
+async fn handle_connection(mut socket: TcpStream, route: Route) {
     let mut buf = vec![0u8; 8192];
     let mut got = 0;
     while got < buf.len() {
