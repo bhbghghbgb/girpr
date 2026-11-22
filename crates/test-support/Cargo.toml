@@ -27,4 +27,4 @@ girpr-test-fixtures = { path = "../test-fixtures" }
 girpr-repair-policy = { path = "../../app/repair-policy" }
 # The path scope is a value of the repair-plan leaf, not of the facade; the
 # glue names it directly, the same way the production callers do.
-girpr-repair-plan = { path = "../repair-plan" }
+girpr-repair-plan = { path = "../../app/repair-plan" }

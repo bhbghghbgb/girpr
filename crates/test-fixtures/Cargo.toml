@@ -16,7 +16,7 @@ workspace = true
 # The mock serves the Sophon wire shapes and the retcode classifier the client
 # uses. Only the leaf's DTOs and pure classifier are borrowed; the run pipeline
 # stays in the facade, which this crate deliberately does not depend on.
-girpr-fetch = { path = "../fetch" }
+girpr-fetch = { path = "../../app/fetch" }
 # The launcher identity the mock puts in its JSON answers, re-exported by the
 # facade as `Biz` but taken from the value leaf directly here.
 girpr-model = { path = "../model" }
@@ -24,7 +24,7 @@ girpr-model = { path = "../model" }
 girpr-digest = { path = "../digest" }
 # The lock mechanics the test-side lock cleanup reads; a test only removes the
 # unlocked file a finished run leaves behind.
-girpr-lock = { path = "../lock" }
+girpr-lock = { path = "../../app/lock" }
 # One scratch-directory policy and one game-tree file implementation for every
 # test that builds a fixture.
 girpr-tempdir = { path = "../tempdir" }
