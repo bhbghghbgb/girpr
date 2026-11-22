@@ -7,7 +7,7 @@
 //! The re-exports keep the shared names at the crate root. The MD5 file
 //! wrappers stayed in [`md5`] rather than moving to the root: `md5_file` and
 //! `md5_file_slice` are reached as [`md5::md5_file`] and
-//! [`md5::md5_file_slice`] (the latter is a test-only helper).
+//! `md5::md5_file_slice` (the latter is a test-only helper).
 //!
 //! Nothing here names a product data model: the crate holds only mechanics.
 

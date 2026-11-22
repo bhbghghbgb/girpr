@@ -509,10 +509,10 @@ async fn plan_work_and_purge(
     Ok((plan, purge_keys, purge_plan))
 }
 
-/// Step 4.2 is now `girpr_repair_plan::check_scope_selection`: the rule and
-/// its typed diagnosis live with the two plans they decide over. Exit `1` — a
-/// property of the request — rather than `5`, and the caller owns only the
-/// mapping to this binary's usage error.
+// Step 4.2 is now `girpr_repair_plan::check_scope_selection`: the rule and
+// its typed diagnosis live with the two plans they decide over. Exit `1` — a
+// property of the request — rather than `5`, and the caller owns only the
+// mapping to this binary's usage error.
 
 /// Step 4.3: the server's deprecated-file list.
 ///
