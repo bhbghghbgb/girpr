@@ -3,7 +3,7 @@ name = "girpr-test-support"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The facade-coupled run glue shared by the girpr integration tests"
+description = "The facade-coupled run glue used by the girpr integration tests"
 
 [lib]
 name = "girpr_test_support"

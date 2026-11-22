@@ -3,7 +3,7 @@ name = "girpr-test-fixtures"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared offline HYP/Sophon mock and fixture builders for the girpr integration tests"
+description = "The offline HYP/Sophon mock and fixture builders for the girpr integration tests"
 
 [lib]
 name = "girpr_test_fixtures"

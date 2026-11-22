@@ -46,7 +46,8 @@ default-members = ["."]
 # The shared policy for packages that opt in with `[lints] workspace = true`.
 # Deliberately small: a lint joins this table only when a real class of bug
 # motivates it. Warnings stay warnings; CI decides whether to deny them.
-# The two dev tools set a smaller subset of their own; see their manifests.
+# The dev tools and their project-owned crates set a smaller subset of their own;
+# see their manifests.
 [workspace.lints.rust]
 # The product and its tests have no `unsafe`.
 unsafe_code = "deny"
@@ -141,7 +142,7 @@ girpr-repair-plan = { path = "app/repair-plan" }
 # this binary keeps its `Biz` resolve/request policy at its own call sites.
 # `clap` is enabled because `Biz` is this binary's `--biz` flag type.
 girpr-model = { path = "crates/model", features = ["clap"] }
-# Hex spelling and fixed-width digest mechanics, shared with the two dev tools
+# Hex spelling and fixed-width digest mechanics, shared with the dev tools
 # that cross the same digest/text boundary. A leaf crate with no program logic.
 girpr-digest = { path = "crates/digest" }
 tracing = "0.1.44"
@@ -220,7 +221,7 @@ girpr-log = { path = "crates/log", features = ["test-support-async"] }
 # `ReuseEntry` alias. The feature is off in the normal dependency above, so only
 # test builds see the extra alias on girpr-fetch's public surface.
 girpr-fetch = { path = "app/fetch", features = ["test-support"] }
-# The scratch-directory helper, shared with the two dev tools: one name, one
+# The scratch-directory helper, shared with the dev tools: one name, one
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }

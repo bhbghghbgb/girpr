@@ -3,7 +3,7 @@ name = "girpr-audio"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared audio scan-file read/write and effective-selection mechanics the girpr repair pipeline uses"
+description = "The audio scan-file read/write and effective-selection mechanics the girpr repair pipeline uses"
 
 [lib]
 name = "girpr_audio"

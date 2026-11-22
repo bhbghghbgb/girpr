@@ -3,7 +3,7 @@ name = "girpr-util-hash"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared one-read MD5 scan and digest helpers the girpr workspace hashes files with"
+description = "The one-read MD5 scan and digest helpers the girpr workspace hashes files with"
 
 [lib]
 name = "girpr_util_hash"

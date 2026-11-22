@@ -3,7 +3,7 @@ name = "girpr-util-path"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared server-path containment, atomic publish and path-test fixture mechanics the girpr workspace uses"
+description = "The server-path containment, atomic publish and path-test fixture mechanics the girpr workspace uses"
 
 [lib]
 name = "girpr_util_path"

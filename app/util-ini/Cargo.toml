@@ -3,7 +3,7 @@ name = "girpr-util-ini"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared launcher config.ini, ignore-list and blacklist mechanics the girpr workspace reads and bumps"
+description = "The launcher config.ini, ignore-list and blacklist mechanics the girpr workspace reads and bumps"
 
 [lib]
 name = "girpr_util_ini"
