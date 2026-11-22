@@ -980,6 +980,7 @@ name = "girpr-sync-test-support"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "girpr-log",
  "girpr-tempdir",
  "girsync",
  "serde_json",

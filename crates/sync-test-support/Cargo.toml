@@ -31,3 +31,7 @@ tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 # The fixture trees are still named and removed by the shared scratch-directory
 # policy; re-exported below so every call site keeps the same surface.
 girpr-tempdir = { path = "../tempdir" }
+# The capture-buffer storage primitive. It owns the bytes and `Write` only; this
+# crate keeps its own lossy text rendering and installs girsync's subscriber
+# stack, so sharing it pulls no program crate into the log leaf.
+girpr-log = { path = "../log", features = ["test-support"] }

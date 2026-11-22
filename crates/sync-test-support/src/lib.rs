@@ -21,6 +21,7 @@
 // crate-level lint gate (which exists for code a user runs) out of this crate.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use girpr_log::test_support::CaptureBuffer;
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
@@ -37,7 +38,6 @@ use girsync::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use serde_json::Value;
@@ -751,38 +751,28 @@ where
 /// A console sink a test can read back: each event's formatted bytes are
 /// appended to one shared buffer, so a scoped subscriber's stderr is available
 /// even though no child process was spawned.
+///
+/// The byte-storing sink is the shared capture buffer; only the lossy text
+/// rendering and this program's `MakeWriter` wiring stay here.
 #[derive(Clone, Default)]
-pub struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+pub struct SharedBuffer(CaptureBuffer);
 
 #[allow(dead_code)] // each integration target gets its own copy of `common`
 impl SharedBuffer {
     /// Everything the console layer has rendered so far, as text.
     pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+        String::from_utf8_lossy(&self.0.snapshot()).into_owned()
     }
 }
 
-pub struct BufferWriter(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for BufferWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
+/// The per-event writer [`SharedBuffer`] hands to the console layer.
+pub type BufferWriter = CaptureBuffer;
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
     type Writer = BufferWriter;
 
     fn make_writer(&'a self) -> Self::Writer {
-        BufferWriter(Arc::clone(&self.0))
+        self.0.clone()
     }
 }
 

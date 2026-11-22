@@ -32,15 +32,20 @@ use std::future::Future;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-/// The capture buffer: cloneable so the subscriber can outlive the caller.
+/// A cloneable byte sink shared between a scoped subscriber and its test.
+///
+/// The storage and `Write` mechanics live here once so the programs that
+/// capture logs do not each carry their own `Arc<Mutex<Vec<u8>>>`. How the
+/// bytes become text, and where the subscriber is installed, stay local to
+/// each consumer: this primitive only owns the bytes.
 #[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
+pub struct CaptureBuffer(Arc<Mutex<Vec<u8>>>);
 
-impl Write for Captured {
+impl Write for CaptureBuffer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0
             .lock()
-            .expect("captured log lock")
+            .unwrap_or_else(|e| e.into_inner())
             .extend_from_slice(buf);
         Ok(buf.len())
     }
@@ -50,16 +55,15 @@ impl Write for Captured {
     }
 }
 
-impl Captured {
-    /// Everything the subscriber wrote, as UTF-8 text.
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().expect("captured log lock").clone())
-            .expect("tracing writes UTF-8")
+impl CaptureBuffer {
+    /// Every byte written so far, in order.
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
 /// The one shared subscriber shape: debug level, no ANSI, one buffer.
-fn subscriber(buffer: Captured) -> impl tracing::Subscriber {
+fn subscriber(buffer: CaptureBuffer) -> impl tracing::Subscriber {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .with_ansi(false)
@@ -73,9 +77,9 @@ fn subscriber(buffer: Captured) -> impl tracing::Subscriber {
 /// `with_default` scopes the subscriber to this thread for the duration of
 /// `f`; nothing in a shipped program installs a global subscriber.
 pub fn logs_of(f: impl FnOnce()) -> String {
-    let buffer = Captured::default();
+    let buffer = CaptureBuffer::default();
     tracing::subscriber::with_default(subscriber(buffer.clone()), f);
-    buffer.text()
+    String::from_utf8(buffer.snapshot()).expect("tracing writes UTF-8")
 }
 
 /// Run `f` under a debug-level scoped subscriber and return its output with
@@ -104,11 +108,14 @@ pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
         "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
     );
 
-    let buffer = Captured::default();
+    let buffer = CaptureBuffer::default();
     let guard = tracing::subscriber::set_default(subscriber(buffer.clone()));
     let out = f.await;
     drop(guard);
-    (out, buffer.text())
+    (
+        out,
+        String::from_utf8(buffer.snapshot()).expect("tracing writes UTF-8"),
+    )
 }
 
 #[cfg(all(test, feature = "test-support-async"))]
