@@ -50,8 +50,8 @@ machine rather than the code.
 | `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
 | `tools/sync/leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
-| `crates/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
-| `crates/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
+| `app/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
+| `app/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
 | `tools/capture/http/` | the gircap-owned logic-free HTTP mechanics: the reqwest transport, the retrying fetcher, the request log and the error-body budget, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native tree cached; no program policy crosses the boundary | `Fetcher`, `Transport`, `RequestLog`, `RetryPolicy`, `Kind`, `ApiError`, `BodyFile` (re-exported from `crates/digest/`), `USER_AGENT` |
 | `tools/capture/hash/` | the gircap-owned logic-free digest/zstd mechanics: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native zstd tree cached; no program policy crosses the boundary | `md5_hex`, `sha256_hex`, `DualDigest`, `HashingFile`, `hex_bytes`, `Encoding`, `should_gzip`, `zstd_decompress`, `zstd_measure` |
@@ -89,7 +89,7 @@ machine rather than the code.
 | `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | a case per decision |
 | `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, a test per capture |
 | `tests/artifact_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
-| `crates/test-fixtures/src/artifact_server.rs` | the loopback replay server, a module distinct from the offline mock and reached through one-line `use` shims | `Bridge`, `Bundle`, `Hit` |
+| `app/test-fixtures/src/artifact_server.rs` | the loopback replay server, a module distinct from the offline mock and reached through one-line `use` shims | `Bridge`, `Bundle`, `Hit` |
 | `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | a case per route family |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
@@ -548,11 +548,11 @@ directly by `girsync` and its own integration tests, so an edit to a planner or
 command leaves them cached; it is girsync-only and shares no program policy.
 This package's integration
 fixtures — the offline HYP/Sophon mock, the manifest/chunk builders and
-the run-lock cleanup — live in `crates/test-fixtures/`, reached through thin
+the run-lock cleanup — live in `app/test-fixtures/`, reached through thin
 shims under `tests/common/`; the crate borrows only narrow leaves, never the
 repair facade, so a repair edit leaves the mock cached. The facade-coupled run
 glue that builds a `RunCtx` and drives the pipeline lives in
-`crates/test-support/`, and gircap's independent mock lives in the gircap-only
+`app/test-support/`, and gircap's independent mock lives in the gircap-only
 `tools/capture/test-support/`; both are reached through thin per-binary shims so
 each compiles once instead of being inlined into every test binary. None of the
 shared crates carries a program's flags, exit-code values or published shapes.
@@ -649,8 +649,8 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   Test allowances stay in the code. On the pinned toolchain `clippy.toml`'s
   `allow-unwrap-in-tests` and `allow-expect-in-tests` exempt only code inside a
   `#[cfg(test)]` module or a `#[test]` function. The
-  shared helpers now live in library crates (`crates/test-fixtures`,
-  `crates/test-support`, `tools/capture/test-support`), where each crate's own
+  shared helpers now live in library crates (`app/test-fixtures`,
+  `app/test-support`, `tools/capture/test-support`), where each crate's own
   `allow` covers them; only the tiny binary-runner shim in `tests/common/mod.rs`
   is still compiled straight into every integration target, and its target-root
   `allow` covers that module tree. The library's `#[cfg_attr(test, allow(...))]`
@@ -753,7 +753,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   the trace log's download records agree with the server's request log). They
   run the **real binary** against the mock, because several of those decisions
   are only visible on the `--output json` records.
-  The fixtures are **described**, not hardcoded: `crates/test-fixtures` takes a
+  The fixtures are **described**, not hardcoded: `app/test-fixtures` takes a
   `FixtureSpec` — the new side, the old side and the bytes on disk — so a
   uniform shift, a mixed shift, a shrinking file, a file with a hole in its
   coverage and a path with a space in it are all a description rather than a

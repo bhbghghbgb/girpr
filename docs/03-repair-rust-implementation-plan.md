@@ -23,8 +23,8 @@ src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit c
 src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
 crates/log/           # the shared log policy: log file path, log levels, env vars (shared by girpr and the three dev tools)
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
-crates/test-fixtures/ # facade-free offline HYP/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
-crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
+app/test-fixtures/ # facade-free offline HYP/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
+app/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
 tools/sync/cache/    # girsync's redb hash cache, its postcard wire codec and digest vocabulary; consumed directly by girsync and sled2redb
 tools/sync/leaves/    # girsync's acyclic rw limiter, include/exclude filter, link classifier and hardlink facts, consumed directly by girsync so a high-level edit leaves them cached
 tools/sync/test-support/ # girsync-coupled option/cache/planner fixtures shared by girsync and sled2redb; keeps crates/tempdir/ girsync-free
@@ -53,8 +53,8 @@ tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
 tests/artifact_bridge.rs  # the bundle-backed end-to-end suite (docs/06)
 tests/common/mod.rs       # thin shims over the shared test libraries below
-crates/test-fixtures/     # facade-free offline mock, artifact replay server and deterministic fixtures
-crates/test-support/      # facade-coupled run glue (RunCtx construction, pipeline driver)
+app/test-fixtures/     # facade-free offline mock, artifact replay server and deterministic fixtures
+app/test-support/      # facade-coupled run glue (RunCtx construction, pipeline driver)
 ```
 
 No build.rs (prost `derive` only, no protoc). No SQLite, no GUI, no speed limiter.
@@ -126,7 +126,7 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
   REPORT/PROGRESS/SUMMARY formatting, HYP wrapper and int-or-string parsing.
 - **Integration tests** (`tests/repair_offline.rs`): a dedicated `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`
-  on `127.0.0.1:<ephemeral>` (`crates/test-fixtures`, reached through the thin
+  on `127.0.0.1:<ephemeral>` (`app/test-fixtures`, reached through the thin
   `tests/common/mod.rs` shim) injected through
   `RunCtx::hyp_base_override` / `sophon_base_override`. Covers repair, check-only
   clean/dirty, dry-run, both purge timings, deprecated deletes, the non-chunk

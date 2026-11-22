@@ -90,7 +90,7 @@ must not depend on `girpr` and must not invoke it, so the bridge lives on the
 
 **A `#[ignore]`d integration test in the `girpr` package** —
 `tests/artifact_bridge.rs`, with the replay server in a shared library module
-(`crates/test-fixtures/src/artifact_server.rs`, §2.1) rather than beside it — not a
+(`app/test-fixtures/src/artifact_server.rs`, §2.1) rather than beside it — not a
 new workspace member and not a `src/bin/`.
 
 The deciding constraint is Cargo's `CARGO_BIN_EXE_<name>`, which is set only
@@ -127,7 +127,7 @@ use server::{Bridge, Bundle, Origins};
 The replay server used to be a `#[path = "artifact_bridge/server.rs"] mod server;`
 in both this binary and `tests/artifact_server.rs`, compiling the module into
 each. It now lives once in
-`crates/test-fixtures/src/artifact_server.rs` as a public library module, reached
+`app/test-fixtures/src/artifact_server.rs` as a public library module, reached
 through a `use` shim in both binaries so the replay mechanics compile
 once. The `#[path]` on `bundle.rs` stays: that module has no other consumer, so
 there is nothing to share it with.
@@ -706,7 +706,7 @@ tests/
   artifact_server.rs            the server's own tests, against a mini-bundle
   repair_machinery.rs           the repair's own decisions, on crafted fixtures
   common/run_lock.rs            run-lock cleanup shared with other integrations
-crates/test-fixtures/src/
+app/test-fixtures/src/
   artifact_server.rs            Bundle, Bridge, routes, request log, error shapes
 ```
 
