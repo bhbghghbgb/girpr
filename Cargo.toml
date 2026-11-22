@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "app/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
+members = [".", "app/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -202,12 +202,12 @@ tempfile = "3.27"
 # `mod common;` into every binary; the public library surface lets each binary
 # keep a thin shim and compiles the mechanics once. This crate is facade-free,
 # so a product edit leaves it cached.
-girpr-test-fixtures = { path = "crates/test-fixtures" }
+girpr-test-fixtures = { path = "app/test-fixtures" }
 # The small facade-coupled run glue (RunCtx construction, the pipeline driver,
 # the counter reader) that used to be inlined by every integration binary. It
 # depends on this package, so this is a test-only inversion; the mechanics it
 # composes with stay in the facade-free crate above.
-girpr-test-support = { path = "crates/test-support" }
+girpr-test-support = { path = "app/test-support" }
 # The one shared log-capture helper, used by both unit and integration tests.
 # The test-support features are off in the shipped build; nextest runs one
 # process per test and skips doctests, so the helper must be a public library

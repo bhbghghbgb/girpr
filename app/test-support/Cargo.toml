@@ -17,14 +17,14 @@ workspace = true
 # a test-only inversion: the glue depends on the facade so the ~120 lines that
 # construct a run and drive it compile once, instead of being inlined by
 # `mod common;` into every integration binary. Nothing that ships links it.
-girpr = { path = "../.." }
+girpr = { path = "../../" }
 # The facade-free mock/fixture mechanics the glue composes with (the lock
 # cleanup a real run leaves behind). Kept separate so a product edit still
 # leaves the bulk fixture crate cached.
 girpr-test-fixtures = { path = "../test-fixtures" }
 # The requested repair mode is a value of the policy leaf, not of the facade;
 # the glue names it directly, without a re-export in the binary.
-girpr-repair-policy = { path = "../../app/repair-policy" }
+girpr-repair-policy = { path = "../repair-policy" }
 # The path scope is a value of the repair-plan leaf, not of the facade; the
 # glue names it directly, the same way the production callers do.
-girpr-repair-plan = { path = "../../app/repair-plan" }
+girpr-repair-plan = { path = "../repair-plan" }
