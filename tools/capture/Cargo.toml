@@ -7,14 +7,17 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its twelve shared path deps are leaf crates
+# the tree (docs/00-spec.md §2). Its thirteen shared path deps are leaf crates
 # holding a shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-report-core` (ordered-JSON and line-writing
 # mechanics — gircap supplies its own event-first order, event field, value
 # types, percent-encoding and boolean spelling), `girpr-digest` (the hex
 # spelling and fixed-width digest mechanics — no flag, no exit code and no
-# published shape),
+# published shape), `girpr-chunk-identity` (the digest/length identity key, the
+# borrowed view and the case-insensitive parse, plus the lowercase-normalisation
+# rule — gircap normalises at its own decode boundary and keeps its sets,
+# collision policy, first-match order and every published byte),
 # `girpr-fs-names` (the Windows device-name predicate mechanism — gircap passes
 # its own reserved set and raw-stem comparison; no program rule is borrowed),
 # `girpr-retry` (the retry schedule factory and injectable sleep driver —
@@ -185,6 +188,12 @@ girpr-model = { path = "../../crates/model", features = ["clap"] }
 # leaf mechanics crate: gircap still publishes lowercase hex strings and owns
 # its own algorithm set, it only borrows the spelling.
 girpr-digest = { path = "../../crates/digest" }
+# The chunk-identity value types and the digest-normalisation rule, shared with
+# the repair binary. The leaf owns the borrowed `(digest hex, length)` view and
+# the case-insensitive parse; gircap keeps the normalisation at its single
+# decode boundary, its set/collision policy, first-match order and every
+# published byte.
+girpr-chunk-identity = { path = "../../crates/chunk-identity" }
 # The Windows device-name predicate mechanism, shared with the repair binary.
 # A leaf crate that owns only the mechanism: gircap keeps its exact rule (no
 # `CLOCK$`, raw-stem comparison) by passing the reserved set and trim flag.

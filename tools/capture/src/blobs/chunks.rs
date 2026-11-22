@@ -30,6 +30,7 @@
 
 use std::collections::BTreeMap;
 
+use girpr_chunk_identity::ChunkIdentity;
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::proto::{SophonChunk, SophonChunkFile};
@@ -68,35 +69,11 @@ impl std::fmt::Display for Set {
     }
 }
 
-/// What a chunk's identity is for reuse purposes.
-///
-/// **Borrows its digest.** This owned a `String` that was cloned once per
-/// *comparison*: `retention` asked "is this new chunk's identity in this old
-/// file" and allocated 32 bytes to ask it, once per new chunk, for a set
-/// membership test that needed no allocation at all. `(&str, i64)` is already
-/// `Hash + Eq`, so this is a view over the manifest and nothing copies.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Identity<'a> {
-    /// The content digest.
-    pub uncompressed_md5: &'a str,
-    /// The decoded length.
-    ///
-    /// Carried alongside the digest because it is what makes the pair a
-    /// *complete* claim: the same MD5 with a different length is not the same
-    /// bytes, and a store keyed on the digest alone would assemble a file of the
-    /// wrong length from the right pieces.
-    pub uncompressed_size: i64,
-}
-
-impl<'a> Identity<'a> {
-    /// The identity of a manifest chunk.
-    pub fn of(c: &'a SophonChunk) -> Identity<'a> {
-        Identity {
-            uncompressed_md5: c.uncompressed_md5.as_str(),
-            uncompressed_size: c.uncompressed_size,
-        }
-    }
-}
+// Chunk identities are the shared leaf's borrowed `ChunkIdentity` view: the
+// digest plus the decoded length, which together are the complete claim that a
+// chunk holds particular bytes. The view borrows the manifest, so asking "is
+// this new chunk's identity in this old file" allocates nothing per comparison;
+// the set and the retention policy stay here.
 
 /// One use of a blob: which file, which build, which role, at which offset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,10 +300,10 @@ pub fn retention(pair: &FilePair) -> Retention {
     // identity in this old file", asked once per new chunk against every old
     // chunk — quadratic in a file's chunk count, which is where the measured
     // `HoYoChannel.dll` reaches three and a real `.blk` reaches hundreds.
-    let old_identities: std::collections::HashSet<Identity<'_>> = pair
+    let old_identities: std::collections::HashSet<ChunkIdentity<'_>> = pair
         .old
         .as_ref()
-        .map(|o| o.entry.chunks.iter().map(Identity::of).collect())
+        .map(|o| o.entry.chunks.iter().map(ChunkIdentity::of).collect())
         .unwrap_or_default();
 
     if let Some(o) = &pair.old {
@@ -344,7 +321,7 @@ pub fn retention(pair: &FilePair) -> Retention {
                 .entry(Set::MaterializeNew)
                 .or_default()
                 .push(c.id.clone());
-            if old_identities.contains(&Identity::of(c)) {
+            if old_identities.contains(&ChunkIdentity::of(c)) {
                 r.reuse.push(c.id.clone());
             } else {
                 r.fetch.push(c.id.clone());
@@ -411,7 +388,7 @@ pub fn wants_with(pairs: &[FilePair], retentions: &[Retention]) -> Vec<Want> {
                 // the shared-chunk case and the store gains a fallback source;
                 // if it does not, that is recorded rather than silently
                 // resolved.
-                if Identity::of(&w.chunk) == Identity::of(c) {
+                if ChunkIdentity::of(&w.chunk) == ChunkIdentity::of(c) {
                     w.sources.push(Source {
                         tag: tag.to_string(),
                     });

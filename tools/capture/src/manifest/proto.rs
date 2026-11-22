@@ -14,6 +14,7 @@
 //! normalisation — stays here as extension traits, so no program logic moved
 //! into the leaf.
 
+use girpr_chunk_identity::{ChunkIdentity, normalize_hex};
 pub use girpr_proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 
 /// Capture's measurements and validation of one decoded file entry.
@@ -99,9 +100,7 @@ impl SophonChunkFileExt for SophonChunkFile {
     }
 
     fn normalise(&mut self) {
-        if self.md5.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.md5 = self.md5.to_ascii_lowercase();
-        }
+        normalize_hex(&mut self.md5);
         for c in &mut self.chunks {
             c.normalise();
         }
@@ -111,8 +110,10 @@ impl SophonChunkFileExt for SophonChunkFile {
 /// Capture's identity and digest policy for one decoded chunk.
 pub trait SophonChunkExt {
     /// The key two chunks are compared by to decide they are the same content:
-    /// MD5 alone is not enough, because a truncated chunk can share one.
-    fn identity(&self) -> (&str, i64);
+    /// MD5 alone is not enough, because a truncated chunk can share one. The
+    /// borrowed view is the shared leaf's; capture keeps only the policy of
+    /// normalising it at the decode boundary below.
+    fn identity(&self) -> ChunkIdentity<'_>;
 
     /// Lower-case the declared digests.
     ///
@@ -136,21 +137,13 @@ pub trait SophonChunkExt {
 }
 
 impl SophonChunkExt for SophonChunk {
-    fn identity(&self) -> (&str, i64) {
-        (&self.uncompressed_md5, self.uncompressed_size)
+    fn identity(&self) -> ChunkIdentity<'_> {
+        ChunkIdentity::new(&self.uncompressed_md5, self.uncompressed_size)
     }
 
     fn normalise(&mut self) {
-        if self
-            .uncompressed_md5
-            .bytes()
-            .any(|b| b.is_ascii_uppercase())
-        {
-            self.uncompressed_md5 = self.uncompressed_md5.to_ascii_lowercase();
-        }
-        if self.compressed_md5.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.compressed_md5 = self.compressed_md5.to_ascii_lowercase();
-        }
+        normalize_hex(&mut self.uncompressed_md5);
+        normalize_hex(&mut self.compressed_md5);
     }
 }
 

@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use girpr_chunk_identity::ChunkIdentity;
 use serde::Serialize;
 
 use crate::manifest::CapturedManifest;
@@ -59,15 +60,12 @@ impl State {
     }
 }
 
-/// `(uncompressed_md5, uncompressed_size)` — the chunk identity used for scoring.
-///
-/// Keyed by both because MD5 alone cannot distinguish a truncated chunk from a
-/// whole one, and a patch that reused a truncated chunk would be silently wrong.
-///
-/// **Borrowed, not owned.** `(&str, i64)` is already `Hash + Eq`, so a chunk
-/// lookup never allocates a `String` for a key that already exists inside the
-/// manifest — roughly 454 000 of them for a `game` field diff.
-type ChunkKey<'a> = (&'a str, i64);
+// Chunk identity is the shared leaf's borrowed `(digest, length)` view. Keyed
+// by both because MD5 alone cannot distinguish a truncated chunk from a whole
+// one, and a patch that reused a truncated chunk would be silently wrong. The
+// view borrows the manifest's digest, so a lookup never allocates a `String`
+// for a key that already exists inside it — roughly 454 000 of them for a
+// `game` field diff.
 
 /// One common path's score (spec §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -389,7 +387,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
 /// `repair::reuse::sources_for` and this crate's own patch flow
 /// (`assemble::patch_flow`) both take the first occurrence, and a list would
 /// invite a second definition of "where the bytes are".
-type FileIndex<'a> = HashMap<ChunkKey<'a>, i64>;
+type FileIndex<'a> = HashMap<ChunkIdentity<'a>, i64>;
 
 /// One old file's chunk index, plus the sum `score` would otherwise walk its
 /// chunks again to compute.
