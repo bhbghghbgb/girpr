@@ -15,7 +15,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T01 | Move and rename `girpr-sync-cache` → `girsync-cache` | completed | 1aa45d2b, 8fe2e94c | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/cache/`, tools-only lints; preserve direct sled2redb edge and `postcard` digest vocabulary. Deviation: intra-workspace path deps use `../../../crates/*` (three levels deep), not the plan's hinted `../../crates/*`; extra doc path text in `docs/03-repair-rust-implementation-plan.md` updated |
 | T02 | Move and rename `girpr-sync-leaves` → `girsync-leaves` | completed | 835c0c1a, dd37a6b1 | §F3, §F7, §F8: girsync-only crate to `tools/sync/leaves/`, tools-only lints. Deviation: path deps use `../../../crates/*` (stale depth hint in plan); doc path text also fixed in `docs/03-repair-rust-implementation-plan.md` and `docs/04-scope-limitation-spec.md` |
 | T03 | Move and rename `girpr-sync-test-support` → `girsync-test-support` | completed | e875e6f3, e222caa5 | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/test-support/`, tools-only lints; preserve the `→ girsync` inversion and both dev-dep edges. Deviation: shared path deps use `../../../crates/*` (stale depth hint); sled2redb README and nextest.toml held no occurrences; `docs/03-repair-rust-implementation-plan.md` updated as a §F8 seam |
-| T04 | Establish the girpr-owned subtree and move the low-level leaves | in_progress | | §F4, §F7, §F8: choose subtree name, move `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; keep `girpr-` names and workspace lints. Record chosen path in Persistent context |
+| T04 | Establish the girpr-owned subtree and move the low-level leaves | pending_review | 8ddd15cf, d72b6a8f | §F4, §F7, §F8: chose `app/` subtree and moved `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; names and workspace lints unchanged; Cargo.lock names unchanged. Chosen path recorded in Persistent context |
 | T05 | Move the mid-layer girpr-only product crates | todo | | §F4, §F6, §F8: move `chunk-verify`, `repair-plan`, `lock`, `fetch`, `report` into the chosen subtree; preserve `repair-plan → fetch` edge and feature wiring. Use subtree path from Persistent context |
 | T06 | Move the two girpr-only test crates | todo | | §F4, §F6, §F8: move `test-fixtures`, `test-support`; preserve the `test-support → root` test-only inversion and the root shims. Use subtree path from Persistent context |
 | T07 | Ownership consistency sweep | todo | | §F5, §F7, §F8, §F9: final classification audit, remaining path text, Cargo.lock and lint-table verification, gircap untouched, fix misleading manifest descriptions |
@@ -73,9 +73,9 @@ relevant task's `note` instead of silently proceeding):
   `members`, dependent path deps, `Cargo.lock` package entries (for the three renames),
   path text in READMEs/doc comments and the three `tests/common/mod.rs` shims all move
   together.
-- **The girpr subtree name is not fixed by the report (§F4, lines 104–114).** T04 chooses
-  it; orchestrator records the chosen path here before T05/T06. Until then, no task
-  names it.
+- **Girpr subtree chosen as `app/` in T04 (§F4, lines 104–114).** T05/T06 move into
+  `app/<crate>`. From a crate already inside `app/`, moved-girpr deps are `../<crate>`
+  while shared deps remain `../../crates/<crate>` (T04 path-dep follow-up for T05/T06).
 - **No lingering references at cleanup.** No source, test, comment, manifest, doc table
   or commit message may reference `REFACTOR_PLAN/` or
   `docs/shared-crate-ownership-findings.md`.
