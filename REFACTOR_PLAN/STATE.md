@@ -13,7 +13,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Move and rename `girpr-sync-cache` → `girsync-cache` | pending_review | 1aa45d2b, 8fe2e94c | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/cache/`, tools-only lints; preserve direct sled2redb edge and `postcard` digest vocabulary. Deviation: intra-workspace path deps use `../../../crates/*` (three levels deep), not the plan's hinted `../../crates/*`; extra doc path text in `docs/03-repair-rust-implementation-plan.md` updated |
-| T02 | Move and rename `girpr-sync-leaves` → `girsync-leaves` | todo | | §F3, §F7, §F8: girsync-only crate to `tools/sync/leaves/`, tools-only lints |
+| T02 | Move and rename `girpr-sync-leaves` → `girsync-leaves` | in_progress | | §F3, §F7, §F8: girsync-only crate to `tools/sync/leaves/`, tools-only lints |
 | T03 | Move and rename `girpr-sync-test-support` → `girsync-test-support` | todo | | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/test-support/`, tools-only lints; preserve the `→ girsync` inversion and both dev-dep edges |
 | T04 | Establish the girpr-owned subtree and move the low-level leaves | todo | | §F4, §F7, §F8: choose subtree name, move `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; keep `girpr-` names and workspace lints. Record chosen path in Persistent context |
 | T05 | Move the mid-layer girpr-only product crates | todo | | §F4, §F6, §F8: move `chunk-verify`, `repair-plan`, `lock`, `fetch`, `report` into the chosen subtree; preserve `repair-plan → fetch` edge and feature wiring. Use subtree path from Persistent context |
