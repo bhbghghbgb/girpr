@@ -39,7 +39,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T25 | `girpr-path-identity` crate | skipped | | F30 validated skip (pre-satisfied): \`girpr-fs-names::fold_ascii_case(value, fold_case)\` already Parameterized with no default; both \`path_key\` rules (girsync \`true\`, product \`cfg!(windows)\`) consume it directly; the three identity questions are already named at their real callers, two girsync-only. Do not re-dispatch F30 |
 | T26 | Generic `EvidencePolicy` with `CannotTell` | skipped | | F31 validated skip: four sites share only a conceptual fail-closed shape, no duplicated code/data type; a generic \`EvidencePolicy\`/\`CannotTell\` is a content-free §A2 facade with all decision logic left in callers. \`Verdict::Unverifiable\`/\`CHANGED\` bytes and cache fail-open-vs-closed keeper (§A9) stay local. Documentation-only principle note suggested |
 | T27 | Split sync-test-support fixtures into generic runner | skipped | | F32 validated skip: \`sync-test-support → girsync\` normal edge is a deliberate keeper (F2), the runner has one consumer, and a generic shape would be the near-forbidden F29/F41 engine/harness trait while absorbing T30 fault seams and T32 memory backend (out of scope). Env pinning (\`GIRSYNC_TEST_CACHE\`) and nextest isolation untouched. Revisit only for a genuine second in-process CLI product |
-| T28 | Generic `AtomicPublish` leaf | in_progress | | F33; one-syscall gaps + hold records; `_tmp` resume excluded (N2) |
+| T28 | Generic `AtomicPublish` leaf | skipped | | F33 validated skip: bytes-publish family already \`girpr-util-path::atomic\` (directly consumed); sync-cache's link-into-place + hold-record/bound/one-syscall-gap protocol and sled2redb's deliberately-unreclaimed namespace cannot be expressed by durable/noclobber parameters without collapsing keepers (§A5/A9/A13); \`_tmp\` resume excluded (N2). Do not re-propose F33 |
 | T29 | Generalized report plane | todo | | F34; pulls clap, pinned NDJSON byte order (A5) |
 | T30 | Generic injected-fault seam | todo | | F35; env spellings pinned by nextest env (A10) |
 | T31 | Shared plan-action record crate | todo | | F36; NDJSON stream vs JSON document; exit/summary parsing |
@@ -75,7 +75,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | H | T17, T18, T19 | done | T19 completed (no fixes); T17/T18 skips confirmed; ordinal drift covered by FU03 |
 | I | T20, T21, T22 | done | No reviewable work - all three validated skips; F26/F27 shared retry drivers should not be re-dispatched |
 | J | T23, T24, T25 | done | No reviewable work - all three validated skips (forbidden cache, dead trait, pre-satisfied fold) |
-| K | T26, T27, T28 | pending | |
+| K | T26, T27, T28 | done | No reviewable work - all three validated skips (content-free policy facade, single-consumer test runner, incompatible publish contracts) |
 | L | T29, T30, T31 | pending | |
 | M | T32, T33, T34 | pending | |
 | N | T35, T36, T37 | pending | |
