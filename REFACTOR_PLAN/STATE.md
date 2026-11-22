@@ -57,7 +57,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T43 | `girpr-primitives` consolidation assessment | skipped | | F48 validated skip: merged leaves have disjoint consumer sets, so any single-part edit rebuilds a strict superset (never fewer variants, §A2); folding loopback-mock into cli pulls clap into every consumer and exit+audio-language couples exit-code vs artifact-byte contracts. No co-change coupling in history |
 | T44 | Narrow loopback hit-count/assertion extension | skipped | | F49 validated skip (premise stale/pre-satisfied): \`girpr-loopback-mock\` already owns \`hits()\`/\`requests()\`/\`start_expecting()\` drop-time count assertion; the named "repeated layer" is actually divergent domain fake servers (N6/N16 keepers) and glue crates with no HTTP server. Leaf stays dependency-free; do not merge domain servers |
 | T45 | `girpr-report-model` leaf | skipped | | F50 validated skip (target exhausted): event placement already \`girpr-report-core::Order\`; three \`Val\` vocabularies are deliberately incompatible byte-pinned contracts (girpr Str/UInt/Int with 1/0 flags, gircap Str/Int/Bool + percent-encoding, girsync full JSON Value), and per-tool key tables are pinned data (§A5/A6). A shared model is a content-free §A2 facade or reintroduces collisions. Do not reopen absent a fourth identical consumer |
-| T46 | Narrow CLI leaf extension (OutputFormat + LogArgs) | in_progress | | F51; pinned help/exit codes, `--version` presence differs |
+| T46 | Narrow CLI leaf extension (OutputFormat + LogArgs) | skipped | | F51 validated skip: three log/--output flag sets are byte-different pinned help (A5/N8 flag sets stay local), three OutputFormats are divergent report-plane types (A6) whose promotion is a §A2 facade/cycle, and log policy already lives in \`girpr-log\` (LogOptions/EnvOptions/LogPlan). Stale premise: no \`cli_contract\` nextest filter exists |
 | T47 | `bounded_decode` in girpr-digest assessment | todo | | F52; streaming always-on test, F52 likely re-confirms N7 — likely skip |
 | T48 | `girpr-fs` composition leaf | todo | | F53; reparse classification is domain logic, one deliberate unsafe call |
 
@@ -81,7 +81,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | N | T35, T36, T37 | done | T35 completed (no fixes); T36/T37 skips confirmed |
 | O | T38, T39, T40 | done | T40 completed with corrective commit c7322ec6 (stale gircap spec dependency descriptions); T38/T39 skips confirmed |
 | P | T41, T42, T43 | done | No reviewable work - all three validated skips (divergent line emission, per-call-site buffer tuning, rebuild-domain trap) |
-| Q | T44, T45, T46 | pending | |
+| Q | T44, T45, T46 | done | No reviewable work - all three validated skips (pre-satisfied hit counter, exhausted field-model target, byte-pinned CLI flags) |
 | R | T47, T48 | pending | |
 
 ## Follow-ups
