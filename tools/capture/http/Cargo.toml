@@ -41,8 +41,9 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 thiserror = "2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# Millisecond RFC 3339 timestamps in the request log.
-chrono = { version = "0.4.45", features = ["clock"] }
+# The millisecond RFC 3339 spelling in the request log is a named format in the
+# time leaf; this crate keeps only the seam its callers already use.
+girpr-time = { path = "../../../crates/time" }
 tracing = "0.1.44"
 
 [dev-dependencies]

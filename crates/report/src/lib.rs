@@ -16,7 +16,7 @@
 //! The ordered-JSON and line-writing mechanics stay in `girpr-report-core`.
 //! This crate keeps girpr's event-first key order, unsigned counts and 1/0
 //! flags; girsync and gircap keep theirs. Nothing here changes a byte: key
-//! order, casing, spacing, the pinned `format_timestamp` and the three
+//! order, casing, spacing, the pinned timestamp spellings and the three
 //! distinct report vocabularies are all outside this crate.
 
 pub mod emit;

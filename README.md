@@ -43,6 +43,7 @@ machine rather than the code.
 | `src/config.rs` | validated run config (scope, limits, repair mode value from `crates/repair-policy/`); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
+| `crates/time/` | the named UTC timestamp formats shared by the byte contracts: the compact sortable stamp, two RFC 3339 spellings and chrono's default, each with its own pinned spelling; no program policy | `compact_stamp`, `compact_stamp_now`, `rfc3339_millis_z`, `rfc3339_millis_z_now`, `rfc3339_secs_z`, `rfc3339`, `rfc3339_now` |
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `crates/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
@@ -409,7 +410,11 @@ One policy, four programs: this binary and the three dev tools (`gircap`,
 share that ships. It is a logic-free leaf, as is `crates/report-core/`, which
 supplies ordered-JSON and line-writing mechanics to all four: each tool keeps
 its own key order, event placement, value types, escaping and boolean spelling,
-so no report format is shared. `crates/digest/` supplies hex spelling and
+so no report format is shared. `crates/time/` supplies the named UTC timestamp
+formats used to stamp file names, ids, request logs and lock bodies: the compact
+sortable stamp, two RFC 3339 spellings and chrono's default, each kept distinct
+and byte-pinned; callers pass the instant, so no stamping policy crosses between
+the programs. `crates/digest/` supplies hex spelling and
 fixed-width digest mechanics to this binary, `gircap`
 and `sled2redb`, and `crates/fs-names/`, which supplies the Windows path-name and
 canonical-path mechanics — device names, trailing dot/space, ASCII case fold,

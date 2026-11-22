@@ -81,7 +81,7 @@ impl Lock {
             let body = format!(
                 "pid={}\nstarted={}\n",
                 std::process::id(),
-                chrono::Utc::now().to_rfc3339()
+                girpr_time::rfc3339_now()
             );
             if file.set_len(0).is_ok() && file.seek(SeekFrom::Start(0)).is_ok() {
                 let _ = file.write_all(body.as_bytes());

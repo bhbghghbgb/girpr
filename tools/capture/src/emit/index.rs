@@ -71,7 +71,7 @@ pub struct ManifestInput<'a> {
 /// so the returned document is whole and there is no second step that can be
 /// skipped or reordered.
 pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
-    let id = girpr_log::format_timestamp(&i.started);
+    let id = girpr_time::compact_stamp(&i.started);
     let manifest_entries: BTreeMap<String, u64> = i
         .fields
         .iter()
@@ -124,7 +124,7 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
         },
         capture: Capture {
             id,
-            captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            captured_at: girpr_time::rfc3339_secs_z(&i.started),
             host_os: std::env::consts::OS.to_string(),
             tool_argv: i.argv.lossy.clone(),
             tool_argv_raw: i.argv.raw.clone(),

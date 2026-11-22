@@ -76,7 +76,6 @@ pub use install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_i
 pub use level::Level;
 pub use plan::{
     EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,
-    format_timestamp, timestamp,
 };
 
 /// Parse a level name, for use as a `clap` value parser.
@@ -87,28 +86,6 @@ pub fn parse_level(s: &str) -> Result<Level, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The exported helper carries the one shared stamp format.
-    #[test]
-    fn the_shared_timestamp_has_the_iso_shape() {
-        let stamp = timestamp();
-        assert_eq!(stamp.len(), 23, "{stamp}");
-        assert_eq!(stamp.as_bytes()[8], b'T');
-        assert_eq!(stamp.as_bytes()[15], b'.');
-        assert_eq!(stamp.as_bytes()[22], b'Z');
-    }
-
-    /// A caller-supplied instant formats exactly as the wall-clock helper does,
-    /// so a capture id and a default log file name cannot drift apart.
-    #[test]
-    fn a_supplied_instant_uses_the_shared_stamp() {
-        let t = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:15:00Z")
-            .expect("a valid instant")
-            .with_timezone(&chrono::Utc);
-        assert_eq!(format_timestamp(&t), "20261014T101500.000000Z");
-        let later = t + chrono::Duration::seconds(1);
-        assert!(format_timestamp(&later) > format_timestamp(&t));
-    }
 
     /// The example in the module docs, **run**.
     ///

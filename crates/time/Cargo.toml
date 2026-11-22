@@ -1,0 +1,18 @@
+[package]
+name = "girpr-time"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The named UTC timestamp formats shared across the girpr workspace"
+
+[lib]
+name = "girpr_time"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The formats are pure wrappers over chrono's formatting; the leaf owns chrono
+# so the programs that stamp a name need only this dependency.
+chrono = { version = "0.4.45", features = ["clock"] }

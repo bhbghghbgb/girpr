@@ -639,6 +639,7 @@ dependencies = [
  "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
+ "girpr-time",
  "girpr-value-ranges",
  "ini_core",
  "percent-encoding",
@@ -672,11 +673,11 @@ dependencies = [
 name = "gircap-http"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "girpr-digest",
  "girpr-loopback-mock",
  "girpr-retry",
  "girpr-tempdir",
+ "girpr-time",
  "reqwest",
  "serde",
  "serde_json",
@@ -854,9 +855,9 @@ name = "girpr-lock"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "girpr-fs-identity",
  "girpr-tempdir",
+ "girpr-time",
  "girpr-util-path",
 ]
 
@@ -864,7 +865,7 @@ dependencies = [
 name = "girpr-log"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "girpr-time",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -953,8 +954,8 @@ dependencies = [
  "anyhow",
  "girpr-digest",
  "girpr-fs-identity",
- "girpr-log",
  "girpr-tempdir",
+ "girpr-time",
  "postcard",
  "redb",
  "serde",
@@ -1019,6 +1020,13 @@ dependencies = [
  "girpr-repair-plan",
  "girpr-repair-policy",
  "girpr-test-fixtures",
+]
+
+[[package]]
+name = "girpr-time"
+version = "0.1.0"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]

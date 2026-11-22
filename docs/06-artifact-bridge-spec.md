@@ -734,7 +734,9 @@ the bridge actually reads.
   other to prove one of them works. Logic-free leaves such as
   `girpr-report-core` (ordered-JSON and line-writing mechanics, parameterised by
   each caller's own field order, event placement, value types, escaping and
-  boolean spelling), `girpr-digest`
+  boolean spelling), `girpr-time` (the named UTC timestamp formats — the compact
+  sortable stamp, two RFC 3339 spellings and chrono's default, each with its own
+  pinned spelling and its instant injected by the caller), `girpr-digest`
   (hex spelling and fixed-width digest mechanics), `girpr-fs-names` (Windows
   path-name and canonical-path mechanics — device names, trailing dot/space,
   ASCII case fold, forward slash and verbatim-free canonicalization —

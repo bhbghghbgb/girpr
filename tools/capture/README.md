@@ -1,7 +1,9 @@
 # gircap — live-artifact capture for `girpr` testing
 
 **Dev-only. Not a patcher, not part of the `girpr` binary, shares no program code
-with it — only logic-free leaf crates: the log policy, the ordered-JSON/line-writing
+with it — only logic-free leaf crates: the log policy, the named UTC timestamp
+formats (the compact sortable stamp, two RFC 3339 spellings and chrono's default,
+each with its own pinned spelling), the ordered-JSON/line-writing
 mechanics (each tool keeps its own key order, event placement, value types,
 escaping and boolean spelling), the digest hex mechanics,
 the Sophon protobuf wire types (tags and field names only; every measurement,

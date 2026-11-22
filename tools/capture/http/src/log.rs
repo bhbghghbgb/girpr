@@ -1,5 +1,4 @@
 use super::record::RequestRecord;
-use chrono;
 use serde_json;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -248,5 +247,5 @@ impl RequestLog {
 
 /// RFC 3339 in UTC, millisecond precision.
 pub fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    girpr_time::rfc3339_millis_z_now()
 }

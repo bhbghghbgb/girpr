@@ -14,8 +14,9 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-# The RFC 3339 `started` field in the lock body names the run to look at.
-chrono = "0.4.45"
+# The RFC 3339 `started` field in the lock body names the run to look at; the
+# spelling is one of the time leaf's named formats.
+girpr-time = { path = "../time" }
 # The link-count and file-identity facts the no-follow body guard reads. This
 # crate keeps its own fail-closed policy; the leaf owns only the platform facts.
 girpr-fs-identity = { path = "../fs-identity" }

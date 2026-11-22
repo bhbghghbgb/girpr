@@ -25,10 +25,10 @@ pub use girpr_fs_identity::Identity as FileId;
 
 /// UTC stamp in the shared ISO format, used to name backups and snapshots.
 ///
-/// The format itself lives in `girpr_log::timestamp`; this shim keeps call
+/// The format itself lives in `girpr_time::compact_stamp`; this shim keeps call
 /// sites short while leaving one definition of the stamp.
 pub fn ts_now() -> String {
-    girpr_log::timestamp()
+    girpr_time::compact_stamp_now()
 }
 
 /// Recursive plain-file copy, used only for legacy sled-directory cache

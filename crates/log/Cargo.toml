@@ -30,9 +30,9 @@ test-support-async = ["test-support", "dep:tokio"]
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }
 
 [dependencies]
-# For the timestamp in a default log file name and in a caller-supplied instant
-# (a capture id or a manifest id).
-chrono = { version = "0.4.45", features = ["clock"] }
+# The one compact stamp in a default log file name. The format lives in the
+# time leaf; this crate only asks it to stamp "now".
+girpr-time = { path = "../time" }
 # For building the console's filter from `--log-level` or `RUST_LOG`, for the
 # one place a broken spec is turned into a warning, and for the `info!` that
 # announces where the log file went.
