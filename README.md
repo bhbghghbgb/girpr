@@ -40,12 +40,12 @@ machine rather than the code.
 | `src/main.rs` | shim: `Args::try_parse` → `init_tracing` → runtime → `repair::run` → `SUMMARY` → `flush_log` → `exit` | `main` |
 | `src/lib.rs` | module map + re-exports | — |
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
-| `src/config.rs` | validated run config (scope, limits, repair mode value from `crates/repair-policy/`); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
+| `src/config.rs` | validated run config (scope, limits, repair mode value from `app/repair-policy/`); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/time/` | the named UTC timestamp formats shared by the byte contracts: the compact sortable stamp, two RFC 3339 spellings and chrono's default, each with its own pinned spelling; no program policy | `compact_stamp`, `compact_stamp_now`, `rfc3339_millis_z`, `rfc3339_millis_z_now`, `rfc3339_secs_z`, `rfc3339`, `rfc3339_now` |
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
-| `crates/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
+| `app/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
 | `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
@@ -62,14 +62,14 @@ machine rather than the code.
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
 | `crates/chunk-verify/` | the chunk-verification leaf: the verdict a scan produces, the range/owner remap the scan and the in-place writer share, and the verify pass that re-derives the finished file from a fresh read; no scan-planning policy, write-direction decision or published bytes, and the coarse-MTIME reuse guard stays with the writer | `Verdict`, `scan_ranges`, `source_ok_by_chunk`, `source_ok_by_range`, `verify_in_place`, `Verified` |
-| `crates/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
+| `app/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
 | `crates/repair-plan/` | the repair-plan values and their pure decisions: work list, cleanup-plan values and path scope in one acyclic leaf so the scope tier consumes both plans without a back-edge; the facade keeps the fetch, walk, publish and byte-emitting policies | `RepairPlan`, `PlannedFile`, `Layout`, `FileId`, `build_plan`, `PurgePlan`, `PurgeCandidate`, `PurgeKeys`, `PathScope`, `LocalChunkMap`, `DownloadEstimate`, `PlanSummaryValues`, `check_scope_selection` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3); the map's alias lives in `crates/repair-plan/` | `fetch_latest`, `local_reuse_map` |
 | `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply; consumes the plan values from `crates/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `crates/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
+| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `app/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `crates/chunk-verify/` | `scan_plan`, `ScanReport` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
@@ -77,12 +77,12 @@ machine rather than the code.
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates over the two plan values (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
-| `crates/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
+| `app/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
 | `crates/path-shape/` | the shared lexical relative-path shape validator: component checks and their order only, with each caller's normalization and device rule and its own mapping from reasons to wording and byte-stable identifiers | `validate`, `ShapePolicy`, `Normalization`, `ShapeProblem` |
 | `crates/value-ranges/` | pure inclusive-range facts for numeric CLI values: below-min/above-max/in-range plus the offending value; no error type, wording, exit code or range constant, so each caller keeps its own | `check_in_range`, `RangeFact`, `RangeBound` |
-| `crates/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
-| `crates/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
-| `crates/util-counter/` | the saturating atomic byte counter | `add_saturating` |
+| `app/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
+| `app/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
+| `app/util-counter/` | the saturating atomic byte counter | `add_saturating` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | a case per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | a case per usage error class |
 | `tests/common/mod.rs` | thin shims over the two shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
@@ -443,7 +443,7 @@ other error to the usage code each caller passes in, so no exit code or exit
 table is shared. `crates/audio-language/` supplies the lower + `_`→`-` token
 primitive and the four code/display-name pairs to this binary and `gircap`;
 each passes its own case-folding flavour and keeps its own alias map, `none`
-sentinel and validation, so no audio policy is shared. `crates/audio/` holds
+sentinel and validation, so no audio policy is shared. `app/audio/` holds
 this binary's audio scan-file read/write and effective-selection policy; the
 repair code depends on it directly under a module alias, so an edit to repair,
 report or CLI leaves it cached for the narrow test targets that link it
@@ -471,7 +471,7 @@ the leaf directly, so neither `file` nor `scan` owns those types and the two
 remap directions cannot drift; the coarse-MTIME guard stays with the writer
 because it reads the plan and the scan report together. The leaf depends only
 on the wire chunk and hash/scan leaves and re-exports nothing from the binary.
-`crates/repair-policy/` owns the write-mode values and the one rule that
+`app/repair-policy/` owns the write-mode values and the one rule that
 resolves them. The in-place writer, the disk estimate's injected-target seam
 and the download estimate all consume that rule directly, so neither `file`
 nor `scan` owns the mode decision and the two estimates cannot disagree with
@@ -492,8 +492,8 @@ identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`
 glob-filter rules to this binary and `girsync`, pinning one glob version and one
-set of matching rules for both. `crates/util-path/`, `crates/util-hash/`,
-`crates/util-ini/` and `crates/util-counter/` hold this binary's low-level
+set of matching rules for both. `app/util-path/`, `app/util-hash/`,
+`app/util-ini/` and `app/util-counter/` hold this binary's low-level
 containment, atomic-publish, scan/digest, config.ini and counter mechanics. They
 are separate leaves: the repair, report, fetch, audio and CLI code depend only
 on the ones they use, so an edit to one leaf leaves the others cached.

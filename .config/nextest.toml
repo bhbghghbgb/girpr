@@ -41,7 +41,7 @@ experimental = ["setup-scripts"]
 #   writing (see `tools/sync/src/commands/sync/apply/copy.rs::test_no_fsync`).
 #   The bytes, size/mtime checks and cache records are unchanged.
 # * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
-#   rename (see `crates/util-ini/src/ini.rs::test_no_fsync`). The temp-file write
+#   rename (see `app/util-ini/src/ini.rs::test_no_fsync`). The temp-file write
 #   and rename are unchanged.
 # * `GIRSYNC_TEST_HEARTBEAT_ENTRIES=<n>` — lowers the walk's heartbeat period
 #   from its production 2000 (see `tools/sync/src/scan.rs::heartbeat_entries`),

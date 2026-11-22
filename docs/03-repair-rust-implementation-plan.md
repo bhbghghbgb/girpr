@@ -32,10 +32,10 @@ crates/report/src/    # Summary/Meter/StoppedBy counters + record data plane, RE
 src/biz.rs            # re-exports girpr_model::region::Region as Biz; ids/channels/base URLs live in crates/model/
 crates/fetch/src/hyp.rs        # HYP client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
-crates/util-path/     # server-path containment, atomic publish, shared junction/symlink fixtures
-crates/util-hash/     # md5 helpers and the one-read file scan
-crates/util-ini/      # config.ini read/write, ignore/blacklist files
-crates/util-counter/  # the saturating atomic byte counter
+app/util-path/        # server-path containment, atomic publish, shared junction/symlink fixtures
+app/util-hash/        # md5 helpers and the one-read file scan
+app/util-ini/         # config.ini read/write, ignore/blacklist files
+app/util-counter/     # the saturating atomic byte counter
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
 src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)
@@ -47,7 +47,7 @@ src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mod
 src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction (salvage_order_refs in production; salvage_order is test-only)
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
 crates/lock/          # the single-writer lock (outside the install)
-crates/audio/         # audio scan-file read/write + effective selection (acyclic leaf)
+app/audio/            # audio scan-file read/write + effective selection (acyclic leaf)
 src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
