@@ -46,14 +46,14 @@
 // cached when a planner, command or other subsystem below changes. The alias
 // keeps every `crate::cache::X` call site and the public `girsync::cache::X`
 // surface unchanged.
-// The acyclic leaves live upstream in `girpr-sync-leaves` and are re-exported
+// The acyclic leaves live upstream in `girsync-leaves` and are re-exported
 // under their old module names, so no `crate::X` call site moves. girsync
 // depends on that crate directly (it is not reached through another module), so
 // an edit to the planner, commands or config above leaves all four leaves and
 // their rw-native dependencies cached. The crate is also consumed directly by
 // its own integration tests, without this facade.
-pub use girpr_sync_leaves::{filter, hardlink, link, rw};
 pub use girsync_cache as cache;
+pub use girsync_leaves::{filter, hardlink, link, rw};
 pub mod cli;
 pub mod commands;
 pub mod config;

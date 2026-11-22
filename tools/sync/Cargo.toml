@@ -62,7 +62,7 @@ girsync-cache = { path = "cache" }
 # leaves and tokio's semaphore cached instead of recompiling them. The crate is
 # consumed directly by its own integration tests too, so it is not merely
 # re-exported by this facade.
-girpr-sync-leaves = { path = "../../crates/sync-leaves" }
+girsync-leaves = { path = "leaves" }
 # Path canonicalization for identity and link-target checks. It resolves links
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.

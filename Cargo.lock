@@ -947,19 +947,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "girpr-sync-leaves"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "girpr-filter",
- "girpr-fs-identity",
- "girpr-tempdir",
- "rayon",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "girpr-sync-test-support"
 version = "0.1.0"
 dependencies = [
@@ -1064,11 +1051,11 @@ dependencies = [
  "girpr-fs-names",
  "girpr-log",
  "girpr-report-core",
- "girpr-sync-leaves",
  "girpr-sync-test-support",
  "girpr-tempdir",
  "girpr-value-ranges",
  "girsync-cache",
+ "girsync-leaves",
  "md-5",
  "rayon",
  "serde",
@@ -1092,6 +1079,19 @@ dependencies = [
  "redb",
  "serde",
  "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "girsync-leaves"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-filter",
+ "girpr-fs-identity",
+ "girpr-tempdir",
+ "rayon",
+ "tokio",
  "tracing",
 ]
 

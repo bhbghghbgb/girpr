@@ -1,16 +1,22 @@
 [package]
-name = "girpr-sync-leaves"
+name = "girsync-leaves"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared girsync leaves: rw limits, filter rules and filesystem link/identity helpers"
+description = "The girsync-owned acyclic leaves: rw limits, filter rules and filesystem link/identity helpers"
 
 [lib]
-name = "girpr_sync_leaves"
+name = "girsync_leaves"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+# The same tools-only policy girsync and the other dev tools use: these leaves
+# hold mechanics, not a repair path, so `unwrap_used`/`expect_used` warnings
+# would be noise. `clippy::all` and denied `unsafe_code` still apply.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
 
 [dependencies]
 # The rw counters use tokio's semaphore: std::sync::Semaphore is still unstable,
@@ -27,12 +33,12 @@ tracing = "0.1.44"
 # The shared include/exclude glob mechanics. This crate owns only girsync's
 # Filter/ExcludeMemo policy on top of them, so the glob version stays pinned in
 # the one place both tools compile against.
-girpr-filter = { path = "../filter" }
+girpr-filter = { path = "../../../crates/filter" }
 # The link-count and file-identity facts the copy guard reads. The leaf owns
 # the platform wrappers; girsync keeps its refusal policy at its call sites.
-girpr-fs-identity = { path = "../fs-identity" }
+girpr-fs-identity = { path = "../../../crates/fs-identity" }
 
 [dev-dependencies]
 # The leaves' own unit tests build fixture trees with the workspace's one
 # scratch-directory helper.
-girpr-tempdir = { path = "../tempdir" }
+girpr-tempdir = { path = "../../../crates/tempdir" }

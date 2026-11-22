@@ -7,14 +7,14 @@
 
 use std::num::NonZeroUsize;
 
-use girpr_sync_leaves::filter::Filter;
-use girpr_sync_leaves::hardlink;
-use girpr_sync_leaves::link;
-use girpr_sync_leaves::rw::{RwLimiter, RwLimits, RwRuntime, RwSide};
+use girsync_leaves::filter::Filter;
+use girsync_leaves::hardlink;
+use girsync_leaves::link;
+use girsync_leaves::rw::{RwLimiter, RwLimits, RwRuntime, RwSide};
 
 #[test]
 fn the_filter_rule_is_reachable_without_girsync() {
-    let patterns = girpr_sync_leaves::filter::compile_patterns(&["link".to_string()]).unwrap();
+    let patterns = girsync_leaves::filter::compile_patterns(&["link".to_string()]).unwrap();
     let filter = Filter::new(vec![], patterns, true);
     assert!(filter.is_excluded("link"));
     assert!(
@@ -29,7 +29,7 @@ fn the_filter_rule_is_reachable_without_girsync() {
 
 #[test]
 fn the_link_and_hardlink_facts_are_reachable_without_girsync() {
-    let root = girpr_tempdir::TempDir::new("girpr_sync_leaves", "direct");
+    let root = girpr_tempdir::TempDir::new("girsync_leaves", "direct");
     let file = root.join("a.txt");
     std::fs::write(&file, b"x").unwrap();
 
