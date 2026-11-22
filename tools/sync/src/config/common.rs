@@ -67,7 +67,7 @@ pub struct TestHooks {
     /// `None` leaves it to the environment (see `CommitLimits::from_env_opt`).
     pub commit: Option<CommitLimits>,
     /// The walk's heartbeat period (`GIRSYNC_TEST_HEARTBEAT_ENTRIES`), folded
-    /// in from the knob T15 exposed on [`ScanMode`]. `None` leaves the period to
+    /// in from the knob exposed on [`ScanMode`]. `None` leaves the period to
     /// the environment (and the production constant when that is unset).
     pub heartbeat_entries: Option<usize>,
 }

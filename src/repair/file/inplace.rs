@@ -89,7 +89,7 @@ async fn attempt_inplace_inner(
 
     // The scan's two lists, both parallel to the chunks: where each chunk
     // *belongs*, and where its bytes could be copied from. Only chunks with a
-    // candidate get a source range (see `scan::scan_ranges`); `source_owner`
+    // candidate get a source range (see `girpr_chunk_verify::scan_ranges`); `source_owner`
     // maps those verdicts back to the chunk they belong to.
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
 

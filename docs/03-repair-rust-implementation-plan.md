@@ -39,7 +39,7 @@ crates/util-counter/  # the saturating atomic byte counter
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
 src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)
-src/repair/phases/plan.rs    # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
+crates/repair-plan/src/plan.rs # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
 src/repair/purge.rs          # Collapse files-cleanup: plan_purge, apply_purge, keep_set, classify_purge_path (step 5, 7)
 src/repair/scope/     # the path scope and the byte ceilings: filter, limits, report (step 4, ceilings); ledger.rs is a thin alias for girpr-report's Meter/StoppedBy
 src/repair/phases/check.rs   # --check-only size+MD5 verification loop (step 6.5)
@@ -99,7 +99,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Effective audio + scan-file write | `girpr_audio::{resolve_effective_audio,write_scan_file}` (1), aliased as `audio` in `src/repair/mod.rs` | Starward |
 | Begin `REPORT` | `report::report_record` + `report::emit` (2.5) | Starward |
 | Manifest fetch/verify/parse | `repair::phases::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
-| Work list + reuse map | `repair::phases::plan::build_plan` (4) + `repair::phases::manifest::local_reuse_map` → `sophon::build_local_chunk_map` keyed by path, chunk md5+size (3) | Starward |
+| Work list + reuse map | `girpr_repair_plan::build_plan` (4) + `repair::phases::manifest::local_reuse_map` → `sophon::build_local_chunk_map` keyed by path, chunk md5+size (3) | Starward |
 | Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (fetched in the plan phase, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |

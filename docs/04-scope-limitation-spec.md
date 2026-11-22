@@ -21,7 +21,7 @@ bundle's own integrity (`gircap verify`). The fourth does not: **run `girpr
 
 Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 
-- `repair::phases::plan::build_plan` builds the work list from the **whole live `game` manifest**
+- `girpr_repair_plan::build_plan` builds the work list from the **whole live `game` manifest**
   — every common path in the live pair, and many more across the audio fields;
 - `file::repair_all` runs one task per planned file (bounded to the `--jobs`
   window) and downloads whatever is not intact — on the order of **tens of gigabytes**;
@@ -91,7 +91,7 @@ touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so the plan length reported as `files_total` and `expected_rels()` both see the narrowed world |
+| `girpr_repair_plan::build_plan` | drop non-matching `rel` **before** the plan exists, so the plan length reported as `files_total` and `expected_rels()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
 | `repair::phases::check::verify_plan` | already narrowed |
 | `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
@@ -196,7 +196,7 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
-the same string `phases::plan::build_plan` stores; `util::path::contained_rel` validates it
+the same string `girpr_repair_plan::build_plan` stores; `util::path::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The matching rules live in the shared `girpr-filter` crate so they
 cannot drift from `girsync`'s: `match_options(false)`, i.e.
@@ -740,7 +740,7 @@ log (§1.2).
 ## 7. Module layout
 
 ```
-src/repair/phases/plan.rs
+crates/repair-plan/src/plan.rs
                 RepairPlan, PlannedFile, est_download_bytes, build_plan
 src/repair/purge.rs
                 PurgePlan, PurgeCandidate, plan_purge, apply_purge
@@ -778,7 +778,7 @@ directory is hidden only when the glob matches the directory path itself.
 
 The pure modules unit-test without a filesystem, exactly like
 `purge::classify_purge_path_visible` (and the test-facing `classify_purge_path`)
-and `phases::plan::build_plan` do. The impure part is the ledger in the report
+and `girpr_repair_plan::build_plan` do. The impure part is the ledger in the report
 crate and the gate calls in `file/mod.rs`.
 
 Touch points outside the scope directory:

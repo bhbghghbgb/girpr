@@ -5,7 +5,7 @@
 //! emits no bytes, runs no filesystem walk, fetches nothing and publishes
 //! nothing. The facade keeps those policies and consumes these values directly.
 //!
-//! `Mode` is deliberately not here: T07's `girpr-repair-policy` leaf already
+//! `Mode` is deliberately not here: the `girpr-repair-policy` leaf already
 //! owns it, and both the disk estimate and the writer consume it from there.
 //! Keeping it there means this crate adds no second home for the write-mode
 //! decision.

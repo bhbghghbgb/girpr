@@ -70,9 +70,9 @@ says which.
 | `crates/fetch/src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `crates/fetch/src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
 | `crates/fetch/src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
-| `src/repair/phases/plan.rs` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
-| `src/repair/phases/plan.rs` `PlannedFile::layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
-| `src/repair/phases/plan.rs` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
+| `crates/repair-plan/src/plan.rs` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
+| `crates/repair-plan/src/plan.rs` `PlannedFile::layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
+| `crates/repair-plan/src/plan.rs` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
 | `src/repair/phases/manifest.rs` `ManifestFetches::next_ordered` and `OrderedResults::push` | manifest result stream and selection index | local | **Invariant**: the stream is built from `manifests.clone().into_iter().enumerate()`, so it yields exactly one result per selected index; `has_next` stops at `slots.len()`, `manifests[index]` is that same selection, and `push` writes `slots[index]` for that same index. |
 | `src/repair/reuse.rs` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
 | `src/repair/scan.rs` `all_chunks_download_bytes` and `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
@@ -119,11 +119,11 @@ window is bounded by `join_file_tasks` without a semaphore permit to unwrap.
 Hostile-manifest and saturation evidence already in the suite, plus the
 zero-length cases added with this audit:
 
-- `repair::phases::plan::tests::malformed_chunk_ranges_are_refused_at_plan_time`
+- `girpr_repair_plan::plan::tests::malformed_chunk_ranges_are_refused_at_plan_time`
   — negative size/offset, `offset + size` overflow, range past file size.
-- `repair::phases::plan::tests::a_zero_length_entry_declaring_a_chunk_is_refused_at_plan_time`
+- `girpr_repair_plan::plan::tests::a_zero_length_entry_declaring_a_chunk_is_refused_at_plan_time`
   — the zero-length/range intersection.
-- `repair::phases::plan::tests::an_overflowing_download_estimate_saturates`.
+- `girpr_repair_plan::plan::tests::an_overflowing_download_estimate_saturates`.
 - `repair::scan::tests::an_overflowing_estimate_saturates_instead_of_panicking`.
 - `repair::scope::report::tests::an_overflowing_write_estimate_saturates_instead_of_panicking`.
 - `repair::scope::report::tests::a_short_estimate_slice_falls_back_to_a_saturating_per_file_estimate`.

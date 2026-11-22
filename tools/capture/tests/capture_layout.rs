@@ -1224,7 +1224,7 @@ fn a_retried_request_is_recorded_as_retried() {
         &[("GIRCAP_TEST_ZERO_BACKOFF", "1")],
     );
     assert_eq!(code, 0, "capture failed:\n{}\n{}", stdout, stderr);
-    // Self-verification of the T13 hook. A refactor that drops the
+    // Self-verification of the hook. A refactor that drops the
     // `zero_backoff()` branch would restore the 500 ms production backoff while
     // this test still saw `attempts == 2` (only slower). The child names the
     // hook on stderr at the exact point it selects ZeroSleep, so require that

@@ -245,7 +245,7 @@ pub fn cmd_sync_with_hooks(opts: SyncOpts, log: &LogCtx, hooks: &TestHooks) -> R
     // here would produce a second timestamped pair mid-run. `open_folder_cache`
     // is also the only thing that decides how a dry run opens a cache, so this
     // stays a plain call rather than a second policy.
-    // The heartbeat period was exposed by T15 on `ScanMode`. The resolved
+    // The heartbeat period was exposed on `ScanMode`. The resolved
     // `TestHooks` carries the same value; fix it on the mode only when a caller
     // injected one, otherwise leave `None` so the environment (and, with it
     // unset, the production period) still answers. This is the one heartbeat
