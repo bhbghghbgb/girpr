@@ -42,6 +42,11 @@ girpr-log = { path = "../../crates/log" }
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
 girpr-fs-names = { path = "../../crates/fs-names" }
+# Pure inclusive-range facts for the numeric flags checked here and by the two
+# other programs. The leaf answers below-min/above-max/in-range and carries the
+# offending value; girsync keeps its own `{flag}` wording and deliberately keeps
+# a zero-refusal outside clap so it exits 3, not clap's parse-error 2.
+girpr-value-ranges = { path = "../../crates/value-ranges" }
 anyhow = "1.0.104"
 walkdir = "2.5.1"
 # The redb cache (with `redb`, its positional `postcard` codec and `tempfile`

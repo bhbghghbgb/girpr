@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use girpr_audio_language::{CaseFold, normalize_audio_token};
+use girpr_value_ranges::{RangeBound, RangeFact, check_in_range};
 
 use crate::cli::{
     Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs,
@@ -446,29 +447,53 @@ fn validate_transport(
     timeout_secs: u64,
     max_response_bytes: u64,
 ) -> Result<crate::http::Transport> {
-    if jobs == 0 {
-        return Err(UsageError::new("--jobs must be at least 1"));
+    // The shared leaf only reports which bound was crossed; the wording, the
+    // `UsageError` type and the exit-1 class stayed here.
+    match check_in_range(jobs, 1, Some(64)) {
+        RangeFact::OutOfRange {
+            bound: RangeBound::Minimum,
+            ..
+        } => return Err(UsageError::new("--jobs must be at least 1")),
+        RangeFact::OutOfRange {
+            bound: RangeBound::Maximum,
+            ..
+        } => {
+            return Err(UsageError::new(format!(
+                "--jobs {jobs} exceeds 64; the CDNs rate-limit well below that and the \
+                 concurrency would only convert a throttle into failures"
+            )));
+        }
+        RangeFact::InRange => {}
     }
-    if jobs > 64 {
-        return Err(UsageError::new(format!(
-            "--jobs {jobs} exceeds 64; the CDNs rate-limit well below that and the \
-             concurrency would only convert a throttle into failures"
-        )));
+    match check_in_range(retries, 1, Some(10)) {
+        RangeFact::OutOfRange {
+            bound: RangeBound::Minimum,
+            ..
+        } => {
+            return Err(UsageError::new(
+                "--retries must be at least 1 (it counts the first attempt)",
+            ));
+        }
+        RangeFact::OutOfRange {
+            bound: RangeBound::Maximum,
+            ..
+        } => {
+            return Err(UsageError::new(format!(
+                "--retries {retries} exceeds 10; past that a failure is a real failure"
+            )));
+        }
+        RangeFact::InRange => {}
     }
-    if retries == 0 {
-        return Err(UsageError::new(
-            "--retries must be at least 1 (it counts the first attempt)",
-        ));
-    }
-    if retries > 10 {
-        return Err(UsageError::new(format!(
-            "--retries {retries} exceeds 10; past that a failure is a real failure"
-        )));
-    }
-    if timeout_secs == 0 {
+    if matches!(
+        check_in_range(timeout_secs, 1, None),
+        RangeFact::OutOfRange { .. }
+    ) {
         return Err(UsageError::new("--timeout must be at least 1 second"));
     }
-    if max_response_bytes == 0 {
+    if matches!(
+        check_in_range(max_response_bytes, 1, None),
+        RangeFact::OutOfRange { .. }
+    ) {
         // The other three are checked here for the same reason, and a zero ceiling
         // is the same kind of nonsense: it would refuse the very first byte of every
         // response, which is a tool that cannot fetch anything rather than one with

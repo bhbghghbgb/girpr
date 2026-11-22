@@ -11,6 +11,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use girpr_log::Level;
+use girpr_value_ranges::{RangeFact, check_in_range};
 
 use crate::cache::{CommitLimits, TestCacheBackend};
 use crate::cli::{CommonArgs, RwArgs};
@@ -390,9 +391,15 @@ impl TryFrom<RwArgs> for RwLimits {
     fn try_from(a: RwArgs) -> Result<Self> {
         let one = RwLimits::one();
         let nz = |flag: &str, n: usize| -> Result<NonZeroUsize> {
-            NonZeroUsize::new(n).ok_or_else(|| {
-                anyhow::anyhow!("{flag} must be >= 1 (got {n}); it is how many reads or writes may be in flight at once")
-            })
+            let bad = || {
+                anyhow::anyhow!(
+                    "{flag} must be >= 1 (got {n}); it is how many reads or writes may be in flight at once"
+                )
+            };
+            match check_in_range(n, 1, None) {
+                RangeFact::OutOfRange { .. } => Err(bad()),
+                RangeFact::InRange => NonZeroUsize::new(n).ok_or_else(bad),
+            }
         };
         match (
             a.rw_threads,

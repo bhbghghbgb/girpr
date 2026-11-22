@@ -741,7 +741,10 @@ the bridge actually reads.
   parameterised by each caller's rule), `girpr-path-shape` (the lexical
    relative-path shape validator — component checks and their order only, with
    each caller's normalization and device rule and its own reason-to-wording
-   and stable-identifier mapping), and `girpr-retry` (the retry schedule
+   and stable-identifier mapping), and `girpr-value-ranges` (pure inclusive-range
+   facts — below-min/above-max/in-range and the offending value only, with each
+   caller's own bounds, error wording and exit class kept locally), and
+   `girpr-retry` (the retry schedule
   factory and sleep driver, parameterised by each caller's delay, jitter and
   cap), and `girpr-exit` (the exit-table generation mechanism, parameterised by
   each caller's own codes and meanings), and `girpr-cli` (the clap-error to

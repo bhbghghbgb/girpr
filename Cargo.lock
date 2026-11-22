@@ -639,6 +639,7 @@ dependencies = [
  "girpr-report-core",
  "girpr-retry",
  "girpr-tempdir",
+ "girpr-value-ranges",
  "ini_core",
  "percent-encoding",
  "prost",
@@ -731,6 +732,7 @@ dependencies = [
  "girpr-util-hash",
  "girpr-util-ini",
  "girpr-util-path",
+ "girpr-value-ranges",
  "reqwest",
  "serde",
  "serde_json",
@@ -1056,6 +1058,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-value-ranges"
+version = "0.1.0"
+
+[[package]]
 name = "girsync"
 version = "0.1.0"
 dependencies = [
@@ -1070,6 +1076,7 @@ dependencies = [
  "girpr-sync-leaves",
  "girpr-sync-test-support",
  "girpr-tempdir",
+ "girpr-value-ranges",
  "md-5",
  "rayon",
  "serde",

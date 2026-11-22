@@ -21,6 +21,7 @@ use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
 use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
+use girpr_value_ranges::{RangeBound, RangeFact, check_in_range};
 
 /// Concurrent file window used when `--jobs` is omitted.
 pub const DEFAULT_JOBS: usize = 4;
@@ -296,11 +297,18 @@ impl Args {
     pub fn into_ctx(self) -> Result<RunCtx> {
         let requested_jobs = self.jobs;
         let jobs = requested_jobs.unwrap_or(DEFAULT_JOBS);
-        if jobs == 0 {
-            bail!("--jobs must be >= 1");
-        }
-        if jobs > MAX_JOBS {
-            bail!("--jobs must be <= {MAX_JOBS}");
+        // The leaf supplies only the crossed-bound fact; this binary maps it to
+        // its own `bail!` wording and keeps its usage-error exit class local.
+        match check_in_range(jobs, 1, Some(MAX_JOBS)) {
+            RangeFact::OutOfRange {
+                bound: RangeBound::Minimum,
+                ..
+            } => bail!("--jobs must be >= 1"),
+            RangeFact::OutOfRange {
+                bound: RangeBound::Maximum,
+                ..
+            } => bail!("--jobs must be <= {MAX_JOBS}"),
+            RangeFact::InRange => {}
         }
         let available = std::thread::available_parallelism()
             .map(|n| n.get())

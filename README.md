@@ -78,6 +78,7 @@ machine rather than the code.
 | `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
 | `crates/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
 | `crates/path-shape/` | the shared lexical relative-path shape validator: component checks and their order only, with each caller's normalization and device rule and its own mapping from reasons to wording and byte-stable identifiers | `validate`, `ShapePolicy`, `Normalization`, `ShapeProblem` |
+| `crates/value-ranges/` | pure inclusive-range facts for numeric CLI values: below-min/above-max/in-range plus the offending value; no error type, wording, exit code or range constant, so each caller keeps its own | `check_in_range`, `RangeFact`, `RangeBound` |
 | `crates/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
 | `crates/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
 | `crates/util-counter/` | the saturating atomic byte counter | `add_saturating` |
@@ -419,7 +420,13 @@ validator to this binary and `gircap`: the component checks and their order are
 shared, while each caller passes its own normalization policy and device rule
 and maps a reason to its own error wording and, where it publishes one, its own
 byte-stable refusal identifier. The repair's `./` cleanup spelling and the
-capture's published rule IDs stay with their callers. `crates/retry/` supplies the
+capture's published rule IDs stay with their callers. `crates/value-ranges/`
+supplies pure inclusive-range facts to this binary, `gircap` and `girsync`: the
+leaf only reports below-min/above-max/in-range and carries the offending value,
+while each caller passes its own bounds and maps a fact to its own error wording
+and exit class — `bail!` here, a `UsageError` exiting 1 in capture, and girsync's
+deliberate zero-refusal exiting 3 rather than clap's parse-error 2. No message,
+exit code or range constant is shared. `crates/retry/` supplies the
 retry schedule factory and injectable sleep driver to this binary and `gircap`;
 each passes its own delay, jitter and cap and keeps its own attempt loop, so
 neither retry policy is shared. `crates/exit/` supplies the exit-table generation
