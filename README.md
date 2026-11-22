@@ -59,6 +59,7 @@ machine rather than the code.
 | `crates/fetch/` (`hyp`) | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
+| `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -436,7 +437,13 @@ the chunk-identity value types to this binary and `gircap` — an owned
 digest/length key, a borrowed view that allocates nothing per comparison and a
 case-insensitive parse, plus the digest-lowercasing rule a caller applies at
 its own decode boundary; each keeps its own index, collision policy, first-match
-order and published bytes, so no selection rule is shared. `crates/model/` supplies the region
+order and published bytes, so no selection rule is shared. `crates/chunk-cost/`
+supplies the saturating download-projection fold to this binary and `gircap` —
+both callers pass one `(compressed_size, downloads)` entry per candidate chunk
+and the leaf only sums the marked sizes, so the `PLAN` total, the
+`SUMMARY plan_download_bytes` key and the capture's projected bytes stay one
+figure; each keeps its own selection, reuse decision and published bytes.
+`crates/model/` supplies the region
 identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
 policy is shared. `crates/filter/` supplies the shared `--include`/`--exclude`

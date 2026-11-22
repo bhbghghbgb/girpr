@@ -752,6 +752,10 @@ the bridge actually reads.
   case-insensitive parse and the lowercase-normalisation rule, with each
   caller's own selection, collision policy, first-match order and published
   bytes kept locally), and
+  `girpr-chunk-cost` (the saturating Σ compressed_size download-projection
+  fold over caller-supplied `(compressed_size, downloads)` entries, with each
+  caller's own selection, reuse decision, ranking and published bytes kept
+  locally), and
   `girpr-model` (the region identity, ids, channel tuples and API bases, with
   each caller's own resolve policy, override seam and URL builders kept
   locally), are not that kind of sharing: they carry no
