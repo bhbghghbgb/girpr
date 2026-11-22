@@ -60,6 +60,7 @@ machine rather than the code.
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
+| `crates/chunk-verify/` | the chunk-verification leaf: the verdict a scan produces, the range/owner remap the scan and the in-place writer share, and the verify pass that re-derives the finished file from a fresh read; no scan-planning policy, write-direction decision or published bytes, and the coarse-MTIME reuse guard stays with the writer | `Verdict`, `scan_ranges`, `source_ok_by_chunk`, `source_ok_by_range`, `verify_in_place`, `Verified` |
 | `crates/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
@@ -69,7 +70,7 @@ machine rather than the code.
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `crates/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
-| `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
+| `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `crates/chunk-verify/` | `scan_plan`, `ScanReport` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics over the shared `girpr-filter` rules (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
@@ -444,6 +445,15 @@ both callers pass one `(compressed_size, downloads)` entry per candidate chunk
 and the leaf only sums the marked sizes, so the `PLAN` total, the
 `SUMMARY plan_download_bytes` key and the capture's projected bytes stay one
 figure; each keeps its own selection, reuse decision and published bytes.
+`crates/chunk-verify/` owns the chunk-verification mechanics shared by the
+`--scan` pass and the in-place writer: the verdict a scan produces (including
+the `modified` timestamp the reuse guard checks), the range/owner remap that
+turns per-range answers into per-chunk verdicts and back, and the verify pass
+that re-derives the finished file from a fresh read. Both consumers depend on
+the leaf directly, so neither `file` nor `scan` owns those types and the two
+remap directions cannot drift; the coarse-MTIME guard stays with the writer
+because it reads the plan and the scan report together. The leaf depends only
+on the wire chunk and hash/scan leaves and re-exports nothing from the binary.
 `crates/repair-policy/` owns the write-mode values and the one rule that
 resolves them. The in-place writer, the disk estimate's injected-target seam
 and the download estimate all consume that rule directly, so neither `file`
