@@ -63,7 +63,6 @@ workspace = true
 
 [dependencies]
 clap = { version = "4.6.9", features = ["derive"] }
-chrono = "0.4.45"
 # The log-file and log-level policy, shared with the two dev tools so that
 # `--log-file`, the env vars and the default levels mean the same thing in
 # all three.

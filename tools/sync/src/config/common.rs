@@ -6,7 +6,7 @@
 //! command runs — and `ScanMode` is the same idea one level down: how a single
 //! folder scan treats the cache and the filesystem.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -552,13 +552,18 @@ impl TryFrom<CommonArgs> for CommonOpts {
 /// `--no-backup` is the flag that says what they meant.
 fn backup_policy(disabled: bool, retain: Option<usize>) -> Result<BackupPolicy> {
     let retain = match retain {
-        Some(n) => match NonZeroUsize::new(n) {
-            Some(nz) => Some(nz),
-            None => bail!(
-                "--backup-retain must be >= 1 (got {n}); it is how many backups or \
-                 snapshots to keep per prefix, and --no-backup is how you ask for none"
-            ),
-        },
+        Some(n) => {
+            let bad = || {
+                anyhow::anyhow!(
+                    "--backup-retain must be >= 1 (got {n}); it is how many backups or \
+                     snapshots to keep per prefix, and --no-backup is how you ask for none"
+                )
+            };
+            match check_in_range(n, 1, None) {
+                RangeFact::OutOfRange { .. } => return Err(bad()),
+                RangeFact::InRange => Some(NonZeroUsize::new(n).ok_or_else(bad)?),
+            }
+        }
         None => None,
     };
     Ok(BackupPolicy { disabled, retain })

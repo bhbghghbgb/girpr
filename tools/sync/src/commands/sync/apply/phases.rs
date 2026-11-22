@@ -763,6 +763,7 @@ fn remove_dir_all(p: &std::path::Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::sync::plan::{CopyBecause, CopyItem};
+    use girpr_log::test_support::CaptureBuffer;
 
     /// **The rule that picks the failure a run reports, on its own.**
     ///
@@ -1102,33 +1103,6 @@ mod tests {
         assert!(log.contains("aaa.bin"), "the log names the value: {log}");
     }
 
-    /// A writer that appends to a shared buffer, so a case can read what the
-    /// run logged.
-    #[derive(Clone, Default)]
-    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for SharedBuffer {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
-        type Writer = SharedBuffer;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Run `f` with a subscriber that writes the events it emits into a
     /// buffer, and return what it wrote.
     ///
@@ -1137,17 +1111,17 @@ mod tests {
     /// that was installed then, and a cached "never" would swallow the event
     /// here.
     fn capture_log<T>(f: impl FnOnce() -> T) -> (T, String) {
-        let buffer = SharedBuffer::default();
+        let buffer = CaptureBuffer::default();
+        let writer = buffer.clone();
         let subscriber = tracing_subscriber::fmt()
-            .with_writer(buffer.clone())
+            .with_writer(move || writer.clone())
             .with_ansi(false)
             .finish();
         let out = tracing::subscriber::with_default(subscriber, || {
             tracing::callsite::rebuild_interest_cache();
             f()
         });
-        let text = String::from_utf8_lossy(&buffer.0.lock().unwrap_or_else(|e| e.into_inner()))
-            .into_owned();
+        let text = String::from_utf8_lossy(&buffer.snapshot()).into_owned();
         (out, text)
     }
 }

@@ -62,6 +62,43 @@ impl CaptureBuffer {
     }
 }
 
+#[cfg(test)]
+mod capture_buffer_tests {
+    use super::*;
+
+    /// Bytes written through `Write` come back from `snapshot()` unchanged,
+    /// including bytes that are not valid UTF-8. The sink stores bytes, not
+    /// text; turning them into text is the caller's job.
+    #[test]
+    fn write_and_snapshot_preserve_bytes_exactly() {
+        let mut buffer = CaptureBuffer::default();
+
+        let first = b"first line\n";
+        assert_eq!(buffer.write(first).expect("write succeeds"), first.len());
+        assert_eq!(buffer.snapshot(), first);
+
+        let second = [0xff, 0x00, 0x80, b'\n'];
+        buffer.write_all(&second).expect("write_all succeeds");
+        let mut expected = first.to_vec();
+        expected.extend_from_slice(&second);
+        assert_eq!(buffer.snapshot(), expected);
+
+        buffer.flush().expect("flush is a no-op");
+        assert_eq!(buffer.snapshot(), expected);
+    }
+
+    /// Clones share one buffer: a writer clone sees bytes written through
+    /// another handle, which is what lets a scoped subscriber and its test
+    /// read the same capture.
+    #[test]
+    fn clones_share_the_same_bytes() {
+        let mut writer = CaptureBuffer::default();
+        let reader = writer.clone();
+        writer.write_all(b"shared").expect("write_all succeeds");
+        assert_eq!(reader.snapshot(), b"shared");
+    }
+}
+
 /// The one shared subscriber shape: debug level, no ANSI, one buffer.
 fn subscriber(buffer: CaptureBuffer) -> impl tracing::Subscriber {
     tracing_subscriber::fmt()

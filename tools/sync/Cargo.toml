@@ -89,6 +89,10 @@ tracing-appender = "0.2.5"
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.
 [dev-dependencies]
+# The shared byte sink behind the scoped log-capture helper: the unit tests that
+# assert on a rendered log line write into `CaptureBuffer` and read its snapshot
+# back as lossy text. Test-only — the shipped library keeps no test surface.
+girpr-log = { path = "../../crates/log", features = ["test-support"] }
 md-5 = "0.11.0"
 # The stdout assertions read `--output json` records, so they build the expected
 # ones with `json!` rather than comparing rendered text.
