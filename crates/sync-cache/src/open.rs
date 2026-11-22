@@ -408,7 +408,9 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
             // remains valid for a later sensitive run. Only genuine conflicts
             // (two live/record paths differing only by case in insensitive mode)
             // abort, detected by the callers — never here.
-            Ok(CacheDb::open_writable_locked(db, lock))
+            let mut cache = CacheDb::open_writable_locked(db, lock);
+            cache.set_capture_path(db_path);
+            Ok(cache)
         }
         CacheOpen::ReadOnly => {
             if !db_path.exists() {
@@ -445,7 +447,9 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
                     "cache case mode differs; read-only open leaves meta as recorded"
                 );
             }
-            Ok(CacheDb::open_read_only_locked(db, lock))
+            let mut cache = CacheDb::open_read_only_locked(db, lock);
+            cache.set_capture_path(db_path);
+            Ok(cache)
         }
     }
 }

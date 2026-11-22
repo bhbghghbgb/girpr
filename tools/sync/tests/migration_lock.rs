@@ -109,7 +109,10 @@ fn lock_update_records_files_dirs_and_hashes() {
     wfile(&dir, "sub/b.txt", b"world");
     std::fs::create_dir_all(dir.join("empty")).unwrap();
 
-    assert_eq!(cmd_update(update(dir.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        common::with_observed_rows(|| cmd_update(update(dir.clone()), &log())).unwrap(),
+        0
+    );
     assert!(dir.join(CACHE_PREFIX).exists(), "update creates the cache");
 
     let r = recs(&dir);
@@ -414,7 +417,7 @@ fn lock_record_side_is_read_only() {
     let t = temp_root("lock_rec");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    common::with_observed_rows(|| cmd_update(update(dir.clone()), &log())).unwrap();
 
     // Same content, different root.
     let live = t.subdir("live");
@@ -423,7 +426,7 @@ fn lock_record_side_is_read_only() {
 
     let record = dir.join(CACHE_PREFIX);
     let before = recs(&dir);
-    let code = cmd_compare(compare(record, live), &log()).unwrap();
+    let code = common::with_observed_rows(|| cmd_compare(compare(record, live), &log())).unwrap();
     assert_eq!(code, 0);
     let after = recs(&dir);
     assert_eq!(before.len(), after.len(), "record compare writes no rows");

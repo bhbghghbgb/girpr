@@ -6,9 +6,10 @@ use redb::{
     Database, DatabaseError, ReadOnlyTable, ReadTransaction, ReadableTable, ReadableTableMetadata,
     TableHandle, backends::InMemoryBackend,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,6 +21,29 @@ use crate::schema::{CACHE_VERSION, FileRec, Meta};
 use crate::wire::{decode_meta, decode_rec, encode_meta};
 use crate::write::{CacheWrite, CommitLimits, CommitPolicy};
 use crate::{ENTRIES, META_KEY, META_TBL};
+
+// A test-only observer for the rows a file-backed cache holds. A handle that is
+// about to be dropped copies its rows here instead of making a test reopen redb
+// to read them: the rows a command left are the ones its handle already has.
+//
+// Thread-local because a command and the test that observes it run on the same
+// thread. Production never enables it, so no extra read happens on a real run.
+thread_local! {
+    static ROW_CAPTURE: RefCell<Option<HashMap<PathBuf, HashMap<String, FileRec>>>> =
+        const { RefCell::new(None) };
+}
+
+/// Start collecting the rows file-backed caches on this thread leave behind.
+/// Keyed by cache path, so a run that touches two sides is read on both.
+pub fn begin_row_capture() {
+    ROW_CAPTURE.with(|c| *c.borrow_mut() = Some(HashMap::new()));
+}
+
+/// Take the rows collected since [`begin_row_capture`], ending the capture.
+/// Empty when capture was never started.
+pub fn take_row_capture() -> HashMap<PathBuf, HashMap<String, FileRec>> {
+    ROW_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
+}
 
 /// The `meta` row, decoded, in the read/write path's words.
 ///
@@ -185,6 +209,12 @@ pub struct CacheDb {
     /// share, so this handle starts a fresh one; what a fresh count means
     /// for the cache is `with_handle`'s to say.
     reads: Arc<AtomicU64>,
+    /// The file this handle came from, when row capture is possible.
+    ///
+    /// Only set by [`crate::open_db`] for a file-backed open; an in-memory cache
+    /// is already readable without a reopen and needs no observer. Used solely
+    /// by [`Drop`], so it cannot change what a run does with a cache.
+    capture_path: Option<PathBuf>,
 }
 
 impl CacheDb {
@@ -222,6 +252,7 @@ impl CacheDb {
             db,
             _lock: lock,
             reads: Arc::new(AtomicU64::new(0)),
+            capture_path: None,
         }
     }
 
@@ -242,6 +273,7 @@ impl CacheDb {
             db,
             _lock: None,
             reads,
+            capture_path: None,
         }
     }
 
@@ -257,6 +289,14 @@ impl CacheDb {
     /// Wrap an observer handle and the shared sidecar lock this run holds.
     pub(crate) fn open_read_only_locked(db: redb::ReadOnlyDatabase, lock: Option<File>) -> Self {
         Self::with_handle_and_lock(Handle::ReadOnly(db), lock)
+    }
+
+    /// Name the file this handle was opened from, so [`Drop`] can offer its
+    /// rows to a test that is capturing them. Only [`crate::open_db`] calls it,
+    /// and only for a file-backed open; nothing a command does with the cache
+    /// reads this field.
+    pub(crate) fn set_capture_path(&mut self, path: &Path) {
+        self.capture_path = Some(path.to_path_buf());
     }
 
     /// Bring the cache's `meta` row in line with the run's case mode.
@@ -779,6 +819,30 @@ impl CacheDb {
     /// handle opens.
     pub fn begin_write_with(&self, limits: CommitLimits) -> Result<CacheWrite<'_>> {
         CacheWrite::with_limits(self.writable()?, limits)
+    }
+}
+
+impl Drop for CacheDb {
+    fn drop(&mut self) {
+        // Capture on the way out, while the handle is still open: a test that
+        // is watching this cache gets its final rows without opening redb
+        // again. Reading through the existing handle costs a transaction, not
+        // a file open, and an error here is a failed observation rather than a
+        // failed command, so it is deliberately ignored.
+        let Some(path) = self.capture_path.clone() else {
+            return;
+        };
+        let enabled = ROW_CAPTURE.with(|c| c.borrow().is_some());
+        if !enabled {
+            return;
+        }
+        if let Ok(rows) = self.load_all() {
+            ROW_CAPTURE.with(|c| {
+                if let Some(map) = c.borrow_mut().as_mut() {
+                    map.insert(path, rows);
+                }
+            });
+        }
     }
 }
 

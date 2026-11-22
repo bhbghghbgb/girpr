@@ -2527,7 +2527,10 @@ fn run_sync_copies_the_cache_before_ignore_cache_removes_it() {
 
     let mut o = sync(src.clone(), dst.clone());
     o.common.ignore_cache = true;
-    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+    assert_eq!(
+        common::with_observed_rows(|| cmd_sync(o, &log())).unwrap(),
+        0
+    );
 
     let copies = siblings(&src, "girpr-cache-backup-");
     assert_eq!(
@@ -2571,7 +2574,10 @@ fn run_sync_with_no_backup_still_removes_the_cache() {
         retain: None,
     };
     o.common.ignore_cache = true;
-    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+    assert_eq!(
+        common::with_observed_rows(|| cmd_sync(o, &log())).unwrap(),
+        0
+    );
 
     assert!(
         siblings(&src, "girpr-cache-backup-").is_empty(),

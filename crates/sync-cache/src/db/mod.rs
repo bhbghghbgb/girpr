@@ -10,7 +10,7 @@ mod handle;
 
 pub use backend::TestCacheBackend;
 pub(super) use backend::{SharedCache, memory_registry, redb_builder};
-pub use cachedb::CacheDb;
+pub use cachedb::{CacheDb, begin_row_capture, take_row_capture};
 // The one walk over an open table's keys, shared by the read handle and the
 // write handle: the batch is not a second reading of the table, it is the same
 // reading of it.

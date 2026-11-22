@@ -126,7 +126,7 @@ pub(crate) fn durability_reads() -> u64 {
     DURABILITY_READS.with(|c| c.get())
 }
 
-pub use db::{CacheDb, TestCacheBackend};
+pub use db::{CacheDb, TestCacheBackend, begin_row_capture, take_row_capture};
 // Test-only seams: `open_memory_cache` is the shared (path-keyed) variant of
 // `CacheDb::open_temp`, and `memory_cache_at` lets a test read what a run left
 // there. Both are reached only through `TestCacheBackend::Memory` or

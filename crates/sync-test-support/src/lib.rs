@@ -294,10 +294,47 @@ pub fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
     load_all_records(&cache_at(dir)).unwrap()
 }
 
+/// Publish rows as the path's in-memory cache so later [`recs_of`] calls read
+/// them without reopening the cache file.
+///
+/// Only for paths that had no memory entry: a suite that ran on the memory
+/// backend already owns the rows and must keep its handle, not have the
+/// registry entry swapped out from under it.
+fn publish_rows(p: &Path, rows: HashMap<String, FileRec>) {
+    if CacheDb::memory_cache_at(p).is_some() {
+        return;
+    }
+    let db = CacheDb::open_memory_cache(p, true).expect("publish observed rows");
+    for (rel, rec) in rows {
+        db.put(&rel, &rec).expect("publish one observed row");
+    }
+}
+
+/// Run `f`, then let its file-backed caches hand their rows to a test-only
+/// observer before they close.
+///
+/// A case whose subject is the cache file keeps the file backend. Its later
+/// [`recs_of`] calls still read the same rows: they are served from the in-memory
+/// mirror of what the run just left, so no second open of redb is needed. The
+/// file, its backups and its snapshots are unchanged — this only changes where
+/// the assertions read from.
+pub fn with_observed_rows<T>(f: impl FnOnce() -> T) -> T {
+    girsync::cache::begin_row_capture();
+    let out = f();
+    for (path, rows) in girsync::cache::take_row_capture() {
+        // The captured snapshot is the whole cache as the run left it, so a
+        // mirror from an earlier observation of this path is stale.
+        CacheDb::forget_memory_cache(&path);
+        publish_rows(&path, rows);
+    }
+    out
+}
+
 /// The cache a run in this process left at `dir`.
 ///
 /// A suite that ran with [`opts_mem`] has its rows in the shared in-memory cache
-/// for `<dir>/girpr-cache`; every other suite has the real file. Preferring the
+/// for `<dir>/girpr-cache`; every other suite has the real file. A file-backed
+/// case wrapped in [`with_observed_rows`] also has a mirror there. Preferring the
 /// memory entry when one exists keeps the assertions identical while letting a
 /// cache-content case leave the HDD.
 fn cache_at(dir: &Path) -> CacheDb {
@@ -311,6 +348,8 @@ fn cache_at(dir: &Path) -> CacheDb {
 /// memory-or-file decision `recs_of` makes; opening the file directly would
 /// invent an empty cache beside the in-memory one.
 pub fn edit_row<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+    let p = dir.join(CACHE_PREFIX);
+    let already_mirrored = CacheDb::memory_cache_at(&p).is_some();
     let db = cache_at(dir);
     let mut rec = db
         .get(rel)
@@ -318,6 +357,12 @@ pub fn edit_row<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
         .unwrap_or_else(|| panic!("no row for {rel}"));
     f(&mut rec);
     db.put(rel, &rec).unwrap();
+    if !already_mirrored {
+        // The edit is on the file, which is the subject of these cases. Mirror
+        // what it now holds so the assertion that reads it back is the next
+        // reader of this handle, not a new open of the same file.
+        publish_rows(&p, load_all_records(&db).expect("read the edited cache"));
+    }
 }
 
 /// Drop one algorithm from a row, leaving its stat intact.
