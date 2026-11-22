@@ -40,7 +40,7 @@ machine rather than the code.
 | `src/main.rs` | shim: `Args::try_parse` → `init_tracing` → runtime → `repair::run` → `SUMMARY` → `flush_log` → `exit` | `main` |
 | `src/lib.rs` | module map + re-exports | — |
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
-| `src/config.rs` | validated run config (scope, limits, repair mode); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
+| `src/config.rs` | validated run config (scope, limits, repair mode value from `crates/repair-policy/`); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
@@ -60,13 +60,14 @@ machine rather than the code.
 | `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
+| `crates/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
 | `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_rels`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
 | `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
+| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `crates/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
@@ -443,6 +444,12 @@ both callers pass one `(compressed_size, downloads)` entry per candidate chunk
 and the leaf only sums the marked sizes, so the `PLAN` total, the
 `SUMMARY plan_download_bytes` key and the capture's projected bytes stay one
 figure; each keeps its own selection, reuse decision and published bytes.
+`crates/repair-policy/` owns the write-mode values and the one rule that
+resolves them. The in-place writer, the disk estimate's injected-target seam
+and the download estimate all consume that rule directly, so neither `file`
+nor `scan` owns the mode decision and the two estimates cannot disagree with
+the writer about which path a file takes. It re-exports nothing from the
+binary and depends only on the optional clap `ValueEnum` derive.
 `crates/model/` supplies the region
 identity, ids, channel tuples and base URLs to this binary and `gircap`; each
 keeps its own resolve policy, override seam and URL builders, so no region
