@@ -67,8 +67,8 @@ All others are dropped. Each batch gets one implementation session then one revi
 | FU04 | Exercise or remove the unused forget_memory_cache wrapper | dropped | No cold-cache need; helper kept for F30 |
 | FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | dropped | Duplicate of active task T18 |
 | FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | dropped | Pre-existing vestigial nit |
-| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | batched | B1: force cold cache / fresh dst so run 2 actually exercises no_fsync=true |
-| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | batched | B1: prevent vacuous None==None parity pass |
+| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | done | B1 / 6a7ecbce: fresh dst per loop iteration gives a cold path-keyed cache row; messages intact |
+| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | done | B1 / 6a7ecbce: is_some() preconditions on both chunk totals rule out vacuous parity; skip guard intact |
 | FU09 | Name-overstates-coverage hygiene in T04 log cases | dropped | Cosmetic; behavior already covered by girpr-log unit tests |
 | FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration | dropped | Merged into FU09 (same class) |
 | FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | dropped | Comment only |
@@ -95,6 +95,8 @@ All others are dropped. Each batch gets one implementation session then one revi
 | FU32 | Restore a one-line manifest comment for the cross-process bundle lock | dropped | Rationale already in gircap-test-support docs |
 | FU33 | Correct the stale F36 example pointer in the report | dropped | Report is deleted at final cleanup |
 | FU34 | Consider success-output override for live per-case progress in merged tests | dropped | failure-output=final already adequate |
+| FU35 | Add explicit forget_memory_cache in FU07 test to document cold-cache intent | open | Defensive only; fresh-dst approach already stronger — prune |
+| FU36 | Strengthen FU08 precondition from is_some() to expected chunk count | open | Low value; current guard closes the reported hole — prune |
 
 ## Persistent context
 
