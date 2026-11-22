@@ -45,7 +45,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T31 | Shared plan-action record crate | skipped | | F36 validated skip: the only shared mechanic is \`girpr-report-core\`'s ordered-JSON/line writer, already consumed directly by both planes; a value-only record type would be a §A2 facade (no overlapping field set) or force one format onto the other (§A5/A6). Stale pointers: code uses \`why=\` (not \`because=\`), report module is \`tools/sync/src/report/mod.rs\` |
 | T32 | Pluggable KV backend + in-memory mirror | skipped | | F37 validated skip: restatement of closed F28/T23 - one KV implementation (redb file vs in-memory), sealed redb handle forces a local trait, single-implementer §A2 facade otherwise. Registry already path-keyed/per-process/forgettable (\`OnceLock\`); generalizing key/lifetime is the cross-test leakage to stop (§A10). Stale premise: row capture is thread-local, not process-global. Do not re-dispatch |
 | T33 | Generic batched durable writer | skipped | | F38 validated skip: only writer is \`girpr-sync-cache::CacheWrite\` (single consumer; §A2 facade); a generic shape must expose \`GIRSYNC_TEST_*\` durability knobs (§A11) or leave all policy local, while pre-drop commit ordering is a call-site crash-safety invariant (§A13/N15). Revisit only if a second batched writer appears |
-| T34 | Generalized `RestartableSink` with blanket impls | in_progress | | F39; Send bound + `restart()` meaning differ between traits |
+| T34 | Generalized `RestartableSink` with blanket impls | skipped | | F39 validated skip: only acyclic common home is \`girpr-digest\`, which deliberately hosts \`BodyFile\` to break a cycle; unifying couples fetch's zstd path to gircap's HTTP body seam. \`Send\` bounds and \`restart()\` responsibilities (truncate+re-digest vs seek-only vs clear) diverge by contract (§A5/A12). No safe narrower boundary |
 | T35 | Shared capture-buffer primitive | todo | | F40; strict-vs-lossy UTF-8 and MakeWriter must not alter lines |
 | T36 | Generic parse→plan→dispatch command harness | todo | | F41; typed outcomes differ, contradicts A4 — likely skip |
 | T37 | Shared precondition/skip policy | todo | | F42; pinned `SKIP precondition:` wording and nextest overrides |
@@ -77,7 +77,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | J | T23, T24, T25 | done | No reviewable work - all three validated skips (forbidden cache, dead trait, pre-satisfied fold) |
 | K | T26, T27, T28 | done | No reviewable work - all three validated skips (content-free policy facade, single-consumer test runner, incompatible publish contracts) |
 | L | T29, T30, T31 | done | No reviewable work - all three validated skips (pre-satisfied report core, local typed fault seam, no shared plan-action value) |
-| M | T32, T33, T34 | pending | |
+| M | T32, T33, T34 | done | No reviewable work - all three validated skips (single-implementer KV facade, single-consumer batched writer, divergent sink contracts) |
 | N | T35, T36, T37 | pending | |
 | O | T38, T39, T40 | pending | |
 | P | T41, T42, T43 | pending | |
