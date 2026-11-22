@@ -18,7 +18,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T04 | Establish the girpr-owned subtree and move the low-level leaves | completed | 8ddd15cf, d72b6a8f | §F4, §F7, §F8: chose `app/` subtree and moved `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; names and workspace lints unchanged; Cargo.lock names unchanged. Chosen path recorded in Persistent context |
 | T05 | Move the mid-layer girpr-only product crates | completed | 8d16a9d8, aa3fb5ed, 822cf4c6 | §F4, §F6, §F8: five crates moved into `app/` with names, lints, `repair-plan → fetch` edge and feature wiring intact; no lockfile diff. T06 note: test crates moving into `app/` must change `../../app/<crate>` deps to `../<crate>` and inversion dep `girpr` from `../..` to `../../` |
 | T06 | Move the two girpr-only test crates | pending_review | 29154608, 9ffe9464 | §F4, §F6, §F8: both crates moved into `app/` with names/lints unchanged, inversion to root kept as a normal dep and the two crates kept separate; root shims, nextest filters/FQNs and isolation untouched. Inversion path written `../../` (textual no-op at same depth); shims held no old path text |
-| T07 | Ownership consistency sweep | in_progress | | §F5, §F7, §F8, §F9: final classification audit, remaining path text, Cargo.lock and lint-table verification, gircap untouched, fix misleading manifest descriptions |
+| T07 | Ownership consistency sweep | pending_review | 7fa1c193 | §F5, §F7, §F8, §F9: audit confirms 19 shared / 13 app / 3 tools/sync / 3 tools/capture, lint tables and locks correct, no forbidden references; F01 README wording and girpr-lock/fetch/report "shared" descriptions fixed. F01 closed by this task |
 
 ## Reviews
 
