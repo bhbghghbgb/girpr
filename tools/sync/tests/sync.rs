@@ -7,16 +7,26 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
-    log, parse_ndjson, recs_of, rfile, skip_if_no_link, sync, sync_dry, sync_mem, sync_mtime,
-    temp_root, update, update_mem, wfile,
+    TempDir, compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling,
+    is_case_sensitive, log, parse_ndjson, recs_of, rfile, skip_if_no_link, sync, sync_dry,
+    sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
 };
 use girsync::cache::{
     CACHE_PREFIX, CacheOpen, CommitLimits, TestCacheBackend, load_all_records, open_db,
 };
 use girsync::{BackupPolicy, TestHooks, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The plain two-sided scratch tree: one isolated root with `src` and `dst`
+/// under it. Cases that pin mtime or build a different shape lay out their
+/// own tree instead.
+fn dirs(tag: &str) -> (TempDir, PathBuf, PathBuf) {
+    let t = temp_root(tag);
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    (t, src, dst)
+}
 
 fn recs(dir: &Path) -> std::collections::HashMap<String, girsync::cache::FileRec> {
     recs_of(dir)
@@ -194,9 +204,7 @@ fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
 /// own test below.
 #[test]
 fn run_sync_dry_run_writes_nothing_and_creates_no_cache() {
-    let t = temp_root("dryrun");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("dryrun");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
     wfile(&dst, "extra.txt", b"stay for now");
@@ -240,9 +248,7 @@ fn run_sync_dry_run_writes_nothing_and_creates_no_cache() {
 /// real cache is treated as absent rather than deleted: left exactly as it was.
 #[test]
 fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
-    let t = temp_root("dryignore");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("dryignore");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
     cmd_update(update(src.clone()), &log()).unwrap();
@@ -265,9 +271,7 @@ fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
 
 #[test]
 fn run_sync_keep_extra_and_missing_only() {
-    let t = temp_root("flags");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("flags");
     wfile(&src, "common.txt", b"v2-changed-and-longer");
     wfile(&dst, "common.txt", b"v1");
     wfile(&src, "newfile.txt", b"brand new");
@@ -305,9 +309,7 @@ fn run_sync_keep_extra_and_missing_only() {
 /// by the same flag that skips `DELETE`.
 #[test]
 fn run_sync_keep_extra_spares_extra_dirs_too() {
-    let t = temp_root("keep_dirs");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("keep_dirs");
     wfile(&src, "shared.txt", b"same");
     wfile(&dst, "shared.txt", b"same");
     wfile(&dst, "extra.txt", b"extra file");
@@ -327,9 +329,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     );
 
     // Without the flag the same tree is fully collected, dirs included.
-    let t2 = temp_root("no_keep_dirs");
-    let src2 = t2.subdir("src");
-    let dst2 = t2.subdir("dst");
+    let (_t2, src2, dst2) = dirs("no_keep_dirs");
     wfile(&src2, "shared.txt", b"same");
     wfile(&dst2, "shared.txt", b"same");
     wfile(&dst2, "extradir/nested/deep.bin", b"y");
@@ -348,9 +348,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
 /// `clash/sub/deep` are unknown dirs that the copy wipes.
 #[test]
 fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
-    let t = temp_root("wiped");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("wiped");
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
@@ -379,9 +377,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
 #[cfg(not(windows))]
 #[test]
 fn a_backslash_in_a_posix_filename_stays_literal_and_the_copy_stays_under_dst() {
-    let t = temp_root("posix_backslash");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (t, src, dst) = dirs("posix_backslash");
     wfile(&src, "a\\b.txt", b"inside");
     wfile(&src, "\\lead.txt", b"leading");
 
@@ -412,9 +408,7 @@ fn a_backslash_in_a_posix_filename_stays_literal_and_the_copy_stays_under_dst() 
 
 #[test]
 fn run_sync_rejects_bad_inputs() {
-    let t = temp_root("reject");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("reject");
     wfile(&src, "a.txt", b"x");
     wfile(&dst, "a.txt", b"x");
 
@@ -442,9 +436,7 @@ fn run_sync_rejects_bad_inputs() {
 /// it before `AlreadyExists` (os error 183) can abort anything.
 #[test]
 fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
-    let t = temp_root("nestedfix");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("nestedfix");
     wfile(&src, "a/b/x.txt", b"x");
     wfile(&dst, "a", b"blocking file");
 
@@ -543,9 +535,7 @@ fn seed_dst_hard_link_pair(src: &Path, dst: &Path, src_name: &str, dst_name: &st
 /// the shared bytes and the link in place.
 #[test]
 fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
-    let t = temp_root("hardlink_guard");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("hardlink_guard");
     wfile(&src, "a.txt", b"AAAA");
     wfile(&src, "b.txt", b"BBBBBBBBBB");
     std::fs::hard_link(src.join("b.txt"), dst.join("a.txt"))
@@ -602,9 +592,7 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
 #[test]
 fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
     // ----- dimensions 1 & 2: one fixture, two dst hard-link pairs -----------
-    let t = temp_root("hardlink_parity");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("hardlink_parity");
     seed_dst_hard_link_pair(&src, &dst, "n.txt", "n.txt", "n_shared.txt");
     // The case-only pair is observable only where the two spellings differ.
     let case_sensitive = is_case_sensitive(&dst);
@@ -670,9 +658,7 @@ fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
     // A fresh single-pair fixture, so the case pair cannot change the plan. The
     // default plan deletes the second name before the copy, reducing the count
     // to one; both modes must reach that decision.
-    let t2 = temp_root("hardlink_default");
-    let src2 = t2.subdir("src");
-    let dst2 = t2.subdir("dst");
+    let (_t2, src2, dst2) = dirs("hardlink_default");
     seed_dst_hard_link_pair(&src2, &dst2, "a.txt", "a.txt", "shared.txt");
 
     let dry = run_binary_mem(&src2, &dst2, &["--dry-run"], &[]);
@@ -690,9 +676,7 @@ fn the_hard_link_refusal_is_the_same_decision_in_all_dimensions() {
 
 #[test]
 fn run_sync_resolves_type_conflicts() {
-    let t = temp_root("typeconf");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("typeconf");
     // src file vs dst dir at the same relpath...
     wfile(&src, "node", b"i am a file");
     wfile(&dst, "node/inner.txt", b"i am a dir");
@@ -1301,9 +1285,7 @@ fn a_copied_file_carries_the_sources_timestamp() {
 /// and the damage only surfaces later as phantom drift from a `compare-self`.
 #[test]
 fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
-    let t = temp_root("prune_keeps_copied");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("prune_keeps_copied");
     // One file at the root, so the run has work beyond the new directory and the
     // prune is not trivially looking at an empty table.
     wfile(&src, "top.txt", b"top");
@@ -1340,9 +1322,7 @@ fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
 /// Asserted against the cache, per the reasoning above.
 #[test]
 fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
-    let t = temp_root("prune_drops_gone");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("prune_drops_gone");
     wfile(&src, "kept.txt", b"kept");
     wfile(&src, "doomed.txt", b"doomed");
 
@@ -1390,9 +1370,7 @@ fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
 /// invisible in the run's own output and shows up later as cache bloat.
 #[test]
 fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
-    let t = temp_root("prune_wiped_subtree");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("prune_wiped_subtree");
     // src: x is a file.
     wfile(&src, "x", b"file contents");
     // dst: x is a directory, with a subtree under it. Two levels, so the
@@ -1613,9 +1591,7 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
         // fixture may observe during the copy phase.
         max_interval: std::time::Duration::from_secs(60),
     };
-    let t = temp_root("copy_commit");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("copy_commit");
     for i in 0..files {
         // Empty, so the fixture's cost is file metadata rather than content; the
         // op-count trigger counts rows, not bytes.
@@ -1665,9 +1641,7 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
 /// deep file is absent" cannot pass because the run did nothing at all.
 #[test]
 fn run_sync_max_depth_skips_deeper_files() {
-    let t = temp_root("maxdepth");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("maxdepth");
     wfile(&src, "top.txt", b"top");
     // Depth 11 (ten directories, then the file); the default cap is 10.
     let deep = "d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/deep.txt";
@@ -1703,9 +1677,7 @@ fn run_sync_max_depth_skips_deeper_files() {
 /// the property a user actually cares about ("No resume" in the README).
 #[test]
 fn a_failed_copy_discards_only_the_uncommitted_cache_tail() {
-    let t = temp_root("copy_fail_tail");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("copy_fail_tail");
     for i in 0..4 {
         wfile(
             &src,
@@ -1860,9 +1832,7 @@ fn run_sync_refuses_nested_roots_before_touching_anything() {
 /// is the only portable way to make the flush fail.
 #[test]
 fn a_failed_flush_aborts_before_the_copy_is_cached() {
-    let t = temp_root("flush_fail");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("flush_fail");
     wfile(&src, "a.bin", b"payload");
 
     // `no_fsync` is explicitly false because the workspace's nextest setup
@@ -1933,9 +1903,7 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 /// the failure did not cut the phase short.
 #[test]
 fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
-    let t = temp_root("copy_fail_order");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("copy_fail_order");
     wfile(&src, "aaa.bin", b"first in the plan");
     wfile(&src, "mmm.bin", b"fails first");
     wfile(&src, "zzz.bin", b"the control");
@@ -1999,9 +1967,7 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
 /// with nothing else in it.
 #[test]
 fn a_reported_copy_failure_is_the_copy_and_the_cause() {
-    let t = temp_root("copy_fail_text");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("copy_fail_text");
     wfile(&src, "mmm.bin", b"payload");
 
     let out = run_binary_raw_with_hooks_mem(
@@ -2176,9 +2142,7 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
 /// and nothing else.
 #[test]
 fn run_sync_backs_up_src_and_snapshots_dst() {
-    let t = temp_root("bakpolicy");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("bakpolicy");
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
     // Both sides have a cache, so both have something to copy aside.
@@ -2210,9 +2174,7 @@ fn run_sync_backs_up_src_and_snapshots_dst() {
 /// the copy another run is making there — however often the bound is applied.
 #[test]
 fn a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone() {
-    let t = temp_root("retain_working");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain_working");
     wfile(&src, "a.txt", b"one");
     // The copy another run is making: the working name carries neither of the
     // two published prefixes.
@@ -2250,9 +2212,7 @@ fn a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone() {
 /// the run answers: the mirror is the same either way.
 #[test]
 fn run_sync_with_no_backup_leaves_no_copy() {
-    let t = temp_root("nobak");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("nobak");
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
     cmd_update(update(src.clone()), &log()).unwrap();
@@ -2295,9 +2255,7 @@ fn run_sync_with_no_backup_leaves_no_copy() {
 /// are not necessarily its newest.
 #[test]
 fn run_sync_backup_retain_bounds_each_prefix() {
-    let t = temp_root("retain");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain");
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
     cmd_update(update(src.clone()), &log()).unwrap();
@@ -2337,9 +2295,7 @@ fn run_sync_backup_retain_bounds_each_prefix() {
 /// deleted as an extra in a destination one.
 #[test]
 fn run_sync_leaves_a_leftover_conversion_temporary_alone() {
-    let t = temp_root("convtmp");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("convtmp");
     wfile(&src, "a.txt", b"one");
     // A leftover in each folder, as a killed conversion in either would leave.
     wfile(
@@ -2377,9 +2333,7 @@ fn run_sync_leaves_a_leftover_conversion_temporary_alone() {
 /// another one.
 #[test]
 fn run_sync_backup_retain_bounds_a_folder_with_no_cache() {
-    let t = temp_root("retain_nocache");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain_nocache");
     wfile(&src, "a.txt", b"one");
     // Copies from earlier runs, sitting beside caches these folders do not
     // have. Both lists are bounded on their own.
@@ -2416,9 +2370,7 @@ fn run_sync_backup_retain_bounds_a_folder_with_no_cache() {
 /// aside still has to leave the folder within the bound the user asked for.
 #[test]
 fn run_sync_with_no_backup_still_bounds_the_copies() {
-    let t = temp_root("retain_nobak");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain_nobak");
     wfile(&src, "a.txt", b"one");
     // A cache, so a run that copied aside would have copied this one.
     let mut up = update(src.clone());
@@ -2448,9 +2400,7 @@ fn run_sync_with_no_backup_still_bounds_the_copies() {
 /// A dry run writes nothing, and a bound is a removal.
 #[test]
 fn run_sync_dry_run_bounds_nothing() {
-    let t = temp_root("retain_dry");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain_dry");
     wfile(&src, "a.txt", b"one");
     wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
     wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
@@ -2472,9 +2422,7 @@ fn run_sync_dry_run_bounds_nothing() {
 /// A dry run writes nothing, and a copy is a write.
 #[test]
 fn run_sync_dry_run_leaves_no_copy() {
-    let t = temp_root("drycopy");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("drycopy");
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
     cmd_update(update(src.clone()), &log()).unwrap();
@@ -2601,9 +2549,7 @@ fn run_sync_with_no_backup_still_removes_the_cache() {
 /// mistake, which is exit `3` rather than the `2` a parse error gets.
 #[test]
 fn run_backup_retain_zero_is_refused() {
-    let t = temp_root("retain0");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+    let (_t, src, dst) = dirs("retain0");
     wfile(&src, "a.txt", b"one");
     wfile(&dst, "a.txt", b"two");
 
