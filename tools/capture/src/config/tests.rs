@@ -43,7 +43,6 @@ fn plan(mutate: impl FnOnce(&mut CaptureArgs)) -> Result<CapturePlan> {
     )
 }
 
-#[test]
 fn a_zero_per_class_is_floored_once_in_the_plan() {
     // The floor belongs to the plan, not to each consumer: `select::decide`
     // and `emit::tree` both read this field, and a convention two places have
@@ -66,7 +65,6 @@ fn a_zero_per_class_is_floored_once_in_the_plan() {
     }
 }
 
-#[test]
 fn a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched() {
     // A misspelt class must be a usage error before a socket opens: the
     // test is in `config.rs` rather than in `run.rs` for exactly that reason,
@@ -88,7 +86,6 @@ fn a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched() {
     );
 }
 
-#[test]
 fn every_valid_require_class_survives_planning_and_keeps_its_order() {
     // Parsing early must not change what the plan carries. Empty stays empty:
     // the required set is the matrix's ordering, not a default of this flag.
@@ -111,7 +108,6 @@ fn every_valid_require_class_survives_planning_and_keeps_its_order() {
     );
 }
 
-#[test]
 fn the_default_request_resolves_to_a_usable_plan() {
     let p = plan(|_| {}).expect("defaults are valid");
     assert_eq!(p.biz, Biz::Hk4eGlobal);
@@ -138,7 +134,6 @@ fn the_default_request_resolves_to_a_usable_plan() {
     assert_eq!(p.argv.raw.len(), p.argv.lossy.len());
 }
 
-#[test]
 fn a_zero_decompression_ceiling_is_a_usage_error() {
     // Zero is not a smaller ceiling, it is a decode that can never produce a
     // byte. Naming the flag before a socket opens is the same rule every
@@ -148,13 +143,11 @@ fn a_zero_decompression_ceiling_is_a_usage_error() {
     assert!(msg.contains("--max-decompressed-bytes"), "{msg}");
 }
 
-#[test]
 fn a_raised_decompression_ceiling_reaches_the_plan() {
     let p = plan(|a| a.max_decompressed_bytes = 4096).expect("positive ceiling");
     assert_eq!(p.max_decompressed_bytes, 4096);
 }
 
-#[test]
 fn audio_codes_are_normalized_and_case_folded() {
     let p = plan(|a| a.audio = vec!["EN_US".into(), "zh-cn".into()]).unwrap();
     assert_eq!(
@@ -163,7 +156,6 @@ fn audio_codes_are_normalized_and_case_folded() {
     );
 }
 
-#[test]
 fn audio_none_is_its_own_selection_and_mixes_with_nothing() {
     let p = plan(|a| a.audio = vec!["none".into()]).unwrap();
     assert_eq!(p.audio, AudioSelection::None);
@@ -175,13 +167,11 @@ fn audio_none_is_its_own_selection_and_mixes_with_nothing() {
     assert!(e.message().contains("ja-jp"), "{}", e.message());
 }
 
-#[test]
 fn a_repeated_audio_code_is_refused_rather_than_deduped() {
     let e = plan(|a| a.audio = vec!["en-us".into(), "en_us".into()]).unwrap_err();
     assert!(e.message().contains("twice"), "{}", e.message());
 }
 
-#[test]
 fn an_audio_code_that_is_not_one_file_name_component_is_refused() {
     // The code is the `matching_field`, which the dump interpolates into
     // `manifests/<tag>/<field>.manifest…`. A separator or a traversal makes
@@ -204,7 +194,6 @@ fn an_audio_code_that_is_not_one_file_name_component_is_refused() {
     }
 }
 
-#[test]
 fn zero_jobs_zero_retries_and_zero_timeout_are_all_refused_by_name() {
     assert!(
         plan(|a| a.jobs = 0)
@@ -226,7 +215,6 @@ fn zero_jobs_zero_retries_and_zero_timeout_are_all_refused_by_name() {
     );
 }
 
-#[test]
 fn absurd_concurrency_and_retry_counts_are_refused_with_a_reason() {
     assert!(plan(|a| a.jobs = 65).unwrap_err().message().contains("64"));
     assert!(
@@ -237,7 +225,6 @@ fn absurd_concurrency_and_retry_counts_are_refused_with_a_reason() {
     );
 }
 
-#[test]
 fn file_paths_that_cannot_name_a_manifest_entry_are_refused() {
     for bad in [
         r"C:\game\a.blk",
@@ -260,7 +247,6 @@ fn file_paths_that_cannot_name_a_manifest_entry_are_refused() {
     }
 }
 
-#[test]
 fn a_normal_manifest_relative_path_is_accepted() {
     let p = plan(|a| {
         a.files = vec![
@@ -272,7 +258,6 @@ fn a_normal_manifest_relative_path_is_accepted() {
     assert_eq!(p.files.len(), 2);
 }
 
-#[test]
 fn a_repeated_files_path_is_a_usage_error() {
     // A duplicate finds the same candidate and would be admitted again with
     // the same capture id: two admissions, two patchmap writes (the second
@@ -294,7 +279,6 @@ fn a_repeated_files_path_is_a_usage_error() {
     );
 }
 
-#[test]
 fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
     let e = plan(|a| {
         a.new_tag = Some("7.1.0".into());
@@ -308,7 +292,6 @@ fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
 /// resolve from the branch and `main.tag` happens to equal `diff_tags[0]`,
 /// `select` must refuse the pair by name before a build id is asked for or a
 /// directory is named after the duplicated tag.
-#[test]
 fn an_equal_resolved_tag_pair_is_refused_naming_both_sources() {
     let mut b = branch();
     b.tag = b.diff_tags[0].clone();
@@ -327,7 +310,6 @@ fn an_equal_resolved_tag_pair_is_refused_naming_both_sources() {
 /// The flags fold case with `eq_ignore_ascii_case`, so the resolved halves do
 /// too: a case-only difference is one tag for the pair's purposes on both
 /// entry points.
-#[test]
 fn a_case_only_difference_is_refused_for_both_flags_and_resolved_pair() {
     assert!(
         plan(|a| {
@@ -350,7 +332,6 @@ fn a_case_only_difference_is_refused_for_both_flags_and_resolved_pair() {
 
 /// The guard is about equality, not similarity: a real version step resolved
 /// from the branch still yields both halves, with their sources intact.
-#[test]
 fn a_different_resolved_pair_is_still_accepted() {
     let p = pair_plan(None, None);
     let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
@@ -359,7 +340,6 @@ fn a_different_resolved_pair_is_still_accepted() {
     assert_eq!(v.old.source, "diff_tags[0]");
 }
 
-#[test]
 fn latest_is_accepted_for_new_tag_and_refused_for_a_probe() {
     assert!(
         plan(|a| a.new_tag = Some("latest".into())).is_ok(),
@@ -369,7 +349,6 @@ fn latest_is_accepted_for_new_tag_and_refused_for_a_probe() {
     assert!(plan(|a| a.probe_tags = vec!["latest".into()]).is_err());
 }
 
-#[test]
 fn a_tag_that_is_not_a_bare_version_string_is_refused() {
     for bad in ["", "7.1.0/../x", "7.1.0 beta", &"7".repeat(33)] {
         assert!(validate_tag(bad, "--old-tag").is_err(), "{bad:?}");
@@ -381,7 +360,6 @@ fn a_tag_that_is_not_a_bare_version_string_is_refused() {
 
 /// The limit is 32 *bytes*, and the message says so. A 33-byte ASCII tag is
 /// refused; a 32-byte one passes.
-#[test]
 fn a_tag_longer_than_32_bytes_is_refused_with_byte_wording() {
     let too_long = "7".repeat(33);
     let problem = tag_shape_problem(&too_long).expect("33 bytes is too long");
@@ -394,7 +372,6 @@ fn a_tag_longer_than_32_bytes_is_refused_with_byte_wording() {
 /// `len()` counts bytes, so 17 two-byte characters are 34 bytes and refused
 /// even though that is only 17 characters. The message must not claim the
 /// rule counts characters.
-#[test]
 fn a_multibyte_tag_is_counted_in_bytes_not_characters() {
     let tag = "é".repeat(17);
     assert_eq!(tag.len(), 34);
@@ -410,7 +387,6 @@ fn a_multibyte_tag_is_counted_in_bytes_not_characters() {
     assert_eq!(tag_shape_problem(&at_limit), None, "{at_limit:?}");
 }
 
-#[test]
 fn a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix() {
     // A tag is joined into the artifact directory raw. On Windows `\` is a
     // separator and `C:` is a path prefix, so either one can move the
@@ -482,7 +458,6 @@ fn a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix() {
 /// A tag becomes `manifests/<tag>`, so a DOS device name is refused by the
 /// same rule the path validator uses. Windows ignores the extension when it
 /// resolves the name, so `NUL.txt` and `CONIN$.txt` are devices too.
-#[test]
 fn a_tag_cannot_name_a_windows_device() {
     for bad in [
         "CON",
@@ -503,13 +478,11 @@ fn a_tag_cannot_name_a_windows_device() {
     }
 }
 
-#[test]
 fn metadata_only_is_a_flag_value_not_an_implicit_rejection() {
     let p = plan(|a| a.no_chunk_blobs = true).unwrap();
     assert!(p.no_chunk_blobs);
 }
 
-#[test]
 fn verify_and_materialize_resolve_their_own_arguments() {
     use crate::cli::{ListArgs, VerifyArgs};
     let v = verify_plan(&VerifyArgs {
@@ -567,7 +540,6 @@ fn verify_and_materialize_resolve_their_own_arguments() {
     assert_eq!(l.root, PathBuf::from("artifacts"));
 }
 
-#[test]
 fn the_bundle_lives_under_biz_then_the_pair_then_the_id() {
     let d = pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0");
     assert_eq!(
@@ -599,7 +571,6 @@ fn pair_plan(new_tag: Option<&str>, old_tag: Option<&str>) -> CapturePlan {
 
 /// The default is `diff_tags[0]` — "current minus one" — measured on
 /// 2026-10-14 as 7.1.0 -> 7.0.0, and each half records which rule chose it.
-#[test]
 fn the_pair_defaults_to_the_branch_head_and_its_first_diff_tag() {
     let p = pair_plan(None, None);
     let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
@@ -611,7 +582,6 @@ fn the_pair_defaults_to_the_branch_head_and_its_first_diff_tag() {
     assert_eq!(v.diff_tags, vec!["7.0.0", "6.7.0"]);
 }
 
-#[test]
 fn the_latest_sentinel_selects_the_branch_head_and_an_explicit_tag_does_not() {
     for (flag, want) in [
         (None, NewTagSelector::BranchHead),
@@ -633,7 +603,6 @@ fn the_latest_sentinel_selects_the_branch_head_and_an_explicit_tag_does_not() {
 
 /// The `source` string is a claim a reader checks against the captured
 /// `getGameBranches`, so it has to distinguish the two routes to each tag.
-#[test]
 fn an_explicit_tag_records_that_it_was_explicit() {
     let p = pair_plan(Some("6.6.0"), Some("5.5.0"));
     let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
@@ -644,7 +613,6 @@ fn an_explicit_tag_records_that_it_was_explicit() {
 
 /// A branch with no `diff_tags` cannot supply a default old version, and
 /// inventing one would mean capturing the wrong version pair.
-#[test]
 fn an_empty_diff_tags_is_an_error_naming_the_remedy() {
     let mut b = branch();
     b.diff_tags.clear();
@@ -666,7 +634,6 @@ fn an_empty_diff_tags_is_an_error_naming_the_remedy() {
 /// A hostile or compromised API can supply `main.tag`/`diff_tags[0]`
 /// without the caller ever passing a bad flag. Those strings reach
 /// `pair_dir`, so they must pass the same shape check the flags do.
-#[test]
 fn api_resolved_tags_are_validated_before_they_name_a_directory() {
     let p = pair_plan(None, None);
 
@@ -719,7 +686,6 @@ fn api_resolved_tags_are_validated_before_they_name_a_directory() {
 
 /// Swapping them would attach a build id to the wrong tag, and every chunk
 /// URL in the bundle is namespaced by build id.
-#[test]
 fn build_ids_attach_new_then_old() {
     let mut v = VersionPair::select(
         &branch(),
@@ -734,7 +700,6 @@ fn build_ids_attach_new_then_old() {
     assert!(v.new.resolved() && v.old.resolved());
 }
 
-#[test]
 fn base_overrides_must_be_absolute_and_https_unless_loopback() {
     for good in [
         "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api",
@@ -757,7 +722,6 @@ fn base_overrides_must_be_absolute_and_https_unless_loopback() {
 }
 
 /// Normalised once, here, so no join site has to remember.
-#[test]
 fn a_base_override_loses_its_trailing_slash() {
     assert_eq!(
         validate_base(Some("https://x/api///"), "--hyp-base").unwrap(),
@@ -766,7 +730,6 @@ fn a_base_override_loses_its_trailing_slash() {
     assert_eq!(validate_base(None, "--hyp-base").unwrap(), None);
 }
 
-#[test]
 fn an_override_reaches_the_plan_and_defaults_to_none() {
     let p = plan(|a| {
         a.hyp_base = Some("http://127.0.0.1:9/hyp".into());
@@ -780,7 +743,6 @@ fn an_override_reaches_the_plan_and_defaults_to_none() {
 
 /// A directory listing of a root has to sort as a history, which is the whole
 /// reason the id is a timestamp and not a random or content-derived name.
-#[test]
 fn the_capture_id_is_a_sortable_utc_timestamp() {
     let t = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:15:00Z")
         .unwrap()
@@ -797,7 +759,6 @@ fn the_capture_id_is_a_sortable_utc_timestamp() {
     );
 }
 
-#[test]
 fn document_paths_are_slash_separated_and_rooted_at_the_artifact() {
     let root = Path::new("artifacts/hk4e_global/7.0.0__7.1.0/20261014T101500.000000Z");
     let deep = root.join("game").join("GenshinImpact_Data").join("Plugins");
@@ -811,4 +772,171 @@ fn document_paths_are_slash_separated_and_rooted_at_the_artifact() {
         rel_path_string(root, Path::new("/elsewhere/x")),
         "/elsewhere/x"
     );
+}
+
+#[test]
+fn config_argument_and_plan_cases() {
+    // Consolidated pure cases: each original case runs under its own label so
+    // a failure still points at the exact check. One process replaces 39 spawns.
+    check_case(
+        "a_zero_per_class_is_floored_once_in_the_plan",
+        a_zero_per_class_is_floored_once_in_the_plan,
+    );
+    check_case(
+        "a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched",
+        a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched,
+    );
+    check_case(
+        "every_valid_require_class_survives_planning_and_keeps_its_order",
+        every_valid_require_class_survives_planning_and_keeps_its_order,
+    );
+    check_case(
+        "the_default_request_resolves_to_a_usable_plan",
+        the_default_request_resolves_to_a_usable_plan,
+    );
+    check_case(
+        "a_zero_decompression_ceiling_is_a_usage_error",
+        a_zero_decompression_ceiling_is_a_usage_error,
+    );
+    check_case(
+        "a_raised_decompression_ceiling_reaches_the_plan",
+        a_raised_decompression_ceiling_reaches_the_plan,
+    );
+    check_case(
+        "audio_codes_are_normalized_and_case_folded",
+        audio_codes_are_normalized_and_case_folded,
+    );
+    check_case(
+        "audio_none_is_its_own_selection_and_mixes_with_nothing",
+        audio_none_is_its_own_selection_and_mixes_with_nothing,
+    );
+    check_case(
+        "a_repeated_audio_code_is_refused_rather_than_deduped",
+        a_repeated_audio_code_is_refused_rather_than_deduped,
+    );
+    check_case(
+        "an_audio_code_that_is_not_one_file_name_component_is_refused",
+        an_audio_code_that_is_not_one_file_name_component_is_refused,
+    );
+    check_case(
+        "zero_jobs_zero_retries_and_zero_timeout_are_all_refused_by_name",
+        zero_jobs_zero_retries_and_zero_timeout_are_all_refused_by_name,
+    );
+    check_case(
+        "absurd_concurrency_and_retry_counts_are_refused_with_a_reason",
+        absurd_concurrency_and_retry_counts_are_refused_with_a_reason,
+    );
+    check_case(
+        "file_paths_that_cannot_name_a_manifest_entry_are_refused",
+        file_paths_that_cannot_name_a_manifest_entry_are_refused,
+    );
+    check_case(
+        "a_normal_manifest_relative_path_is_accepted",
+        a_normal_manifest_relative_path_is_accepted,
+    );
+    check_case(
+        "a_repeated_files_path_is_a_usage_error",
+        a_repeated_files_path_is_a_usage_error,
+    );
+    check_case(
+        "an_identical_pair_is_refused_because_it_would_exercise_nothing",
+        an_identical_pair_is_refused_because_it_would_exercise_nothing,
+    );
+    check_case(
+        "an_equal_resolved_tag_pair_is_refused_naming_both_sources",
+        an_equal_resolved_tag_pair_is_refused_naming_both_sources,
+    );
+    check_case(
+        "a_case_only_difference_is_refused_for_both_flags_and_resolved_pair",
+        a_case_only_difference_is_refused_for_both_flags_and_resolved_pair,
+    );
+    check_case(
+        "a_different_resolved_pair_is_still_accepted",
+        a_different_resolved_pair_is_still_accepted,
+    );
+    check_case(
+        "latest_is_accepted_for_new_tag_and_refused_for_a_probe",
+        latest_is_accepted_for_new_tag_and_refused_for_a_probe,
+    );
+    check_case(
+        "a_tag_that_is_not_a_bare_version_string_is_refused",
+        a_tag_that_is_not_a_bare_version_string_is_refused,
+    );
+    check_case(
+        "a_tag_longer_than_32_bytes_is_refused_with_byte_wording",
+        a_tag_longer_than_32_bytes_is_refused_with_byte_wording,
+    );
+    check_case(
+        "a_multibyte_tag_is_counted_in_bytes_not_characters",
+        a_multibyte_tag_is_counted_in_bytes_not_characters,
+    );
+    check_case(
+        "a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix",
+        a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix,
+    );
+    check_case(
+        "a_tag_cannot_name_a_windows_device",
+        a_tag_cannot_name_a_windows_device,
+    );
+    check_case(
+        "metadata_only_is_a_flag_value_not_an_implicit_rejection",
+        metadata_only_is_a_flag_value_not_an_implicit_rejection,
+    );
+    check_case(
+        "verify_and_materialize_resolve_their_own_arguments",
+        verify_and_materialize_resolve_their_own_arguments,
+    );
+    check_case(
+        "the_bundle_lives_under_biz_then_the_pair_then_the_id",
+        the_bundle_lives_under_biz_then_the_pair_then_the_id,
+    );
+    check_case(
+        "the_pair_defaults_to_the_branch_head_and_its_first_diff_tag",
+        the_pair_defaults_to_the_branch_head_and_its_first_diff_tag,
+    );
+    check_case(
+        "the_latest_sentinel_selects_the_branch_head_and_an_explicit_tag_does_not",
+        the_latest_sentinel_selects_the_branch_head_and_an_explicit_tag_does_not,
+    );
+    check_case(
+        "an_explicit_tag_records_that_it_was_explicit",
+        an_explicit_tag_records_that_it_was_explicit,
+    );
+    check_case(
+        "an_empty_diff_tags_is_an_error_naming_the_remedy",
+        an_empty_diff_tags_is_an_error_naming_the_remedy,
+    );
+    check_case(
+        "api_resolved_tags_are_validated_before_they_name_a_directory",
+        api_resolved_tags_are_validated_before_they_name_a_directory,
+    );
+    check_case(
+        "build_ids_attach_new_then_old",
+        build_ids_attach_new_then_old,
+    );
+    check_case(
+        "base_overrides_must_be_absolute_and_https_unless_loopback",
+        base_overrides_must_be_absolute_and_https_unless_loopback,
+    );
+    check_case(
+        "a_base_override_loses_its_trailing_slash",
+        a_base_override_loses_its_trailing_slash,
+    );
+    check_case(
+        "an_override_reaches_the_plan_and_defaults_to_none",
+        an_override_reaches_the_plan_and_defaults_to_none,
+    );
+    check_case(
+        "the_capture_id_is_a_sortable_utc_timestamp",
+        the_capture_id_is_a_sortable_utc_timestamp,
+    );
+    check_case(
+        "document_paths_are_slash_separated_and_rooted_at_the_artifact",
+        document_paths_are_slash_separated_and_rooted_at_the_artifact,
+    );
+}
+
+fn check_case(label: &str, case: fn()) {
+    println!("case: {label}");
+    case();
 }
