@@ -54,7 +54,7 @@ pub mod scope;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use girpr_repair_plan::{PurgePlan, RepairPlan};
+use girpr_repair_plan::{PurgePlan, RepairPlan};
 pub use phases::metadata::Meta;
 
 use std::path::{Path, PathBuf};
