@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
+use girpr_chunk_identity::{ChunkIdentity, IdentityKey};
 use girpr_util_hash::Md5;
 use girpr_util_path as path_util;
 
@@ -41,17 +42,23 @@ impl ReuseEntry {
     /// This is the one chunk-identity predicate: [`FileReuse`]'s index, the
     /// plan estimate, the in-place source lookup and the temp path's reuse
     /// lookup all agree with it, so "the same chunk" cannot mean different
-    /// things there.
+    /// things there. The digest/length rule itself lives in the shared leaf;
+    /// only the choice of *which* match wins stays in this map.
     pub fn matches(&self, c: &SophonChunk) -> bool {
-        Md5::parse_hex(&c.uncompressed_md5)
-            .is_ok_and(|md5| self.matches_identity(md5, c.uncompressed_size))
+        ChunkIdentity::of(c).matches(self.identity())
+    }
+
+    /// The identity this entry holds, for the shared case-insensitive match
+    /// rule. Also the shape the insert path compares against.
+    fn identity(&self) -> IdentityKey {
+        IdentityKey::new(self.md5, self.size)
     }
 
     /// The same predicate without a chunk to point at, for the index's insert
     /// path: an entry is a duplicate when its digest and size name the same
     /// chunk.
-    fn matches_identity(&self, md5: Md5, size: i64) -> bool {
-        self.size == size && self.md5 == md5
+    fn matches_identity(&self, key: IdentityKey) -> bool {
+        self.identity() == key
     }
 }
 
@@ -88,10 +95,11 @@ impl FileReuse {
     /// Add `entry` unless its chunk identity is already present.
     fn insert(&mut self, entry: ReuseEntry) {
         let key = Self::key(entry.md5, entry.size);
+        let identity = entry.identity();
         let duplicate = self.by_key.get(&key).is_some_and(|candidates| {
             candidates
                 .iter()
-                .any(|&i| self.entries[i].matches_identity(entry.md5, entry.size))
+                .any(|&i| self.entries[i].matches_identity(identity))
         });
         if duplicate {
             return;
@@ -102,13 +110,16 @@ impl FileReuse {
 
     /// The entry holding `c`'s bytes, or `None` when the chunk must download.
     pub fn get(&self, c: &SophonChunk) -> Option<&ReuseEntry> {
-        let md5 = Md5::parse_hex(&c.uncompressed_md5).ok()?;
-        let key = Self::key(md5, c.uncompressed_size);
+        // Parse once at the boundary, then confirm each candidate by bytes: a
+        // hash collision still falls through to the first entry with the exact
+        // same identity, which is the same first-match rule as the old scan.
+        let identity = ChunkIdentity::of(c).parse()?;
+        let key = Self::key(identity.digest, identity.size);
         self.by_key
             .get(&key)?
             .iter()
             .map(|&i| &self.entries[i])
-            .find(|entry| entry.matches(c))
+            .find(|entry| entry.matches_identity(identity))
     }
 
     /// Does any entry hold `c`'s bytes?

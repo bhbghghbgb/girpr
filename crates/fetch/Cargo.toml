@@ -40,6 +40,10 @@ tracing = "0.1.44"
 girpr-model = { path = "../model" }
 girpr-digest = { path = "../digest" }
 girpr-proto = { path = "../proto" }
+# The chunk-identity value types: the digest-bytes/length key and the borrowed
+# view the reuse map's match predicate and the manifest diff share. The leaf
+# holds no index, collision policy or first-match order — those stay here.
+girpr-chunk-identity = { path = "../chunk-identity" }
 girpr-retry = { path = "../retry" }
 girpr-util-hash = { path = "../util-hash" }
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
