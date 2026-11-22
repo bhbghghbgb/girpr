@@ -711,7 +711,7 @@ crates/test-fixtures/src/
 ```
 
 Everything here is **test-only** or lives in the test-fixtures library crate;
-nothing under `src/` changes. `crates/fetch/src/sophon/stream.rs` carries a note
+nothing under `src/` changes. `app/fetch/src/sophon/stream.rs` carries a note
 that a trace log can be parsed for `chunk downloaded chunk=<id>` — that note
 stays accurate, and that line remains the documented last resort rather than what
 the bridge actually reads.

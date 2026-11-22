@@ -740,7 +740,7 @@ log (§1.2).
 ## 7. Module layout
 
 ```
-crates/repair-plan/src/plan.rs
+app/repair-plan/src/plan.rs
                 RepairPlan, PlannedFile, est_download_bytes, build_plan
 src/repair/purge.rs
                 PurgePlan, PurgeCandidate, plan_purge, apply_purge
@@ -752,7 +752,7 @@ src/repair/scope/
   ledger.rs   thin alias re-exporting Meter and StoppedBy from girpr-report;
               no policy or type is defined here
   report.rs   PLAN line + --plan-out JSON
-crates/report/src/ledger.rs
+app/report/src/ledger.rs
                 Meter, StoppedBy, and the runtime reservations the hard stops read
 ```
 
@@ -790,8 +790,8 @@ Touch points outside the scope directory:
 | `src/repair/mod.rs` | `plan_phase` / `execute_phase` split with `PlanOutcome`; build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` and the audio scan-file write |
 | `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move; post-repair delete-ceiling re-check |
 | `src/repair/file/mod.rs` | download/write reservation calls and their hard stops + fail-fast |
-| `crates/report/src/ledger.rs` | `Meter`, `StoppedBy` and the runtime reservation methods |
-| `crates/report/src/summary.rs` | the conditional `SUMMARY` keys |
+| `app/report/src/ledger.rs` | `Meter`, `StoppedBy` and the runtime reservation methods |
+| `app/report/src/summary.rs` | the conditional `SUMMARY` keys |
 | `README.md` | flag table, machine-contract table, exit-code table |
 
 ---

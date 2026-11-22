@@ -28,10 +28,10 @@ crates/test-support/  # facade-coupled run glue (RunCtx construction, pipeline d
 tools/sync/cache/    # girsync's redb hash cache, its postcard wire codec and digest vocabulary; consumed directly by girsync and sled2redb
 tools/sync/leaves/    # girsync's acyclic rw limiter, include/exclude filter, link classifier and hardlink facts, consumed directly by girsync so a high-level edit leaves them cached
 tools/sync/test-support/ # girsync-coupled option/cache/planner fixtures shared by girsync and sled2redb; keeps crates/tempdir/ girsync-free
-crates/report/src/    # Summary/Meter/StoppedBy counters + record data plane, REPORT / PROGRESS / SUMMARY emission, phase timer (plan_record lives in the scope reporter)
+app/report/src/    # Summary/Meter/StoppedBy counters + record data plane, REPORT / PROGRESS / SUMMARY emission, phase timer (plan_record lives in the scope reporter)
 src/biz.rs            # re-exports girpr_model::region::Region as Biz; ids/channels/base URLs live in crates/model/
-crates/fetch/src/hyp.rs        # HYP client: getGameConfigs/getGameBranches/getBuild/getDeprecated
-crates/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
+app/fetch/src/hyp.rs        # HYP client: getGameConfigs/getGameBranches/getBuild/getDeprecated
+app/fetch/src/sophon/      # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
 app/util-path/        # server-path containment, atomic publish, shared junction/symlink fixtures
 app/util-hash/        # md5 helpers and the one-read file scan
 app/util-ini/         # config.ini read/write, ignore/blacklist files
@@ -39,14 +39,14 @@ app/util-counter/     # the saturating atomic byte counter
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
 src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)
-crates/repair-plan/src/plan.rs # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
+app/repair-plan/src/plan.rs # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
 src/repair/purge.rs          # Collapse files-cleanup: plan_purge, apply_purge, keep_set, classify_purge_path (step 5, 7)
 src/repair/scope/     # the path scope and the byte ceilings: filter, limits, report (step 4, ceilings); ledger.rs is a thin alias for girpr-report's Meter/StoppedBy
 src/repair/phases/check.rs   # --check-only size+MD5 verification loop (step 6.5)
 src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mode, reuse vs download (step 6)
 src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction (salvage_order_refs in production; salvage_order is test-only)
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
-crates/lock/          # the single-writer lock (outside the install)
+app/lock/          # the single-writer lock (outside the install)
 app/audio/            # audio scan-file read/write + effective selection (acyclic leaf)
 src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
@@ -112,7 +112,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 
 Concurrency: a bounded spawn/join window over files (`repair::file::join_file_tasks`, at most
 `jobs` tasks in flight); a single `reqwest::Client` with a fixed
-connection-pool cap (see `crates/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
+connection-pool cap (see `app/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
 with fixed-size buffers. Retries: 5× with jittered exponential backoff on manifest/chunk/file ops.
 
 ## 4. Testing
@@ -145,7 +145,7 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
   `--repair-mode inplace` explicitly. It asserts the patched bytes, the exact fetched-chunk
   set and the reported download bytes against the bundle's ground truth; the other write
   modes are tested on crafted fixtures, not here.
-- **The streaming invariant** (`crates/fetch/src/sophon/stream.rs`): an always-on unit test
+- **The streaming invariant** (`app/fetch/src/sophon/stream.rs`): an always-on unit test
   (`the_streamed_decode_writes_in_pieces_not_one_buffer`) asserts that a decoded
   chunk reaches the sink in more than one write, every byte arrives, and no single
   write holds the whole body. It fails if streaming is replaced by a buffered
@@ -200,7 +200,7 @@ the same whole-file MD5, and `config.ini` advances only when every planned file 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
 decoded as it arrives and the decoded bytes are written into the target as they are
 produced, so the peak per active chunk is one read window plus the decoder's buffer,
-not the chunk — a scale-free invariant in `crates/fetch/src/sophon/stream.rs` fails if a buffered
+not the chunk — a scale-free invariant in `app/fetch/src/sophon/stream.rs` fails if a buffered
 decode ever writes the whole body in one piece. The
 only RAM that scales with the file is the in-place tier's staging, and that is what
 `--max-ram-bytes` bounds. A manifest is streamed too, into a buffer the API's

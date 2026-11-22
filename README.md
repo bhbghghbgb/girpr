@@ -44,7 +44,7 @@ machine rather than the code.
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/time/` | the named UTC timestamp formats shared by the byte contracts: the compact sortable stamp, two RFC 3339 spellings and chrono's default, each with its own pinned spelling; no program policy | `compact_stamp`, `compact_stamp_now`, `rfc3339_millis_z`, `rfc3339_millis_z_now`, `rfc3339_secs_z`, `rfc3339`, `rfc3339_now` |
-| `crates/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
+| `app/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `app/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
@@ -55,28 +55,28 @@ machine rather than the code.
 | `tools/capture/test-support/` | the gircap-only dev library holding the self-contained offline capture mock and fixture builders, reached through the thin `tools/capture/tests/common/mod.rs` shim so they compile once; depends on gircap's public seams and nothing from the repair binary | `World`, `Mock`, `shared_bundle`, `dispatch`, `minimal_bundle` |
 | `tools/capture/http/` | the gircap-owned logic-free HTTP mechanics: the reqwest transport, the retrying fetcher, the request log and the error-body budget, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native tree cached; no program policy crosses the boundary | `Fetcher`, `Transport`, `RequestLog`, `RetryPolicy`, `Kind`, `ApiError`, `BodyFile` (re-exported from `crates/digest/`), `USER_AGENT` |
 | `tools/capture/hash/` | the gircap-owned logic-free digest/zstd mechanics: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure, consumed directly by gircap so an edit to emit/blobs/manifest leaves the native zstd tree cached; no program policy crosses the boundary | `md5_hex`, `sha256_hex`, `DualDigest`, `HashingFile`, `hex_bytes`, `Encoding`, `should_gzip`, `zstd_decompress`, `zstd_measure` |
-| `crates/report/` | run counters, the report-owned runtime ledger (`Meter`/`StoppedBy`) the hard stops read, every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
+| `app/report/` | run counters, the report-owned runtime ledger (`Meter`/`StoppedBy`) the hard stops read, every stdout line of the contract, and the phase timer; consumed directly by the binary and the facade | `Summary`, `SummaryFlags`, `Summary::snapshot`, `Meter`, `StoppedBy`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard`, `PhaseTimer` |
 | `src/biz.rs` | re-export of `girpr-model`'s region identity as `Biz`; the ids, channel tuples and base URLs live in `crates/model/` | `Biz`, `Biz::endpoints`, `Biz::channel_tuple` |
-| `crates/fetch/` (`hyp`) | HYP + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `crates/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
+| `app/fetch/` (`hyp`) | HYP + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
+| `app/fetch/` (`sophon`) | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `crates/chunk-identity/` | the shared chunk-identity value types: a digest-bytes/length key and a borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; no index, collision policy, first-match order or published bytes | `IdentityKey`, `ChunkIdentity`, `ChunkIdentity::of`, `ChunkIdentity::parse`, `ChunkIdentity::matches`, `normalize_hex` |
 | `crates/chunk-cost/` | the shared saturating download-projection fold: Σ compressed_size over the chunks a caller marks as downloads, clamping negative declarations; the caller supplies the selection, the leaf holds no reuse, identity or published-byte policy | `projected_download_bytes` |
-| `crates/chunk-verify/` | the chunk-verification leaf: the verdict a scan produces, the range/owner remap the scan and the in-place writer share, and the verify pass that re-derives the finished file from a fresh read; no scan-planning policy, write-direction decision or published bytes, and the coarse-MTIME reuse guard stays with the writer | `Verdict`, `scan_ranges`, `source_ok_by_chunk`, `source_ok_by_range`, `verify_in_place`, `Verified` |
+| `app/chunk-verify/` | the chunk-verification leaf: the verdict a scan produces, the range/owner remap the scan and the in-place writer share, and the verify pass that re-derives the finished file from a fresh read; no scan-planning policy, write-direction decision or published bytes, and the coarse-MTIME reuse guard stays with the writer | `Verdict`, `scan_ranges`, `source_ok_by_chunk`, `source_ok_by_range`, `verify_in_place`, `Verified` |
 | `app/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
-| `crates/repair-plan/` | the repair-plan values and their pure decisions: work list, cleanup-plan values and path scope in one acyclic leaf so the scope tier consumes both plans without a back-edge; the facade keeps the fetch, walk, publish and byte-emitting policies | `RepairPlan`, `PlannedFile`, `Layout`, `FileId`, `build_plan`, `PurgePlan`, `PurgeCandidate`, `PurgeKeys`, `PathScope`, `LocalChunkMap`, `DownloadEstimate`, `PlanSummaryValues`, `check_scope_selection` |
+| `app/repair-plan/` | the repair-plan values and their pure decisions: work list, cleanup-plan values and path scope in one acyclic leaf so the scope tier consumes both plans without a back-edge; the facade keeps the fetch, walk, publish and byte-emitting policies | `RepairPlan`, `PlannedFile`, `Layout`, `FileId`, `build_plan`, `PurgePlan`, `PurgeCandidate`, `PurgeKeys`, `PathScope`, `LocalChunkMap`, `DownloadEstimate`, `PlanSummaryValues`, `check_scope_selection` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
-| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3); the map's alias lives in `crates/repair-plan/` | `fetch_latest`, `local_reuse_map` |
-| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply; consumes the plan values from `crates/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
+| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3); the map's alias lives in `app/repair-plan/` | `fetch_latest`, `local_reuse_map` |
+| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply; consumes the plan values from `app/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `app/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
-| `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `crates/chunk-verify/` | `scan_plan`, `ScanReport` |
+| `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `app/chunk-verify/` | `scan_plan`, `ScanReport` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
-| `src/repair/scope/mod.rs` | scope-of-work facade: the ceiling tier; the path-scope value lives in `crates/repair-plan/` | `Limits`, `LimitHit` |
+| `src/repair/scope/mod.rs` | scope-of-work facade: the ceiling tier; the path-scope value lives in `app/repair-plan/` | `Limits`, `LimitHit` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates over the two plan values (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
-| `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`crates/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
+| `src/repair/scope/ledger.rs` | thin alias over the report-owned ledger (`app/report/src/ledger.rs`), so repair keeps its existing paths | `Meter`, `StoppedBy` |
 | `app/util-path/` | server-path containment, atomic publish and the shared junction/symlink fixtures | `contained_rel`, `contained_join`, `file_len`, `atomic::write_atomic` |
 | `crates/path-shape/` | the shared lexical relative-path shape validator: component checks and their order only, with each caller's normalization and device rule and its own mapping from reasons to wording and byte-stable identifiers | `validate`, `ShapePolicy`, `Normalization`, `ShapeProblem` |
 | `crates/value-ranges/` | pure inclusive-range facts for numeric CLI values: below-min/above-max/in-range plus the offending value; no error type, wording, exit code or range constant, so each caller keeps its own | `check_in_range`, `RangeFact`, `RangeBound` |
@@ -462,7 +462,7 @@ both callers pass one `(compressed_size, downloads)` entry per candidate chunk
 and the leaf only sums the marked sizes, so the `PLAN` total, the
 `SUMMARY plan_download_bytes` key and the capture's projected bytes stay one
 figure; each keeps its own selection, reuse decision and published bytes.
-`crates/chunk-verify/` owns the chunk-verification mechanics shared by the
+`app/chunk-verify/` owns the chunk-verification mechanics shared by the
 `--scan` pass and the in-place writer: the verdict a scan produces (including
 the `modified` timestamp the reuse guard checks), the range/owner remap that
 turns per-range answers into per-chunk verdicts and back, and the verify pass
@@ -477,7 +477,7 @@ and the download estimate all consume that rule directly, so neither `file`
 nor `scan` owns the mode decision and the two estimates cannot disagree with
 the writer about which path a file takes. It re-exports nothing from the
 binary and depends only on the optional clap `ValueEnum` derive.
-`crates/repair-plan/` owns the values the plan half decides over: the work list
+`app/repair-plan/` owns the values the plan half decides over: the work list
 (`RepairPlan`/`PlannedFile`/`Layout`), the cleanup-plan values (`PurgePlan`/
 `PurgeKeys`), the path scope, and the download estimate and `SUMMARY` figures
 derived from them. Putting both plans and the selector in one leaf breaks the
@@ -497,7 +497,7 @@ set of matching rules for both. `app/util-path/`, `app/util-hash/`,
 containment, atomic-publish, scan/digest, config.ini and counter mechanics. They
 are separate leaves: the repair, report, fetch, audio and CLI code depend only
 on the ones they use, so an edit to one leaf leaves the others cached.
-`crates/report/` holds this binary's run counters, record data plane, every
+`app/report/` holds this binary's run counters, record data plane, every
 stdout line and the phase timer. It also owns the mutually recursive
 `Summary`/`Meter`/`StoppedBy` group, so the old `report::summary` ↔
 `repair::scope::ledger` cycle is inside one crate; the repair code and the
@@ -506,7 +506,7 @@ binary depend on it directly, so an edit to repair leaves it cached. It reuses
 this binary's event-first order, unsigned counts and 1/0 flags distinct from
 the other two report planes.
 
-`crates/fetch/` holds this binary's HYP client, Sophon manifest fetch,
+`app/fetch/` holds this binary's HYP client, Sophon manifest fetch,
 chunk streaming, manifest filter, local chunk map and attempt loop; the repair
 code depends on it directly, so an edit to the repair, report or CLI leaves the
 whole reqwest/zstd/prost tree cached. It reuses `crates/proto/` for the wire
@@ -532,7 +532,7 @@ vocabulary that codec stores. `girsync` consumes it directly under a module
 alias and the sled converter names it directly too, so an edit to a planner,
 command or other girsync subsystem leaves the cache and its `redb`/`postcard`/
 `tempfile` tree cached; the cache wire format is pinned by literal-byte tests.
-`crates/lock/` holds this binary's single-writer
+`app/lock/` holds this binary's single-writer
 run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
 repair and the lock-only integration tests depend on it directly, while the dev
 tools never take it, so a repair edit leaves the lock cached. All four share the
@@ -718,7 +718,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;
-  `HypClient::new_with_bases` in `crates/fetch/src/hyp.rs`).
+  `HypClient::new_with_bases` in `app/fetch/src/hyp.rs`).
 - **One scratch-directory policy, three projects.** A test that needs a tree of
   its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,
   `gircap` and `girsync` alike. Each tree gets a fresh random name (with a
