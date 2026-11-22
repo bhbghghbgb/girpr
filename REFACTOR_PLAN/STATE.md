@@ -12,8 +12,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | `girpr-chunk-identity` leaf (+ digest normalization placement) | pending_review | f831b5af, 950fb9cf, d9a49602, 401fb580 | F4+F8; leaf `girpr-chunk-identity` added, digest normalization stays at gircap decode boundary; borrowed view keeps spelling-exact Eq/Hash (case-insensitive via `matches`/`parse`); no byte/first-match/collision drift; gircap leaf inventory 12→13 |
-| T02 | `girpr-chunk-layout` leaf | skipped | | F5 validated skip: the two layouts are different data models (i64 string-violations vs u64 tiled/gaps/overlaps), algorithms and verdicts, each with one consumer; unifying risks published `Range` bytes and collapses §A13 verdicts. Implementer suggests revisiting only if gircap's published `Range` gains a second consumer — needs reviewer endorsement |
+| T01 | `girpr-chunk-identity` leaf (+ digest normalization placement) | completed | f831b5af, 950fb9cf, d9a49602, 401fb580 | F4+F8; leaf `girpr-chunk-identity` added, digest normalization stays at gircap decode boundary; borrowed view keeps spelling-exact Eq/Hash (case-insensitive via `matches`/`parse`); no byte/first-match/collision drift; gircap leaf inventory 12→13 |
+| T02 | `girpr-chunk-layout` leaf | skipped | | F5 validated skip: the two layouts are different data models (i64 string-violations vs u64 tiled/gaps/overlaps), algorithms and verdicts, each with one consumer; unifying risks published `Range` bytes and collapses §A13 verdicts. Reviewer endorsed follow-up FU01 |
 | T03 | `girpr-chunk-cost` download-projection fold | todo | | F6; published PLAN/SUMMARY figure and ranking key |
 | T04 | `girpr-reuse-decision` leaf | todo | | F7; `usable_len` real-vs-u64::MAX asymmetry is load-bearing |
 | T05 | `girpr-manifest-stats` leaf | todo | | F9; recorded violation is evidence, not an error to normalize away |
@@ -65,7 +65,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| A | T01, T02 | pending | |
+| A | T01, T02 | done | T01 completed (no fixes needed); T02 skip endorsed |
 | B | T03, T04, T05 | pending | |
 | C | T06 | pending | |
 | D | T07, T08 | pending | |
@@ -92,7 +92,7 @@ A planning review batches the survivors only after every task is settled.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| *(none yet)* | | | |
+| FU01 | Revisit extracting gircap's published `Range` into a logic-free leaf only if a second consumer appears (from T02) | open | Reviewer-endorsed: a second consumer is the §A2 condition that makes the leaf pay off; skip holds until then |
 
 ## Persistent context
 
