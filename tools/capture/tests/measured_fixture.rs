@@ -278,7 +278,6 @@ fn game() -> FieldDiff {
     diff::diff_field(&a, &b).expect("same field")
 }
 
-#[test]
 fn the_five_path_counts_are_what_the_live_capture_measured() {
     let d = game();
     assert_eq!(
@@ -304,7 +303,6 @@ fn the_five_path_counts_are_what_the_live_capture_measured() {
 
 /// The identity that makes the two counts consistent: every common path is
 /// either identical or changed, and the two are disjoint.
-#[test]
 fn identical_and_changed_partition_the_common_set() {
     let d = game();
     assert_eq!(d.counts.identical + d.counts.changed(), d.counts.common);
@@ -323,7 +321,6 @@ fn identical_and_changed_partition_the_common_set() {
 }
 
 /// The pool's headline numbers, with the two identities kept apart.
-#[test]
 fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
     let d = game();
     let p: &ReusePool = &d.pool;
@@ -353,7 +350,6 @@ fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
 }
 
 /// The §5 ranking key, on a fixture whose arithmetic can be done by hand.
-#[test]
 fn total_cost_is_what_the_table_says_and_patch_bytes_is_not() {
     let d = game();
     let dll = d
@@ -376,7 +372,6 @@ fn total_cost_is_what_the_table_says_and_patch_bytes_is_not() {
     );
 }
 
-#[test]
 fn a_moved_chunk_is_reused_and_counted_as_moved() {
     let d = game();
     let blk = d
@@ -404,7 +399,6 @@ fn a_moved_chunk_is_reused_and_counted_as_moved() {
 
 /// Ordering is the determinism the whole selection rests on, so it is pinned on
 /// the same fixture rather than on a synthetic one.
-#[test]
 fn cost_ordering_puts_the_cheapest_usable_files_first() {
     let d = game();
     let ranked = diff::by_cost(&[d]);
@@ -450,7 +444,6 @@ fn cost_ordering_puts_the_cheapest_usable_files_first() {
 
 /// The aggregate carries the same numbers plus the per-field breakdown, and
 /// prefixes one-sided paths so a path from two pools cannot collide.
-#[test]
 fn aggregation_keeps_the_counts_and_names_the_field() {
     let d = game();
     let agg: PathDiff = diff::aggregate("7.0.0", "7.1.0", &[d]);
@@ -479,7 +472,6 @@ fn aggregation_keeps_the_counts_and_names_the_field() {
 
 /// `paths.tsv` is the file a reader greps, so its header and its arithmetic
 /// are pinned here rather than only in the module's own tests.
-#[test]
 fn the_flat_tsv_carries_every_row_of_both_sides() {
     let d = game();
     let tsv = diff::paths_tsv(&[d]);
@@ -574,7 +566,6 @@ mod m5_matrix {
     ];
 
     /// The cheapest *path*, per class, straight out of the pool.
-    #[test]
     fn every_class_picks_the_cheapest_candidate_the_spec_records() {
         let pool = select::candidates(&[game()]);
         for (class, path, _) in CHEAPEST {
@@ -596,7 +587,6 @@ mod m5_matrix {
     /// The class set is a partition, so one capture answers one shape and every
     /// class gets a capture of its own — the matrix says so rather than
     /// reporting a class as satisfied by a coincidence.
-    #[test]
     fn greedy_admission_captures_the_expected_file_per_class() {
         let pool = select::candidates(&[game()]);
         let s = select::select(&pool, 1, Budget::unlimited(), &[]);
@@ -649,7 +639,6 @@ mod m5_matrix {
     /// *recorded*, with the reason and the count of candidates that were looked
     /// at and found wanting. A matrix that simply omitted an unsatisfiable
     /// class would be indistinguishable from a bug in the loop that walks them.
-    #[test]
     fn the_class_with_no_candidate_is_recorded_as_unavailable_not_dropped() {
         // A pool with one candidate in it, so five of the six classes have
         // none.
@@ -694,7 +683,6 @@ mod m5_matrix {
 
     /// The matrix rows come out in `REQUIRED_ORDER`, which is what makes
     /// `diff/matrix.json` readable as a document rather than a set.
-    #[test]
     fn the_matrix_comes_out_in_required_order() {
         let pool = select::candidates(&[game()]);
         let s = select::select(&pool, 1, Budget::unlimited(), &[]);
@@ -711,7 +699,6 @@ mod m5_matrix {
     /// one. The class is still `captured`; the shortfall belongs to the
     /// candidate, not to the class, and conflating the two would make a
     /// partially-satisfied class look like a missing one.
-    #[test]
     fn per_class_two_under_a_tight_ceiling_tags_the_second_over_budget() {
         let pool = select::candidates(&[game()]);
         let cap = 108 + 1_775_744 - 1;
@@ -766,7 +753,6 @@ mod m5_matrix {
     /// always flips exactly one candidate, and `spent ≤ cap < spent + cheapest
     /// rejected` holds at every setting — which is the property that makes
     /// "smallest-first" mean something other than "nearly sorted".
-    #[test]
     fn the_ceiling_boundary_is_exact_at_every_setting() {
         let pool = select::candidates(&[game()]);
         // Every ceiling from nothing to everything, stepped by a prime so the
@@ -812,7 +798,6 @@ mod m5_matrix {
     /// `--files` wins over the matrix and produces `covered_by`: a path named
     /// explicitly is already captured, so a class it happens to satisfy is not
     /// looked for again.
-    #[test]
     fn a_named_file_is_captured_once_and_covers_the_class_it_answers() {
         let dll = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
         let pool = select::candidates(&[game()]);
@@ -837,7 +822,6 @@ mod m5_matrix {
     /// The frozen corpus has a real degenerate path: a one-chunk file with no
     /// reuse answers no class. Naming it with `--files` must record that fact,
     /// not drop it between `requested` and `skipped`.
-    #[test]
     fn a_named_degenerate_path_is_recorded_as_unscored() {
         let degenerate = "GenshinImpact_Data/AssetBundles/data_revision";
         let pool = select::candidates(&[game()]);
@@ -855,7 +839,6 @@ mod m5_matrix {
 
     /// The scoring document is written from the same diff the admission used, so
     /// it can be checked against the answer without re-deriving anything.
-    #[test]
     fn the_candidates_document_lists_every_path_once_with_its_classes() {
         let diffs = [game()];
         let doc = select::candidates_document(&diffs);
@@ -897,7 +880,6 @@ mod m5_matrix {
     /// position would have produced `reuse_moved+7` for a
     /// `--per-class 1` run, which is true about the cost order and useless
     /// about the flag.
-    #[test]
     fn the_capture_id_suffix_counts_within_the_class() {
         let pool = select::candidates(&[game()]);
         let one = select::select(&pool, 1, Budget::unlimited(), &[]);
@@ -954,7 +936,6 @@ mod m5_matrix {
     /// required every class would have nothing to complain about here — and
     /// that is the point: the requirement is about the classes the caller
     /// names, not about the ones nobody did.
-    #[test]
     fn an_unavailable_class_is_recorded_and_never_pretends_to_be_a_failure() {
         let pool = select::candidates(&[game()]);
         let open = select::select(&pool, 1, Budget::unlimited(), &[]);
@@ -991,6 +972,54 @@ mod m5_matrix {
             tight.rejected.len(),
             6,
             "every wanted candidate is accounted for"
+        );
+    }
+
+    pub(super) fn cases() {
+        // Consolidated pure cases; each label names an original case.
+        crate::check_case(
+            "every_class_picks_the_cheapest_candidate_the_spec_records",
+            every_class_picks_the_cheapest_candidate_the_spec_records,
+        );
+        crate::check_case(
+            "greedy_admission_captures_the_expected_file_per_class",
+            greedy_admission_captures_the_expected_file_per_class,
+        );
+        crate::check_case(
+            "the_class_with_no_candidate_is_recorded_as_unavailable_not_dropped",
+            the_class_with_no_candidate_is_recorded_as_unavailable_not_dropped,
+        );
+        crate::check_case(
+            "the_matrix_comes_out_in_required_order",
+            the_matrix_comes_out_in_required_order,
+        );
+        crate::check_case(
+            "per_class_two_under_a_tight_ceiling_tags_the_second_over_budget",
+            per_class_two_under_a_tight_ceiling_tags_the_second_over_budget,
+        );
+        crate::check_case(
+            "the_ceiling_boundary_is_exact_at_every_setting",
+            the_ceiling_boundary_is_exact_at_every_setting,
+        );
+        crate::check_case(
+            "a_named_file_is_captured_once_and_covers_the_class_it_answers",
+            a_named_file_is_captured_once_and_covers_the_class_it_answers,
+        );
+        crate::check_case(
+            "a_named_degenerate_path_is_recorded_as_unscored",
+            a_named_degenerate_path_is_recorded_as_unscored,
+        );
+        crate::check_case(
+            "the_candidates_document_lists_every_path_once_with_its_classes",
+            the_candidates_document_lists_every_path_once_with_its_classes,
+        );
+        crate::check_case(
+            "the_capture_id_suffix_counts_within_the_class",
+            the_capture_id_suffix_counts_within_the_class,
+        );
+        crate::check_case(
+            "an_unavailable_class_is_recorded_and_never_pretends_to_be_a_failure",
+            an_unavailable_class_is_recorded_and_never_pretends_to_be_a_failure,
         );
     }
 }
@@ -1107,7 +1136,6 @@ mod m6_chunk_store {
 
     /// Three old ids plus two new-only ids is **five** distinct chunk ids, and
     /// the shared one is fetched once.
-    #[test]
     fn the_measured_pair_needs_five_distinct_chunks() {
         let r = chunks::retention(&hoyo_pair());
         assert_eq!(r.ids(Set::MaterializeOld).len(), 3);
@@ -1146,7 +1174,6 @@ mod m6_chunk_store {
 
     /// The shared chunk is one blob with two sources and both roles -- and it is
     /// *not* in `patch_fetch`, which is the whole point of the reuse subtraction.
-    #[test]
     fn the_shared_chunk_is_retained_for_both_sides_and_fetched_for_neither() {
         let w = chunks::wants(&[hoyo_pair()]);
         let shared = w
@@ -1174,7 +1201,6 @@ mod m6_chunk_store {
     /// Offset-0 content changed while the offset did not. This is the case that
     /// separates a content-keyed reuse test from an offset-keyed one, and the
     /// measured pair really contains it.
-    #[test]
     fn the_same_offset_with_new_bytes_is_not_a_reuse() {
         let p = hoyo_pair();
         let r = chunks::retention(&p);
@@ -1200,7 +1226,6 @@ mod m6_chunk_store {
     /// A metadata-only run records the same plan with nothing measured, and
     /// `verified: null` rather than four `false`: "not measured" and "measured
     /// wrong" are different findings and need different responses.
-    #[test]
     fn no_chunk_blobs_records_the_plan_and_measures_nothing() {
         let w = chunks::wants(&[hoyo_pair()]);
         let idx = ChunkIndex::build(Store::plan_only(&w));
@@ -1228,7 +1253,6 @@ mod m6_chunk_store {
 
     /// The five stored paths are exactly `chunks/blobs/<id>.zst`, which is what
     /// Assembly and `verify` will read back.
-    #[test]
     fn every_blob_has_the_path_m7_and_m9_will_read() {
         for w in chunks::wants(&[hoyo_pair()]) {
             assert_eq!(
@@ -1239,11 +1263,38 @@ mod m6_chunk_store {
     }
 
     /// Projected transfer cost for the pair, against the measured one.
-    #[test]
     fn the_projected_download_matches_the_measured_chunk_bytes() {
         let w = chunks::wants(&[hoyo_pair()]);
         // 259 794 + 638 614 + 14 619 + 259 795 + 14 631
         assert_eq!(gircap::blobs::projected_download(&w), 1_187_453);
+    }
+
+    pub(super) fn cases() {
+        // Consolidated pure cases; each label names an original case.
+        crate::check_case(
+            "the_measured_pair_needs_five_distinct_chunks",
+            the_measured_pair_needs_five_distinct_chunks,
+        );
+        crate::check_case(
+            "the_shared_chunk_is_retained_for_both_sides_and_fetched_for_neither",
+            the_shared_chunk_is_retained_for_both_sides_and_fetched_for_neither,
+        );
+        crate::check_case(
+            "the_same_offset_with_new_bytes_is_not_a_reuse",
+            the_same_offset_with_new_bytes_is_not_a_reuse,
+        );
+        crate::check_case(
+            "no_chunk_blobs_records_the_plan_and_measures_nothing",
+            no_chunk_blobs_records_the_plan_and_measures_nothing,
+        );
+        crate::check_case(
+            "every_blob_has_the_path_m7_and_m9_will_read",
+            every_blob_has_the_path_m7_and_m9_will_read,
+        );
+        crate::check_case(
+            "the_projected_download_matches_the_measured_chunk_bytes",
+            the_projected_download_matches_the_measured_chunk_bytes,
+        );
     }
 }
 
@@ -1405,7 +1456,6 @@ mod m7_assembly {
 
     /// A7, A8, A9, A10, A11, A12 — every row green on the measured identity
     /// structure (tiny bodies; the count-sensitive totals are pinned elsewhere).
-    #[test]
     fn the_measured_pair_is_green_on_a7_through_a12() {
         let a = assemble_measured(&hoyo_pair(TINY_LENGTHS));
         let rows = a.selfcheck_rows();
@@ -1431,7 +1481,6 @@ mod m7_assembly {
 
     /// The measured outcome: one chunk reused from the old file, two fetched,
     /// and a download cost that matches the schema doc's worked example.
-    #[test]
     fn the_measured_patch_reuses_one_chunk_and_fetches_two() {
         // The one test that keeps the measured byte counts. Every literal the
         // other three used to pin is either here or reproduced by a size
@@ -1473,7 +1522,6 @@ mod m7_assembly {
     /// The reuse decision is made on content, and the measured pair is the proof:
     /// the chunk at offset 0 is the same *length* in both builds and is still a
     /// FETCH.
-    #[test]
     fn the_chunk_at_the_same_offset_with_new_bytes_is_fetched_not_reused() {
         let pair = hoyo_pair(TINY_LENGTHS);
         let a = assemble_measured(&pair);
@@ -1497,7 +1545,6 @@ mod m7_assembly {
 
     /// A9 is the whole milestone: the patch flow and the direct assembly are
     /// different code paths, so byte-equality is evidence.
-    #[test]
     fn the_patch_flow_byte_equals_the_direct_new_assembly_on_the_measured_pair() {
         let pair = hoyo_pair(TINY_LENGTHS);
         let a = assemble_measured(&pair);
@@ -1537,4 +1584,70 @@ mod m7_assembly {
             "A7"
         );
     }
+
+    pub(super) fn cases() {
+        // Consolidated pure cases; each label names an original case.
+        crate::check_case(
+            "the_measured_pair_is_green_on_a7_through_a12",
+            the_measured_pair_is_green_on_a7_through_a12,
+        );
+        crate::check_case(
+            "the_measured_patch_reuses_one_chunk_and_fetches_two",
+            the_measured_patch_reuses_one_chunk_and_fetches_two,
+        );
+        crate::check_case(
+            "the_chunk_at_the_same_offset_with_new_bytes_is_fetched_not_reused",
+            the_chunk_at_the_same_offset_with_new_bytes_is_fetched_not_reused,
+        );
+        crate::check_case(
+            "the_patch_flow_byte_equals_the_direct_new_assembly_on_the_measured_pair",
+            the_patch_flow_byte_equals_the_direct_new_assembly_on_the_measured_pair,
+        );
+    }
+}
+
+#[test]
+fn measured_fixture_cases() {
+    // Consolidated fixture cases: one process for all 29 original cases.
+    // Each label and every assertion/message from the originals is kept.
+    check_case(
+        "the_five_path_counts_are_what_the_live_capture_measured",
+        the_five_path_counts_are_what_the_live_capture_measured,
+    );
+    check_case(
+        "identical_and_changed_partition_the_common_set",
+        identical_and_changed_partition_the_common_set,
+    );
+    check_case(
+        "the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach",
+        the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach,
+    );
+    check_case(
+        "total_cost_is_what_the_table_says_and_patch_bytes_is_not",
+        total_cost_is_what_the_table_says_and_patch_bytes_is_not,
+    );
+    check_case(
+        "a_moved_chunk_is_reused_and_counted_as_moved",
+        a_moved_chunk_is_reused_and_counted_as_moved,
+    );
+    check_case(
+        "cost_ordering_puts_the_cheapest_usable_files_first",
+        cost_ordering_puts_the_cheapest_usable_files_first,
+    );
+    check_case(
+        "aggregation_keeps_the_counts_and_names_the_field",
+        aggregation_keeps_the_counts_and_names_the_field,
+    );
+    check_case(
+        "the_flat_tsv_carries_every_row_of_both_sides",
+        the_flat_tsv_carries_every_row_of_both_sides,
+    );
+    m5_matrix::cases();
+    m6_chunk_store::cases();
+    m7_assembly::cases();
+}
+
+fn check_case(label: &str, case: fn()) {
+    println!("case: {label}");
+    case();
 }
