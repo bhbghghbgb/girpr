@@ -3,7 +3,7 @@ name = "girpr-lock"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The single-writer run lock and its key policy, shared by the product and its integration tests"
+description = "The single-writer run lock and its key policy, used by the girpr product and its lock-only tests"
 
 [lib]
 name = "girpr_lock"

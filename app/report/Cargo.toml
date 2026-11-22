@@ -3,7 +3,7 @@ name = "girpr-report"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared run counters and stdout report plane the girpr repair pipeline reads with"
+description = "The run counters and stdout report plane the girpr repair pipeline reads with"
 
 [lib]
 name = "girpr_report"

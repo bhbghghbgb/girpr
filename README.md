@@ -657,8 +657,10 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   covers its unit tests without a second lint policy file. Re-test the options
   before moving these allowances to a config file.
 
-- **The three dev tools opt into a smaller lint subset.** `girsync`, `gircap`
-  and `sled2redb` set `[lints.rust] unsafe_code = "deny"` and
+- **The dev tools and their project-owned crates opt into a smaller lint subset.**
+  `girsync`, `gircap` and `sled2redb`, plus the crates they own (`girsync-cache`,
+  `girsync-leaves`, `girsync-test-support`, `gircap-http`, `gircap-hash`,
+  `gircap-test-support`), set `[lints.rust] unsafe_code = "deny"` and
   `[lints.clippy] all = "warn"` themselves instead of inheriting the workspace
   table, and the command above checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
   deliberately absent: for a repair run a panic is a failed run, while for a

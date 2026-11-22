@@ -3,7 +3,7 @@ name = "girpr-fetch"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared HYP and Sophon fetch mechanics the girpr repair pipeline reads with"
+description = "The HYP and Sophon fetch mechanics the girpr repair pipeline reads with"
 
 [lib]
 name = "girpr_fetch"
