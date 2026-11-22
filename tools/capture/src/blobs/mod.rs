@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use girpr_chunk_cost::projected_download_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::http::{ApiError, Fetcher, Kind};
@@ -974,11 +975,11 @@ pub fn file_pairs(
 /// **Saturating, because this is an estimate.** A hostile manifest can declare
 /// `compressed_size: i64::MAX` on several chunks; the answer is "more than this
 /// tool can count", not a debug abort or a release wrap. The capture-side plan
-/// is a total to display and compare, not an address.
+/// is a total to display and compare, not an address. The shared fold now owns
+/// that arithmetic; every wanted chunk is marked as a download here, and the
+/// retention-set decision that produced the wants stays in this crate.
 pub fn projected_download(wants: &[Want]) -> u64 {
-    wants.iter().fold(0_u64, |total, w| {
-        total.saturating_add(w.chunk.compressed_size.max(0) as u64)
-    })
+    projected_download_bytes(wants.iter().map(|w| (w.chunk.compressed_size, true)))
 }
 
 /// A one-line summary for the run log.

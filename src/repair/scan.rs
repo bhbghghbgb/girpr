@@ -28,6 +28,8 @@ use std::time::SystemTime;
 
 use futures_util::StreamExt;
 
+use girpr_chunk_cost::projected_download_bytes;
+
 use super::file::Mode;
 use crate::config::RepairMode;
 use crate::repair::manifest::LocalChunkMap;
@@ -210,11 +212,10 @@ impl ScanReport {
 }
 
 /// `Σ compressed_size` over every chunk: the temp-after-discard and
-/// unreachable-file figure. Saturated, because the sizes are server data.
+/// unreachable-file figure. Every chunk is marked as a download; the shared
+/// fold clamps and saturates the server-controlled sizes.
 fn all_chunks_download_bytes(chunks: &[SophonChunk]) -> u64 {
-    chunks.iter().fold(0u64, |n, c| {
-        n.saturating_add(c.compressed_size.max(0) as u64)
-    })
+    projected_download_bytes(chunks.iter().map(|c| (c.compressed_size, true)))
 }
 
 /// One file's download figure, for the write path it will really take.
@@ -242,13 +243,12 @@ fn est_file_download_bytes(
     match resolved {
         // The temp path writes every chunk; only the reuse sources save a
         // download, and `source_ok` is exactly the scan's verdict on them.
-        Mode::Temp => chunks
-            .iter()
-            .zip(v.source_ok.iter())
-            .filter(|(_, ok)| !**ok)
-            .fold(0u64, |n, (c, _)| {
-                n.saturating_add(c.compressed_size.max(0) as u64)
-            }),
+        Mode::Temp => projected_download_bytes(
+            chunks
+                .iter()
+                .zip(v.source_ok.iter())
+                .map(|(c, ok)| (c.compressed_size, !*ok)),
+        ),
         Mode::Inplace => {
             // One pass builds the writer's two inputs: the damaged chunks, in
             // plan order, and their sources. The writer's rule is the same
@@ -270,12 +270,11 @@ fn est_file_download_bytes(
                 });
             }
             let order = reuse::salvage_order_refs(&bad, &srcs, u64::MAX);
-            bad.iter()
-                .enumerate()
-                .filter(|(k, _)| !order.live[*k])
-                .fold(0u64, |n, (_, c)| {
-                    n.saturating_add(c.compressed_size.max(0) as u64)
-                })
+            projected_download_bytes(
+                bad.iter()
+                    .enumerate()
+                    .map(|(k, c)| (c.compressed_size, !order.live[k])),
+            )
         }
     }
 }

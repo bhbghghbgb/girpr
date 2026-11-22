@@ -23,6 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use girpr_chunk_cost::projected_download_bytes;
 use serde::Serialize;
 
 use crate::config::RepairMode;
@@ -391,11 +392,9 @@ impl<'a> PlanDocument<'a> {
                 .iter()
                 .map(|(id, f)| {
                     let est = est_by_file.get(id.index()).copied().unwrap_or_else(|| {
-                        // Server-controlled sizes: saturate, so a corrupt
-                        // manifest cannot overflow the fallback.
-                        f.chunks.iter().fold(0u64, |n, c| {
-                            n.saturating_add(c.compressed_size.max(0) as u64)
-                        })
+                        // Every chunk is a download in the fallback; the
+                        // shared fold clamps and saturates the server sizes.
+                        projected_download_bytes(f.chunks.iter().map(|c| (c.compressed_size, true)))
                     });
                     let d = disk
                         .for_id(id)

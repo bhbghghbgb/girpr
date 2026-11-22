@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use girpr_chunk_cost::projected_download_bytes;
+
 use crate::sophon::{FileReuse, SophonChunk, SophonChunkFile};
 
 use super::manifest::LocalChunkMap;
@@ -340,24 +342,19 @@ impl RepairPlan {
 /// Per-file download estimate: `Σ c.compressed_size for c in plan[rel].chunks
 /// where (c.uncompressed_md5, c.uncompressed_size) ∉ local_map[rel]`.
 ///
-/// This is character-for-character `gircap`'s `patch_fetch` formula,
-/// so the `PLAN` line, the `SUMMARY plan_download_bytes` key
-/// and the capture's `totals.download_bytes` are the same figure. With no local
-/// map (a fresh install) it degenerates to "every chunk downloads", which is
-/// the honest worst case.
+/// This is gircap's `patch_fetch` figure: the `PLAN` line, the
+/// `SUMMARY plan_download_bytes` key and the capture's `totals.download_bytes`
+/// are the same number. Both programs feed the shared
+/// [`projected_download_bytes`] fold, so the arithmetic cannot drift; this
+/// caller keeps its own reuse-map membership decision, which is exactly the
+/// flag the leaf is handed. With no local map (a fresh install) every chunk is
+/// marked as a download, which is the honest worst case.
 pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&FileReuse>) -> u64 {
-    file.chunks
-        .iter()
-        .filter(|c| match reuse {
-            Some(reuse) => !reuse.contains(c),
-            None => true,
-        })
-        // Server-controlled sizes can overflow a `u64` (three chunks at
-        // `i64::MAX`); saturate so a corrupt manifest is an over-approximation,
-        // not a panic in the plan phase.
-        .fold(0u64, |total, c| {
-            total.saturating_add(c.compressed_size.max(0) as u64)
-        })
+    projected_download_bytes(
+        file.chunks
+            .iter()
+            .map(|c| (c.compressed_size, reuse.is_none_or(|r| !r.contains(c)))),
+    )
 }
 
 /// Reject a chunk range a corrupt manifest can carry before it reaches a seek.
