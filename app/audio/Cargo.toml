@@ -20,7 +20,7 @@ tracing = "0.1.44"
 # The four code/display-name pairs and their canonical order, shared with the
 # capture tool so both write the same scan-file bytes. This crate keeps the
 # read/write and selection policy; the leaf owns only the constant table.
-girpr-audio-language = { path = "../audio-language" }
+girpr-audio-language = { path = "../../crates/audio-language" }
 # Server-controlled path containment and the atomic temp-then-rename publish.
 # These are low-level mechanics with no product policy, so an edit to the
 # config writer, the hash or the counter leaves the whole audio boundary
@@ -29,4 +29,4 @@ girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
 # The scratch directories the scan-file tests read and write through.
-girpr-tempdir = { path = "../tempdir" }
+girpr-tempdir = { path = "../../crates/tempdir" }

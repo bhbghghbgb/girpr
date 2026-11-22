@@ -25,14 +25,14 @@ anyhow = "1.0.104"
 # The Windows device-name predicate, slash folding and ASCII case folding the
 # server-path checks are spelled with. This crate keeps its own containment and
 # identity policies; the leaf owns only the platform primitives.
-girpr-fs-names = { path = "../fs-names" }
+girpr-fs-names = { path = "../../crates/fs-names" }
 # The lexical relative-path shape validator, parameterised by this crate's
 # normalising policy and device rule. The path names, ID mapping and containment
 # decisions stay here; the leaf owns only the shape checks and their order.
-girpr-path-shape = { path = "../path-shape" }
+girpr-path-shape = { path = "../../crates/path-shape" }
 # Temp-sibling-then-rename publishing for every artifact the product writes.
 tempfile = "3.27"
 
 [dev-dependencies]
 # The scratch directories the file and containment tests write into.
-girpr-tempdir = { path = "../tempdir" }
+girpr-tempdir = { path = "../../crates/tempdir" }

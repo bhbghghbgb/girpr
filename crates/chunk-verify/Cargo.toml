@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.104"
 girpr-proto = { path = "../proto" }
-girpr-util-hash = { path = "../util-hash" }
+girpr-util-hash = { path = "../../app/util-hash" }
 
 [dev-dependencies]
 girpr-tempdir = { path = "../tempdir" }

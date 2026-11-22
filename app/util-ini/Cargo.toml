@@ -26,9 +26,9 @@ girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
 # The scratch directories the config tests write into.
-girpr-tempdir = { path = "../tempdir" }
+girpr-tempdir = { path = "../../crates/tempdir" }
 # The shared log-capture helper the config-list warning tests assert through.
-girpr-log = { path = "../log", features = ["test-support"] }
+girpr-log = { path = "../../crates/log", features = ["test-support"] }
 # The junction/symlink fixtures the host-dependent config cases share with the
 # path containment tests. The feature is off in shipped builds.
 girpr-util-path = { path = "../util-path", features = ["test-support"] }

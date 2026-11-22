@@ -26,7 +26,7 @@ clap = ["dep:clap"]
 girpr-report-core = { path = "../report-core" }
 # The saturating atomic counter used by the byte and RAM reservations. It is a
 # dependency-free leaf, so a config, path or hash edit leaves the report cached.
-girpr-util-counter = { path = "../util-counter" }
+girpr-util-counter = { path = "../../app/util-counter" }
 # The `event` field is emitted through `Serialize`; this crate owns the value
 # vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
 serde = "1.0.229"

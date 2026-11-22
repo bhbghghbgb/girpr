@@ -24,7 +24,7 @@ girpr = { path = "../.." }
 girpr-test-fixtures = { path = "../test-fixtures" }
 # The requested repair mode is a value of the policy leaf, not of the facade;
 # the glue names it directly, without a re-export in the binary.
-girpr-repair-policy = { path = "../repair-policy" }
+girpr-repair-policy = { path = "../../app/repair-policy" }
 # The path scope is a value of the repair-plan leaf, not of the facade; the
 # glue names it directly, the same way the production callers do.
 girpr-repair-plan = { path = "../repair-plan" }

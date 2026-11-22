@@ -45,10 +45,10 @@ girpr-proto = { path = "../proto" }
 # holds no index, collision policy or first-match order — those stay here.
 girpr-chunk-identity = { path = "../chunk-identity" }
 girpr-retry = { path = "../retry" }
-girpr-util-hash = { path = "../util-hash" }
+girpr-util-hash = { path = "../../app/util-hash" }
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
 # not the config writer, so an ini edit leaves this fetch tree cached.
-girpr-util-path = { path = "../util-path" }
+girpr-util-path = { path = "../../app/util-path" }
 
 [dev-dependencies]
 # The dependency-free loopback server the canned-reply helper scripts. This

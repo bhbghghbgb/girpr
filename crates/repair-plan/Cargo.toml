@@ -17,4 +17,4 @@ tracing = "0.1.44"
 girpr-chunk-cost = { path = "../chunk-cost" }
 girpr-fetch = { path = "../fetch" }
 girpr-filter = { path = "../filter" }
-girpr-util-path = { path = "../util-path" }
+girpr-util-path = { path = "../../app/util-path" }

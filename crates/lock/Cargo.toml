@@ -28,4 +28,4 @@ girpr-tempdir = { path = "../tempdir" }
 # The fixture refusal type and the symlink classifiers the host-dependent lock
 # cases use, so a host that cannot create a link skips out loud. They come from
 # the path leaf's test seam; the feature is off in shipped builds.
-girpr-util-path = { path = "../util-path", features = ["test-support"] }
+girpr-util-path = { path = "../../app/util-path", features = ["test-support"] }
