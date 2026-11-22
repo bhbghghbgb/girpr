@@ -30,7 +30,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T16 | Fold tiny pure-test clusters | completed | 4e8d728c, 97a7cd34, 5588b71f, f2ae25b8, 09b8f468, 0301c15c | 6 commits (one per cluster), none skipped; measured report-core isolated 0.070s→0.043s (~38% saved by 3 fewer spawns); 45→24 test fns (21 fewer spawns); every assertion/message preserved with labelled subcases; pinned junction/symlink, clock and artifact-bridge cases untouched; no nextest filter change; 79 passed |
 | T17 | Leaf-crate test cleanups | completed | f90cb5ef, 98740650 | 2 commits: ledger barrier-free exact-sum tests 8×100→4×25 (sums 700/1100 retained), Barrier race test kept at 8, ceiling-overshoot race tests untouched; redundant tag-6 byte assertion removed from fetch_direct (binary + compile check kept) and value-0 proto_roundtrip duplicate removed; authoritative girpr-proto byte pin unchanged; no nextest filter change; report 40/40, fetch 34/34, proto 1/1 |
 | T18 | Reduce row-reading redb reopens | pending_review | aba631af | 1 commit; step-1 confirmed T02 pre-satisfied the bulk, then addressed 4 residual file-subject reopens via test-only thread-local row observer + path-keyed in-memory row mirror (instead of RunOutcome.rows); opens 21→14, sync pair 3.204→2.531s, migration pair 1.642→0.801s; assertions/helper semantics/file backend unchanged; no nextest filter change; 585 passed |
-| T19 | Shrink the sync-cache digest fixture and add `dirs()` | todo | | |
+| T19 | Shrink the sync-cache digest fixture and add `dirs()` | in_progress | | |
 | T20 | Merge pure gircap test clusters | todo | | |
 | T21 | Use `shared_bundle` for read-only capture tests; drop `fs2` | todo | | |
 
