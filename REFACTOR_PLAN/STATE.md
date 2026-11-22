@@ -30,7 +30,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T16 | `girpr-request-url` leaf | skipped | | F21 validated skip (pre-satisfied/keeper): shared values already in \`girpr-model::region\`; remaining URL-join/escaping strategies are a recorded divergence (§A9/§N8) and program-local override seams (\`--hyp-base\`/\`--sophon-base\`, gircap \`Box::leak\`). Do not re-dispatch §F21; a shared builder would change pinned URL bytes (§A5) or collapse the keeper |
 | T17 | Deepen `girpr-document-envelope` from report-core | skipped | | F22 validated skip (premise stale): \`girpr-report-core\` serves only the stdout NDJSON plane (A6), not the five durable documents, which use the local \`emit::write_doc\` helpers; no common envelope shape (\`tool\` only on MANIFEST.json, key order is load-bearing serde order, N11 says no duplication). Deepening would absorb the published format (A4/A5/N9). Do not re-dispatch |
 | T18 | Publish-target predicate into fs-names leaf | skipped | | F23 validated skip (pre-satisfied): \`girpr-fs-names\` already owns \`has_trailing_dot_or_space\` and \`is_reserved_device_name\`; T14's \`girpr-path-shape::validate\` composes them; both writers consume the leaves directly with atomicity intact (capture non-atomic docs + one blob rename, util-path \`NamedTempFile::persist\`). Do not re-dispatch F23 |
-| T19 | `girpr-value-ranges` leaf | pending_review | 92f7964305273f41754b974caab8791ccfbf992f | F24; dependency-free leaf with \`check_in_range\`/\`RangeFact\`/\`RangeBound\`, no messages/exit codes/constants; all three callers migrated directly with error strings and exit classes unchanged; **gircap leaf inventory now sixteen**; suggested follow-up: girsync \`backup_policy\` fourth NonZeroUsize check not migrated |
+| T19 | `girpr-value-ranges` leaf | completed | 92f7964305273f41754b974caab8791ccfbf992f | F24; dependency-free leaf with \`check_in_range\`/\`RangeFact\`/\`RangeBound\`, no messages/exit codes/constants; all three callers migrated directly with error strings and exit classes unchanged; **gircap leaf inventory now sixteen**; suggested follow-up: girsync \`backup_policy\` fourth NonZeroUsize check not migrated |
 | T20 | Shared blob→bytes→digest verify walker | todo | | F25; re-derive against chunks/index.json; findings not failures (A13) |
 | T21 | `girpr-http-transport` assessment | todo | | F26; reverses gircap-http rationale, couples reqwest — likely skip |
 | T22 | Shared retry decision vocabulary / `drive_attempts` | todo | | F27; jitter keepers (A9), published status set |
@@ -72,7 +72,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | E | T09, T10 | done | T09 completed (no fixes); T10 skip endorsed; report-only drift suggestion rejected (report deleted at cleanup) |
 | F | T11, T12, T13 | done | No reviewable work — all three validated skips (T11/T12 pre-satisfied or stale premise, T13 near-forbidden) |
 | G | T14, T15, T16 | done | T14 completed (no fixes); T15/T16 skips confirmed; three follow-ups endorsed |
-| H | T17, T18, T19 | pending | |
+| H | T17, T18, T19 | done | T19 completed (no fixes); T17/T18 skips confirmed; ordinal drift covered by FU03 |
 | I | T20, T21, T22 | pending | |
 | J | T23, T24, T25 | pending | |
 | K | T26, T27, T28 | pending | |
@@ -102,6 +102,7 @@ A planning review batches the survivors only after every task is settled.
 | FU08 | Revisit provenance extraction only if a second real consumer appears (from T13) | open | Reviewer-endorsed: a second consumer is §A2's payoff condition; with one consumer F18 stays near-forbidden (§A4) |
 | FU09 | Record gircap URL construction as a deliberate keeper so §F21 is not re-dispatched; weigh any shared uppercase percent-encoder against §N8 and §A14 cost (from T16) | open | Reviewer-endorsed: F21's remainder is the recorded URL-join keeper (§A9/§N8) |
 | FU10 | Consider the shared validator's whole-string colon check vs the old product per-component check: for a value violating both an earlier trailing-dot rule and a later colon rule, product error wording changed (from review G) | open | Low priority; caller-local, non-published text; no test regressed |
+| FU11 | Optionally migrate girsync's fourth hand-written NonZeroUsize check in `backup_policy` (`--backup-retain`) to `girpr-value-ranges` (from T19) | open | Reviewer-endorsed, non-blocking; preserve its distinct wording/exit-3 class |
 
 ## Persistent context
 
