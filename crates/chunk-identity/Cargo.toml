@@ -1,0 +1,19 @@
+[package]
+name = "girpr-chunk-identity"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared chunk-identity value types and digest-normalisation mechanics"
+
+[lib]
+name = "girpr_chunk_identity"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The digest-byte key and the case-insensitive hex parse rule live here; the
+# wire type the borrowed view reads comes from the logic-free proto leaf.
+girpr-digest = { path = "../digest" }
+girpr-proto = { path = "../proto" }
