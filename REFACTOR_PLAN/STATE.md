@@ -31,8 +31,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T17 | Leaf-crate test cleanups | completed | f90cb5ef, 98740650 | 2 commits: ledger barrier-free exact-sum tests 8×100→4×25 (sums 700/1100 retained), Barrier race test kept at 8, ceiling-overshoot race tests untouched; redundant tag-6 byte assertion removed from fetch_direct (binary + compile check kept) and value-0 proto_roundtrip duplicate removed; authoritative girpr-proto byte pin unchanged; no nextest filter change; report 40/40, fetch 34/34, proto 1/1 |
 | T18 | Reduce row-reading redb reopens | completed | aba631af | 1 commit; step-1 confirmed T02 pre-satisfied the bulk, then addressed 4 residual file-subject reopens via test-only thread-local row observer + path-keyed in-memory row mirror (instead of RunOutcome.rows); opens 21→14, sync pair 3.204→2.531s, migration pair 1.642→0.801s; assertions/helper semantics/file backend unchanged; no nextest filter change; 585 passed |
 | T19 | Shrink the sync-cache digest fixture and add `dirs()` | completed | cc069d9b, 44991aed | 2 commits: digest body 300,000→8192 bytes (still crosses 128×64-byte blocks, under CHUNK, assertion intact, 900k→24.5k updates); dirs(tag) helper applied to 32 homogeneous sequences, 17 left alone (14 mtime-pinned + 3 heterogeneous), _t guards keep TempDir alive; hygiene only, no wall claim; no nextest filter change; sync 46/46, sync-cache 129/129 |
-| T20 | Merge pure gircap test clusters | pending_review | bc115d8a, 9ad944de, 30c38788 | 3 commits: config 39→1 (0.370→0.020s), select 39→1 (0.384→0.053s), measured_fixture 29→1 (0.981→0.83-0.86s); hash cluster SKIPPED (~1s real CPU/test, merging loses parallelism 0.712→0.884s), capture_layout trio SKIPPED (shapes differ + spawns binary); gircap lib 641→565, 10.8-11.2s→8.0-9.1s; bodies byte-identical (only #[test] removed), labelled case helper; no nextest filter change, independence held; 751 passed |
-| T21 | Use `shared_bundle` for read-only capture tests; drop `fs2` | pending_review | e2ea9eec, 9efe78f7 | 2 commits: 4 read-only callers→shared_bundle (full captures 19→15), sensitive spawn/flag/record callers left alone; report's example (capture_layout shape) NOT switched — asserts in-process run record, stale pointer; fs2 dev-dep removed from gircap only, Cargo.lock drops fs2 from gircap list but package still in graph via test-support/sled; shared-bundle cache key/blob (32768 bytes at line 907)/bytes unchanged, F37 not reopened; no nextest filter change; 665 passed |
+| T20 | Merge pure gircap test clusters | completed | bc115d8a, 9ad944de, 30c38788 | 3 commits: config 39→1 (0.370→0.020s), select 39→1 (0.384→0.053s), measured_fixture 29→1 (0.981→0.83-0.86s); hash cluster SKIPPED (~1s real CPU/test, merging loses parallelism 0.712→0.884s), capture_layout trio SKIPPED (shapes differ + spawns binary); gircap lib 641→565, 10.8-11.2s→8.0-9.1s; bodies byte-identical (only #[test] removed), labelled case helper; no nextest filter change, independence held; 751 passed |
+| T21 | Use `shared_bundle` for read-only capture tests; drop `fs2` | completed | e2ea9eec, 9efe78f7 | 2 commits: 4 read-only callers→shared_bundle (full captures 19→15), sensitive spawn/flag/record callers left alone; report's example (capture_layout shape) NOT switched — asserts in-process run record, stale pointer; fs2 dev-dep removed from gircap only, Cargo.lock drops fs2 from gircap list but package still in graph via test-support/sled; shared-bundle cache key/blob (32768 bytes at line 907)/bytes unchanged, F37 not reopened; no nextest filter change; 665 passed |
 
 ## Reviews
 
@@ -49,7 +49,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | I | T14, T15 | done | |
 | J | T16, T17 | done | |
 | K | T18, T19 | done | T18 had genuine residual work beyond T02's memory seam |
-| L | T20, T21 | pending | |
+| L | T20, T21 | done | |
 
 ## Follow-ups
 
@@ -89,6 +89,10 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU28 | Remove label/match-arm duplication in retry_driver_contracts | open | Cosmetic only |
 | FU29 | Derive row-mirror case sensitivity from captured cache meta, not hardcoded true | open | Future case-insensitive file-subject case would disagree |
 | FU30 | Use a drop-guard so with_observed_rows clears ROW_CAPTURE on panic | open | Harmless under nextest; robustness for in-process sequential runs |
+| FU31 | De-duplicate the three identical check_case helpers in gircap tests | open | Pure cleanup, no behaviour change |
+| FU32 | Restore a one-line manifest comment for the cross-process bundle lock | open | Rationale currently only in gircap-test-support docs |
+| FU33 | Correct the stale F36 example pointer in the report | open | Informational; report is deleted at final cleanup |
+| FU34 | Consider success-output override for live per-case progress in merged tests | open | No action needed; failure-output=final already adequate |
 
 ## Persistent context
 
