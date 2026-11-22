@@ -1,0 +1,15 @@
+[package]
+name = "girpr-chunk-cost"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared saturating download-projection fold for chunk transfer costs"
+
+[lib]
+name = "girpr_chunk_cost"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

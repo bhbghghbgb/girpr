@@ -625,6 +625,7 @@ dependencies = [
  "gircap-http",
  "gircap-test-support",
  "girpr-audio-language",
+ "girpr-chunk-cost",
  "girpr-chunk-identity",
  "girpr-cli",
  "girpr-digest",
@@ -705,6 +706,7 @@ dependencies = [
  "futures-util",
  "girpr-audio",
  "girpr-audio-language",
+ "girpr-chunk-cost",
  "girpr-cli",
  "girpr-digest",
  "girpr-exit",
@@ -750,6 +752,10 @@ dependencies = [
 
 [[package]]
 name = "girpr-audio-language"
+version = "0.1.0"
+
+[[package]]
+name = "girpr-chunk-cost"
 version = "0.1.0"
 
 [[package]]
