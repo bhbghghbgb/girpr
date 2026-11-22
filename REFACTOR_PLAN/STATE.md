@@ -59,7 +59,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T45 | `girpr-report-model` leaf | skipped | | F50 validated skip (target exhausted): event placement already \`girpr-report-core::Order\`; three \`Val\` vocabularies are deliberately incompatible byte-pinned contracts (girpr Str/UInt/Int with 1/0 flags, gircap Str/Int/Bool + percent-encoding, girsync full JSON Value), and per-tool key tables are pinned data (§A5/A6). A shared model is a content-free §A2 facade or reintroduces collisions. Do not reopen absent a fourth identical consumer |
 | T46 | Narrow CLI leaf extension (OutputFormat + LogArgs) | skipped | | F51 validated skip: three log/--output flag sets are byte-different pinned help (A5/N8 flag sets stay local), three OutputFormats are divergent report-plane types (A6) whose promotion is a §A2 facade/cycle, and log policy already lives in \`girpr-log\` (LogOptions/EnvOptions/LogPlan). Stale premise: no \`cli_contract\` nextest filter exists |
 | T47 | `bounded_decode` in girpr-digest assessment | skipped | | F52 validated skip (re-confirms N7): two shapes are async/write/hash vs sync/read/hex-string with distinct error text (keeper); hosting a zstd wrapper in \`girpr-digest\` pushes native zstd-sys rebuild into ~13 dependents (§A2/F48). Streaming always-on test and distinct messages intact. Do not fold \`zstd_measure_from\` into \`zstd_measure\` |
-| T48 | `girpr-fs` composition leaf | in_progress | | F53; reparse classification is domain logic, one deliberate unsafe call |
+| T48 | `girpr-fs` composition leaf | skipped | | F53 validated skip (pre-satisfied/stale premises): \`canonical_no_verbatim\` in \`girpr-fs-names\`, identity facts in \`girpr-fs-identity\`, link classification in \`girpr-sync-leaves\` all shared and directly consumed; no \`LinkClass\`, no first-party unsafe handle call, no host/fail-closed policy to parameterize. A composition leaf is a §A2 facade absorbing N5/A9 domain logic. Device-name drift (girpr CLOCK$+trim vs gircap raw/no-CLOCK$) is a deliberate A9 divergence - raised as follow-up FU16, not changed |
 
 ## Reviews
 
@@ -82,7 +82,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | O | T38, T39, T40 | done | T40 completed with corrective commit c7322ec6 (stale gircap spec dependency descriptions); T38/T39 skips confirmed |
 | P | T41, T42, T43 | done | No reviewable work - all three validated skips (divergent line emission, per-call-site buffer tuning, rebuild-domain trap) |
 | Q | T44, T45, T46 | done | No reviewable work - all three validated skips (pre-satisfied hit counter, exhausted field-model target, byte-pinned CLI flags) |
-| R | T47, T48 | pending | |
+| R | T47, T48 | done | No reviewable work - both validated skips (re-confirmed N7 streaming/error keeper, pre-satisfied fs leaves with stale premises) |
 
 ## Follow-ups
 
@@ -107,6 +107,7 @@ A planning review batches the survivors only after every task is settled.
 | FU13 | Add a direct unit test in `crates/log` for `CaptureBuffer`'s Write/snapshot byte fidelity (from review N) | open | Non-blocking; currently covered only indirectly |
 | FU14 | Add a brief comment at the `unwrap_or_else(into_inner)` call sites noting intentional parity with the sync consumer (from review N) | open | Non-blocking cosmetic |
 | FU15 | Remove the now-unused direct `chrono = "0.4.45"` dependency from the root `girpr` package (from review O) | open | Non-blocking optional cleanup; pre-existing before T40, no source usage |
+| FU16 | Assess the device-name drift as a separate defect candidate: girpr uses `DEVICE_NAMES` incl. `CLOCK$` with trailing dot/space trim, gircap uses a set without `CLOCK$` and compares the raw stem (from T48) | open | Deliberate §A9 divergence; do not fold into a shared boundary silently |
 
 ## Persistent context
 
