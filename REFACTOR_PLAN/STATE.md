@@ -29,8 +29,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T15 | Remove cross-file duplicate process-level assertions | completed | a94eac24 | 1 commit; removed 1 duplicate process case after folding its only process-only assertion (getBuild via endpoint overrides) into base_precedence_and_env_fallback smoke; spawns 14→13, process tests 8→7; coverage verified in-process first (REPORT/SUMMARY via cli_contract goldens, scope via repair_scope); no nextest filter change; pinned repair_post + host-skips untouched; 420 passed/6 skipped; F22 premises partly stale (already reduced by earlier work) |
 | T16 | Fold tiny pure-test clusters | completed | 4e8d728c, 97a7cd34, 5588b71f, f2ae25b8, 09b8f468, 0301c15c | 6 commits (one per cluster), none skipped; measured report-core isolated 0.070s→0.043s (~38% saved by 3 fewer spawns); 45→24 test fns (21 fewer spawns); every assertion/message preserved with labelled subcases; pinned junction/symlink, clock and artifact-bridge cases untouched; no nextest filter change; 79 passed |
 | T17 | Leaf-crate test cleanups | completed | f90cb5ef, 98740650 | 2 commits: ledger barrier-free exact-sum tests 8×100→4×25 (sums 700/1100 retained), Barrier race test kept at 8, ceiling-overshoot race tests untouched; redundant tag-6 byte assertion removed from fetch_direct (binary + compile check kept) and value-0 proto_roundtrip duplicate removed; authoritative girpr-proto byte pin unchanged; no nextest filter change; report 40/40, fetch 34/34, proto 1/1 |
-| T18 | Reduce row-reading redb reopens | pending_review | aba631af | 1 commit; step-1 confirmed T02 pre-satisfied the bulk, then addressed 4 residual file-subject reopens via test-only thread-local row observer + path-keyed in-memory row mirror (instead of RunOutcome.rows); opens 21→14, sync pair 3.204→2.531s, migration pair 1.642→0.801s; assertions/helper semantics/file backend unchanged; no nextest filter change; 585 passed |
-| T19 | Shrink the sync-cache digest fixture and add `dirs()` | pending_review | cc069d9b, 44991aed | 2 commits: digest body 300,000→8192 bytes (still crosses 128×64-byte blocks, under CHUNK, assertion intact, 900k→24.5k updates); dirs(tag) helper applied to 32 homogeneous sequences, 17 left alone (14 mtime-pinned + 3 heterogeneous), _t guards keep TempDir alive; hygiene only, no wall claim; no nextest filter change; sync 46/46, sync-cache 129/129 |
+| T18 | Reduce row-reading redb reopens | completed | aba631af | 1 commit; step-1 confirmed T02 pre-satisfied the bulk, then addressed 4 residual file-subject reopens via test-only thread-local row observer + path-keyed in-memory row mirror (instead of RunOutcome.rows); opens 21→14, sync pair 3.204→2.531s, migration pair 1.642→0.801s; assertions/helper semantics/file backend unchanged; no nextest filter change; 585 passed |
+| T19 | Shrink the sync-cache digest fixture and add `dirs()` | completed | cc069d9b, 44991aed | 2 commits: digest body 300,000→8192 bytes (still crosses 128×64-byte blocks, under CHUNK, assertion intact, 900k→24.5k updates); dirs(tag) helper applied to 32 homogeneous sequences, 17 left alone (14 mtime-pinned + 3 heterogeneous), _t guards keep TempDir alive; hygiene only, no wall claim; no nextest filter change; sync 46/46, sync-cache 129/129 |
 | T20 | Merge pure gircap test clusters | todo | | |
 | T21 | Use `shared_bundle` for read-only capture tests; drop `fs2` | todo | | |
 
@@ -48,7 +48,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | H | T12, T13 | done | |
 | I | T14, T15 | done | |
 | J | T16, T17 | done | |
-| K | T18, T19 | pending | Split if T18 is pre-satisfied by T02 |
+| K | T18, T19 | done | T18 had genuine residual work beyond T02's memory seam |
 | L | T20, T21 | pending | |
 
 ## Follow-ups
@@ -87,6 +87,8 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU26 | Consider splitting the ~324-line merged T14 test | open | Only if failure triage proves painful; labels/messages already preserved |
 | FU27 | Fold remaining tiny pure-test clusters beyond the six named | open | Broad rewrite, modest sampled benefit; re-measure per-test overhead first |
 | FU28 | Remove label/match-arm duplication in retry_driver_contracts | open | Cosmetic only |
+| FU29 | Derive row-mirror case sensitivity from captured cache meta, not hardcoded true | open | Future case-insensitive file-subject case would disagree |
+| FU30 | Use a drop-guard so with_observed_rows clears ROW_CAPTURE on panic | open | Harmless under nextest; robustness for in-process sequential runs |
 
 ## Persistent context
 
