@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Dispatch, Mock, World, dispatch_with};
+use common::{BundleVariant, Dispatch, Mock, World, dispatch_with, shared_bundle};
 use girpr_tempdir::TempDir;
 
 /// A scratch root that is removed when the test ends, whatever happens.
@@ -156,7 +156,7 @@ fn patchmaps(bundle: &Path) -> Vec<(String, serde_json::Value)> {
 /// itself must not have one.
 #[test]
 fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
-    let (_scratch, bundle) = capture_ok("matrix-agrees");
+    let bundle = shared_bundle(BundleVariant::Default);
     let rows = matrix(&bundle);
     let maps = patchmaps(&bundle);
 
@@ -241,7 +241,7 @@ fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
 /// failure to diagnose from the number that is wrong.
 #[test]
 fn the_capture_matrix_loads_with_distinct_paths() {
-    let (_scratch, bundle) = capture_ok("matrix-paths");
+    let bundle = shared_bundle(BundleVariant::Default);
     let rows = matrix(&bundle);
     let maps = patchmaps(&bundle);
 

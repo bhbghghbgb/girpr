@@ -615,7 +615,7 @@ fn per_class_two_admits_two_files_and_numbers_them() {
 /// the file, and that the nine rows are the same nine either way.
 #[test]
 fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
-    let matrix_only = captured("explicit-off", World::all_shapes(), &[]);
+    let matrix_only = shared_bundle(BundleVariant::Default);
     let c = captured(
         "explicit",
         World::all_shapes(),
@@ -642,7 +642,7 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
     };
     assert_eq!(
         ids(&c.bundle),
-        ids(&matrix_only.bundle),
+        ids(&matrix_only),
         "the named file was already admitted, so nothing was duplicated"
     );
     // And the nine rows are the same nine, with one difference that is the
@@ -660,7 +660,12 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
             .collect()
     };
     let with_files = states(c.matrix());
-    let without = states(matrix_only.matrix());
+    let without = states(
+        json(&matrix_only.join("MANIFEST.json"))["matrix"]
+            .as_array()
+            .expect("a matrix")
+            .clone(),
+    );
     assert_eq!(with_files.len(), without.len(), "nine rows either way");
     assert_eq!(with_files["identical"], "covered_by");
     assert_eq!(without["identical"], "captured");

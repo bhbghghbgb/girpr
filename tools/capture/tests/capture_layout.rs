@@ -1481,8 +1481,11 @@ fn the_captured_bundle_verifies_offline() {
 
 #[test]
 fn the_captured_bundle_materializes_to_the_same_bytes() {
-    let (_m, _s, _r, bundle) = capture_ok("materialize");
-    let out = bundle.with_file_name("rebuilt");
+    let bundle = shared_bundle(BundleVariant::Default);
+    // The shared tree is read-only; materialize's output goes into its own
+    // scratch rather than beside the shared bundle.
+    let out_root = TempDir::new("gircap-materialize", "rebuilt");
+    let out = out_root.join("rebuilt");
     let r = run(&[
         "materialize",
         "--artifact",
