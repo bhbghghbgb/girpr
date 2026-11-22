@@ -1,0 +1,18 @@
+[package]
+name = "girpr-path-shape"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "Shared lexical relative-path shape validation mechanics, parameterised by each caller's normalization and device rules"
+
+[lib]
+name = "girpr_path_shape"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The Windows name predicates the shape checks are spelled with. This crate
+# owns no reserved set or trim rule: each caller passes its own.
+girpr-fs-names = { path = "../fs-names" }

@@ -634,6 +634,7 @@ dependencies = [
  "girpr-log",
  "girpr-loopback-mock",
  "girpr-model",
+ "girpr-path-shape",
  "girpr-proto",
  "girpr-report-core",
  "girpr-retry",
@@ -880,6 +881,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-path-shape"
+version = "0.1.0"
+dependencies = [
+ "girpr-fs-names",
+]
+
+[[package]]
 name = "girpr-proto"
 version = "0.1.0"
 dependencies = [
@@ -1042,6 +1050,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "girpr-fs-names",
+ "girpr-path-shape",
  "girpr-tempdir",
  "tempfile",
 ]
