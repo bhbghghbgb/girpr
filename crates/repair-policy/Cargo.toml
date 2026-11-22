@@ -1,0 +1,20 @@
+[package]
+name = "girpr-repair-policy"
+version = "0.1.0"
+edition = "2024"
+description = "The repair write-mode values and the single rule that resolves them"
+
+[lib]
+name = "girpr_repair_policy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Only the `--repair-mode` value enum needs clap. A consumer that just reads
+# the values does not pull the CLI framework into its graph.
+clap = ["dep:clap"]
+
+[dependencies]
+clap = { version = "4.6.9", features = ["derive"], optional = true }

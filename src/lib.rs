@@ -109,9 +109,11 @@ pub use repair::scope::ledger::Meter;
 ///
 /// The list is deliberately explicit:
 ///
-/// - `RepairMode`, `Lock`, `lock_path`, `takes_lock`, `Limits` and `PathScope`
-///   let a test build a [`RunCtx`], drive the real pipeline, and inspect the
-///   lock policy and the file a run leaves behind;
+/// - `Lock`, `lock_path`, `takes_lock`, `Limits` and `PathScope` let a test
+///   build a [`RunCtx`], drive the real pipeline, and inspect the lock policy
+///   and the file a run leaves behind. `RepairMode` is not re-exported here:
+///   it is a value of the `girpr-repair-policy` leaf, which tests name directly
+///   just as the production callers do;
 /// - `BackoffPolicy` chooses the retry wait (real or immediate) without a test
 ///   sleeping for real;
 /// - `SophonChunk`, `SophonChunkFile` and `SophonChunkManifest` build the
@@ -143,7 +145,6 @@ pub use repair::scope::ledger::Meter;
 pub mod test_support {
     use std::time::{Duration, SystemTime};
 
-    pub use crate::config::RepairMode;
     pub use crate::hyp::terminal_retcode;
     pub use crate::repair::diagnostics::RepairDiagnostics;
     pub use crate::repair::scope::{Limits, PathScope};

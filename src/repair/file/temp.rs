@@ -764,13 +764,13 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use crate::config::RepairMode;
     use crate::repair::phases::manifest::LocalChunkMap;
     use crate::repair::phases::plan::RepairPlan;
     use crate::report::Summary;
     use crate::retry::BackoffPolicy;
     use crate::sophon::{ChunkSink, ReuseEntry};
     use crate::util::Md5;
+    use girpr_repair_policy::RepairMode;
 
     /// A context with no network activity: the tests below only reach the
     /// reuse/no-candidate branches, where nothing is fetched.

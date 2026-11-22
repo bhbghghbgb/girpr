@@ -29,9 +29,8 @@ use std::time::SystemTime;
 use futures_util::StreamExt;
 
 use girpr_chunk_cost::projected_download_bytes;
+use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
-use super::file::Mode;
-use crate::config::RepairMode;
 use crate::repair::manifest::LocalChunkMap;
 use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::reuse;
@@ -194,7 +193,7 @@ impl ScanReport {
                     |root| root.join(&f.rel),
                 );
                 let resolved = match joined {
-                    Ok(path) => super::file::resolve_mode(requested, &path),
+                    Ok(path) => resolve_mode(requested, &path),
                     // Defence in depth, matching the scan itself: a path that
                     // escapes is not readable, so nothing is reusable.
                     Err(_) => return all_chunks_download_bytes(&f.chunks),

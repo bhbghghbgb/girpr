@@ -24,10 +24,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use girpr_chunk_cost::projected_download_bytes;
+use girpr_repair_policy::{Mode, RepairMode, resolve_mode_from_target};
 use serde::Serialize;
 
-use crate::config::RepairMode;
-use crate::repair::file::Mode;
 use crate::repair::phases::plan::{FileId, RepairPlan};
 use crate::repair::purge::PurgePlan;
 use crate::report::Record;
@@ -75,7 +74,7 @@ impl DiskPlan {
     /// One `stat` per planned file ([`std::fs::symlink_metadata`]): its length
     /// is what turns "the file is this big" into "the file has to *grow* by
     /// this much", and its file-vs-directory-vs-symlink bit is the same one
-    /// [`crate::repair::file::resolve_mode`] uses to pick the temp path. Both
+    /// [`girpr_repair_policy::resolve_mode`] uses to pick the temp path. Both
     /// facts are handed to [`DiskPlan::from_figures`]: this method is the I/O
     /// wrapper, that one is the arithmetic. `resolve_mode` itself is untouched
     /// — its decision is measured here and injected as data.
@@ -156,11 +155,9 @@ impl DiskPlan {
             let size = f.size.max(0) as u64;
             // `requested == Temp` forces the temp path; otherwise the injected
             // verdict decides. A directory/symlink is `in_place == false`.
-            let mode = if requested == RepairMode::Temp || !in_place {
-                Mode::Temp
-            } else {
-                Mode::Inplace
-            };
+            // The rule itself lives in the repair-policy leaf, so this seam
+            // and the writer cannot disagree about which path a file takes.
+            let mode = resolve_mode_from_target(requested, in_place);
             let (mode, extra) = match mode {
                 // The temp path duplicates the whole file: the target and the
                 // temp exist side by side for as long as the repair takes.

@@ -72,13 +72,13 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use tracing::Instrument;
 
-use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
 use crate::retry::{BackoffPolicy, RetryState, retry_state};
 #[cfg(test)]
 use crate::sophon::SophonChunk;
 use crate::util;
+use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
 use crate::repair::phases::manifest::LocalChunkMap;
 use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan, validate_chunk_ranges};
@@ -174,16 +174,6 @@ pub struct ChunkStats {
 struct FileWrites {
     /// The bytes written from a source that passed its gate.
     settled: u64,
-}
-
-/// How one file was written.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Mode {
-    /// Repaired in place: the target was written where it lies.
-    #[default]
-    Inplace,
-    /// Written through `{path}_tmp` and renamed over the target.
-    Temp,
 }
 
 /// Everything the repair loop needs, grouped so the signature names one phase
@@ -666,43 +656,6 @@ enum Inplace {
     /// This path cannot run for this file; the caller should use the other
     /// one. The reason is for the log.
     Unavailable(&'static str),
-}
-
-/// How one file will be repaired.
-///
-/// The table:
-///
-/// | the target              | mode                          |
-/// |-------------------------|-------------------------------|
-/// | does not exist          | in place — it is created      |
-/// | an existing regular file| in place                      |
-/// | a directory, a symlink  | temp — it is not a file       |
-///
-/// `--repair-mode` decides whether the in-place path is tried at all:
-/// `temp` never is, and `discard` deletes the target first and then repairs
-/// it in place.
-///
-/// A target that turns out to be unopenable for writing is **not** decided
-/// here: the attempt finds out and answers `Inplace::Unavailable`, and the
-/// caller falls back to the temp path with a warning. Deciding it from the
-/// metadata alone would be a guess; deciding it from the open is a fact.
-///
-/// `pub(super)` because the plan's disk estimates ask the same question: the
-/// estimate and the repair must not disagree about which path a file takes.
-pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {
-    if requested == RepairMode::Temp {
-        return Mode::Temp;
-    }
-    match std::fs::symlink_metadata(path) {
-        // An existing regular file: repair it where it lies.
-        Ok(m) if m.is_file() => Mode::Inplace,
-        // A directory, a symlink, a device: not a file we can write into.
-        // The temp path replaces the path with a regular file, which is what
-        // a manifest entry means.
-        Ok(_) => Mode::Temp,
-        // Not there: the in-place path creates it.
-        Err(_) => Mode::Inplace,
-    }
 }
 
 /// A write that passed its gate.

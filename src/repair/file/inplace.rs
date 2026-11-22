@@ -15,7 +15,6 @@ use super::temp::{DownloadedChunk, write_downloaded_chunk};
 use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
-use crate::config::RepairMode;
 use crate::repair::diagnostics;
 use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
@@ -23,6 +22,7 @@ use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk, source_ok_by
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
+use girpr_repair_policy::RepairMode;
 
 /// Repair one file **in place**.
 ///

@@ -495,11 +495,11 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::RepairMode;
     use crate::repair::scope::{Limits, PathScope};
     use crate::report::OutputFormat;
     use crate::retry::BackoffPolicy;
     use crate::test_origin::{Reply, TestServer};
+    use girpr_repair_policy::RepairMode;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

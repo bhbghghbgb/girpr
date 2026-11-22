@@ -58,8 +58,9 @@ use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, ctx_for,
     field, lay_out, md5hex, scope, stamp_ago, stamp_ahead, temp_dir,
 };
-use girpr::test_support::{RepairDiagnostics, RepairMode, summary_record, take_repair_diagnostics};
+use girpr::test_support::{RepairDiagnostics, summary_record, take_repair_diagnostics};
 use girpr::{RunExit, Summary};
+use girpr_repair_policy::RepairMode;
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------

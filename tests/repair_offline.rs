@@ -35,8 +35,9 @@ use crate::common::{
     temp_dir, write_game_file,
 };
 use girpr::RunExit;
-use girpr::test_support::{RepairMode, join_url, summary_record};
+use girpr::test_support::{join_url, summary_record};
 use girpr_lock::Lock;
+use girpr_repair_policy::RepairMode;
 use std::sync::atomic::Ordering;
 
 /// The extra latest-build manifest the fixture advertises under `field`.

@@ -10,7 +10,8 @@ use crate::common::{
     run, scope, temp_dir, write_game_file,
 };
 use girpr::RunExit;
-use girpr::test_support::{RepairMode, summary_record};
+use girpr::test_support::summary_record;
+use girpr_repair_policy::RepairMode;
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------

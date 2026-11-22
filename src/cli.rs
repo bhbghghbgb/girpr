@@ -15,10 +15,11 @@ use girpr_audio_language::{CaseFold, normalize_audio_token};
 use girpr_log::Level;
 
 use crate::Biz;
-use crate::config::{RepairMode, RunCtx};
+use crate::config::RunCtx;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
+use girpr_repair_policy::RepairMode;
 
 /// Concurrent file window used when `--jobs` is omitted.
 pub const DEFAULT_JOBS: usize = 4;

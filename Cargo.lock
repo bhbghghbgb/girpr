@@ -719,6 +719,7 @@ dependencies = [
  "girpr-loopback-mock",
  "girpr-model",
  "girpr-proto",
+ "girpr-repair-policy",
  "girpr-report",
  "girpr-retry",
  "girpr-tempdir",
@@ -875,6 +876,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-repair-policy"
+version = "0.1.0"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "girpr-report"
 version = "0.1.0"
 dependencies = [
@@ -973,6 +981,7 @@ name = "girpr-test-support"
 version = "0.1.0"
 dependencies = [
  "girpr",
+ "girpr-repair-policy",
  "girpr-test-fixtures",
 ]
 

@@ -1437,7 +1437,7 @@ mod tests {
             audio_explicit: false,
             path_scope: PathScope::default(),
             limits: crate::repair::scope::Limits::default(),
-            repair_mode: crate::config::RepairMode::Auto,
+            repair_mode: girpr_repair_policy::RepairMode::Auto,
             repair_mode_explicit: false,
             jobs: 1,
             check_only: false,

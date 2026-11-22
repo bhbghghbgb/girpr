@@ -8,8 +8,8 @@ use crate::common::{
     PLAN_SCAN_BYTES_KEY, build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field,
     load_counters, logs_of, read_game_file, run, run_binary, temp_dir, write_game_file,
 };
-use girpr::test_support::RepairMode;
 use girpr::{RunExit, Summary};
+use girpr_repair_policy::RepairMode;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 

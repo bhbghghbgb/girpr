@@ -21,8 +21,9 @@
 
 use std::collections::HashSet;
 
-use girpr::test_support::{BackoffPolicy, Limits, PathScope, RepairMode};
+use girpr::test_support::{BackoffPolicy, Limits, PathScope};
 use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
+use girpr_repair_policy::RepairMode;
 
 // Host-relative fixture timestamps. The implementation lives behind the
 // facade's test seam so unit and integration tests share one definition; this
