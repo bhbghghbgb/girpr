@@ -14,8 +14,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | `girpr-chunk-identity` leaf (+ digest normalization placement) | completed | f831b5af, 950fb9cf, d9a49602, 401fb580 | F4+F8; leaf `girpr-chunk-identity` added, digest normalization stays at gircap decode boundary; borrowed view keeps spelling-exact Eq/Hash (case-insensitive via `matches`/`parse`); no byte/first-match/collision drift; gircap leaf inventory 12→13 |
 | T02 | `girpr-chunk-layout` leaf | skipped | | F5 validated skip: the two layouts are different data models (i64 string-violations vs u64 tiled/gaps/overlaps), algorithms and verdicts, each with one consumer; unifying risks published `Range` bytes and collapses §A13 verdicts. Reviewer endorsed follow-up FU01 |
-| T03 | `girpr-chunk-cost` download-projection fold | pending_review | cdc28f44, 5fb0508e, cbdfb574 | F6; leaf folds `(compressed_size, downloads)` entries (identity kept out to stay dependency-free), membership still caller-supplied; migrated no-scan + 3 scanned derivations + `scope/report.rs` `--plan-out` fallback + gircap; lower-bound framing and published figures unchanged; test-side re-derivation in `scan.rs` left as independent verification check |
-| T04 | `girpr-reuse-decision` leaf | skipped | | F7 validated skip: identity-only mode already owned by `girpr-chunk-identity` (T01, task forbids reabsorbing it); order-survival mode has one consumer and incomparable input domain, so a both-mode leaf is a single-consumer mode-dispatch facade (§A2) coupling gircap to girpr repair policy (§A4). Implementer suggests closing F7 as satisfied-by-T01/order-half-N-A — needs reviewer endorsement |
+| T03 | `girpr-chunk-cost` download-projection fold | completed | cdc28f44, 5fb0508e, cbdfb574 | F6; leaf folds `(compressed_size, downloads)` entries (identity kept out to stay dependency-free), membership still caller-supplied; migrated no-scan + 3 scanned derivations + `scope/report.rs` `--plan-out` fallback + gircap; lower-bound framing and published figures unchanged; reviewer: keep `scan.rs`/capture test-side re-derivations independent, never replace with the shared fold (§A13) |
+| T04 | `girpr-reuse-decision` leaf | skipped | | F7 validated skip: identity-only mode already owned by `girpr-chunk-identity` (T01, task forbids reabsorbing it); order-survival mode has one consumer and incomparable input domain, so a both-mode leaf is a single-consumer mode-dispatch facade (§A2) coupling gircap to girpr repair policy (§A4). Reviewer endorsed follow-up FU02 |
 | T05 | `girpr-manifest-stats` leaf | skipped | | F9 validated skip (premise stale): `verify()` in `tools/capture/src/manifest/mod.rs` turns reconciliation mismatches into a fatal exit-3 assertion in the production fetch path, so "recorded, never fatal" is contradicted; product does no declared-stats reconciliation, leaving only a trivial inequality (thin leaf, §A2). Do not retry on the old reading; sums sit upstream in the decoder and touching them risks the §A5 string wire form and §N9 wording |
 | T06 | `girpr-api-dto` leaf (revisit skipped T18) | todo | | F10; wire-preserving decoders, byte-exact bodies, URL-join divergence |
 | T07 | Lift `Mode`/`resolve_mode`/`RepairMode` to a policy leaf | todo | | F15; prerequisite for T08 (file↔scan cycle) |
@@ -66,7 +66,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01, T02 | done | T01 completed (no fixes needed); T02 skip endorsed |
-| B | T03, T04, T05 | pending | |
+| B | T03, T04, T05 | done | T03 completed (no fixes); T04 skip + follow-up endorsed; T05 note confirmed accurate |
 | C | T06 | pending | |
 | D | T07, T08 | pending | |
 | E | T09, T10 | pending | |
@@ -93,6 +93,8 @@ A planning review batches the survivors only after every task is settled.
 | ID | Description | State | Note |
 |----|-------------|-------|------|
 | FU01 | Revisit extracting gircap's published `Range` into a logic-free leaf only if a second consumer appears (from T02) | open | Reviewer-endorsed: a second consumer is the §A2 condition that makes the leaf pay off; skip holds until then |
+| FU02 | Close §F7 as satisfied-by-T01 for the identity half and not-applicable for the order half; revisit a standalone order fold only if a second consumer appears (from T04) | open | Reviewer-endorsed: the second-consumer trigger is §A2's payoff condition; do not reopen T04 |
+| FU03 | Reword the capture manifest comment's "not a fourteenth shared leaf" ordinal now that a real fourteenth leaf (`girpr-chunk-cost`) exists (from review B) | open | Non-blocking cosmetic suggestion; not implemented |
 
 ## Persistent context
 
