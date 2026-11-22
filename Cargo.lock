@@ -707,6 +707,7 @@ dependencies = [
  "girpr-audio",
  "girpr-audio-language",
  "girpr-chunk-cost",
+ "girpr-chunk-verify",
  "girpr-cli",
  "girpr-digest",
  "girpr-exit",
@@ -765,6 +766,16 @@ version = "0.1.0"
 dependencies = [
  "girpr-digest",
  "girpr-proto",
+]
+
+[[package]]
+name = "girpr-chunk-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-proto",
+ "girpr-tempdir",
+ "girpr-util-hash",
 ]
 
 [[package]]

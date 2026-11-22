@@ -4,7 +4,8 @@
 //! `ChunkStats`, `FileCtx`, `FileWrites`, `Inplace`, `PlannedFile`,
 //! `write_at`, `copy_within`, `zero_fill`, plus `super::mode::{open_inplace,
 //! open_rw}` and `super::temp::write_downloaded_chunk`. Crate paths for
-//! `RepairMode`, `reuse`, `SophonChunk`, `util`, and
+//! `RepairMode`, the chunk-verify leaf's verdict/remap/verify names, `reuse`,
+//! `SophonChunk`, `util`, and
 //! `crate::repair::phases::plan::{PlannedFile, RepairPlan}`.
 
 use std::io::Write;
@@ -18,10 +19,12 @@ use super::{
 use crate::repair::diagnostics;
 use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
-use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk, source_ok_by_range};
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
+use girpr_chunk_verify::{
+    Verdict, Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
+};
 use girpr_repair_policy::RepairMode;
 
 /// Repair one file **in place**.
@@ -744,48 +747,6 @@ impl std::fmt::Display for FinalDigestMismatch {
 
 impl std::error::Error for FinalDigestMismatch {}
 
-/// What one verification run over the in-place target answered.
-enum Verified {
-    /// The whole-file digest is the manifest's; the chunk verdicts were not
-    /// needed.
-    Matches(Md5),
-    /// The digest did not match. `still_bad` names the chunks whose verdicts
-    /// the follow-up scan found wrong, in plan order.
-    Mismatch { md5: Md5, still_bad: Vec<usize> },
-}
-
-/// Verify the target: one pass for the digest, a second only on a mismatch.
-///
-/// The digest alone answers success, and success is the normal outcome, so the
-/// gate is a whole-file read that hashes nothing else. When the digest does
-/// not match, the per-chunk verdicts are needed to name what to redo; that
-/// second read is the rare path, and it is the only one that pays for the
-/// range digests. Asking the first pass for the ranges as well would hash
-/// every chunk range on every repaired file to save the second read only when
-/// something is wrong.
-///
-/// `read` takes the ranges to hash and returns the scan. It is called once
-/// with no ranges and, only on a mismatch, once with `dest_ranges`.
-fn verify_in_place(
-    dest_ranges: &[util::ScanRange<'_>],
-    mut read: impl FnMut(&[util::ScanRange<'_>]) -> Result<util::Scan>,
-    chunks_len: usize,
-    expect: &str,
-) -> Result<Verified> {
-    let scan = read(&[])?;
-    if Md5::parse_hex(expect).is_ok_and(|expected| expected == scan.file_md5) {
-        return Ok(Verified::Matches(scan.file_md5));
-    }
-    let scan = read(dest_ranges)?;
-    let still_bad = (0..chunks_len)
-        .filter(|&i| !scan.dest_ok.get(i).copied().unwrap_or(false))
-        .collect();
-    Ok(Verified::Mismatch {
-        md5: scan.file_md5,
-        still_bad,
-    })
-}
-
 /// The widest filesystem timestamp tick the reuse guard accounts for.
 ///
 /// FAT/exFAT record modification times at 2 s; HFS+ and some SMB/NFS servers
@@ -1080,7 +1041,6 @@ enum Tier {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Seek, SeekFrom};
     use std::sync::Arc;
 
     use super::*;
@@ -1767,93 +1727,6 @@ mod tests {
         assert!(
             redo_mismatch_is_terminal(&gapped, &empty, 0),
             "no overlap is proof by itself"
-        );
-    }
-
-    /// The verify pass pins the whole-file digest on success and names the
-    /// chunks to redo on a mismatch. The corrupt byte is in the chunk the
-    /// patch did not write, so the digest has to fail and the follow-up pass
-    /// has to report that chunk — not the one the patch rewrote.
-    ///
-    /// Success is one read: the digest, with no per-range hashing. A mismatch
-    /// is two — the digest again, plus the range verdicts — because that is
-    /// the rare path and it is the only one that needs the verdicts.
-    #[test]
-    fn the_in_place_verify_pins_the_digest_and_names_the_still_bad_chunks() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "verify_digest");
-        let path = dir.join("f.dat");
-        let mut good = vec![0x41u8; 64];
-        good.extend_from_slice(&[0x42u8; 64]);
-        std::fs::write(&path, &good).unwrap();
-
-        let md5_0 = util::md5::md5_digest(&good[..64]).to_hex();
-        let md5_1 = util::md5::md5_digest(&good[64..]).to_hex();
-        let dest: Vec<util::ScanRange<'_>> = vec![(0, 64, &md5_0), (64, 64, &md5_1)];
-        let expect = util::md5::md5_digest(&good).to_hex();
-
-        let mut f = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        // The verify starts at the beginning of the file even when the last
-        // write left the handle at EOF.
-        f.seek(SeekFrom::End(0)).unwrap();
-        let mut reads = 0;
-        match verify_in_place(
-            &dest,
-            |ranges| {
-                reads += 1;
-                util::scan_reader(&mut f, ranges, &[])
-            },
-            2,
-            &expect,
-        )
-        .unwrap()
-        {
-            Verified::Matches(md5) => assert_eq!(md5.to_hex(), expect),
-            Verified::Mismatch { md5, .. } => {
-                panic!("an intact file must match, got {md5}")
-            }
-        }
-        assert_eq!(reads, 1, "an intact file needs only the digest pass");
-
-        // Only the second chunk is damaged: chunk 0 is the one a patch would
-        // have written, chunk 1 is outside it.
-        let mut bad = good.clone();
-        bad[70] ^= 0xff;
-        std::fs::write(&path, &bad).unwrap();
-        let mut f = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        f.seek(SeekFrom::End(0)).unwrap();
-        let mut reads = 0;
-        match verify_in_place(
-            &dest,
-            |ranges| {
-                reads += 1;
-                util::scan_reader(&mut f, ranges, &[])
-            },
-            2,
-            &expect,
-        )
-        .unwrap()
-        {
-            Verified::Mismatch { md5, still_bad } => {
-                assert_eq!(
-                    still_bad,
-                    vec![1],
-                    "the follow-up pass names the chunk that is still wrong"
-                );
-                assert_eq!(md5, util::md5::md5_digest(&bad));
-            }
-            Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
-        }
-        assert_eq!(
-            reads, 2,
-            "a mismatch reads once more to name the chunks, not on the success path"
         );
     }
 

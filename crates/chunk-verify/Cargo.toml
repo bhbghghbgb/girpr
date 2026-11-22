@@ -1,0 +1,20 @@
+[package]
+name = "girpr-chunk-verify"
+version = "0.1.0"
+edition = "2024"
+description = "Chunk verification verdicts, range remap and the in-place verify pass"
+
+[lib]
+name = "girpr_chunk_verify"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+girpr-proto = { path = "../proto" }
+girpr-util-hash = { path = "../util-hash" }
+
+[dev-dependencies]
+girpr-tempdir = { path = "../tempdir" }

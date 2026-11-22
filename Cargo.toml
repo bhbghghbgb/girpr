@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "crates/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/repair-policy", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util-counter", "crates/util-hash", "crates/util-ini", "crates/util-path", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
+members = [".", "crates/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-identity", "crates/chunk-verify", "crates/cli", "crates/digest", "crates/exit", "crates/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "crates/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/proto", "crates/report", "crates/report-core", "crates/repair-policy", "crates/retry", "crates/sync-cache", "crates/sync-leaves", "crates/sync-test-support", "crates/tempdir", "crates/test-fixtures", "crates/test-support", "crates/util-counter", "crates/util-hash", "crates/util-ini", "crates/util-path", "tools/sync", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support", "tools/sled2redb"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -116,6 +116,12 @@ girpr-proto = { path = "crates/proto" }
 # binary supplies its own chunk selection through the per-entry flag; the leaf
 # holds no reuse decision, collision handling or published-byte shape.
 girpr-chunk-cost = { path = "crates/chunk-cost" }
+# The chunk-verification leaf: the verdict a scan produces, the range/owner
+# remap shared by the scan and the in-place writer, and the verify pass that
+# re-derives the finished file from a fresh read. It depends only on the wire
+# chunk and hash/scan leaves, so the correctness-sensitive guard stays in the
+# facade while the mechanics compile and test in a narrow target.
+girpr-chunk-verify = { path = "crates/chunk-verify" }
 # The write-mode values and the one resolve rule. They live in an acyclic leaf
 # so the writer, the disk estimate and the download estimate all consume the
 # same decision directly, and neither `file` nor `scan` owns it. `clap` is
