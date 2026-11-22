@@ -1223,7 +1223,6 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
 fn a_copied_file_carries_the_sources_timestamp() {
     let t = temp_root("copy_mtime");
     let src = t.subdir("src");
-    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"payload");
 
     // A fixed instant well in the past, so the copy's own write time cannot
@@ -1237,8 +1236,12 @@ fn a_copied_file_carries_the_sources_timestamp() {
         .unwrap();
 
     // Both flush shapes are asked for explicitly through the injected hook,
-    // rather than by setting a process-global variable on a child.
+    // rather than by setting a process-global variable on a child. Each shape
+    // gets a fresh dst: the memory cache is path-keyed and shared within this
+    // process, so reusing one dst would let run 2 read run 1's row and skip the
+    // copy entirely, passing the assertions without exercising no_fsync=true.
     for no_fsync in [false, true] {
+        let dst = t.subdir(&format!("dst_{no_fsync}"));
         let out = run_binary_raw_with_hooks_mem(
             &src,
             &dst,

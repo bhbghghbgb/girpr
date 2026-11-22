@@ -660,6 +660,19 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
             "SUMMARY {key} must not depend on where the scan came from"
         );
     }
+    // The chunk fields are `Option` and are only populated on the in-place
+    // success path. If neither run repaired a file in place both sides are
+    // `None` and the parity check below passes vacuously, so require the
+    // precondition first — the structured form of the old "repaired in place"
+    // log-line guard.
+    assert!(
+        scanned.diag.chunks_total.is_some(),
+        "the scanned run must repair a file in place before its chunk stats can be compared"
+    );
+    assert!(
+        plain.diag.chunks_total.is_some(),
+        "the plain run must repair a file in place before its chunk stats can be compared"
+    );
     assert_eq!(
         (
             scanned.diag.chunks_total,
