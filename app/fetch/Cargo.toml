@@ -37,24 +37,24 @@ tracing = "0.1.44"
 # own request policy, decode/verify seam and attempt loops; only the leaves
 # hold shared values or mechanics. The scan/digest helpers come from the hash
 # leaf directly, so a config or path edit leaves this fetch tree cached.
-girpr-model = { path = "../model" }
-girpr-digest = { path = "../digest" }
-girpr-proto = { path = "../proto" }
+girpr-model = { path = "../../crates/model" }
+girpr-digest = { path = "../../crates/digest" }
+girpr-proto = { path = "../../crates/proto" }
 # The chunk-identity value types: the digest-bytes/length key and the borrowed
 # view the reuse map's match predicate and the manifest diff share. The leaf
 # holds no index, collision policy or first-match order — those stay here.
-girpr-chunk-identity = { path = "../chunk-identity" }
-girpr-retry = { path = "../retry" }
-girpr-util-hash = { path = "../../app/util-hash" }
+girpr-chunk-identity = { path = "../../crates/chunk-identity" }
+girpr-retry = { path = "../../crates/retry" }
+girpr-util-hash = { path = "../util-hash" }
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
 # not the config writer, so an ini edit leaves this fetch tree cached.
-girpr-util-path = { path = "../../app/util-path" }
+girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
 # The dependency-free loopback server the canned-reply helper scripts. This
 # fetch-side helper stays local and keeps its own contract: the product's and
 # both capture mocks script different replies and read different journals.
-girpr-loopback-mock = { path = "../loopback-mock" }
+girpr-loopback-mock = { path = "../../crates/loopback-mock" }
 # The `#[tokio::test]` driver. `reqwest` enables the network surface in every
 # build; naming it here keeps the tests' own requirement explicit.
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }

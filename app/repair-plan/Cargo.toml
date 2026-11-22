@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.104"
 tracing = "0.1.44"
-girpr-chunk-cost = { path = "../chunk-cost" }
+girpr-chunk-cost = { path = "../../crates/chunk-cost" }
 girpr-fetch = { path = "../fetch" }
-girpr-filter = { path = "../filter" }
-girpr-util-path = { path = "../../app/util-path" }
+girpr-filter = { path = "../../crates/filter" }
+girpr-util-path = { path = "../util-path" }

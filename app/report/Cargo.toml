@@ -23,10 +23,10 @@ clap = ["dep:clap"]
 # The ordered-JSON and line-writing mechanics below the plane. This crate keeps
 # girpr's own event-first order, unsigned counts and 1/0 flags; the core owns no
 # field order, value vocabulary or boolean spelling, and no `preserve_order`.
-girpr-report-core = { path = "../report-core" }
+girpr-report-core = { path = "../../crates/report-core" }
 # The saturating atomic counter used by the byte and RAM reservations. It is a
 # dependency-free leaf, so a config, path or hash edit leaves the report cached.
-girpr-util-counter = { path = "../../app/util-counter" }
+girpr-util-counter = { path = "../util-counter" }
 # The `event` field is emitted through `Serialize`; this crate owns the value
 # vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
 serde = "1.0.229"
@@ -43,6 +43,6 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt", "time"
 [dev-dependencies]
 # The shared log-capture helper, reached through this crate's own tests. The
 # `test-support` feature is off in every shipped build.
-girpr-log = { path = "../log", features = ["test-support"] }
+girpr-log = { path = "../../crates/log", features = ["test-support"] }
 # Paused time makes the progress-guard cadence and stop-on-drop deterministic.
 tokio = { version = "1.54.1", default-features = false, features = ["test-util"] }
