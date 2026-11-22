@@ -39,7 +39,7 @@ A planning review batches the survivors only after every task is settled.
 | ID | Description | State | Note |
 |----|-------------|-------|------|
 | F01 | Correct README's "three dev tools opt into a smaller lint subset" wording (now understated by girsync-cache/girsync-leaves) | done | Endorsed by reviews A-D, folded into T07 and confirmed satisfied by review E (commit 7fa1c193) |
-| F02 | Normalize remaining pre-existing ownership wording: `shared` descriptions on girpr-only `app/` manifests (util-path, util-ini, util-hash, util-counter, audio, test-support, test-fixtures) and `two dev tools` phrasing in root Cargo.toml lint comment, digest/tempdir comments and crates/log doc comments | batched | Approved as a single batch "Doc-only ownership wording cleanup" by follow-up planning review; word-only edits, no behavior/classification/lint-table change; no new follow-ups proposed |
+| F02 | Normalize remaining pre-existing ownership wording: `shared` descriptions on girpr-only `app/` manifests (util-path, util-ini, util-hash, util-counter, audio, test-support, test-fixtures) and `two dev tools` phrasing in root Cargo.toml lint comment, digest/tempdir comments and crates/log doc comments | done | Implemented in 8f6646a3 and verified by review; no fixes. Implementer-suggested cosmetic "three projects" pass was reviewed and dropped |
 
 ## Persistent context
 
