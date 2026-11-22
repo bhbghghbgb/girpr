@@ -15,7 +15,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T01 | Move and rename `girpr-sync-cache` → `girsync-cache` | completed | 1aa45d2b, 8fe2e94c | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/cache/`, tools-only lints; preserve direct sled2redb edge and `postcard` digest vocabulary. Deviation: intra-workspace path deps use `../../../crates/*` (three levels deep), not the plan's hinted `../../crates/*`; extra doc path text in `docs/03-repair-rust-implementation-plan.md` updated |
 | T02 | Move and rename `girpr-sync-leaves` → `girsync-leaves` | completed | 835c0c1a, dd37a6b1 | §F3, §F7, §F8: girsync-only crate to `tools/sync/leaves/`, tools-only lints. Deviation: path deps use `../../../crates/*` (stale depth hint in plan); doc path text also fixed in `docs/03-repair-rust-implementation-plan.md` and `docs/04-scope-limitation-spec.md` |
 | T03 | Move and rename `girpr-sync-test-support` → `girsync-test-support` | completed | e875e6f3, e222caa5 | §F3, §F7, §F8, §F6: girsync-only crate to `tools/sync/test-support/`, tools-only lints; preserve the `→ girsync` inversion and both dev-dep edges. Deviation: shared path deps use `../../../crates/*` (stale depth hint); sled2redb README and nextest.toml held no occurrences; `docs/03-repair-rust-implementation-plan.md` updated as a §F8 seam |
-| T04 | Establish the girpr-owned subtree and move the low-level leaves | pending_review | 8ddd15cf, d72b6a8f | §F4, §F7, §F8: chose `app/` subtree and moved `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; names and workspace lints unchanged; Cargo.lock names unchanged. Chosen path recorded in Persistent context |
+| T04 | Establish the girpr-owned subtree and move the low-level leaves | completed | 8ddd15cf, d72b6a8f | §F4, §F7, §F8: chose `app/` subtree and moved `audio`, `util-counter`, `util-hash`, `util-ini`, `util-path`, `repair-policy`; names and workspace lints unchanged; Cargo.lock names unchanged. Chosen path recorded in Persistent context |
 | T05 | Move the mid-layer girpr-only product crates | todo | | §F4, §F6, §F8: move `chunk-verify`, `repair-plan`, `lock`, `fetch`, `report` into the chosen subtree; preserve `repair-plan → fetch` edge and feature wiring. Use subtree path from Persistent context |
 | T06 | Move the two girpr-only test crates | todo | | §F4, §F6, §F8: move `test-fixtures`, `test-support`; preserve the `test-support → root` test-only inversion and the root shims. Use subtree path from Persistent context |
 | T07 | Ownership consistency sweep | todo | | §F5, §F7, §F8, §F9: final classification audit, remaining path text, Cargo.lock and lint-table verification, gircap untouched, fix misleading manifest descriptions |
@@ -26,7 +26,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01, T02 | done | Both completed; no fixes needed |
 | B | T03 | done | Completed; no fixes needed |
-| C | T04 | pending | |
+| C | T04 | done | Completed; no fixes needed |
 | D | T05 | pending | |
 | E | T06, T07 | pending | |
 
@@ -38,7 +38,7 @@ A planning review batches the survivors only after every task is settled.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| F01 | Correct README's "three dev tools opt into a smaller lint subset" wording (now understated by girsync-cache/girsync-leaves) | open | Endorsed by reviews A and B as doc-only, low priority; reviewers recommend folding into T07 rather than a standalone batch |
+| F01 | Correct README's "three dev tools opt into a smaller lint subset" wording (now understated by girsync-cache/girsync-leaves) | open | Endorsed by reviews A, B and C as doc-only, low priority; reviewers recommend folding into T07 rather than a standalone batch |
 
 ## Persistent context
 
