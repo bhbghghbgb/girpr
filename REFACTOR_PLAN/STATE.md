@@ -74,7 +74,7 @@ All others are dropped. Each batch gets one implementation session then one revi
 | FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | dropped | Comment only |
 | FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | dropped | Covered by smoke + girpr-log unit tests |
 | FU13 | Record exact cargo tree command behind T05 dependency-count figures | dropped | Host/cargo-specific; deltas confirmed |
-| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | batched | B2: bound the read so Drop cannot block on driver.join() |
+| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | done | B2 / 30db0a64: driver publishes accepted socket under lock before serve_one; Drop sets stop flag + wake-up connection + shutdown(Both) on in-flight socket; regression test uses no sleeps |
 | FU15 | Document a deliberate toolchain-bump procedure (trigger/cadence/owner) | dropped | Process-doc nit |
 | FU16 | Revalidate the rust-lld linker win on the CI host | dropped | Caveat already in T06 note; near-duplicate of FU01 |
 | FU17 | Re-trial and scope linker config for other MSVC triples if support widens | dropped | Conditional future scope |
@@ -97,6 +97,8 @@ All others are dropped. Each batch gets one implementation session then one revi
 | FU34 | Consider success-output override for live per-case progress in merged tests | dropped | failure-output=final already adequate |
 | FU35 | Add explicit forget_memory_cache in FU07 test to document cold-cache intent | open | Defensive only; fresh-dst approach already stronger — prune |
 | FU36 | Strengthen FU08 precondition from is_some() to expected chunk count | open | Low value; current guard closes the reported hole — prune |
+| FU37 | Add explicit regression for Drop with no in-flight connection | open | Path exercised incidentally by existing canned-server tests — prune |
+| FU38 | Replace regression test's yield-spin with a channel readiness signal | open | Defensive only; current test stable — prune |
 
 ## Persistent context
 
