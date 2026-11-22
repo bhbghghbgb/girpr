@@ -54,8 +54,10 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 ## Follow-ups
 
 Follow-ups are non-blocking suggestions from review sessions; the orchestrator records
-them here. A pruning review reduced the list to those below (12 dropped, FU10 merged
-into FU09). Phase 3 planning decides final batching and any further drops.
+them here. A pruning review and the Phase 3 planning review have settled all of them:
+only three are kept, in two batches — **B1** (FU07, FU08): restore semantic assertions
+weakened by the T02/T03 migrations; **B2** (FU14): bound loopback-mock Drop-abort reads.
+All others are dropped. Each batch gets one implementation session then one review.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
@@ -65,34 +67,34 @@ into FU09). Phase 3 planning decides final batching and any further drops.
 | FU04 | Exercise or remove the unused forget_memory_cache wrapper | dropped | No cold-cache need; helper kept for F30 |
 | FU05 | F31 residual redb reopens (md5_in/md5_in_file, cache-copy keepers) | dropped | Duplicate of active task T18 |
 | FU06 | Remove ignored _extra env parameter in rw_threads/main.rs::run_env | dropped | Pre-existing vestigial nit |
-| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | open | Real semantic gap: path-keyed cache may let run 2 skip the copy |
-| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | open | None==None could pass |
-| FU09 | Name-overstates-coverage hygiene in T04 log cases | open | Absorbed FU10; keep one item for this class |
+| FU07 | Check a_copied_file_carries_the_sources_timestamp for cache reuse across its two runs | batched | B1: force cold cache / fresh dst so run 2 actually exercises no_fsync=true |
+| FU08 | Restore in-place precondition in T03 a_scanned_repair_and_an_unscanned_repair_agree parity case | batched | B1: prevent vacuous None==None parity pass |
+| FU09 | Name-overstates-coverage hygiene in T04 log cases | dropped | Cosmetic; behavior already covered by girpr-log unit tests |
 | FU10 | "created" in an_explicit_log_file_is_echoed_and_created is aspiration | dropped | Merged into FU09 (same class) |
 | FU11 | Stale T03 comment at tests/repair_machinery.rs:1603 re LogLevel debug | dropped | Comment only |
 | FU12 | Strengthen T04 level-sink assertion beyond plan filter directives to rendered records | dropped | Covered by smoke + girpr-log unit tests |
 | FU13 | Record exact cargo tree command behind T05 dependency-count figures | dropped | Host/cargo-specific; deltas confirmed |
-| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | open | Latent test-hang risk |
+| FU14 | Harden loopback-mock ScriptedServer Drop-abort against a stalled read_line | batched | B2: bound the read so Drop cannot block on driver.join() |
 | FU15 | Document a deliberate toolchain-bump procedure (trigger/cadence/owner) | dropped | Process-doc nit |
 | FU16 | Revalidate the rust-lld linker win on the CI host | dropped | Caveat already in T06 note; near-duplicate of FU01 |
 | FU17 | Re-trial and scope linker config for other MSVC triples if support widens | dropped | Conditional future scope |
-| FU18 | Narrow the root's private mod util glob alias to per-leaf aliases | open | Clarity only; no rebuild-graph effect — likely drop at Phase 3 |
-| FU19 | Clarify the 3 promoted junction test-helper visibilities as test-only | open | No behavior/byte change; already behind test-support feature — likely drop |
-| FU20 | Strengthen frozen-body pin test to verify body↔checksum relation via zstd decode + md5 | open | Byte contract self-containment; functional tests already cover it |
-| FU21 | Consider dropping the unused gircap_http::BodyFile compatibility re-export | open | Needs out-of-tree caller check; trait canonical path is girpr_digest::BodyFile |
-| FU22 | Optional merge of the 12 post.rs audio-move tests into one table test | open | Conditional on per-test spawn being material; F26/F35 want measurement first |
-| FU23 | Reseed install between rows of the phase table if state-dependent assertions are added | open | Future-conditional; current assertions are flag-only |
-| FU24 | Extend T13 reseed_install if the binary persists new local-state files | open | Maintenance note; currently resets config.ini + two fixture files |
-| FU25 | Finish F22 in-process rig dedup in repair_post/scan/plan | open | Constraint-blocked: repair_post host-skip/log-capture cases must stay untouched |
-| FU26 | Consider splitting the ~324-line merged T14 test | open | Only if failure triage proves painful; labels/messages already preserved |
-| FU27 | Fold remaining tiny pure-test clusters beyond the six named | open | Broad rewrite, modest sampled benefit; re-measure per-test overhead first |
-| FU28 | Remove label/match-arm duplication in retry_driver_contracts | open | Cosmetic only |
-| FU29 | Derive row-mirror case sensitivity from captured cache meta, not hardcoded true | open | Future case-insensitive file-subject case would disagree |
-| FU30 | Use a drop-guard so with_observed_rows clears ROW_CAPTURE on panic | open | Harmless under nextest; robustness for in-process sequential runs |
-| FU31 | De-duplicate the three identical check_case helpers in gircap tests | open | Pure cleanup, no behaviour change |
-| FU32 | Restore a one-line manifest comment for the cross-process bundle lock | open | Rationale currently only in gircap-test-support docs |
-| FU33 | Correct the stale F36 example pointer in the report | open | Informational; report is deleted at final cleanup |
-| FU34 | Consider success-output override for live per-case progress in merged tests | open | No action needed; failure-output=final already adequate |
+| FU18 | Narrow the root's private mod util glob alias to per-leaf aliases | dropped | Clarity only; no rebuild-graph effect |
+| FU19 | Clarify the 3 promoted junction test-helper visibilities as test-only | dropped | Cosmetic; already behind test-support feature |
+| FU20 | Strengthen frozen-body pin test to verify body↔checksum relation via zstd decode + md5 | dropped | Body/length/checksum already pinned by T11 |
+| FU21 | Consider dropping the unused gircap_http::BodyFile compatibility re-export | dropped | Out-of-tree breakage risk, no in-tree payoff |
+| FU22 | Optional merge of the 12 post.rs audio-move tests into one table test | dropped | Conditional; T12 found this saves no cost |
+| FU23 | Reseed install between rows of the phase table if state-dependent assertions are added | dropped | Future-conditional; current assertions flag-only |
+| FU24 | Extend T13 reseed_install if the binary persists new local-state files | dropped | Maintenance note; conditional on new binary state |
+| FU25 | Finish F22 in-process rig dedup in repair_post/scan/plan | dropped | Constraint-blocked by pinned host-skip/log-capture cases |
+| FU26 | Consider splitting the ~324-line merged T14 test | dropped | Conditional; splitting would add spawns (§A1) |
+| FU27 | Fold remaining tiny pure-test clusters beyond the six named | dropped | Broad rewrite, modest benefit, re-measure first |
+| FU28 | Remove label/match-arm duplication in retry_driver_contracts | dropped | Cosmetic |
+| FU29 | Derive row-mirror case sensitivity from captured cache meta, not hardcoded true | dropped | Future-conditional; current tests all exact-case |
+| FU30 | Use a drop-guard so with_observed_rows clears ROW_CAPTURE on panic | dropped | No-op under nextest (§A1) |
+| FU31 | De-duplicate the three identical check_case helpers in gircap tests | dropped | Pure cleanup |
+| FU32 | Restore a one-line manifest comment for the cross-process bundle lock | dropped | Rationale already in gircap-test-support docs |
+| FU33 | Correct the stale F36 example pointer in the report | dropped | Report is deleted at final cleanup |
+| FU34 | Consider success-output override for live per-case progress in merged tests | dropped | failure-output=final already adequate |
 
 ## Persistent context
 
