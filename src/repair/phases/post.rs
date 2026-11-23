@@ -16,6 +16,7 @@
 //! The deprecated list itself is **not** fetched here — it arrives as an
 //! argument, having been read during the plan phase.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::report::Summary;
 use crate::util;
 use crate::util::path::{
-    any_component_has_windows_trailing_dot_or_space, join_rel, rel_from_base, rel_pair_from_base,
+    any_component_has_windows_trailing_dot_or_space, join_rel, rel_pair_from_base,
 };
 
 use super::metadata::Meta;
@@ -592,6 +593,24 @@ fn move_audio_cache_with(
     rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
     copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
 ) {
+    move_audio_cache_with_mkdir(game_dir, config, scope, dry_run, rename, copy, |parent| {
+        std::fs::create_dir_all(parent)
+    });
+}
+
+/// [`move_audio_cache_with`] with destination-directory creation injected too,
+/// so the once-per-parent creation can be asserted without counting real
+/// syscalls. Production reachability, scoping and best-effort handling live in
+/// the outer function; this is the same move with one more seam for tests.
+fn move_audio_cache_with_mkdir(
+    game_dir: &Path,
+    config: &crate::hyp::GameConfig,
+    scope: &PathScope,
+    dry_run: bool,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+    mkdir: impl Fn(&Path) -> std::io::Result<()>,
+) {
     let (cache_dir, res_dir) = (&config.audio_pkg_cache_dir, &config.audio_pkg_res_dir);
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
         return;
@@ -626,13 +645,15 @@ fn move_audio_cache_with(
     if !cache.is_dir() {
         return;
     }
-    let files: Vec<std::path::PathBuf> = WalkDir::new(&cache)
+    // Stream the walk straight into the per-file decision instead of
+    // materialising a PathBuf per cache file up front. Every entry is still
+    // handled independently: an unreadable entry is logged and skipped, so the
+    // best-effort housekeeping semantics are unchanged.
+    let walk = WalkDir::new(&cache)
         .into_iter()
         .filter_map(|e| match e {
             Ok(e) => Some(e),
             Err(e) => {
-                // The move is best effort: an unreadable entry is logged and
-                // the rest of the cache still moves.
                 tracing::warn!(
                     error = %format!("{e:#}"),
                     "audio cache walk: entry unreadable; skipped"
@@ -640,30 +661,28 @@ fn move_audio_cache_with(
                 None
             }
         })
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.path().to_path_buf())
-        .collect();
-    if dry_run {
-        for src in &files {
-            let Some(rel) = rel_from_base(src, &cache) else {
-                continue;
-            };
-            if !scope.is_visible(&join_rel(cache_rel, Path::new(&rel))) {
-                continue;
-            }
-            tracing::info!("would move audio cache {} -> res", rel);
-        }
-        return;
-    }
+        .filter(|e| e.file_type().is_file());
+
     let mut moved = 0u64;
     let mut kept = 0u64;
-    for src in files {
+    // Files in the same destination directory share one mkdir. Record only
+    // parents whose creation succeeded: a failed create is still retried for
+    // the next file in that directory, so the phase stays best-effort.
+    let mut created_dirs: HashSet<PathBuf> = HashSet::new();
+    for entry in walk {
+        let src = entry.path();
         // One strip gives both halves: the `/` scope key and the byte-exact
         // destination path, so a name that is not UTF-8 is not rewritten.
-        let Some((rel, rel_path)) = rel_pair_from_base(&src, &cache) else {
+        let Some((rel, rel_path)) = rel_pair_from_base(src, &cache) else {
             continue;
         };
         if !scope.is_visible(&join_rel(cache_rel, Path::new(&rel))) {
+            continue;
+        }
+        // A dry run lists the same files, in the same walk order, and does no
+        // move; the outcome counters stay at zero so no summary is claimed.
+        if dry_run {
+            tracing::info!("would move audio cache {} -> res", rel);
             continue;
         }
         let target = res.join(rel_path);
@@ -681,27 +700,31 @@ fn move_audio_cache_with(
         }
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
-        if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
-            tracing::warn!(
-                src = %src.display(),
-                error = %e,
-                "audio cache move: destination directory could not be created; source kept"
-            );
-            kept += 1;
-            continue;
+        let parent = target.parent().unwrap_or(&res);
+        if !created_dirs.contains(parent) {
+            if let Err(e) = mkdir(parent) {
+                tracing::warn!(
+                    src = %src.display(),
+                    error = %e,
+                    "audio cache move: destination directory could not be created; source kept"
+                );
+                kept += 1;
+                continue;
+            }
+            created_dirs.insert(parent.to_path_buf());
         }
-        match rename(&src, &target) {
+        match rename(src, &target) {
             Ok(()) => moved += 1,
             Err(rename_err) => {
                 // The copy fallback publishes through a temp sibling, so a
                 // truncated copy can never be mistaken for a complete one.
-                match copy_publish_with(&src, &target, &copy) {
+                match copy_publish_with(src, &target, &copy) {
                     Ok(()) => {
                         // Only now is there a complete destination: the source
                         // is removed **after** it, never before. Removing it
                         // unconditionally would delete a cache file that had no
                         // copy if the copy failed.
-                        match std::fs::remove_file(&src) {
+                        match std::fs::remove_file(src) {
                             Ok(()) => moved += 1,
                             Err(e) => {
                                 kept += 1;
@@ -1206,6 +1229,54 @@ mod tests {
                 && logs.contains("moved=1")
                 && logs.contains("kept=0"),
             "the summary names what happened: {logs}"
+        );
+    }
+
+    /// Files sharing a destination directory pay one mkdir between them: the
+    /// walk streams straight into the move, and a parent is created the first
+    /// time a file needs it rather than once per file.
+    #[test]
+    fn shared_destination_directories_are_created_once() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "mkdir_dedup");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache/sub")).unwrap();
+        for name in ["a.pck", "b.pck"] {
+            std::fs::write(base.join("Audio/cache").join(name), b"cache bytes").unwrap();
+        }
+        std::fs::write(base.join("Audio/cache/sub/c.pck"), b"cache bytes").unwrap();
+
+        let created: std::cell::RefCell<Vec<PathBuf>> = std::cell::RefCell::new(Vec::new());
+        move_audio_cache_with_mkdir(
+            base,
+            &config("Audio/cache", "Audio/res"),
+            &PathScope::default(),
+            false,
+            |from, to| std::fs::rename(from, to),
+            |from, to| std::fs::copy(from, to),
+            |parent| {
+                created.borrow_mut().push(parent.to_path_buf());
+                std::fs::create_dir_all(parent)
+            },
+        );
+
+        let mut dirs = created.borrow().clone();
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            vec![base.join("Audio/res"), base.join("Audio/res/sub")],
+            "one mkdir per distinct destination parent: {dirs:?}"
+        );
+        for name in ["a.pck", "b.pck"] {
+            assert!(!base.join("Audio/cache").join(name).exists());
+            assert_eq!(
+                std::fs::read(base.join("Audio/res").join(name)).unwrap(),
+                b"cache bytes"
+            );
+        }
+        assert!(!base.join("Audio/cache/sub/c.pck").exists());
+        assert_eq!(
+            std::fs::read(base.join("Audio/res/sub/c.pck")).unwrap(),
+            b"cache bytes"
         );
     }
 

@@ -265,7 +265,21 @@ pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
 /// drops `.` and repeated separators for the same reason.
 pub fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
     path.components().any(|c| match c {
-        Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
+        Component::Normal(part) => {
+            let bytes = part.as_encoded_bytes();
+            // Common case: an all-ASCII component's encoded bytes *are* the
+            // string, so a trailing `.` or ` ` is exactly its last byte. This
+            // avoids the lossy conversion on every ordinary path component.
+            if bytes.is_ascii() {
+                matches!(bytes.last(), Some(b'.' | b' '))
+            } else {
+                // Non-ASCII (or ill-formed) names keep the original rule. `.`
+                // and ` ` are ASCII and can never be the tail of a multi-byte
+                // character, but deferring to the string keeps every edge case
+                // — including Windows WTF-8 unpaired surrogates — unchanged.
+                has_windows_trailing_dot_or_space(&part.to_string_lossy())
+            }
+        }
         _ => false,
     })
 }
@@ -606,6 +620,99 @@ mod tests {
             "game/lpt",
         ] {
             assert!(contained_rel(good).is_ok(), "{good:?} must be accepted");
+        }
+    }
+
+    /// The byte-based fast path in `any_component_has_windows_trailing_dot_or_space`
+    /// is defined as equal to the original lossy check. Compare the two directly
+    /// over ordinary, non-ASCII and structural-component spellings.
+    fn lossy_trailing_reference(path: &Path) -> bool {
+        path.components().any(|c| match c {
+            Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn any_component_trailing_check_matches_lossy_reference() {
+        for input in [
+            "Audio/res/foo.pck",
+            "Audio/res/foo.",
+            "Audio/res/foo ",
+            "dir./foo.pck",
+            "Audio/res/dir /foo.pck",
+            "Audio/res/../foo.pck",
+            "Audio/res/./foo.pck",
+            "a..b",
+            "a. ",
+            "a .",
+            "trailing\\.",
+            "café.pck",
+            "café.",
+            "café ",
+            "café",
+            "日本語/",
+            "",
+            ".",
+            "..",
+        ] {
+            let path = Path::new(input);
+            assert_eq!(
+                any_component_has_windows_trailing_dot_or_space(path),
+                lossy_trailing_reference(path),
+                "disagreement for {input:?}"
+            );
+        }
+    }
+
+    /// Ill-formed Unix names exercise the fallback: invalid bytes are replaced
+    /// with U+FFFD by the lossy string, and the byte path must not disagree.
+    #[cfg(unix)]
+    #[test]
+    fn any_component_trailing_check_matches_lossy_reference_on_non_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        for bytes in [
+            b"foo.".to_vec(),
+            b"foo ".to_vec(),
+            vec![0xFF, b'.'],
+            vec![0xFF, b' '],
+            vec![0xFF],
+            vec![b'c', 0xC3, 0xA9],
+            vec![b'c', 0xC3, 0xA9, b'.'],
+            vec![0xED, 0xA0, 0x80, b'.'],
+        ] {
+            let path = Path::new(OsStr::from_bytes(&bytes));
+            assert_eq!(
+                any_component_has_windows_trailing_dot_or_space(path),
+                lossy_trailing_reference(path),
+                "disagreement for {bytes:?}"
+            );
+        }
+    }
+
+    /// A Windows component is WTF-8; an unpaired surrogate becomes U+FFFD in
+    /// the lossy string, but an ASCII trailing byte still decides the answer.
+    #[cfg(windows)]
+    #[test]
+    fn any_component_trailing_check_matches_lossy_reference_on_wtf8() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        for wide in [
+            vec![0xD800, b'.' as u16],
+            vec![0xD800, b' ' as u16],
+            vec![0xD800],
+            vec![b'f' as u16, b'o' as u16, b'o' as u16, b'.' as u16],
+        ] {
+            let os = OsString::from_wide(&wide);
+            let path = Path::new(&os);
+            assert_eq!(
+                any_component_has_windows_trailing_dot_or_space(path),
+                lossy_trailing_reference(path),
+                "disagreement for {wide:?}"
+            );
         }
     }
 
