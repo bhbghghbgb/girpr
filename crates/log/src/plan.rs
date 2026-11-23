@@ -23,10 +23,13 @@
 //!    whatever the shell happened to export. And `--no-log-file` beats both,
 //!    because "write no log file" is the more specific thing to have said.
 //! 4. **Two levels, not one.** `--log-level` is the **console's** (default
-//!    `info`); `--log-file-level` is the **file's** (default `debug`). They are
+//!    `info`); `--log-file-level` is the **file's** (default `debug` in a debug
+//!    build, `info` in a release build — see [`default_file_level`]). They are
 //!    separate because they answer separate questions: the console is for the
 //!    person watching, the file is for the person reading it afterwards, and
-//!    the second reader wants more detail than the first.
+//!    the second reader wants more detail than the first. A release build
+//!    keeps the file quiet by default; an operator who wants the per-chunk
+//!    detail opts back in with `--log-file-level debug` (or `trace`).
 //! 5. **`RUST_LOG` adds to the console; it does not replace it.** The
 //!    program's own level is `--log-level`'s, and the environment can only add
 //!    visibility for other crates — never take the program's own away. The
@@ -192,7 +195,10 @@ impl LogPlan {
                 },
             }
         };
-        let file_level = opts.file_level.or(env.file_level).unwrap_or(Level::Debug);
+        let file_level = opts
+            .file_level
+            .or(env.file_level)
+            .unwrap_or_else(default_file_level);
         Self {
             project,
             console_level: opts.console_level,
@@ -296,6 +302,26 @@ pub fn default_file_is_written() -> bool {
     !cfg!(debug_assertions)
 }
 
+/// The file layer's level when neither the flag nor the environment names one.
+///
+/// **A debug build defaults to `debug`; a release build defaults to `info`.**
+///
+/// The switch is the same `cfg!(debug_assertions)` that decides whether a file
+/// is written at all ([`default_file_is_written`]). A developer wants the file
+/// to hold everything, so the debug default stays `debug`. A shipped binary
+/// installs a file on every run, and the per-chunk `debug!`/`trace!` events are
+/// the bulk of its logging cost; `info` keeps the per-file record while leaving
+/// those lines off. This is only a *default*: `--log-file-level debug` (or
+/// `trace` for the `trace!` lines) still brings them back, and the environment
+/// variable answers for a flag that was never given.
+pub fn default_file_level() -> Level {
+    if cfg!(debug_assertions) {
+        Level::Debug
+    } else {
+        Level::Info
+    }
+}
+
 /// The default log file path: `<exe-dir>/logs/<project>_<timestamp>.log`.
 ///
 /// Beside the executable, because that is the one directory a user can find
@@ -367,7 +393,7 @@ fn parse_file_level(raw: &str, prefix: &str) -> (Option<Level>, Option<String>) 
             None,
             Some(format!(
                 "{prefix}_LOG_FILE_LEVEL: {e}; using the default ({})",
-                Level::Debug
+                default_file_level()
             )),
         ),
     }
@@ -376,6 +402,12 @@ fn parse_file_level(raw: &str, prefix: &str) -> (Option<Level>, Option<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEFAULT_FILE_FILTER: &str = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "info"
+    };
 
     fn opts() -> LogOptions {
         LogOptions {
@@ -432,6 +464,48 @@ mod tests {
             );
             assert!(!plan.file_named);
         }
+    }
+
+    /// The file level starts quieter in a shipped binary, but an explicit
+    /// flag or environment value still wins over either default.
+    #[test]
+    fn the_default_file_level_follows_the_build_and_explicit_values_win() {
+        let want = if cfg!(debug_assertions) {
+            Level::Debug
+        } else {
+            Level::Info
+        };
+        assert_eq!(default_file_level(), want);
+        assert_eq!(
+            LogPlan::resolve("girpr", opts(), EnvOptions::default()).file_level,
+            want
+        );
+        assert_eq!(
+            LogPlan::resolve(
+                "girpr",
+                LogOptions {
+                    file_level: Some(Level::Trace),
+                    ..opts()
+                },
+                EnvOptions::default(),
+            )
+            .file_level,
+            Level::Trace,
+            "an operator can still opt into per-chunk (trace) lines"
+        );
+        assert_eq!(
+            LogPlan::resolve(
+                "girpr",
+                LogOptions {
+                    file_level: Some(Level::Debug),
+                    ..opts()
+                },
+                EnvOptions::default(),
+            )
+            .file_level,
+            Level::Debug,
+            "--log-file-level debug brings back the per-chunk debug lines"
+        );
     }
 
     /// The four ways to choose a log file, in precedence order. Each row is a
@@ -586,19 +660,20 @@ mod tests {
                 },
                 env: EnvOptions::default(),
                 console: Some("girpr=info"),
-                file: Some("debug"),
+                file: Some(DEFAULT_FILE_FILTER),
                 level: None,
                 own: None,
             },
-            // The file's level defaults to debug.
+            // The file's level defaults to the build's default: debug while
+            // developing, info in a shipped binary.
             Case {
-                name: "default file level is debug",
+                name: "default file level follows the build",
                 project: "girpr",
                 options: opts(),
                 env: EnvOptions::default(),
                 console: None,
-                file: None,
-                level: Some(Level::Debug),
+                file: Some(DEFAULT_FILE_FILTER),
+                level: Some(default_file_level()),
                 own: None,
             },
             // `<PROJECT>_LOG_FILE_LEVEL` sets the file's level when the flag
@@ -641,7 +716,7 @@ mod tests {
                 options: opts(),
                 env: EnvOptions::default(),
                 console: Some("girsync=info"),
-                file: Some("debug"),
+                file: Some(DEFAULT_FILE_FILTER),
                 level: None,
                 own: None,
             },
@@ -658,7 +733,7 @@ mod tests {
                     ..Default::default()
                 },
                 console: Some("reqwest=debug,girpr=info"),
-                file: Some("debug"),
+                file: Some(DEFAULT_FILE_FILTER),
                 level: None,
                 own: None,
             },
@@ -740,7 +815,7 @@ mod tests {
         let warning = warning.expect("the user is told");
         assert!(warning.contains("GIRPR_LOG_FILE_LEVEL"), "{warning}");
         assert!(warning.contains("loud"), "{warning}");
-        assert!(warning.contains("debug"), "{warning}");
+        assert!(warning.contains(default_file_level().as_str()), "{warning}");
 
         let (level, warning) = parse_file_level("trace", "GIRPR");
         assert_eq!(level, Some(Level::Trace));

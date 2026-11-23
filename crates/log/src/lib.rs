@@ -8,7 +8,9 @@
 //!   unless `--log-file` or `<PROJECT>_LOG_FILE` says otherwise — and in a
 //!   **debug** build there is no file at all unless one was asked for.
 //! - **How loud is each sink?** The console is `info` by default
-//!   (`--log-level`); the file is `debug` by default (`--log-file-level`).
+//!   (`--log-level`); the file is `debug` by default in a debug build and
+//!   `info` in a release build (`--log-file-level`, see
+//!   [`plan::default_file_level`]).
 //! - **What happens when the file cannot be opened?** A warning on stderr,
 //!   never a failed run.
 //!

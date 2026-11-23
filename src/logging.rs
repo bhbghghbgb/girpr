@@ -10,10 +10,13 @@
 //! Design (automation contract, see README):
 //! - Console (stderr) is filtered by `--log-level`, optionally replaced by
 //!   `RUST_LOG`.
-//! - The file is filtered by `--log-file-level`, which defaults to `debug`.
-//!   The two levels are separate because they answer separate questions: the
-//!   console is for the person watching, the file is for the person reading
-//!   it afterwards.
+//! - The file is filtered by `--log-file-level`, which defaults to `debug` in
+//!   a debug build and `info` in a release build (see
+//!   [`girpr_log::default_file_level`]). The two levels are separate because
+//!   they answer separate questions: the console is for the person watching,
+//!   the file is for the person reading it afterwards. A shipped binary keeps
+//!   per-chunk lines off by default; `--log-file-level debug` (or `trace`)
+//!   brings them back.
 //! - The file is written when it is asked for: by `--log-file`, by
 //!   `GIRPR_LOG_FILE`, or — in a **release** build — by the default, which is
 //!   [`girpr_log::default_log_path`]'s timestamped path in a `logs/` directory beside
@@ -90,7 +93,7 @@ static WORKER_GUARD: Mutex<Option<WorkerGuard>> = Mutex::new(None);
 ///
 /// `console_level` is `--log-level`, `file_level` is `--log-file-level`
 /// (`None` when the flag was not given, so the environment variable and then
-/// the `debug` default can answer for it), `log_file` is `--log-file`
+/// the build's file default can answer for it), `log_file` is `--log-file`
 /// (`None` for the timestamped default), and `no_log_file` is `--no-log-file`.
 ///
 /// The returned plan is what was *asked for*, not what was opened: a file

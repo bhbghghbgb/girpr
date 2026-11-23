@@ -15,10 +15,12 @@
 //! `<exe-dir>/logs/gircap_<timestamp>.log`. A **debug** build writes no file
 //! unless it is asked to, and `--no-log-file` turns it off in any build. The
 //! console filter is deliberately *not* copied to the file sink — the two are
-//! separate questions, and the file's default (`debug`) is one step louder
-//! than the console's (`info`) for exactly that reason. An artifact run's
-//! narration is the evidence for why a version pair was chosen and what each
-//! request cost, and it must survive a `--log-level warn` console.
+//! separate questions. In a debug build the file's default (`debug`) is one
+//! step louder than the console's (`info`); in a release build it starts at
+//! `info` and `--log-file-level debug` (or `trace`) opts back into the louder
+//! per-event lines. An artifact run's narration is the evidence for why a
+//! version pair was chosen and what each request cost, and it must survive a
+//! `--log-level warn` console.
 //!
 //! The *policy* — where the file goes, which level each sink gets, which
 //! environment variable answers for which flag — is the workspace's and lives
