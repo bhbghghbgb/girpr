@@ -9,14 +9,14 @@
 //! and `FileId`.
 
 use std::io::Write;
-use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
 
 use super::mode::{open_inplace, open_rw};
 use super::temp::{DownloadedChunk, write_downloaded_chunk};
 use super::{
-    ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
+    ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, reusable_verdict, write_at,
+    zero_fill,
 };
 use crate::repair::diagnostics;
 use crate::repair::reuse;
@@ -24,7 +24,7 @@ use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
 use girpr_chunk_verify::{
-    Verdict, Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
+    Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
 };
 use girpr_repair_plan::FileId;
 use girpr_repair_policy::RepairMode;
@@ -222,7 +222,7 @@ fn open_and_scan(
     // correct, and which sources are intact. Under `--scan` the plan phase
     // already took that read; reuse it only when the guard proves the file is
     // still the one that was scanned.
-    let scan = match reusable_verdict(ctx, id, file, &handle) {
+    let scan = match reusable_verdict(ctx, id, file, handle.metadata()) {
         Some(v) => {
             // How long ago the plan scan ran, not how old the file's mtime is:
             // the verdict records the latter for the guard, and the two are
@@ -879,137 +879,6 @@ impl std::fmt::Display for FinalDigestMismatch {
 
 impl std::error::Error for FinalDigestMismatch {}
 
-/// The widest filesystem timestamp tick the reuse guard accounts for.
-///
-/// FAT/exFAT record modification times at 2 s; HFS+ and some SMB/NFS servers
-/// at 1-2 s. A store that truncates further is outside this margin and is
-/// covered by the residual limit documented on [`reusable_verdict`].
-const COARSE_MTIME_TICK: Duration = Duration::from_secs(2);
-
-/// Did the recorded mtime predate the scan by more than one coarse tick?
-///
-/// A rewrite that happens at or after the scan can only present the recorded
-/// mtime on a tick-truncating store when its own time falls in the recorded
-/// tick. Requiring the scan start to be more than a tick after the recorded
-/// mtime rules that out. Missing or backwards timestamps answer `false`, so
-/// the caller reads the file again.
-///
-/// This inference assumes a forward-moving wall clock: a write at or after
-/// `scanned_at` stamps a time no earlier than `scanned_at`. A backwards jump
-/// can break it; the consequences are described on [`reusable_verdict`].
-fn mtime_predates_scan(recorded: SystemTime, scanned_at: Option<SystemTime>) -> bool {
-    let Some(scanned_at) = scanned_at else {
-        return false;
-    };
-    scanned_at
-        .duration_since(recorded)
-        .is_ok_and(|age| age > COARSE_MTIME_TICK)
-}
-
-/// The plan-phase verdict for this file, when a cheap stat proves the open
-/// handle has not changed since it was scanned.
-///
-/// Reuse is deliberately conservative: a missing report or scan start, a
-/// failed stat, a length mismatch, any modification-time difference, or a
-/// recorded mtime too close to the scan all mean "read it again". A stale
-/// verdict describes a layout that is no longer on disk, so every uncertainty
-/// costs the read rather than risking a wrong write.
-///
-/// The verdict is about the **open handle**, not the path: the length and
-/// mtime come from `handle.metadata()`, so a path replacement between the open
-/// and this check cannot make the guard read another file's metadata. The
-/// writer still writes the handle it opened; a path replacement after that is
-/// outside this guard and is caught by the final digest only for the handle.
-///
-/// # The coarse-timestamp limit
-///
-/// A **coarse** filesystem - FAT/exFAT (2 s), HFS+, and some SMB/NFS servers
-/// (1-2 s) - can let a rewrite keep the length and land inside the same
-/// timestamp tick as the scan. The recorded and current mtimes are then equal,
-/// and without more information the guard would accept a verdict that
-/// describes the previous bytes. The natural evasion window is exactly that:
-/// the recorded mtime must share the coarse tick with the post-scan rewrite.
-///
-/// [`mtime_predates_scan`] closes the **intact**-verdict gap. A rewrite at or
-/// after the scan has a timestamp at least as new as the scan start, so when
-/// the recorded mtime predates the scan start by more than one coarse tick,
-/// no such rewrite can present the recorded timestamp. Only a file whose mtime
-/// is within the tick of the scan start pays the extra read on a normal
-/// filesystem; files installed or last changed earlier keep the reuse.
-///
-/// What a stale verdict costs depends on what the plan scan found:
-///
-/// - A verdict that found the file **damaged** cannot make the writer skip,
-///   because its digest is not the manifest's. The patch runs with the stale
-///   per-chunk answers, and [`verify_in_place`] always digests the finished
-///   file; when the answers were wrong that digest fails, its range scan names
-///   the chunks that are still wrong, and [`verify_and_retry`] downloads them.
-///   The cost is one extra verify pass and a redo, never a wrong byte left in
-///   the file.
-/// - A verdict that found the file **intact** is also the skip check: its
-///   digest matches the manifest's, so the writer reports the file skipped
-///   without reading or writing it. The age check above rejects the same-tick
-///   rewrite, but it cannot cover every store or writer. The residual is a
-///   post-scan rewrite that can still present the recorded mtime even though
-///   it is older than the scan:
-///
-///   - a store that does not advance the mtime on a write at all, where the
-///     recorded value is preserved no matter how old it is;
-///   - a store whose timestamp granularity is coarser than
-///     [`COARSE_MTIME_TICK`], where a scan more than a tick after the recorded
-///     mtime can still share the truncated tick with a later rewrite;
-///   - a writer that backdates the mtime, for example by restoring the
-///     original timestamp after changing the bytes.
-///
-///   Such a store or writer can still make this run report the file skipped
-///   until a later scan sees it. Nothing is ever written from a stale verdict,
-///   so this run cannot corrupt the file; it can only fail to repair it.
-///
-/// # The clock direction
-///
-/// The age rule assumes the wall clock moves forward between the file's last
-/// write, the plan scan, and the writer's check. A backwards jump is not
-/// detected. A jump before the scan starts leaves every recorded mtime at or
-/// after the earlier scan start; [`mtime_predates_scan`] then answers `false`
-/// and each file is read again, the safe direction at the cost of the read. A
-/// jump during the scan is per file, because the scan start is one timestamp
-/// taken before the files are read: one scanned before the jump recorded a
-/// time at or after the scan start and is read again, while one scanned after
-/// the jump recorded a lower time and the after-scan caveat below applies.
-/// If the jump happens after the scan, a post-scan rewrite can stamp a time
-/// earlier than the scan start, so "a later write is at least as new as the
-/// scan" no longer holds. Should that rewrite then
-/// present the recorded mtime exactly - naturally or because a coarse store
-/// truncates it there - the guard can accept a stale intact verdict, with the
-/// residual consequence above: skipped until a later scan, never written from
-/// the stale verdict.
-///
-/// Not paying for a second read here is the trade that makes scanning worth it.
-fn reusable_verdict<'a>(
-    ctx: &'a FileCtx,
-    id: FileId,
-    file: &PlannedFile,
-    handle: &std::fs::File,
-) -> Option<&'a Verdict> {
-    let report = ctx.scan.as_deref()?;
-    let verdict = report.get(&ctx.plan, id)?;
-    if verdict.dest_ok.len() != file.chunks.len() || verdict.source_ok.len() != file.chunks.len() {
-        return None;
-    }
-    let recorded = verdict.modified?;
-    let metadata = handle.metadata().ok()?;
-    if metadata.len() != verdict.file_len {
-        return None;
-    }
-    if metadata.modified().ok()? != recorded {
-        return None;
-    }
-    if !mtime_predates_scan(recorded, report.scanned_at) {
-        return None;
-    }
-    Some(verdict)
-}
-
 /// The success settle shared by the first verify and the redo.
 ///
 /// Both paths end the same way: one `repaired in place` line carrying the
@@ -1174,7 +1043,11 @@ enum Tier {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
 
+    use girpr_chunk_verify::Verdict;
+
+    use super::super::{COARSE_MTIME_TICK, mtime_predates_scan};
     use super::*;
     use crate::repair::scan::ScanReport;
     use crate::report::Summary;
@@ -2146,7 +2019,7 @@ mod tests {
         let report = ScanReport::for_test(&plan, vec![Some(wrong_shape)]);
         let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         assert!(
-            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
             "a verdict for another chunk layout is not this file's verdict"
         );
 
@@ -2161,7 +2034,7 @@ mod tests {
         let report = ScanReport::for_test(&plan, vec![Some(no_time)]);
         let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         assert!(
-            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
             "without a recorded mtime the guard cannot prove the file unchanged"
         );
     }
@@ -2228,7 +2101,7 @@ mod tests {
 
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, id, &file, &handle).is_some(),
+            reusable_verdict(&ctx, id, &file, handle.metadata()).is_some(),
             "an old mtime with the same length is the one reusable shape"
         );
 
@@ -2241,7 +2114,7 @@ mod tests {
             .unwrap();
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
             "a different mtime means a different snapshot"
         );
 
@@ -2255,7 +2128,7 @@ mod tests {
             .unwrap();
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
             "a different length is never reused"
         );
 
@@ -2270,13 +2143,13 @@ mod tests {
         let handle = std::fs::File::open(&path).unwrap();
         let no_verdict = test_ctx(Some(Arc::new(ScanReport::default())));
         assert!(
-            reusable_verdict(&no_verdict, id, &file, &handle).is_none(),
+            reusable_verdict(&no_verdict, id, &file, handle.metadata()).is_none(),
             "a missing verdict is not reusable"
         );
 
         // And without a scan there is nothing to reuse.
         let no_scan = test_ctx(None);
-        assert!(reusable_verdict(&no_scan, id, &file, &handle).is_none());
+        assert!(reusable_verdict(&no_scan, id, &file, handle.metadata()).is_none());
     }
 
     /// The age rule, as a table: only a recorded mtime more than one coarse

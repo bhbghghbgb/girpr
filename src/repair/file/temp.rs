@@ -10,9 +10,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use anyhow::{Context, Result};
 
 use super::{
-    COPY_BUF, ChunkStats, FileCtx, FileWrites, Inplace, Mode, PlannedFile, note_write,
-    reserve_write, scratch_slice,
+    COPY_BUF, ChunkStats, FileCtx, FileId, FileWrites, Inplace, Mode, PlannedFile, note_write,
+    reserve_write, reusable_verdict, scratch_slice,
 };
+use crate::repair::diagnostics;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::sophon::{self, FileReuse, SophonChunk};
 use crate::util;
@@ -26,32 +27,51 @@ use crate::util;
 /// twice, for as long as the repair takes.
 pub(super) async fn attempt_temp(
     ctx: &FileCtx,
+    file_id: FileId,
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
     final_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<Inplace> {
-    match util::file_len(final_path) {
-        util::FileLen::Absent => {
-            tracing::debug!(path = %final_path.display(), "check: missing local file");
+    // Under --scan an intact target was already read in the plan phase. Reuse
+    // that verdict when the same length/mtime guard the in-place path applies
+    // proves the target is still the scanned one, so the whole-file digest is
+    // not paid twice for the same bytes. Temp has no handle on the target at
+    // this point, so it passes a path stat; that follows symlinks just like the
+    // scan's own `modified` stat, so both paths agree on a symlinked target.
+    // A file written earlier in this run has an mtime at or after the scan
+    // start and is refused by the guard, so it is read again rather than
+    // skipped from a stale verdict.
+    if let Some(verdict) = reusable_verdict(ctx, file_id, file, std::fs::metadata(final_path)) {
+        if verdict.file_md5.matches_hex(&file.md5) {
+            tracing::debug!(actual_md5 = %verdict.file_md5, "check: md5 match -> skip");
+            diagnostics::record_plan_scan_reused();
+            return Ok(Inplace::Skipped);
         }
-        util::FileLen::Unreadable(e) => tracing::warn!(
-            path = %final_path.display(),
-            error = %e,
-            "check: cannot stat the local file -> needs repair"
-        ),
-        util::FileLen::Present(n) if n != file.size as u64 => {
-            tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
-        }
-        util::FileLen::Present(_) => match util::md5::md5_file_digest(final_path) {
-            Ok(h) if h.matches_hex(&file.md5) => {
-                tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
-                return Ok(Inplace::Skipped);
+        tracing::debug!(actual_md5 = %verdict.file_md5, "check: md5 mismatch -> needs repair");
+    } else {
+        match util::file_len(final_path) {
+            util::FileLen::Absent => {
+                tracing::debug!(path = %final_path.display(), "check: missing local file");
             }
-            Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
-            Err(e) => tracing::debug!("check: unreadable ({e:#}) -> needs repair"),
-        },
+            util::FileLen::Unreadable(e) => tracing::warn!(
+                path = %final_path.display(),
+                error = %e,
+                "check: cannot stat the local file -> needs repair"
+            ),
+            util::FileLen::Present(n) if n != file.size as u64 => {
+                tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
+            }
+            util::FileLen::Present(_) => match util::md5::md5_file_digest(final_path) {
+                Ok(h) if h.matches_hex(&file.md5) => {
+                    tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
+                    return Ok(Inplace::Skipped);
+                }
+                Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
+                Err(e) => tracing::debug!("check: unreadable ({e:#}) -> needs repair"),
+            },
+        }
     }
     if ctx.dry_run {
         tracing::info!("would repair");
@@ -1504,6 +1524,136 @@ mod tests {
         assert!(
             chain.contains("seek to chunk c9 offset") && chain.contains("seek refused"),
             "the seek failure is still named with its chunk: {chain}"
+        );
+    }
+
+    /// An intact target with a guarded plan verdict is skipped without the
+    /// temp path reading it at all — the digest the scan took is the skip
+    /// check. This is the temp half of the verdict sharing; the guard itself is
+    /// the one the in-place path applies.
+    #[tokio::test]
+    async fn a_guarded_plan_verdict_skips_the_temp_check() {
+        use crate::repair::scan::ScanReport;
+        use crate::test_support::stamp_ago;
+        use girpr_chunk_verify::Verdict;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "verdict_skip");
+        let path = dir.join("f.dat");
+        let tmp = dir.join("f.dat_tmp");
+        let data = b"abcdef";
+        std::fs::write(&path, data).unwrap();
+        let Some(stamp) = stamp_ago(std::time::Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: data.len() as i64,
+            md5: util::md5::md5_digest(data).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: Vec::new(),
+        };
+        let verdict = Verdict {
+            file_md5: util::md5::md5_digest(data),
+            dest_ok: Vec::new(),
+            source_ok: Vec::new(),
+            file_len: data.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report =
+            ScanReport::for_test_at(&plan, vec![Some(verdict)], std::time::SystemTime::now());
+        let mut ctx = test_ctx();
+        ctx.plan = Arc::new(plan);
+        ctx.scan = Some(Arc::new(report));
+
+        let outcome = attempt_temp(
+            &ctx,
+            FileId::new(0),
+            &file,
+            "",
+            &tmp,
+            &path,
+            &mut FileWrites::default(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, Inplace::Skipped));
+        assert!(!tmp.exists(), "a skipped file never opens a temp file");
+    }
+
+    /// The other half of assumption 3: a target written after the plan scan
+    /// must not be skipped from that scan's digest. The shared guard sees the
+    /// newer mtime, so the temp path falls through to its own check and repair.
+    #[tokio::test]
+    async fn a_file_written_after_the_scan_is_not_skipped_by_the_temp_path() {
+        use crate::repair::scan::ScanReport;
+        use crate::test_support::stamp_ago;
+        use girpr_chunk_verify::Verdict;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "verdict_stale");
+        let path = dir.join("f.dat");
+        let tmp = dir.join("f.dat_tmp");
+        let data = b"abcdef";
+        std::fs::write(&path, data).unwrap();
+        let Some(stamp) = stamp_ago(std::time::Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: data.len() as i64,
+            md5: util::md5::md5_digest(data).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: Vec::new(),
+        };
+        let verdict = Verdict {
+            file_md5: util::md5::md5_digest(data),
+            dest_ok: Vec::new(),
+            source_ok: Vec::new(),
+            file_len: data.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report =
+            ScanReport::for_test_at(&plan, vec![Some(verdict)], std::time::SystemTime::now());
+        let mut ctx = test_ctx();
+        ctx.plan = Arc::new(plan);
+        ctx.scan = Some(Arc::new(report));
+
+        // Same length, but written after the scan: the mtime no longer matches
+        // the recorded one, so the verdict is stale.
+        let mut changed = *data;
+        changed[1] ^= 0xff;
+        std::fs::write(&path, &changed).unwrap();
+
+        let outcome = attempt_temp(
+            &ctx,
+            FileId::new(0),
+            &file,
+            "",
+            &tmp,
+            &path,
+            &mut FileWrites::default(),
+        )
+        .await;
+        assert!(
+            !matches!(outcome, Ok(Inplace::Skipped)),
+            "a post-scan write must be repaired, not skipped from the stale verdict"
         );
     }
 
