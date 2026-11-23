@@ -82,7 +82,8 @@ Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args — clap-lev
 included, so the code remaps clap's default 2 — unusable game path, non-chunk
 `default_download_mode`), 2 metadata/network, 3 write/verify (counted per-file repair
 failures via `Ok(summary, 3)` with `SUMMARY`, plus fatal config.ini / audio-scan write,
-files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage,
+files-cleanup, game-dir creation and a live single-writer lock via `Err(RunFailure::write)`
+with `FATAL` only), 4 check-only found damage,
 5 a requested enforcement ceiling bound the run (`SUMMARY stopped=…`, `limited=1`). `--help`
 is the only other 0. Fatal
 errors carry their class via `config::RunFailure` at the raise site; per-file verify
@@ -103,7 +104,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (fetched in the plan phase, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
-| Single-writer lock | `girpr_lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 1 (5, taken in the execute phase) | — |
+| Single-writer lock | `girpr_lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 3 (5, taken in the execute phase) | — |
 | Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode **streamed straight into the file**, digested on the way past → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
 | Check-only | `repair::phases::check::verify_plan` (6.5) | Starward |
 | Post deletes/config | `repair::phases::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |

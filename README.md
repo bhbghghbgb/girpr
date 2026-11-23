@@ -220,11 +220,11 @@ flowchart TD
   `download_bytes` will be far above what a run with reuse available costs, and
   a `--max-download-bytes` ceiling is measured against the same empty map, so it
   moves. Check this key before comparing byte totals.
-- exit codes: `0` ok (check-only: intact) · `1` usage/config (including a
-  refusal because another `girpr` run holds the lock) · `2` metadata/network
+- exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network
   (including a malformed manifest path or chunk range, refused at plan time
   before any mode runs) ·
-  `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
+  `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only —
+  including a live lock held by another run and a failed game-dir creation) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
   exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
   part of the work, and the next run re-verifies and continues (`SUMMARY
@@ -291,10 +291,11 @@ flowchart TD
   The open handle is the exclusion, so a **scoped** run takes the same lock as
   an unscoped one and the OS releases a killed run's lock immediately — there
   is no wall-clock staleness rule. A live holder refuses the second run with
-  **exit `1`**, naming the lock file and the holder from the body when it can
-  be read (an exclusive lock can hide the body on Windows, and the refusal says
-  so). The file is left in place on exit, so a run that opens it while the lock
-  is being released cannot end up holding a file that is no longer at the path;
+  **exit `3`** (a write-path failure, not a bad invocation), naming the lock file
+  and the holder from the body when it can be read (an exclusive lock can hide
+  the body on Windows, and the refusal says so). The file is left in place on
+  exit, so a run that opens it while the lock is being released cannot end up
+  holding a file that is no longer at the path;
   an unlocked leftover does not block the next run. A read-only run
   (`--check-only`, `--dry-run`, `--print-plan`) never takes it. Older runs wrote
   `{game_dir}/girpr.lock`; it is never created now, and a leftover is left
