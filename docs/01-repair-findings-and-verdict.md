@@ -17,7 +17,7 @@ imports them. Each one covers a different part of the GI update/repair mechanism
   persistent files written by the game client (`docs/08` §2.4).
 - `reference-projects/GI-Live-Hotfix-Downloader` — reference for understanding the process of
   querying the dispatcher for hotfix versions and the download of persistent hotfix files
-  (`docs/08` §6).
+  (`docs/08` §7).
 
 ## 1. How each launcher discovers the file list
 

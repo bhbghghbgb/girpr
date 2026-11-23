@@ -1,6 +1,7 @@
 # Persistent-directory update research — Genshin Impact
 
-**Status: research complete; no product code changed.** This document answers three
+**Status: research complete; no product code changed.** §5 records the open product
+decisions that implementation needs answered (with blank answer columns). This document answers three
 questions raised by the `girpr` repair-only design:
 
 1. What are the "already verified" marker files the game writes into the install,
@@ -491,7 +492,70 @@ scripts and exact URLs/statuses are in `tools/persistent-sophon-research/README.
 
 ---
 
-## 5. Recommended next steps
+## 5. Opt-in `Persistent` update: conflicts and decision blockers
+
+The feature is **opt-in**: one new flag (written `--with-persistent` below; the
+actual name and envelope are decisions in §5.2 (B1)) must leave today's repair-only default
+byte-identical — same plan, same `SUMMARY`, same exit codes. This section records
+the two things that still need an answer before that flag can be implemented:
+
+* **§5.1 conflicts** — places where the new work (or its §4 prerequisites) meets
+  an existing `girpr` rule that already has a defined meaning. Each row gives the
+  competing meanings, the semantics this research suggests, and an empty **Answer**
+  column for the final call.
+* **§5.2 blockers** — choices that reading the two launchers or the live probe
+  cannot settle. The §4 prerequisites are deliberately **not** blockers: the
+  decoder, the two manifests, the full-file downloader, the marker writes, the
+  read-flag stripping and the directory/ctable/DXSETUP work are implementation
+  tasks, not open questions. Likewise, capturing a dispatcher response and both
+  manifests into a `gircap` bundle (§6 step 2) is a prerequisite
+  for testing, not a decision.
+
+"Suggested" is this report's recommendation, not a decision. The last column is
+intentionally blank and is where the answer will be recorded.
+
+### 5.1 Conflicts with existing `girpr` functions and contracts
+
+| # | Conflict: new/prerequisite vs. existing `girpr` rule | Possible semantics | Suggested semantic | Answer |
+|---|---|---|---|---|
+| C1 | **Purge keep-set vs. Persistent files and markers.** `--purge-after`/`--purge-only` currently keep only live-manifest paths, `config.ini`, the legacy lock, the blacklist and `audio_lang_*`/`Audio_*_pkg_version`; every `Persistent/` file is a purge candidate (§4.3). | (a) widen the keep-set for every run; (b) widen only when `--with-persistent` is passed; (c) leave the purge alone and document the loss. | **(a)** — widening is keep-only, so it cannot write wrong bytes; (b) would let an unflagged run delete the markers of an install that was already repaired. |  |
+| C2 | **Root `pkg_version` vs. purge.** Only `Audio_*_pkg_version` is a keep pattern today; the root `pkg_version` is swept, although the HoYoPlay launcher uses it (§4.3). | (a) always keep it; (b) keep only with `--with-persistent`; (c) no change. | **(a)** — same reasoning as C1; this is a correctness fix for all runs, not part of the feature. |  |
+| C3 | **Plan-half "touches nothing" vs. mirroring the persistent manifests.** Collapse writes `*_persist` inside its fetch step; `girpr` allows exactly one plan-half write (`--plan-out`). | (a) fetch and parse in the plan half, publish the mirrored files in the execute/post half; (b) write them in the plan half as a flag-scoped exception; (c) never mirror, let the game generate the database. | **(a)** — the plan stays inspectable and read-only; (c) gives up the marker that suppresses re-verification. |  |
+| C4 | **Read-only modes vs. marker writes.** `--dry-run`, `--check-only` and `--print-plan` write nothing (README, "read-only modes"). | (a) all three list persistent work but write no markers or manifest mirrors; (b) `--dry-run` writes markers; (c) `--check-only` writes markers for intact files. | **(a)** — a read-only mode that writes verification state is a contradiction, and the design in §4.2 step 4 puts marker writes last. |  |
+| C5 | **What "install intact" means under `--check-only`.** The check currently verifies the Sophon plan only; with the flag on, a byte-intact install with a stale/missing revision file will still re-verify in-game. | (a) check persistent files *and* the marker block; (b) check file bytes only; (c) keep Sophon-only. | **(a)** — with `--with-persistent` on, "intact" must include the state the feature exists to maintain; otherwise exit `0` claims a result the game will not honour. This narrows the set of installs `--check-only` calls clean, which should be stated in the help text. |  |
+| C6 | **Dispatcher failure vs. the exit-code table.** `1` usage, `2` metadata/network, `3` write, `4` check-only damage, `5` ceiling. A failed RSA/protobuf decode is none of the HYP/Sophon metadata calls. | (a) exit `2` with a distinct log line; (b) exit `1` ("cannot satisfy this request in this environment"); (c) exit `0` with a degraded report. | **(a)** — it is a server-metadata failure; (c) would report success for a request that was not performed. |  |
+| C7 | **Path scope (`--include`/`--exclude`) vs. install-wide markers.** A scoped run already forgoes the `config.ini` bump, and explicit `--audio` under a scope is exit `1`. Marker files are global state, not per-path bytes. | (a) refuse `--with-persistent` + any active scope (exit `1`); (b) allow, suppress markers and the bump, report `config_bumped=0`-style; (c) allow and write markers. | **(a)** — same contradiction rule as `--audio`: a scope cannot claim revisions for files it deliberately did not install. See B5 for the open part of this call. |  |
+| C8 | **Per-file failure gate vs. all-or-nothing markers.** Any failed file already returns exit `3` and skips the post-phase, so `config.ini` never advances over damage. | (a) one global gate in the post phase: no marker block if any persistent file failed; (b) write markers for the files that passed; (c) write markers unconditionally. | **(a)** — a revision file asserts that *all* files at that revision are present; a partial assertion is worse than a stale one. |  |
+| C9 | **Marker write order vs. `config.ini` bump.** `ScriptVersion` records the game version; the bump is the last post-phase act. | (a) markers first, bump last, both skipped on failure; (b) bump first; (c) no bump when only markers changed. | **(a)** — preserves the existing "version advances only after the bytes are in place" invariant and Collapse's "markers last" ordering within that window. |  |
+| C10 | **`--repair-mode` vs. full-file downloads.** `auto`/`inplace`/`temp`/`discard` and their `SUMMARY` keys describe the chunk writer. Persistent files are full-file HTTP with a post-download MD5 gate (§4.5). | (a) persistent uses its own path; the mode group describes base files only; (b) apply the mode to persistent files too; (c) add a mode value. | **(a)** — do not pretend a chunk mode governs a path that has no chunks; document that the mode group excludes persistent bytes so the `SUMMARY` is not read as covering them. |  |
+| C11 | **Byte ceilings vs. persistent bytes.** The download/write/verified counters and `--max-files` count chunk-plan files only; a `--max-download-bytes 0` run must not be able to download hotfixes. | (a) fold persistent file sizes into the existing estimates and live counters, with the same pre-flight refusal and runtime stop; (b) add parallel `--max-persistent-*` ceilings; (c) exclude persistent bytes. | **(a)** — a ceiling that can be bypassed by a new code path is a broken contract; the full sizes are known from the manifest, so the pre-flight refusal stays exact. B7 covers the contract change this implies. |  |
+| C12 | **"Unflagged `SUMMARY` is byte-identical" vs. C1/C2.** Keeping markers and `pkg_version` changes `deleted_extra_bytes` on an install that contains them, even for a run with no new flags. | (a) accept the change and document it as a deliberate safety fix; (b) gate the keep-set on `--with-persistent`; (c) add a separate keep-only flag. | **(a)** — the byte-identical promise is about flags, not about installs whose contents changed; silently deleting verification state to preserve a number is the wrong trade. B5 records the decision. |  |
+| C13 | **`--scan` and byte reporting.** The scan reads every planned file once and publishes `scan_bytes` and exact estimates; persistent files are not in the Sophon plan. | (a) add persistent files to the scan; (b) exclude them and state that their full-file MD5 gate is the check; (c) a separate persistent scan pass. | **(b)** — the repair already reads each persistent file in full for its MD5 gate; scanning them again doubles the I/O for figures that are already exact from the manifest. Make the exclusion visible in `PLAN`/`--plan-out`. |  |
+| C14 | **Audio selection vs. persistent audio filtering.** `.pck` rows are filtered by `Persistent/audio_lang_14`; `girpr` already reads `audio_pkg_scan_dir` via `getGameConfigs` (§4 row 12). | (a) reuse `meta.audio` and the existing scan-file read; (b) write a second `Persistent/audio_lang_14`; (c) include every language. | **(a)** — one source of truth, read-only; first verify the two paths are the same file before assuming parity. |  |
+| C15 | **Atomic publish vs. purge classification of `*_tmp`.** `purge` treats `*_tmp` as a candidate; Collapse also leaves partial `*_persist` files on a failed download (§4.4). | (a) download to a temp name, full-file MD5, then atomic publish before the post-repair re-plan; (b) write the final path directly; (c) add a persistent-`_tmp` keep pattern. | **(a)** — util-path's atomic publish already exists; (b) is exactly the partial-marker failure §4.4 warns about. |  |
+| C16 | **Missing `res_versions_streaming` vs. `base_res_version_hash`.** Collapse simply omits the marker when the source file is absent (§4.4); `girpr` normally refuses malformed inputs at plan time. | (a) omit that one marker and report it; (b) refuse the run; (c) synthesize the hash from the Sophon manifest. | **(a)** — match the game's and Collapse's behaviour; make the omission visible on the data plane rather than failing a repair that is otherwise sound. |  |
+| C17 | **Tree-wide read-only stripping (§4 row 8) vs. per-file clearing.** Collapse calls `TryUnassignReadOnlyFiles` on the whole game tree up front; `girpr` clears the flag only when an in-place open fails, and otherwise falls back to `{path}_tmp` for that one file. Hotfix files are often read-only. | (a) strip read-only flags tree-wide when the flag is on; (b) strip only on persistent paths, before overwriting each file; (c) keep per-file clearing and rely on the temp path. | **(b)** — a tree-wide attribute change is a surprising mutation of files the run does not otherwise touch; a persistent file that still cannot be opened should fall back to the same temp path as any other file, not fail the run. |  |
+
+### 5.2 Blockers that need a decision
+
+Only items that a product decision — not more research — can settle. Each is a
+yes/no or a choice between concrete alternatives; the suggested answer is a
+recommendation.
+
+| # | Blocker | Possible answers | Suggested answer | Answer |
+|---|---|---|---|---|
+| B1 | **Flag envelope.** What does the single opt-in actually promise? | (a) one master flag enabling dispatcher + manifests + markers; (b) separate flags for each; (c) no flag, auto-detect from install contents. | **(a)** — a partial opt-in can produce an install with hotfixes but no markers, which is worse than no feature; (c) makes the default run's network behaviour nondeterministic. |  |
+| B2 | **Dispatcher key/seed source (§4.1).** The response is encrypted protobuf with a versioned seed and a region-specific RSA key; `girpr` has none of that today. | (a) port `Hi3Helper.EncTool` + `GenshinGateway.proto` and fetch the key/seed from Collapse's release metadata; (b) embed a maintained key/seed table with an explicit update path; (c) require the user to supply key/seed; (d) support only pre-captured manifests, never a live query. | **(a)** for the first release, with (b) as the fallback if depending on a third party's metadata repository is unacceptable. This is a maintenance-policy call, not a code gap. |  |
+| B3 | **Dispatcher failure while opted in.** Collapse warns and continues; its default is not an opt-in request. | (a) fail (exit `2`); (b) degrade to base-only repair and report a `persistent=unavailable` flag; (c) try again on the next run only. | **(a)** — a user who explicitly asked for a persistent update should not receive `exit 0` for a run that skipped it. Best-effort behaviour stays for runs without the flag (where the dispatcher is never queried). |  |
+| B4 | **Channel coverage for the first release.** The live probe (§4.5) covered `hk4e_global` only; CN/Bili dispatcher fields are unverified. | (a) global only, with a clear refusal for the other two `--biz` values while the flag is on; (b) all three at launch; (c) global + CN only. | **(a)** — ship the verified path behind the flag and add channels when each has a captured dispatcher response and manifest pair; research cannot certify the unprobed regions. |  |
+| B5 | **Scope/audio combination (C7, C12).** Is refusing `--with-persistent` under any path scope (and under explicit `--audio` outside the scan file) acceptable, and is the keep-set fix allowed to change unflagged `deleted_extra_bytes`? | (a) refuse the combination, ship the keep-set fix independently, document the `SUMMARY` change; (b) allow scoped persistent updates with markers suppressed; (c) keep the flag out of scope rules entirely. | **(a)** — atomic state must not be written by a partial run, and a deliberate safety fix is worth a one-time change to a deletion total. This is where C7/C12 need an explicit product sign-off. |  |
+| B6 | **How far beyond Collapse to go (§4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. |  |
+| B7 | **Ceiling contract (C11).** Folding persistent bytes into the existing ceilings changes what those flags mean for opted-in runs. | (a) fold them in and document the broader meaning; (b) add dedicated persistent ceilings so the existing ones keep their exact definition; (c) leave persistent bytes unbounded. | **(a)** — enforceable ceilings are the point of the tier; (b) is defensible if a caller needs to budget the two paths separately, but doubles the flag surface. (c) is not acceptable. |  |
+| B8 | **Legal/ToS posture.** Querying `query_cur_region` directly and shipping/deriving its RSA key is a product risk that source inspection cannot answer. | (a) acceptable, same as Collapse and the community tools; (b) acceptable only with user-supplied keys; (c) not acceptable — drop live dispatch and support captured bundles only. | **(a)** is this report's technical recommendation; the final call belongs to the project owner and is recorded here rather than assumed. |  |
+
+---
+
+## 6. Recommended next steps
 
 1. Decide the dispatcher strategy (port the Collapse decoder vs. a minimal
    maintained key/seed table) and add it behind a dedicated flag so the existing
@@ -506,7 +570,7 @@ scripts and exact URLs/statuses are in `tools/persistent-sophon-research/README.
 5. Verify on a real install: update Persistent with `girpr`, copy the game to a
    second machine, launch once, and confirm no verification/re-download occurs.
 
-## 6. Additional reference projects
+## 7. Additional reference projects
 
 Two repositories found during this research are direct, independent documentation
 sources for the *in-game* half of the update mechanism, which neither existing
@@ -548,7 +612,7 @@ Optional companion (metadata, not code): Collapse's release-data repo
 clone (or a direct fetch of those two files) is enough if the dispatcher strategy
 in §4.1 needs to be pinned locally.
 
-## 7. Source index
+## 8. Source index
 
 Launcher code (all under `reference-projects/Collapse/` unless noted):
 
