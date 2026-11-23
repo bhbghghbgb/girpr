@@ -106,11 +106,11 @@ planning review batches the survivors only after every task is settled.
 | F37 | End-to-end materialize assertion that an under-declared blob surfaces the new declared-size-mismatch text | done | Endorsed by review K; validates T23's user-visible contract. Batch 2 (gircap artifact e2e). Batch 2 reviewed; no fix needed. |
 | F38 | Measure girsync's walk-stat and per-worker-allocation reductions at scale (large tree, both platforms) | dropped | Endorsed by review L; current gains are structural, not measured. Dropped by follow-up planning: scale/two-platform measurement; validates a deleted report claim. |
 | F39 | Add a direct regression test that walk_live reports the same size/mtime_ns as std::fs::metadata for a regular file | done | Non-blocking follow-up from review L; locks TOOL-02's byte-equivalence assumption against a future walkdir upgrade. Batch 1 (test hardening). Batch 1 reviewed; fix commit 62e6be61 (comment-only). |
-| F40 | Add a byte-dribble loopback test with a short injected deadline to pin that JSON_BODY_IDLE is a fixed window, not a per-byte resetting idle timer | open | Proposed by batch-1 review; only fixture that distinguishes the two semantics. |
-| F41 | In the stalled-body test, assert the retry budget is actually consumed (one request per attempt) rather than only hits >= 1 | open | Non-blocking suggestion from batch-1 review; low priority. |
-| F42 | Extend the F19 lying-declared-size scenario to the temp path's real-length re-check (capture_slice) | open | Non-blocking suggestion from batch-1 review; pins both downstream guards. |
-| F43 | Add a link counterpart to F39 asserting is_link and the target's size/mtime, gated for platform-specific junction behavior | open | Non-blocking suggestion from batch-1 review. |
-| F44 | Add an e2e test for directory-symlink dedup through the published-checksums path, asserting the exact path set and no double-counted file_count/total_bytes | open | Endorsed by batch-2 review, low priority; complements F32, soft-skips without symlink privilege. |
+| F40 | Add a byte-dribble loopback test with a short injected deadline to pin that JSON_BODY_IDLE is a fixed window, not a per-byte resetting idle timer | batched | Proposed by batch-1 review; only fixture that distinguishes the two semantics. Batch 3 (timeout & repair-path test hardening). |
+| F41 | In the stalled-body test, assert the retry budget is actually consumed (one request per attempt) rather than only hits >= 1 | dropped | Non-blocking suggestion from batch-1 review; low priority. Dropped by final pruning: low-priority assertion strengthening; pins no new contract. |
+| F42 | Extend the F19 lying-declared-size scenario to the temp path's real-length re-check (capture_slice) | batched | Non-blocking suggestion from batch-1 review; pins both downstream guards. Batch 3 (timeout & repair-path test hardening). |
+| F43 | Add a link counterpart to F39 asserting is_link and the target's size/mtime, gated for platform-specific junction behavior | dropped | Non-blocking suggestion from batch-1 review. Dropped by final pruning: conditional, platform-gated, low value. |
+| F44 | Add an e2e test for directory-symlink dedup through the published-checksums path, asserting the exact path set and no double-counted file_count/total_bytes | dropped | Endorsed by batch-2 review, low priority; complements F32, soft-skips without symlink privilege. Dropped by final pruning: low priority, soft-skips, complements done F32. |
 
 ## Persistent context
 
@@ -202,6 +202,9 @@ relevant task's `note` instead of silently proceeding):
   link flag. sled2redb is untouched: TOOL-18 is a validated stale skip (`write_records`
   already batches via `CacheWrite::maybe_commit` with a final commit and atomic
   NamedTempFile publish). See T24 note.
+- **Final follow-up pruning.** F41, F43 and F44 were dropped (low-priority,
+  redundant or platform-conditional). F40 and F42 survived as one bounded Batch 3
+  of test-only work; no new follow-ups were proposed.
 - **Follow-up batch 2 outcome.** F31, F32 and F37 are done (implementation
   9d79c13f, no fix needed). The F32 symlink e2e test soft-skips on hosts where
   `symlink_file` is denied (verified on the Windows runner), so a green run there is
