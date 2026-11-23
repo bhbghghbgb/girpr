@@ -128,26 +128,15 @@ pub fn write(
     //    files[].encoding` says which one is on disk.
     if detail == ManifestDetail::Full {
         let full = FullDecode::from_captured(captured);
-        // **Measured, then written.** Two things need the length — the
-        // `--gzip-threshold` rule and `files[].uncompressed_bytes` — and the
-        // file's *name* depends on the answer, so the length has to exist before
-        // the write starts. Hence the counting pass: a second walk over the decode
-        // that allocates nothing, in exchange for not holding a ~27 MB `String`
-        // plus its ~7 MB compressed copy alive at once for every manifest.
-        let uncompressed_bytes = crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
-        let gzipped = hash::should_gzip(uncompressed_bytes, gzip_threshold);
-        let (rel, encoding) = if gzipped {
-            (
-                format!("{}.json.gz", full_prefix(&tag, &field)),
-                Encoding::Gzip,
-            )
-        } else {
-            (
-                format!("{}.json", full_prefix(&tag, &field)),
-                Encoding::Identity,
-            )
-        };
-        crate::emit::write_json_gz(root, &rel, &full, gzipped)?;
+        // **Serialised once, then placed.** The length is needed before the
+        // write because the file's *name* depends on the gzip decision, and the
+        // same length goes into `files[].uncompressed_bytes`. Serialising to a
+        // temporary plain file gives both without a second walk over the decode:
+        // one CPU-heavy pass plus one plain-file disk pass, instead of two
+        // serialisations of a ~27 MB document.
+        let plain = format!("{}.json", full_prefix(&tag, &field));
+        let (rel, encoding, uncompressed_bytes) =
+            crate::emit::write_json_gz_counted(root, &plain, &full, gzip_threshold)?;
         out.push(StoredAs {
             path: rel,
             encoding,

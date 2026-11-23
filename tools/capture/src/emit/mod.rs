@@ -22,6 +22,7 @@ pub mod tree;
 use std::path::{Path, PathBuf};
 
 use crate::config::rel_path_string;
+use crate::hash::{self, Encoding};
 use crate::http::RequestLog;
 use crate::http::probe::{ErrorShapes, TagProbe};
 use crate::hyp::{self, Captured};
@@ -531,6 +532,82 @@ pub fn write_json_gz(
     Ok(path)
 }
 
+/// Removes a temporary file even when the operation that created it fails.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Serialize a JSON document **once** and place the final file from that copy.
+///
+/// The gzip decision needs the serialised length, and the length is not known
+/// until serialisation finishes — which is why the old path walked the whole
+/// decode twice: [`json_len`] counted it, then [`write_json_gz`] wrote it. Here
+/// the single serialisation goes to a temporary plain file in the same
+/// directory; its length decides the final name, and the final document is
+/// produced from that file (gzip) or by copying it (plain). The document is
+/// walked once, at the cost of one extra plain-file disk pass.
+///
+/// The temp file is removed on every path, including an error, so the bundle's
+/// file set and write order are unchanged. Its size is bounded by the
+/// serialised document, which the manifest ceiling already bounds.
+///
+/// **The bytes are the same as the two-pass path.** The plain form is the same
+/// `to_writer_pretty` output; the gzipped form feeds flate2 from a file in
+/// ordinary `copy` chunks instead of a `BufWriter` fed a token at a time, and
+/// flate2's output does not depend on input chunking (pinned by
+/// `gzip_bytes_do_not_depend_on_how_the_input_was_fed`).
+pub fn write_json_gz_counted(
+    root: &Path,
+    rel_plain: &str,
+    value: &impl serde::Serialize,
+    gzip_threshold: u64,
+) -> std::io::Result<(String, Encoding, usize)> {
+    let plain_path = root.join(rel_plain);
+    if let Some(dir) = plain_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp_path = root.join(format!("{rel_plain}.tmp"));
+    let tmp = std::fs::File::create(&tmp_path)?;
+    let _cleanup = RemoveOnDrop(tmp_path.clone());
+    {
+        let mut w = std::io::BufWriter::new(tmp);
+        serde_json::to_writer_pretty(&mut w, value)
+            .map_err(|e| std::io::Error::other(format!("serialise {rel_plain}: {e}")))?;
+        std::io::Write::flush(&mut w)?;
+    }
+    let count = std::fs::metadata(&tmp_path)?.len() as usize;
+    let gzipped = hash::should_gzip(count, gzip_threshold);
+    let (rel, encoding) = if gzipped {
+        (format!("{rel_plain}.gz"), Encoding::Gzip)
+    } else {
+        (rel_plain.to_string(), Encoding::Identity)
+    };
+    let final_path = root.join(&rel);
+    let mut reader = std::fs::File::open(&tmp_path)?;
+    if gzipped {
+        let mut enc = flate2::write::GzEncoder::new(
+            std::fs::File::create(&final_path)?,
+            flate2::Compression::default(),
+        );
+        std::io::copy(&mut reader, &mut enc)?;
+        enc.finish()?;
+    } else {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&final_path)?);
+        std::io::copy(&mut reader, &mut out)?;
+        std::io::Write::flush(&mut out)?;
+    }
+    debug_assert_eq!(
+        rel_path_string(root, &final_path),
+        rel,
+        "the path must round-trip"
+    );
+    Ok((rel, encoding, count))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +889,68 @@ mod tests {
             "the gzipped document does not decompress to the length that was measured"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The one-serialisation path must land exactly the same artifact bytes as
+    /// the two-pass path, in both encodings, and leave no temporary file in the
+    /// bundle for close-out to digest.
+    #[test]
+    fn counted_serialisation_writes_the_same_bytes_and_leaves_no_temp_file() {
+        let d = decode_fixture();
+        let claimed = json_len(&d, "the fixture").expect("json_len");
+
+        // Plain branch: a threshold above the body size keeps the `.json` name.
+        let plain_root = tmp("counted-plain");
+        let (rel, encoding, count) = write_json_gz_counted(
+            &plain_root,
+            "manifests/7.1.0/game.manifest.json",
+            &d,
+            10_000_000,
+        )
+        .expect("counted plain");
+        assert_eq!(rel, "manifests/7.1.0/game.manifest.json");
+        assert_eq!(encoding, Encoding::Identity);
+        assert_eq!(count, claimed);
+        let plain_reference = tmp("counted-plain-reference");
+        write_json_gz(&plain_reference, "game.manifest.json", &d, false).expect("reference");
+        assert_eq!(
+            std::fs::read(plain_root.join(&rel)).expect("read"),
+            std::fs::read(plain_reference.join("game.manifest.json")).expect("read reference")
+        );
+        assert!(
+            !plain_root
+                .join("manifests/7.1.0/game.manifest.json.tmp")
+                .exists(),
+            "the temporary file must not become a bundle document"
+        );
+
+        // Gzip branch: below the threshold it takes the `.json.gz` name, and
+        // flate2 must produce the same bytes from a file as from a BufWriter.
+        let gz_root = tmp("counted-gz");
+        let (rel, encoding, count) =
+            write_json_gz_counted(&gz_root, "manifests/7.1.0/game.manifest.json", &d, 0)
+                .expect("counted gzip");
+        assert_eq!(rel, "manifests/7.1.0/game.manifest.json.gz");
+        assert_eq!(encoding, Encoding::Gzip);
+        assert_eq!(count, claimed);
+        assert_eq!(
+            crate::hash::gunzip(&std::fs::read(gz_root.join(&rel)).expect("read")).expect("gunzip"),
+            serde_json::to_string_pretty(&d)
+                .expect("to_string_pretty")
+                .as_bytes()
+        );
+        let gz_reference = tmp("counted-gz-reference");
+        write_json_gz(&gz_reference, "game.manifest.json.gz", &d, true).expect("reference");
+        assert_eq!(
+            std::fs::read(gz_root.join(&rel)).expect("read"),
+            std::fs::read(gz_reference.join("game.manifest.json.gz")).expect("read reference")
+        );
+        assert!(
+            !gz_root
+                .join("manifests/7.1.0/game.manifest.json.tmp")
+                .exists(),
+            "the temporary file must not become a bundle document"
+        );
     }
 
     fn body(name: &str, endpoint: &'static str) -> CapturedBody {
