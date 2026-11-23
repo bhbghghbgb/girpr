@@ -409,6 +409,15 @@ fn choose_tier<'a>(
 ///
 /// Every byte written is hash-gated before it lands, and a staged source is a
 /// write's source: gate it here too.
+///
+/// The scan already verdicts each source range, but this hash is **not** a
+/// redundant second computation. The scan's `source_ok` describes the bytes at
+/// scan time; the bytes read here are the ones that will actually be written,
+/// read after the open, the optional discard/trim and the tier decision. The
+/// hash is folded into this single capture read — the bytes are read once and
+/// hashed while in hand — and is the TOCTOU re-check that keeps the "no byte is
+/// written from an unverified source" invariant. Dropping it in favour of the
+/// older verdict would weaken that guard, so it stays deliberately.
 fn stage_sources(
     file: &PlannedFile,
     sources: &[Option<u64>],

@@ -136,9 +136,15 @@ async fn repair_attempt_inner(
         "tmp resume point"
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
-    // One scratch buffer for this file: every reuse hash and copy reuses it
-    // instead of allocating a fresh 512 KiB buffer per chunk.
+    // One scratch buffer for this file: every reuse copy reuses it instead of
+    // allocating a fresh 512 KiB buffer per chunk.
     let mut scratch = Vec::new();
+    // One capture buffer for this file, grown to one chunk's length at a time
+    // and reused across chunks. A reuse slice is read once into this buffer;
+    // its digest and the copy that follows both consume the bytes already in
+    // memory. The bound is a single chunk, held only until its copy lands, so
+    // the staging RAM is one slice rather than one slice per chunk.
+    let mut slice_buf = Vec::new();
     // The reuse source is the same file for every chunk, so one lazily opened
     // handle serves them all. A failed read drops it, and the next chunk may
     // open the path once more instead of failing the file.
@@ -153,6 +159,7 @@ async fn repair_attempt_inner(
             reuse_entries,
             out: &mut f,
             scratch: &mut scratch,
+            slice_buf: &mut slice_buf,
             src_handle: &mut src_handle,
             tmp_len: &mut tmp_len,
             writes: &mut *writes,
@@ -328,9 +335,79 @@ struct ReuseCall<'a, W: Write + Seek> {
     reuse_entries: Option<&'a FileReuse>,
     out: &'a mut W,
     scratch: &'a mut Vec<u8>,
+    /// The whole-slice staging buffer, reused across chunks.
+    slice_buf: &'a mut Vec<u8>,
     src_handle: &'a mut Option<File>,
     tmp_len: &'a mut u64,
     writes: &'a mut FileWrites,
+}
+
+/// How the single capture read of a reuse slice ended.
+enum SliceCapture {
+    /// The whole slice was read into the staging buffer.
+    Complete,
+    /// The source ended before the slice did. The bytes read are still in the
+    /// buffer; the caller must not treat them as a verified slice.
+    Short { have: u64, want: u64 },
+    /// A seek or read failed. The concrete `io::Error` is kept so the caller
+    /// can surface it instead of collapsing it to "no candidate".
+    Failed(std::io::Error),
+}
+
+/// Read a reuse slice once, into `buf`, and report how it ended.
+///
+/// The old path hashed the slice with `md5_reader_slice_digest` and then sought
+/// back and read the same bytes again for the copy. Here one read fills the
+/// staging buffer; the digest and the copy both consume those bytes, so a
+/// reused slice costs one source read. The buffer is grown at most to one
+/// chunk's declared length, so the extra RAM is bounded to a single slice and
+/// is released for the next chunk by `clear`.
+fn capture_slice<R: Read + Seek>(
+    sf: &mut R,
+    offset: u64,
+    len: u64,
+    buf: &mut Vec<u8>,
+) -> SliceCapture {
+    if let Err(e) = sf.seek(SeekFrom::Start(offset)) {
+        return SliceCapture::Failed(e);
+    }
+    let want = match usize::try_from(len) {
+        Ok(n) => n,
+        // An unrepresentable length is a corrupt manifest, not an I/O error:
+        // report it as a short slice so the caller falls back to a download
+        // whose reservation is bounded by the run's ceilings.
+        Err(_) => {
+            return SliceCapture::Short { have: 0, want: len };
+        }
+    };
+    if buf.try_reserve_exact(want).is_err() {
+        return SliceCapture::Short { have: 0, want: len };
+    }
+    buf.clear();
+    let mut remaining = len;
+    while remaining > 0 {
+        let piece = (remaining as usize).min(COPY_BUF);
+        let start = buf.len();
+        buf.resize(start + piece, 0);
+        match sf.read(&mut buf[start..start + piece]) {
+            Ok(0) => {
+                buf.truncate(start);
+                return SliceCapture::Short {
+                    have: len - remaining,
+                    want: len,
+                };
+            }
+            Ok(n) => {
+                buf.truncate(start + n);
+                remaining -= n as u64;
+            }
+            Err(e) => {
+                buf.truncate(start);
+                return SliceCapture::Failed(e);
+            }
+        }
+    }
+    SliceCapture::Complete
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
@@ -373,49 +450,74 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
             match File::open(call.src).with_context(|| format!("open {}", call.src.display())) {
                 Ok(sf) => sf,
                 Err(e) => {
-                    tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                    // An unreadable source is not "no candidate": it is an I/O
+                    // failure worth surfacing. Keep the concrete error text and
+                    // the download fallback, but do not hide the cause at debug.
+                    tracing::warn!(
+                        chunk = %c.id,
+                        path = %call.src.display(),
+                        error = %format!("{e:#}"),
+                        "reuse source cannot be opened -> download"
+                    );
+                    diagnostics::record_reuse_io_fallback();
                     return Ok(ChunkOutcome::Download);
                 }
             }
         }
     };
-    let digest = match util::md5::md5_reader_slice_digest(
+    // One source read for both the digest and the copy. The old code hashed the
+    // slice, sought back and read it a second time; here the bytes land in a
+    // per-file staging buffer that both passes consume.
+    let digest = match capture_slice(
         &mut sf,
         ro as u64,
         c.uncompressed_size as u64,
-        &mut *call.scratch,
+        &mut *call.slice_buf,
     ) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+        SliceCapture::Complete => util::md5::md5_digest(call.slice_buf),
+        SliceCapture::Short { have, want } => {
+            // A truncated source is still readable, so keep the handle for the
+            // next chunk; only a failed read or seek drops it.
+            *call.src_handle = Some(sf);
+            tracing::info!(
+                chunk = %c.id,
+                src_offset = ro,
+                have,
+                want,
+                "reuse slice is short -> download"
+            );
+            diagnostics::record_reuse_io_fallback();
+            return Ok(ChunkOutcome::Download);
+        }
+        SliceCapture::Failed(e) => {
+            tracing::warn!(
+                chunk = %c.id,
+                src_offset = ro,
+                error = %format!("{e:#}"),
+                "reuse slice cannot be read -> download"
+            );
+            diagnostics::record_reuse_io_fallback();
             return Ok(ChunkOutcome::Download);
         }
     };
     if !digest.matches_hex(&c.uncompressed_md5) {
         *call.src_handle = Some(sf);
+        // The expected outcome: this candidate simply does not hold the
+        // chunk's bytes. Debug is right here, unlike the I/O cases above.
         tracing::debug!(chunk = %c.id, slice_md5 = %digest, "reuse slice md5 mismatch -> download");
         return Ok(ChunkOutcome::Download);
     }
     tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-    // The same handle: seek back to the slice start and copy the bytes that
-    // were just verified, instead of opening `src` again.
-    if let Err(e) = sf.seek(SeekFrom::Start(ro as u64)) {
-        // Leave the handle slot empty, the way a failed read does: a seek that
-        // failed means this handle cannot be trusted to position the next
-        // slice, so the next chunk opens the path once more rather than
-        // reusing a bad handle. Restoring it here would only change the retry
-        // path, not the outcome — the chunk is downloaded either way.
-        tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-        return Ok(ChunkOutcome::Download);
-    }
     // Position the sink only on the copy path. The download path does not need
     // it: `write_downloaded_chunk` builds a `ChunkFileSink`, whose constructor
-    // seeks this same file to the chunk's offset before the stream starts.
+    // seeks this same file to the chunk's offset before the stream starts. The
+    // bytes come from the staging buffer now, so there is no seek back on the
+    // source and no second read of the slice.
     call.out.seek(SeekFrom::Start(c.offset as u64))?;
     match copy_reuse_pieces(
         call.ctx,
         &mut *call.writes,
-        &mut sf,
+        &mut &call.slice_buf[..],
         &mut *call.out,
         &mut *call.scratch,
         c,
@@ -846,6 +948,7 @@ mod tests {
     struct ReuseState<'a> {
         ctx: &'a FileCtx,
         scratch: Vec<u8>,
+        slice_buf: Vec<u8>,
         src_handle: Option<File>,
         tmp_len: u64,
         writes: FileWrites,
@@ -856,6 +959,7 @@ mod tests {
             Self {
                 ctx,
                 scratch: Vec::new(),
+                slice_buf: Vec::new(),
                 src_handle: None,
                 tmp_len: 0,
                 writes: FileWrites::default(),
@@ -879,6 +983,7 @@ mod tests {
                 reuse_entries: None,
                 out,
                 scratch: &mut self.scratch,
+                slice_buf: &mut self.slice_buf,
                 src_handle: &mut self.src_handle,
                 tmp_len: &mut self.tmp_len,
                 writes: &mut self.writes,
@@ -961,6 +1066,39 @@ mod tests {
             buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
             self.pos += n;
             Ok(n)
+        }
+    }
+
+    /// A reader that records every seek and every byte handed back, so a test
+    /// can tell a single capture read from the old hash-then-seek-back pair.
+    struct CountingReader<'a> {
+        file: &'a mut File,
+        seeks: Vec<SeekFrom>,
+        bytes_read: u64,
+    }
+
+    impl<'a> CountingReader<'a> {
+        fn new(file: &'a mut File) -> Self {
+            Self {
+                file,
+                seeks: Vec::new(),
+                bytes_read: 0,
+            }
+        }
+    }
+
+    impl Read for CountingReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.file.read(buf)?;
+            self.bytes_read += n as u64;
+            Ok(n)
+        }
+    }
+
+    impl Seek for CountingReader<'_> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks.push(pos);
+            self.file.seek(pos)
         }
     }
 
@@ -1159,6 +1297,105 @@ mod tests {
         );
         out.flush().unwrap();
         assert_eq!(std::fs::read(&out_path).unwrap(), source);
+    }
+
+    /// IO-02: a reuse slice is captured in one read. The old path hashed the
+    /// slice, sought back and read it again to copy it; the capture helper now
+    /// seeks once to the slice start and hands back exactly the slice's bytes,
+    /// which both the digest and the copy consume.
+    #[test]
+    fn a_reuse_slice_is_captured_in_one_read() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "capture_once");
+        let src = dir.join("source.bin");
+        let size = COPY_BUF + 4;
+        let source: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &source).unwrap();
+        let mut file = File::open(&src).unwrap();
+        let mut reader = CountingReader::new(&mut file);
+        let mut buf = Vec::new();
+
+        let outcome = capture_slice(&mut reader, 0, size as u64, &mut buf);
+
+        assert!(matches!(outcome, SliceCapture::Complete));
+        assert_eq!(
+            reader.seeks,
+            vec![SeekFrom::Start(0)],
+            "one seek to the slice start, no seek-back for a second pass"
+        );
+        assert_eq!(
+            reader.bytes_read, size as u64,
+            "the slice is read exactly once"
+        );
+        assert_eq!(buf, source, "the single read captured the whole slice");
+    }
+
+    /// A short source is a failure condition, not a digest to trust: it is
+    /// reported with how much was actually available, and it still costs only
+    /// the one read.
+    #[test]
+    fn a_short_reuse_source_is_reported_without_a_second_read() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "capture_short");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123").unwrap();
+        let mut file = File::open(&src).unwrap();
+        let mut reader = CountingReader::new(&mut file);
+        let mut buf = Vec::new();
+
+        let outcome = capture_slice(&mut reader, 0, 8, &mut buf);
+
+        assert!(matches!(outcome, SliceCapture::Short { have: 4, want: 8 }));
+        assert_eq!(reader.seeks.len(), 1, "a short slice does not seek back");
+        assert_eq!(reader.bytes_read, 4, "only the available bytes were read");
+    }
+
+    /// COR-04: an unreadable reuse source is an unexpected I/O failure and is
+    /// recorded in the structured diagnostics; the ordinary MD5 mismatch is
+    /// the expected "candidate did not verify" outcome and is not counted.
+    #[test]
+    fn unexpected_reuse_io_fallbacks_are_recorded_but_digest_mismatches_are_not() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_diag");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 0, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 0);
+        let out_path = dir.join("out.bin");
+        let ctx = test_ctx();
+        let _ = diagnostics::take();
+
+        {
+            let mut file = temp_out(&out_path);
+            let mut out = SeekRecording::new(&mut file);
+            let mismatching = chunk_at("c0", "00000000000000000000000000000000", 0, 4);
+            let mut state = ReuseState::new(&ctx);
+            let outcome =
+                try_reuse_slice(&mut state.call(&src, &mismatching, &mut out).with_reuse(&reuse))
+                    .unwrap();
+            assert!(matches!(outcome, ChunkOutcome::Download));
+        }
+        assert_eq!(
+            diagnostics::take().reuse_io_fallbacks,
+            0,
+            "an MD5 mismatch is expected and stays at debug"
+        );
+
+        {
+            let mut file = temp_out(&out_path);
+            let mut out = SeekRecording::new(&mut file);
+            let c = chunk_at("c1", &md5, 0, 4);
+            let mut state = ReuseState::new(&ctx);
+            let outcome = try_reuse_slice(
+                &mut state
+                    .call(&dir.join("missing.bin"), &c, &mut out)
+                    .with_reuse(&reuse),
+            )
+            .unwrap();
+            assert!(matches!(outcome, ChunkOutcome::Download));
+        }
+        assert_eq!(
+            diagnostics::take().reuse_io_fallbacks,
+            1,
+            "an unreadable source is surfaced"
+        );
     }
 
     /// A read error and a short slice both send the chunk to the download, but

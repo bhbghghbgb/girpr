@@ -49,6 +49,11 @@ pub struct RepairDiagnostics {
     pub dead_tail_trimmed: bool,
     /// The trim was deferred because a reuse candidate reaches past the end.
     pub trim_deferred: bool,
+    /// An unexpected I/O failure on the temp reuse path (open, seek, read, or
+    /// a short source) fell back to a download. The expected MD5 mismatch is
+    /// deliberately not counted: it is the ordinary "candidate did not verify"
+    /// outcome, not a failure worth surfacing.
+    pub reuse_io_fallbacks: u64,
 }
 
 /// Records by originating thread. Keyed by thread rather than held in TLS
@@ -140,4 +145,9 @@ pub(crate) fn record_dead_tail_trimmed() {
 /// Record that the trim was deferred to the end.
 pub(crate) fn record_trim_deferred() {
     with_record(|d| d.trim_deferred = true);
+}
+
+/// Record an unexpected reuse-path I/O failure that fell back to a download.
+pub(crate) fn record_reuse_io_fallback() {
+    with_record(|d| d.reuse_io_fallbacks += 1);
 }
