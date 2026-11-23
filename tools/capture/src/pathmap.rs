@@ -128,6 +128,20 @@ impl PathMap {
 mod tests {
     use super::*;
 
+    /// The interior mutability is a `Mutex<BTreeMap<..>>`: `Mutex<T>` is `Sync`
+    /// when `T: Send` and `BTreeMap<String, String>` is `Send`, so `PathMap` is
+    /// safe to share by reference across parallel workers. `document()` takes
+    /// the same lock and iterates the `BTreeMap` in key order, so even concurrent
+    /// `record()` calls produce a byte-identical document. Capture's assembly
+    /// keeps the writes on one thread today; this pins that the shared state
+    /// would be sound if that ever changes.
+    #[test]
+    fn path_map_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PathMap>();
+        assert_send_sync::<PathMapDocument>();
+    }
+
     #[test]
     fn a_device_component_is_recorded_with_its_logical_spelling() {
         let map = PathMap::new();
