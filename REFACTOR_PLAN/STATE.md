@@ -16,8 +16,8 @@ machine data or change log.
 | T01 | Right-size the Tokio runtime and move repair file I/O off async workers | completed | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). Reviewed A: no fix/revert needed. |
 | T02 | Fetch and decode chunks within one file in a bounded window | completed | e385b8dd | §2 S-03 (143–157); assumption 2 (841–842). Scoped to in-place Staged tier with disjoint layout; salvage/Ordered, overlapping layouts and temp stay sequential (temp resume-by-length/rollback couples writes). Ceiling ledger CAS settles out of order exactly; per-chunk wire counts change on failure (siblings still fetched); RAM contract unchanged. |
 | T03 | Run the three independent plan-phase network fetches concurrently | completed | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
-| T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | pending_review | ff48e189 | §2 S-05 (173–185); assumptions (183–184) hold. Walk stays serial; stat/delete parallel via bounded scoped threads (no new dependency); results in index slots, log lines emitted on caller thread in plan order; empty-dir sweep after all deletes. DirEntry carried into stat stage to keep Windows cached metadata (no extra syscall); tracing dispatcher is thread-local so scoped workers cannot log. |
-| T05 | Eliminate the duplicate plan/scan per-file stat pass | pending_review | 0b4031c5 | §2 S-06 (186–198). Reuse of scan data into DiskFigure::Measured rejected: scan uses follow-symlink `metadata` + bytes-read length, plan needs `symlink_metadata` is_file/length (classification + verdict mtime guard). Chose genuine overlap: plan stat task launched before scan awaited, JoinHandle held in PlanWork and awaited after limits gate; aborted on limit refusal. Relevant to T06. |
+| T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | completed | ff48e189 | §2 S-05 (173–185); assumptions (183–184) hold. Walk stays serial; stat/delete parallel via bounded scoped threads (no new dependency); results in index slots, log lines emitted on caller thread in plan order; empty-dir sweep after all deletes. DirEntry carried into stat stage to keep Windows cached metadata (no extra syscall); tracing dispatcher is thread-local so scoped workers cannot log. |
+| T05 | Eliminate the duplicate plan/scan per-file stat pass | completed | 0b4031c5 | §2 S-06 (186–198). Reuse of scan data into DiskFigure::Measured rejected: scan uses follow-symlink `metadata` + bytes-read length, plan needs `symlink_metadata` is_file/length (classification + verdict mtime guard). Chose genuine overlap: plan stat task launched before scan awaited, JoinHandle held in PlanWork and awaited after limits gate; aborted on limit refusal. Relevant to T06. |
 | T06 | Reuse scan verdicts and remove double reads in the repair path | todo | | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849) |
 | T07 | Add validated path joins and cache canonicalization | todo | | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) |
 | T08 | Remove redundant post-phase mkdir syscalls and materialization | todo | | §3 IO-07/IO-08 (277–293) |
@@ -48,6 +48,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 |----|------------------|-------|------|
 | A | T01 | done | No fix/revert needed; offload committed before runtime shrink and tests pass. Endorsed follow-up: stress test above blocking-pool cap; dropped: --jobs help clarification. |
 | B | T02, T03 | done | No fix/revert needed. Endorsed stress case with per-chunk timing and conditional deprecated prefetch deferral; dropped temp-mode windowing. |
+| C | T04, T05 | done | No fix/revert needed. Endorsed purge-scale measurement; endorsed scan-probe sharing only if folded into T06. |
 
 ## Follow-ups
 
@@ -62,6 +63,8 @@ planning review batches the survivors only after every task is settled.
 | F03 | Add a many-small-chunks end-to-end stress case with per-chunk timing to confirm real network/decompression overlap from the T02 window, not just structural correctness | open | Endorsed by review B; temp-mode windowing extension (its resume-by-length/rollback coupling) dropped. |
 | F04 | Conditionally defer the deprecated prefetch when `path_scope.has_includes()` is active, restoring the "no advisory request on scope typo" property while keeping overlap in the common unscoped case | open | Endorsed by review B; low priority — the extra advisory request is harmless, usage error/message unchanged. |
 | F05 | Validate peak RSS under high `--jobs` with the 4x per-file decoder window to confirm tight `--max-ram-bytes` ceilings are not pressured by transient decoder scratch | open | Non-blocking validation follow-up from review B. |
+| F06 | Measure purge wall time at scale (10k+ orphans, SSD/HDD, both platforms) before claiming a cross-platform speedup | open | Endorsed by review C; on Windows the stat stage issues no syscall (cached DirEntry metadata), so only delete benefits there. |
+| F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | open | Endorsed by review C but fold into T06, not standalone; requires identical verdict `modified`/`file_len` guard semantics and symlink/dir classification. |
 
 ## Persistent context
 
@@ -150,6 +153,15 @@ relevant task's `note` instead of silently proceeding):
   would change symlink/dir → temp classification and verdict-trust semantics. T05
   therefore overlaps the two blocking tasks rather than merging them; T06 must keep
   the `symlink_metadata` source for the mode decision. See T05 note.
+- **Plan-work API after T05 (feeds T06).** `publish_plan(ctx, &work)` no longer takes
+  `game_dir`/`root` nor computes figures; it consumes `work.disk`, computed and awaited
+  in `build_and_assert_plan` (`PlanWork` gained `disk: Option<DiskPlan>`). Later tasks
+  touching that call site must preserve this.
+- **Purge threads after T04 (feeds T16).** Purge stat/delete run on scoped threads with
+  a thread-local tracing dispatcher; new purge diagnostics must be emitted on the caller
+  thread via index slots, not from workers. On Windows the stat stage reads cached
+  `DirEntry` metadata (no syscall), so any speedup there comes only from deletes.
+  See T04 note.
 - **Plan-phase fetch API after T03.** `src/repair/phases/manifest.rs` exports
   `ManifestBudget` (shared 4-permit semaphore); `fetch_latest` / `local_reuse_map` take
   it, and `PlanInputs` has a `deprecated` field. T11/T12 fetch work must build on this.
