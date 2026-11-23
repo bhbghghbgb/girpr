@@ -67,6 +67,52 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
 }
 
 #[tokio::test]
+async fn print_plan_with_scan_keeps_disk_figures_from_the_target_stat() {
+    // The disk figures are computed by a blocking pass that runs alongside the
+    // scan. The scan follows symlinks and uses the length it read; neither may
+    // leak into the plan's mode/extra_bytes, which come from the disk plan's
+    // `symlink_metadata` probe. A directory where a file should be is not a
+    // regular file: it takes the temp path even under `--scan`, charged whole.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_disk_with_scan");
+    let fx2 = build_fixture();
+    // foo.dat present and full size -> in place, no extra space needed.
+    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data);
+    // bar.dat is a directory, not a file -> temp path, the whole file charged.
+    std::fs::create_dir_all(dir.join(&fx2.files[1].rel)).expect("dir fixture");
+
+    let out = dir.join("plan.json");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.scan = true;
+    ctx.print_plan = true;
+    ctx.plan_out = Some(out.clone());
+    let (_summary, code) = run(ctx).await.expect("print-plan with scan runs");
+    assert_eq!(code, RunExit::Success);
+
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let entries = v["repair"].as_array().unwrap();
+    let foo = entries
+        .iter()
+        .find(|e| e["rel"] == "game/foo.dat")
+        .expect("foo.dat is planned");
+    assert_eq!(foo["mode"], "inplace");
+    assert_eq!(foo["extra_bytes"], 0);
+    let bar = entries
+        .iter()
+        .find(|e| e["rel"] == "game/bar.dat")
+        .expect("bar.dat is planned");
+    assert_eq!(
+        bar["mode"], "temp",
+        "a directory target takes the temp path under --scan"
+    );
+    assert_eq!(bar["extra_bytes"], 48, "the whole file is charged");
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn print_plan_reports_the_plan_and_writes_nothing() {
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;

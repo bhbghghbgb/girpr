@@ -248,7 +248,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // in-install `--plan-out` is not among them: `--purge-before` executes that
     // exact pre-flight set and leaves the document in place, while the
     // post-repair re-plan sees it as any other extra file.
-    publish_plan(ctx, &game_dir, root.as_ref(), &work).await?;
+    publish_plan(ctx, &work).await?;
     if ctx.print_plan {
         return Ok(PlanOutcome::Finished(RunExit::Success));
     }
@@ -279,6 +279,10 @@ struct PlanWork {
     /// The per-file download estimate, owned by the `girpr-repair-plan` leaf.
     /// One derivation feeds both the `PLAN` total and the `--plan-out` document.
     estimate: DownloadEstimate,
+    /// The disk figures, computed by a blocking task started alongside the scan
+    /// so its per-file stat pass overlaps the scan's reads instead of following
+    /// them. `None` when neither `--print-plan` nor `--plan-out` needs them.
+    disk: Option<scope::report::DiskPlan>,
 }
 
 /// Steps 1 + 2 of the plan half: local state and server metadata, then the
@@ -434,6 +438,35 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
     }
 
+    // The disk figures stat every planned file, and under `--scan` the scan
+    // stats the same files as it reads them. Start the disk pass as a blocking
+    // task before the scan so the two O(n) passes overlap on the blocking pool
+    // instead of running back to back. They cannot share one stat: the scan
+    // follows symlinks for a modification-time guard and uses the length it
+    // read, while the disk plan uses `symlink_metadata` for the symlink/dir →
+    // temp decision and the on-disk length. Only their wall-clock overlaps;
+    // every figure keeps the probe that gives it the right meaning.
+    let disk_handle = (ctx.print_plan || ctx.plan_out.is_some()).then(|| {
+        let disk_game_dir = game_dir.to_path_buf();
+        let disk_root = root.cloned();
+        let disk_plan = Arc::clone(&plan);
+        let repair_mode = ctx.repair_mode;
+        let jobs = ctx.jobs;
+        // Raw `spawn_blocking`: `DiskPlan::new` emits only best-effort
+        // warnings (a rel that escapes the install, a file that cannot be
+        // stat'd). No test drives them through this spawn site; a test that
+        // needed to would use `spawn_blocking_traced`.
+        tokio::task::spawn_blocking(move || {
+            scope::report::DiskPlan::new(
+                &disk_game_dir,
+                disk_root.as_ref(),
+                &disk_plan,
+                repair_mode,
+                jobs,
+            )
+        })
+    });
+
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
 
     // The estimate is a pure computation; the summary values it derives are
@@ -451,8 +484,25 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
     summary.files_total = plan_summary.files_total;
     summary.flags.limited = plan_summary.limited;
     if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
+        // A refusal never publishes a plan; do not leave the speculative disk
+        // pass running on the pool after we return.
+        if let Some(handle) = &disk_handle {
+            handle.abort();
+        }
         return Ok(None);
     }
+
+    // The scan (if any) has finished; the disk task has been running alongside
+    // it. Await it here, still before anything is written, so its figures are
+    // ready to publish without a second stat pass.
+    let disk = match disk_handle {
+        Some(handle) => Some(handle.await.map_err(|e| {
+            RunFailure::write(anyhow::anyhow!(
+                "disk planning task failed before any write: {e}"
+            ))
+        })?),
+        None => None,
+    };
 
     Ok(Some(PlanWork {
         plan,
@@ -461,6 +511,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         deprecated,
         scan,
         estimate,
+        disk,
     }))
 }
 
@@ -673,58 +724,27 @@ fn within_limits(
 /// the `--plan-out` document. Compute it when either was asked for, so the
 /// document is written for a run that does the work as well as for
 /// `--print-plan`.
-#[allow(clippy::expect_used)] // each `disk` use is inside the branch that computed it
-async fn publish_plan(
-    ctx: &RunCtx,
-    game_dir: &Path,
-    root: Option<&util::PathRoot>,
-    work: &PlanWork,
-) -> Result<(), RunFailure> {
+#[allow(clippy::expect_used)] // each `disk` use is under a flag that made `build_and_assert_plan` compute it
+async fn publish_plan(ctx: &RunCtx, work: &PlanWork) -> Result<(), RunFailure> {
     let plan = &work.plan;
     let purge_plan = work.purge_plan.as_ref();
     let scan = work.scan.as_deref();
     let est_download_by_file = &work.estimate.by_file;
     let est_download_bytes = work.estimate.bytes;
+    // The figures were computed by a blocking task started alongside the scan
+    // (see `build_and_assert_plan`); publishing itself is now just the two
+    // consumers folding the same table. No per-file stat happens here.
+    let disk = work.disk.as_ref();
     // Publishing only costs anything when it produces a plan; an ordinary run's
     // call is a no-op and must not add a zero-duration line.
     let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
-    let disk = if ctx.print_plan || ctx.plan_out.is_some() {
-        let disk_game_dir = game_dir.to_path_buf();
-        let disk_root = root.cloned();
-        let disk_plan = Arc::clone(plan);
-        let repair_mode = ctx.repair_mode;
-        let jobs = ctx.jobs;
-        // Raw `spawn_blocking`: `DiskPlan::new` emits only best-effort
-        // warnings (a rel that escapes the install, a file that cannot be
-        // stat'd). No test drives them through this spawn site; a test that
-        // needed to would use `spawn_blocking_traced`.
-        Some(
-            tokio::task::spawn_blocking(move || {
-                scope::report::DiskPlan::new(
-                    &disk_game_dir,
-                    disk_root.as_ref(),
-                    &disk_plan,
-                    repair_mode,
-                    jobs,
-                )
-            })
-            .await
-            .map_err(|e| {
-                RunFailure::write(anyhow::anyhow!(
-                    "disk planning task failed before any write: {e}"
-                ))
-            })?,
-        )
-    } else {
-        None
-    };
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
             plan,
             purge_plan,
             est_download_bytes,
             ctx.path_scope.is_active(),
-            disk.as_ref().expect("the print-plan branch asks for it"),
+            disk.expect("the print-plan branch asks for it"),
             scan.map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
@@ -741,7 +761,7 @@ async fn publish_plan(
             plan,
             purge_plan,
             est_download_by_file,
-            disk.as_ref().expect("the plan-out branch asks for it"),
+            disk.expect("the plan-out branch asks for it"),
         );
         doc.write_to(Path::new(out))
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
