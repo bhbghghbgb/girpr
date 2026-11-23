@@ -26,9 +26,9 @@ machine data or change log.
 | T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | completed | 76daf1ce | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) validated on capture (9 MB GETs take 11 s; all JSON responses 200). 10 s connect + 30 s idle on JSON reads (no blanket total); status check in both JSON paths, non-2xx classified Fatal (pinned 500 test); body-read Retry, wrapper-parse Fatal, data:null -> SophonNotFound. MIC-12 not needed (already in-place retain_mut); stream.rs untouched (T09-owned); tokio `time` feature added as normal dep. |
 | T12 | Validate reuse offsets and parse digests once | completed | 65ef8db6, 9b5eabdf | §6 COR-03 (442–451); §8 MIC-01/08/11 (564–573, 610–613, 624–629). COR-03: offset/size >= 0 and checked_add against manifest-declared `f.size`, warn+skip; `.max(0)` clamp removed. MIC-01/08: new `Md5::try_parse_hex -> Option` (parse_hex keeps identical errors); "parse once at decode" half already satisfied. MIC-11: XOR of two digest halves replaces DefaultHasher; bucket/collision-confirmation unchanged. stream.rs untouched (T09/T11). |
 | T13 | Reuse hash scratch buffers and tighten range handling | completed | 3e301c80, 4b3998ae | §4 MEM-03/04 (320–336); §8 MIC-09/10 (614–623). Thread-local reusable 512 KiB hash scratch; read_to_end into reserved spare capacity (no unsafe — workspace denies unsafe_code; read_buf unstable on pinned 1.100). MIC-10 finalizes range Md5 once; MIC-09 already-sorted fast path (not cross-crate pre-sort — public scan API accepts arbitrary order). Report's mod.rs zero-fill pointer now resolves to temp.rs::capture_slice; scratch_slice in file/mod.rs left unchanged (already reused). 4 equivalence tests added. |
-| T14 | Classify lock and directory failures correctly | pending_review | e604bb45, dc3f9cfd | §6 COR-01 (417–428); assumption 10 (864–866) validated in-repo (two lock test assertions + 3 docs updated; no CLI-contract pin; external automation unverifiable). Deviation: lock contention uses existing `RunFailure::write` (exit 3), not a new code, preserving the pinned exit-code table; held() chain names the holder. create_dir_all failure -> write (exit 3) with `ctx.game_dir` path. app/lock untouched. |
-| T15 | Fix stale scan/check verdicts, surface scan failures, close tmp TOCTOU | pending_review | 56a1c625, c4f21a4c | §6 COR-02/COR-05/COR-08 (429–441, 464–472, 496–504); assumption 9 (862–863). Partially implemented: COR-02 documented, not changed — --check-only --scan is a deliberate plan-answer check (verified by commit d046eb54 and a_scanned_check_uses_the_scan_digest_but_still_checks_the_length); COR-05 adds ScanReport::failures + scan_failed(), surfaced on the scan-phase tracing line (not PLAN stdout) with estimates unchanged. COR-08 SKIPPED: no portable safe handle-relative rename (std has no File::rename; Linux no rename-by-fd; Windows needs FFI but workspace denies unsafe_code) — promote_tmp left path-based. Reviewer to decide final state. |
-| T16 | Move scope-typo refusal earlier and surface purge diagnostics | pending_review | 9923b4c9 | §6 COR-06/COR-07/COR-09 (474–512). Early check_scope_selection after build_plan for !purge_wanted (before walk); full post-walk check retained for purge runs. SUMMARY gains conditional numeric purge_errors=N / purge_hidden=N (only when non-zero) via existing Extra::Num path — T16's sole data-plane exception. Deviation: no hidden-byte counter exists, so purge_hidden is a path count, documented as such. plan_work_and_purge gained private purge_wanted: bool. Strict refusal not added. |
+| T14 | Classify lock and directory failures correctly | completed | e604bb45, dc3f9cfd | §6 COR-01 (417–428); assumption 10 (864–866) validated in-repo (two lock test assertions + 3 docs updated; no CLI-contract pin; external automation unverifiable). Deviation: lock contention uses existing `RunFailure::write` (exit 3), not a new code, preserving the pinned exit-code table; held() chain names the holder. create_dir_all failure -> write (exit 3) with `ctx.game_dir` path. app/lock untouched. |
+| T15 | Fix stale scan/check verdicts, surface scan failures, close tmp TOCTOU | completed | 56a1c625, c4f21a4c | §6 COR-02/COR-05/COR-08 (429–441, 464–472, 496–504); assumption 9 (862–863). Partially implemented: COR-02 documented, not changed — --check-only --scan is a deliberate plan-answer check (verified by commit d046eb54 and a_scanned_check_uses_the_scan_digest_but_still_checks_the_length); COR-05 adds ScanReport::failures + scan_failed(), surfaced on the scan-phase tracing line (not PLAN stdout) with estimates unchanged. COR-08 SKIPPED: no portable safe handle-relative rename (std has no File::rename; Linux no rename-by-fd; Windows needs FFI but workspace denies unsafe_code) — promote_tmp left path-based. Reviewed H: completed (partial with one validated skip — do not re-validate mtime/re-hash or use unsafe FFI). |
+| T16 | Move scope-typo refusal earlier and surface purge diagnostics | completed | 9923b4c9 | §6 COR-06/COR-07/COR-09 (474–512). Early check_scope_selection after build_plan for !purge_wanted (before walk); full post-walk check retained for purge runs. SUMMARY gains conditional numeric purge_errors=N / purge_hidden=N (only when non-zero) via existing Extra::Num path — T16's sole data-plane exception. Deviation: no hidden-byte counter exists, so purge_hidden is a path count, documented as such. plan_work_and_purge gained private purge_wanted: bool. Strict refusal not added. |
 | T17 | Reduce logging cost without changing the data plane | todo | | §7 LOG-01..03 (517–559); assumptions 11–12 (867–871) |
 | T18 | Low-risk micro-optimization sweep | todo | | §8 MIC-02/03/06/07 (574–589, 600–609); §4 MEM-02 (309–319) |
 | T19 | Cut allocations in gircap's HTTP recording pipeline | todo | | §9 TOOL-01/07/08/09/10 (643–652, 691–715); assumption 14 (875–877) |
@@ -53,6 +53,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | E | T07, T08 | done | No fix/revert needed. Endorsed CleanRel newtype, install-scale syscall measurement, and audio-cache scale measurement. |
 | F | T09, T10, T11 | done | No fix/revert needed. All four suggested follow-ups endorsed; the high-jobs poll check folded into F01/F02. |
 | G | T12, T13 | done | No fix/revert needed. Dropped Sha256 symmetry; endorsed five other follow-ups (mostly low/conditional priority). |
+| H | T14, T15, T16 | done | No fix/revert needed. T15 resolved completed with COR-08 a validated skip; dedicated exit code dropped; five other follow-ups endorsed. |
 
 ## Follow-ups
 
@@ -81,6 +82,11 @@ planning review batches the survivors only after every task is settled.
 | F17 | Convert `file/mod.rs` `scratch_slice`/piece-copy loops to spare-capacity reads | open | Endorsed by review G conditionally (low priority) — only if the one-time-per-file 512 KiB fill proves measurable. |
 | F18 | Consider task-owned rather than thread-local hash buffers if 512 KiB per blocking-pool thread becomes a concern | open | Endorsed by review G conditionally (low priority); revisit with RSS evidence. |
 | F19 | Add a unit test that a lying declared `f.size` (larger than the real file) cannot turn a bad reuse offset into an intact verdict | open | Non-blocking follow-up from review G; existing tests cover negative/overflow/past-declared-EOF, not declared-vs-real mismatch. |
+| F20 | Add a binary-level e2e case asserting process status 3 plus FATAL text for a held lock and failed game-dir creation | open | Endorsed by review H, low priority; API-level tests already assert RunExit::Write. |
+| F21 | Revisit COR-08 if a safe portable handle-relative rename primitive appears, or evaluate post-rename identity verification | open | Endorsed by review H; tracks the validated skip in T15. |
+| F22 | Surface the post-repair re-plan errors/hidden counters by threading `&mut Summary` through the post phase | open | Endorsed by review H, low priority; only the up-front purge plan's counters are currently surfaced. |
+| F23 | Consider strict refusal on purge errors as a separate, explicitly opted-in change | open | Endorsed by review H; must stay opt-in and separate, never a silent change. |
+| F24 | Add an end-to-end test injecting an unreadable purge candidate to assert the new SUMMARY keys | open | Endorsed by review H; current coverage of the new keys is unit-level. |
 
 ## Persistent context
 
@@ -163,6 +169,17 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Fail-fast / diagnostics after T14-T16.** Live-lock and game-dir-creation failures
+  now exit 3 (`RunFailure::write`) with FATAL; the pinned exit-code table is unchanged
+  (external automation pinning exit 1 is unverifiable). `--check-only --scan` is
+  deliberately a plan-answer check (`d046eb54`) — do not re-validate mtime or re-hash;
+  `ScanReport::failures` / `scan_failed()` surface on the scan tracing line only.
+  `promote_tmp` stays path-based (no portable safe handle-relative rename;
+  `unsafe_code = "deny"`) — do not "fix" via mtime revalidation or unsafe FFI.
+  `plan_work_and_purge` takes a private `purge_wanted: bool`; SUMMARY gained conditional
+  numeric `purge_errors`/`purge_hidden` (path count, not bytes) via `Extra::Num`, the
+  sole data-plane exception; strict refusal not added. Post-repair re-plan counters
+  remain unsurfaced. See T14/T15/T16 notes.
 - **Digest / hash internals after T12-T13.** `girpr_digest::Md5::try_parse_hex` is
   public; `parse_hex` keeps identical diagnostics. Reuse keys are `(XOR of the two
   8-byte digest halves, size)` buckets with full `IdentityKey` confirmation. Local
