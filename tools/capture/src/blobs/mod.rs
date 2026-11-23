@@ -913,23 +913,23 @@ pub fn file_pairs(
         (&str, &str),
         BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>,
     > = BTreeMap::new();
+    // The build id is looked up with the same `(field, tag)` key as the entry
+    // map, so build it in the same walk. `or_insert` keeps the first match,
+    // which is what the old `find` over `manifests` returned.
+    let mut build_ids: BTreeMap<(&str, &str), &str> = BTreeMap::new();
     for (field, pair) in fields.iter().zip(manifests) {
         for m in pair {
             indexes.insert(
                 (field.as_str(), m.tag.as_str()),
                 m.entries.iter().map(|e| (e.file.as_str(), e)).collect(),
             );
+            build_ids
+                .entry((field.as_str(), m.tag.as_str()))
+                .or_insert(m.build_id.as_str());
         }
     }
     let build_id = |tag: &str, field: &str| -> &str {
-        manifests
-            .iter()
-            .zip(fields)
-            .filter(|(_, f)| f.as_str() == field)
-            .flat_map(|(ms, _)| ms.iter())
-            .find(|m| m.tag == tag)
-            .map(|m| m.build_id.as_str())
-            .unwrap_or_default()
+        build_ids.get(&(field, tag)).copied().unwrap_or_default()
     };
     selection
         .admitted

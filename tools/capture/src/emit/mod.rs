@@ -21,7 +21,6 @@ pub mod tree;
 
 use std::path::{Path, PathBuf};
 
-use crate::config::rel_path_string;
 use crate::hash::{self, Encoding};
 use crate::http::RequestLog;
 use crate::http::probe::{ErrorShapes, TagProbe};
@@ -412,11 +411,6 @@ fn write_parts(root: &Path, rel: &str, parts: &[&[u8]]) -> std::io::Result<PathB
     for p in parts {
         std::io::Write::write_all(&mut f, p)?;
     }
-    debug_assert_eq!(
-        rel_path_string(root, &path),
-        rel,
-        "the path must round-trip"
-    );
     Ok(path)
 }
 
@@ -524,11 +518,6 @@ pub fn write_json_gz(
             .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
         std::io::Write::flush(&mut w)?;
     }
-    debug_assert_eq!(
-        rel_path_string(root, &path),
-        rel,
-        "the path must round-trip"
-    );
     Ok(path)
 }
 
@@ -600,11 +589,6 @@ pub fn write_json_gz_counted(
         std::io::copy(&mut reader, &mut out)?;
         std::io::Write::flush(&mut out)?;
     }
-    debug_assert_eq!(
-        rel_path_string(root, &final_path),
-        rel,
-        "the path must round-trip"
-    );
     Ok((rel, encoding, count))
 }
 
@@ -612,9 +596,30 @@ pub fn write_json_gz_counted(
 mod tests {
     use super::*;
     use crate::biz::BranchParams;
-    use crate::config::{NewTagSelector, OldTagSelector, VersionPair};
+    use crate::config::{NewTagSelector, OldTagSelector, VersionPair, rel_path_string};
     use crate::http::probe::{TagProbeRow, finish};
     use crate::hyp::CapturedBody;
+
+    /// The invariant the per-write `debug_assert_eq!` used to check, stated once
+    /// over representative paths instead of allocating on every document write.
+    /// Every writer builds its path with `root.join(rel)`, so rendering that path
+    /// back must give the exact string the caller passed in.
+    #[test]
+    fn a_document_path_round_trips_to_its_artifact_relative_string() {
+        let root = Path::new("/bundle");
+        for rel in [
+            "MANIFEST.json",
+            "README.md",
+            "api/requests.ndjson",
+            "verify/selfcheck.json",
+            "verify/checksums.json",
+            "manifests/7.1.0/game.manifest.json.gz",
+            "game/sub/data.bin",
+        ] {
+            let path = root.join(rel);
+            assert_eq!(rel_path_string(root, &path), rel, "{rel}");
+        }
+    }
 
     /// A document shaped like a real manifest decode, ~200 entries.
     ///

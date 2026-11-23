@@ -15,7 +15,7 @@
 //! a reader who wants "is anything missing?" reads `checksums.json`; a reader who
 //! wants "what did this run produce?" reads `files[]`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::selfcheck;
@@ -83,6 +83,13 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
             (f.clone(), d.counts.common + d.counts.added)
         })
         .collect();
+    // One map by `capture_id`, built once: the old `admitted.iter().find` was
+    // O(admitted) for every matrix row. `or_insert` keeps the first admission
+    // for an id, matching `find`'s first-match behavior if ids ever repeat.
+    let mut by_capture_id: HashMap<&str, &crate::select::Admission> = HashMap::new();
+    for a in &i.selection.admitted {
+        by_capture_id.entry(a.capture_id.as_str()).or_insert(a);
+    }
     let matrix: Vec<ManifestMatrixRow> = i
         .selection
         .matrix
@@ -91,7 +98,7 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
             let admission = row
                 .capture_id
                 .as_ref()
-                .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
+                .and_then(|cid| by_capture_id.get(cid.as_str()).copied());
             ManifestMatrixRow {
                 class: row.class.id().to_string(),
                 status: row.status.id().to_string(),
@@ -260,18 +267,22 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
 /// `sort_by_file_name` is a depth-first, per-directory sort, the same order the
 /// hand-rolled stack produced, so the document bytes do not change.
 ///
-/// **Every entry is resolved against the canonical root before it is used.**
-/// A directory is only descended into when its canonical path is inside the
-/// canonical root and has not been seen already, so a symlink or junction that
-/// points back up the tree cannot loop the walk and one that points outside
-/// cannot pull bytes from beyond the artifact into it. `WalkDir` follows links
-/// and detects ancestor loops on its own; the canonical-path set additionally
-/// dedupes a symlink to a sibling that a pure ancestor check would walk twice
-/// (the same real tree reached under two names). The same containment rule
-/// applies to files: a file whose canonical path is outside the root is not
-/// part of the artifact. Paths in the result stay relative to the `root`
-/// argument and keep its spelling, so a symlinked root (whose canonical form
-/// is its target) still yields an ordinary artifact-relative listing.
+/// **Every entry is checked against the canonical root before it is used.**
+/// An entry reached through a link is resolved with `canonicalize`: a symlink
+/// or junction that points back up the tree cannot loop the walk and one that
+/// points outside cannot pull bytes from beyond the artifact into it. An entry
+/// whose path contains no link is already canonical relative to the resolved
+/// root, so it needs no resolution syscall. `WalkDir` follows links and
+/// detects ancestor loops on its own; the canonical-path set additionally
+/// dedupes a symlink to a sibling *directory* that a pure ancestor check would
+/// walk twice (the same real tree reached under two names). Only directories
+/// are deduplicated: a link to a file may sort before the real file, and
+/// dropping the real path would make the recorded listing depend on
+/// directory-sort order. The containment rule still applies to files: a file
+/// whose canonical path is outside the root is not part of the artifact. Paths
+/// in the result stay relative to the `root` argument and keep its spelling,
+/// so a symlinked root (whose canonical form is its target) still yields an
+/// ordinary artifact-relative listing.
 pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     // Resolve the root once. A root that cannot be resolved fails here, just
     // as it would fail at the first directory read. The canonical root is in
@@ -280,25 +291,51 @@ pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     visited.insert(canonical_root.clone());
     let mut out = Vec::new();
+    // Whether the ancestors of an entry include a link, indexed by depth. The
+    // close-out walks this tree several times, and each walk used to call
+    // `canonicalize` for every entry. Only an entry reached through a link can
+    // resolve somewhere other than the canonical root joined with its
+    // artifact-relative path, so that is the only case that needs the syscall.
+    let mut under_link: Vec<bool> = Vec::new();
 
     let entries = WalkDir::new(root)
         .follow_links(true)
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|e| {
+            let depth = e.depth();
+            if under_link.len() <= depth {
+                under_link.resize(depth + 1, false);
+            }
+            let linked = e.path_is_symlink() || (depth > 0 && under_link[depth - 1]);
+            under_link[depth] = linked;
             // The root defines the walk; it is not resolved as an entry.
-            if e.depth() == 0 {
+            if depth == 0 {
                 return true;
             }
-            // `file_type()` follows the link, so the canonical path is the
-            // only honest answer to "is this inside the artifact?". An entry
-            // that cannot be resolved is a broken link and contributes nothing.
-            let Some(canonical) = canonical_under_root(&canonical_root, e.path()) else {
-                return false;
+            // `path_is_symlink()` is cheap and reports the link even though
+            // `file_type()` follows it. A linked entry needs the real
+            // resolution to answer "is this inside the artifact?" and to be
+            // deduplicated; an unlinked one is already canonical relative to
+            // the resolved root. An entry that cannot be resolved is a broken
+            // link and contributes nothing.
+            let canonical = if linked {
+                let Some(c) = canonical_under_root(&canonical_root, e.path()) else {
+                    return false;
+                };
+                c
+            } else {
+                canonical_root.join(e.path().strip_prefix(root).unwrap_or(e.path()))
             };
-            // A canonical path already seen is a link back into walked ground;
-            // descending again would list the same real files twice.
-            visited.insert(canonical)
+            // Only a directory can create a traversal cycle or be reached
+            // twice under two names. Deduplicating files would drop the real
+            // file when a link to it sorts first: files cannot loop a walk, so
+            // both the link and the real path are listed.
+            if e.file_type().is_dir() {
+                visited.insert(canonical)
+            } else {
+                true
+            }
         });
 
     for entry in entries {
@@ -361,12 +398,18 @@ fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
 /// machines and a reader that has to know the writer's separator cannot be
 /// checked by anyone else.
 pub fn rel(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    // One pre-sized String instead of a Vec<Cow> plus a join: the byte shape
+    // is identical (each component rendered lossily, '/' only between
+    // components) but there is no intermediate allocation per pass.
+    let mut out = String::with_capacity(rel.as_os_str().len());
+    for c in rel.components() {
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(&c.as_os_str().to_string_lossy());
+    }
+    out
 }
 
 /// The passing detail for a scoped pass, stating which files were re-hashed and
@@ -884,6 +927,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A file link that sorts before the real file must not make the walk drop
+    /// the real path. Canonical-path dedup is for directories (which can loop a
+    /// walk); applying it to files made the listing depend on which name sorted
+    /// first — `checksums.json` then named the link instead of the real file.
+    #[test]
+    fn a_file_link_sorting_first_does_not_hide_the_real_file() {
+        let root = scratch("file-link-order");
+        std::fs::write(root.join("z_real.txt"), b"body").unwrap();
+        if !link_file(&root.join("z_real.txt"), &root.join("a_link.txt")) {
+            eprintln!("skipping file-link ordering test: file symlinks unavailable on this host");
+            return;
+        }
+        let paths: Vec<String> = walk(&root).unwrap().iter().map(|p| rel(&root, p)).collect();
+        assert_eq!(
+            paths,
+            vec!["a_link.txt", "z_real.txt"],
+            "both the link and the real file are regular files under the root"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A link under the root that points outside it contributes no bytes: neither
     /// the linked directory's files nor a linked single file are part of the
     /// artifact. Only the real file under the root is walked.
@@ -936,6 +1000,106 @@ mod tests {
         let root = scratch("slashes");
         let p = root.join("a").join("b").join("c.txt");
         assert_eq!(rel(&root, &p), "a/b/c.txt");
+    }
+
+    /// The allocation-light `rel` must render exactly what the old
+    /// `components().map(to_string_lossy).join("/")` produced, on every shape
+    /// the writer can hand it. Byte-for-byte, because these strings are written
+    /// into `MANIFEST.json` and `checksums.json` and pin artifact bytes.
+    #[test]
+    fn rel_matches_the_component_join_byte_for_byte() {
+        let root = Path::new("/bundle");
+        for path in [
+            root.join("MANIFEST.json"),
+            root.join("game/sub/data.bin"),
+            root.join("verify/checksums.json"),
+            root.join("manifests/7.1.0/game.manifest.json.gz"),
+            root.join("a/./b/../c.txt"),
+        ] {
+            let expected = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            assert_eq!(rel(root, &path), expected, "{}", path.display());
+        }
+    }
+
+    /// A walk that canonicalizes every entry, kept as the reference for the
+    /// link-only optimization. It differs from `walk` only in when it calls
+    /// `canonicalize`: the dedup rule and the output are otherwise identical.
+    fn walk_canonicalizing_every_entry(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+        let canonical_root = std::fs::canonicalize(root)?;
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        visited.insert(canonical_root.clone());
+        let mut out = Vec::new();
+        let entries = WalkDir::new(root)
+            .follow_links(true)
+            .sort_by_file_name()
+            .into_iter()
+            .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
+                let Some(canonical) = canonical_under_root(&canonical_root, e.path()) else {
+                    return false;
+                };
+                if e.file_type().is_dir() {
+                    visited.insert(canonical)
+                } else {
+                    true
+                }
+            });
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type().is_file() {
+                let r = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|_| std::io::Error::other("entry is not under the artifact root"))?;
+                out.push(r.to_path_buf());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Skipping `canonicalize` for entries with no link in their path must not
+    /// change the listing: the canonical path of such an entry is the resolved
+    /// root joined with its relative path, which is what the syscall returned.
+    #[test]
+    fn link_only_canonicalization_lists_the_same_paths() {
+        let root = scratch("canon-equivalence");
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::write(root.join("real/here.txt"), b"h").unwrap();
+        std::fs::write(root.join("real/sub/data.txt"), b"d").unwrap();
+        std::fs::write(root.join("z_real.txt"), b"body").unwrap();
+        if !link_dir(&root.join("real"), &root.join("alias")) {
+            eprintln!("skipping equivalence test: directory symlinks unavailable on this host");
+            return;
+        }
+        if !link_file(&root.join("z_real.txt"), &root.join("a_link.txt")) {
+            eprintln!("skipping equivalence test: file symlinks unavailable on this host");
+            return;
+        }
+        let expected = walk_canonicalizing_every_entry(&root).unwrap();
+        assert_eq!(walk(&root).unwrap(), expected);
+
+        // A symlinked root must agree too: every descendant is then reached
+        // through a link and takes the syscall path in both implementations.
+        let alias_root = scratch("canon-equivalence-root");
+        let link = alias_root.join("root_link");
+        if !link_dir(&root, &link) {
+            eprintln!("skipping symlinked-root equivalence: symlinks unavailable");
+            return;
+        }
+        assert_eq!(
+            walk(&link).unwrap(),
+            walk_canonicalizing_every_entry(&link).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&alias_root);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
