@@ -36,7 +36,7 @@ machine data or change log.
 | T21 | Fix gircap indexing and canonicalization correctness | completed | af8a2890 | §9 TOOL-05/06/13/17/19/20 (679–690, 729–737, 763–768, 780–795); assumptions 16–17 (881–888) validated. O(1) build-id/admission indexes; TOOL-13 uses path_is_symlink() + ancestor stack (file_type() returns target under follow_links(true)); shared canonical walk rejected — tree changes between fixpoint passes. Dedup directory-only with first-sorting-link regression test. TOOL-20 removed three per-write debug asserts (incl. T20's in write_json_gz_counted) into a test. No production symlink creation; first-match semantics kept. |
 | T22 | Parallelize gircap verification and capture assembly | completed | fbc134ba, b4bade9a | §9 TOOL-14/15 (740–752); assumption 17 (885–888) validated. rayon added to gircap. Verify A6 per-blob over rayon, collect (id,row) sorted by id; assembly CPU parallel but writes/rows/digests/path_map/tracing stay serial in index order (path_map proven Send+Sync but not actually shared — preserves write order, abort semantics and .json.tmp/close-out safety). New trade-off: all assembled results briefly resident. A6 row order relies on ChunkIndex::blobs being id-ordered (hand-edited unsorted index could change first-red-A6 headline). |
 | T23 | Make gircap declared-size mismatch errors honest | completed | 68e83ac5 | §9 TOOL-21 (796–805). Text-only fix: private zstd_over_limit_from; mismatch says "declared size mismatch ... declared expected size of N B", bomb says "decode ceiling exceeded ... C B hard ceiling"; both keep the "decode limit" token. Ceiling/limit enforcement code unchanged; zstd_measure_from untouched so verify A6 report strings/artifact bytes unaffected. Chose text distinction over measure-first (would change decode behavior/RSS). |
-| T24 | Cut girsync and sled2redb I/O and transaction cost | pending_review | b8d34961, 01f717e1 | §9 TOOL-02/16/18 (654–659, 756–762, 770–777). TOOL-02: ent.metadata() in live walk (walkdir 2.5.1 caches for regular files under follow_links(true)), path_is_symlink kept. TOOL-16: new public girsync_cache::hash::hash_file_with_buf; phase C uses rayon try_for_each_init (Result-returning closure) for per-worker buffers. TOOL-18 SKIPPED (stale): write_records already batches via cache.begin_write() + COMMIT_* + final commit, publishes via NamedTempFile; sled2redb untouched. |
+| T24 | Cut girsync and sled2redb I/O and transaction cost | completed | b8d34961, 01f717e1 | §9 TOOL-02/16/18 (654–659, 756–762, 770–777). TOOL-02: ent.metadata() in live walk (walkdir 2.5.1 caches for regular files under follow_links(true)), path_is_symlink kept. TOOL-16: new public girsync_cache::hash::hash_file_with_buf; phase C uses rayon try_for_each_init (Result-returning closure) for per-worker buffers. TOOL-18 SKIPPED (stale): write_records already batches via cache.begin_write() + COMMIT_* + final commit, publishes via NamedTempFile; sled2redb untouched. |
 | T25 | Validate and, if safe, shrink the build-time dependency surface | skipped | | §10 B-01 (818–823); assumption 13 (872–874) FAILS workspace-wide: cargo tree -i chrono --workspace shows gircap is a second direct chrono consumer with chrono-typed public API feeding girpr_time; removing chrono cannot preserve the four pinned spellings/tests or the API without an out-of-scope rewrite. No code change, no commit. |
 
 ## Reviews
@@ -57,6 +57,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | I | T17, T18 | done | No fix/revert needed. Endorsed order-insensitive chunk-hit test, conditional PurgeKeys revisit, and lossless-appender backpressure validation; duplicate suggestion dropped. |
 | J | T19, T20 | done | No fix/revert needed. T20 resolved completed with memoization a validated skip; all three suggested follow-ups endorsed plus a content_type edge test. |
 | K | T21, T22, T23 | done | No fix/revert needed. All six suggested follow-ups endorsed. |
+| L | T24 | done | No fix/revert needed. T25 was validated-skipped and not reviewed. Endorsed scale measurement and a walk_live mtime-equivalence regression test. |
 
 ## Follow-ups
 
@@ -103,6 +104,8 @@ planning review batches the survivors only after every task is settled.
 | F35 | Consider streaming per-worker A6 reads to cut transient memory while preserving exact row text (MD5+SHA-256+zstd measure) | open | Endorsed by review K conditionally; non-trivial. |
 | F36 | Wall-clock timing on a real capture bundle to validate the gircap parallel speedup claim | open | Endorsed by review K; report figures are static reasoning. |
 | F37 | End-to-end materialize assertion that an under-declared blob surfaces the new declared-size-mismatch text | open | Endorsed by review K; validates T23's user-visible contract. |
+| F38 | Measure girsync's walk-stat and per-worker-allocation reductions at scale (large tree, both platforms) | open | Endorsed by review L; current gains are structural, not measured. |
+| F39 | Add a direct regression test that walk_live reports the same size/mtime_ns as std::fs::metadata for a regular file | open | Non-blocking follow-up from review L; locks TOOL-02's byte-equivalence assumption against a future walkdir upgrade. |
 
 ## Persistent context
 
@@ -185,6 +188,15 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **girsync APIs after T24.** `girsync_cache::hash::hash_file_with_buf(path,
+  &AlgoSet, &mut [u8])` is public (empty buffer rejected for non-empty algos; empty
+  algos is a no-op); effective phase C hashes via per-worker rayon buffers
+  (`try_for_each_init`, abort-on-first-error preserved). The live walk uses
+  `ent.metadata()`; under `follow_links(true)` walkdir 2.5.1 caches Windows metadata
+  for regular files but re-stats symlinks, with `path_is_symlink()` still carrying the
+  link flag. sled2redb is untouched: TOOL-18 is a validated stale skip (`write_records`
+  already batches via `CacheWrite::maybe_commit` with a final commit and atomic
+  NamedTempFile publish). See T24 note.
 - **chrono build surface (T25 skip).** `cargo tree -i chrono --workspace` shows two
   direct consumers: `girpr-time` and `gircap`. gircap's public API (`ManifestInput.started`,
   `capture_id`, `artifact_dir`) passes chrono `DateTime<Utc>` into `girpr_time`, so the
