@@ -21,7 +21,7 @@ machine data or change log.
 | T06 | Reuse scan verdicts and remove double reads in the repair path | pending_review | bcd10762, d45c3c49, 10394ad7 | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849). IO-01 guarded verdict shared with temp (byte-identical conditions); IO-02 single capture read into one reusable per-file chunk buffer; IO-04 layout() once, passed as &Layout; COR-04 reuse I/O fallback counter + info/warn (MD5 mismatch stays debug). IO-03 premise false: staged-source hash is a required TOCTOU re-check, kept and documented. Temp staging buffer holds one chunk, not charged to --max-ram-bytes (temp mode never used it); peak temp RSS rises by one chunk. Guard helpers moved to file/mod.rs; attempt_temp gained FileId; added RepairDiagnostics.reuse_io_fallbacks. F07 guard-equivalence fails — no code change. |
 | T07 | Add validated path joins and cache canonicalization | completed | 36883118 | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) holds — only five plan-derived join callers. Deviation: parent cache keeps leaf canonicalization (dropping it would allow a file-level symlink escape); game_dir canonicalized once per phase (twice per run), second PathRoot via syscall-free new_canonical. New API: PathRoot::join_validated/new_canonical, Lock::acquire_canonical, lock_path_for_canonical. |
 | T08 | Remove redundant post-phase mkdir syscalls and materialization | completed | c24b6f71 | §3 IO-07/IO-08 (277–293). Audio-cache walk streamed (no Vec); mkdir dedup via HashSet of successful creates only (failures retried, phase stays best-effort); ASCII byte fast path for trailing-dot/space check with lossy fallback for non-ASCII. New private `move_audio_cache_with_mkdir` test seam; `rel_from_base` no longer imported in post.rs. |
-| T09 | Bound streaming decode output and validate blob IDs | in_progress | | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) |
+| T09 | Bound streaming decode output and validate blob IDs | pending_review | 9b914411 | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) validated on captured 7.1.0 bundle (16.8 MB manifest, 9 MB compressed) — both 64 MiB caps exceed it. Deviation: conservative unsafe-shape id check (not strict capture regex) so short hex/test ids still pass; origin/path-prefix assertion is the backstop. MAX_MANIFEST_HINT removed; new MANIFEST_INITIAL_CAPACITY/MAX_MANIFEST_BYTES/MAX_MANIFEST_COMPRESSED; join_url now rejects hostile ids. |
 | T10 | Move streaming decode/write off async workers | todo | | §5 NET-07 (404–413); same class as S-02/T01 |
 | T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | todo | | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) |
 | T12 | Validate reuse offsets and parse digests once | todo | | §6 COR-03 (442–451); §8 MIC-01/08/11 (564–573, 610–613, 624–629) |
@@ -153,6 +153,14 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Fetch manifest caps / ID validation after T09 (feeds T11, T19/T20).**
+  `app/fetch/src/sophon/stream.rs` no longer has `MAX_MANIFEST_HINT`; it now has
+  `MANIFEST_INITIAL_CAPACITY` (64 KiB), `MAX_MANIFEST_BYTES` and
+  `MAX_MANIFEST_COMPRESSED` (both 64 MiB), with geometric buffer growth. `join_url`
+  (and `fetch_manifest` / `try_stream_chunk`) rejects hostile blob-id shapes — any
+  tool/test feeding a non-alphanumeric id must use a simple one. The conservative
+  unsafe-shape check is deliberate: the strict capture regex would reject real short
+  ids and violate assumption 8. See T09 note.
 - **Path APIs after T07 (feeds T14/T16/T17).** `PathRoot::join_validated` and
   `PathRoot::new_canonical`, `Lock::acquire_canonical` and `lock_path_for_canonical` are
   public. The resolved-parent cache (`Arc<Mutex<HashMap>>`) is shared only by clones of
