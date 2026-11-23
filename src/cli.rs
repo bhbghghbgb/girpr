@@ -28,13 +28,10 @@ pub const DEFAULT_JOBS: usize = 4;
 
 /// Largest accepted `--jobs` value.
 ///
-/// The runtime keeps one worker beyond the file window, so this asks for 1025
-/// OS threads. That is a real startup and stack cost, but the cap is a typo
-/// guard, not a promise that every host can create the threads: a lower value
-/// would only reject a deliberate window sooner, and a host that cannot create
-/// the threads would still fail at runtime construction. Refusing here names
-/// the flag instead of leaving the user with a runtime-construction failure
-/// that does not.
+/// This caps the in-flight window of file tasks on the blocking pool, not the
+/// async runtime's worker threads, so a large value does not ask for one OS
+/// thread per file. It is a typo guard: it rejects a mistyped window at the
+/// flag rather than deep into a run, where the failure would be harder to name.
 pub const MAX_JOBS: usize = 1024;
 
 /// The one-paragraph `--jobs` help.

@@ -45,18 +45,18 @@ fn main() -> ExitCode {
         }
     };
 
-    // The file tasks inside the run do blocking disk I/O on the async
-    // runtime's workers. One worker beyond the file window keeps timers and
-    // network polling able to run while every file task is waiting on the
-    // disk, so raising `--jobs` does not starve the runtime itself.
+    // Repair file tasks do their synchronous disk I/O on the blocking pool,
+    // so async workers are free for timers and network polling no matter how
+    // many files are in flight. Size the runtime from the host alone; `--jobs`
+    // bounds the file window, not the worker set.
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let workers = worker_threads(available, ctx.jobs);
+    let workers = worker_threads(available);
     tracing::info!(
         worker_threads = workers,
         jobs = ctx.jobs,
-        "runtime sized for requested file window"
+        "runtime sized independently of the file window"
     );
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -88,13 +88,15 @@ fn exit_code(status: RunExit) -> ExitCode {
     ExitCode::from(status.process_status())
 }
 
-/// Worker threads for a run that admits `jobs` files at once.
+/// Worker threads for the async runtime.
 ///
-/// At least the host's parallelism, and always one more than the file window
-/// so the runtime keeps a worker for timers and network progress. The addition
-/// saturates: an absurd `jobs` must not overflow the thread count.
-fn worker_threads(available: usize, jobs: usize) -> usize {
-    available.max(jobs.saturating_add(1))
+/// A function of host parallelism only: repair file work runs on the blocking
+/// pool, so the worker set never scales with the `--jobs` file window. Keep a
+/// small floor and one spare worker for the run's own orchestration, timers
+/// and network polling. The addition saturates so a pathological host count
+/// cannot overflow the thread count.
+fn worker_threads(available: usize) -> usize {
+    available.max(2).saturating_add(1)
 }
 
 /// Run the pipeline and return the process exit code.
@@ -170,31 +172,27 @@ mod tests {
 
     #[test]
     fn worker_threads_arithmetic() {
-        // (host parallelism, file window, expected worker count)
-        for (available, jobs, expected) in [
-            (1usize, 1usize, 2usize),    // one core, one job: keep runtime headroom
-            (8, 1, 8),                   // host parallelism wins over a small window
-            (1, usize::MAX, usize::MAX), // a huge window saturates, no overflow
-        ] {
+        // (host parallelism, expected worker count). A small floor keeps at
+        // least two workers on a single-CPU host; the spare one is for timers
+        // and network polling. A pathological host count saturates, no overflow.
+        for (available, expected) in [(1usize, 3usize), (2, 3), (8, 9), (usize::MAX, usize::MAX)] {
             assert_eq!(
-                worker_threads(available, jobs),
+                worker_threads(available),
                 expected,
-                "worker_threads({available}, {jobs})"
+                "worker_threads({available})"
             );
         }
     }
 
     #[test]
-    fn the_runtime_keeps_a_worker_beyond_every_file_window() {
-        // The oversized-window warning is about CPU oversubscription, not about
-        // the runtime running out of workers: `jobs + 1` is always one more,
-        // even on a single-CPU host.
-        for jobs in [1, 4, 8, 1000] {
-            assert!(
-                worker_threads(1, jobs) > jobs,
-                "{jobs} files must leave a worker for timers and network polling"
-            );
+    fn the_runtime_is_sized_by_the_host_not_the_file_window() {
+        // The worker count is a function of host parallelism alone, with a
+        // small fixed floor and one spare — never the `--jobs` file window.
+        for (available, expected) in [(1usize, 3usize), (4, 5), (64, 65)] {
+            assert_eq!(worker_threads(available), expected);
         }
+        // Stable across calls: no hidden dependence on mutable state.
+        assert_eq!(worker_threads(4), worker_threads(4));
     }
 
     /// The documented exit statuses, in numeric order.
