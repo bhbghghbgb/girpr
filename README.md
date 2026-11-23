@@ -187,8 +187,12 @@ flowchart TD
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
-  not in place); `SUMMARY config_bumped=0` says so. `--audio` under a scope is
-  exit `1`. So is an `--include` that selected **nothing at all** — but an empty
+  not in place); `SUMMARY config_bumped=0` says so. An explicit `--audio` under a
+  scope is exit `1` only when the scan file it would write
+  (`getGameConfigs.audio_pkg_scan_dir`) is outside the scope — include that path
+  (a `./`-spelled include matches the same file) and the run proceeds;
+  `--dry-run`, `--check-only` and `--print-plan` write nothing and are exempt.
+  An `--include` that selected **nothing at all** is also exit `1` — but an empty
   *repair* plan on its own is not a typo: a path on disk that the new manifest
   dropped is in no repair plan by construction, so `--purge-only --include
   <that path>` deletes it rather than erroring, which is what `--purge-only`
