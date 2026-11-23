@@ -24,8 +24,8 @@ machine data or change log.
 | T09 | Bound streaming decode output and validate blob IDs | completed | 9b914411 | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) validated on captured 7.1.0 bundle (16.8 MB manifest, 9 MB compressed) — both 64 MiB caps exceed it. Deviation: conservative unsafe-shape id check (not strict capture regex) so short hex/test ids still pass; origin/path-prefix assertion is the backstop. MAX_MANIFEST_HINT removed; new MANIFEST_INITIAL_CAPACITY/MAX_MANIFEST_BYTES/MAX_MANIFEST_COMPRESSED; join_url now rejects hostile ids. |
 | T10 | Move streaming decode/write off async workers | completed | ec5b52ab | §5 NET-07 (404–413); same class as S-02/T01. Report premise false in current tree: sole production caller write_downloaded_chunk runs inside T01's Handle::block_on blocking-pool file tasks, so a spawn_blocking wrapper would be redundant and is forbidden by T01 policy. Took the sanctioned document-and-enforce outcome (rustdoc contract on stream_chunk_to/write_downloaded_chunk); no executable code change. No runtime assertion (Tokio 1.54 exposes none); enforcement by documented contract + Send bound. |
 | T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | completed | 76daf1ce | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) validated on capture (9 MB GETs take 11 s; all JSON responses 200). 10 s connect + 30 s idle on JSON reads (no blanket total); status check in both JSON paths, non-2xx classified Fatal (pinned 500 test); body-read Retry, wrapper-parse Fatal, data:null -> SophonNotFound. MIC-12 not needed (already in-place retain_mut); stream.rs untouched (T09-owned); tokio `time` feature added as normal dep. |
-| T12 | Validate reuse offsets and parse digests once | pending_review | 65ef8db6, 9b5eabdf | §6 COR-03 (442–451); §8 MIC-01/08/11 (564–573, 610–613, 624–629). COR-03: offset/size >= 0 and checked_add against manifest-declared `f.size`, warn+skip; `.max(0)` clamp removed. MIC-01/08: new `Md5::try_parse_hex -> Option` (parse_hex keeps identical errors); "parse once at decode" half already satisfied. MIC-11: XOR of two digest halves replaces DefaultHasher; bucket/collision-confirmation unchanged. stream.rs untouched (T09/T11). |
-| T13 | Reuse hash scratch buffers and tighten range handling | pending_review | 3e301c80, 4b3998ae | §4 MEM-03/04 (320–336); §8 MIC-09/10 (614–623). Thread-local reusable 512 KiB hash scratch; read_to_end into reserved spare capacity (no unsafe — workspace denies unsafe_code; read_buf unstable on pinned 1.100). MIC-10 finalizes range Md5 once; MIC-09 already-sorted fast path (not cross-crate pre-sort — public scan API accepts arbitrary order). Report's mod.rs zero-fill pointer now resolves to temp.rs::capture_slice; scratch_slice in file/mod.rs left unchanged (already reused). 4 equivalence tests added. |
+| T12 | Validate reuse offsets and parse digests once | completed | 65ef8db6, 9b5eabdf | §6 COR-03 (442–451); §8 MIC-01/08/11 (564–573, 610–613, 624–629). COR-03: offset/size >= 0 and checked_add against manifest-declared `f.size`, warn+skip; `.max(0)` clamp removed. MIC-01/08: new `Md5::try_parse_hex -> Option` (parse_hex keeps identical errors); "parse once at decode" half already satisfied. MIC-11: XOR of two digest halves replaces DefaultHasher; bucket/collision-confirmation unchanged. stream.rs untouched (T09/T11). |
+| T13 | Reuse hash scratch buffers and tighten range handling | completed | 3e301c80, 4b3998ae | §4 MEM-03/04 (320–336); §8 MIC-09/10 (614–623). Thread-local reusable 512 KiB hash scratch; read_to_end into reserved spare capacity (no unsafe — workspace denies unsafe_code; read_buf unstable on pinned 1.100). MIC-10 finalizes range Md5 once; MIC-09 already-sorted fast path (not cross-crate pre-sort — public scan API accepts arbitrary order). Report's mod.rs zero-fill pointer now resolves to temp.rs::capture_slice; scratch_slice in file/mod.rs left unchanged (already reused). 4 equivalence tests added. |
 | T14 | Classify lock and directory failures correctly | todo | | §6 COR-01 (417–428); assumption 10 (864–866) |
 | T15 | Fix stale scan/check verdicts, surface scan failures, close tmp TOCTOU | todo | | §6 COR-02/COR-05/COR-08 (429–441, 464–472, 496–504); assumption 9 (862–863) |
 | T16 | Move scope-typo refusal earlier and surface purge diagnostics | todo | | §6 COR-06/COR-07/COR-09 (474–512) |
@@ -52,6 +52,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | D | T06 | done | No fix/revert needed. F07 closed (guard-equivalence fails); endorsed temp-RSS measurement follow-up. |
 | E | T07, T08 | done | No fix/revert needed. Endorsed CleanRel newtype, install-scale syscall measurement, and audio-cache scale measurement. |
 | F | T09, T10, T11 | done | No fix/revert needed. All four suggested follow-ups endorsed; the high-jobs poll check folded into F01/F02. |
+| G | T12, T13 | done | No fix/revert needed. Dropped Sha256 symmetry; endorsed five other follow-ups (mostly low/conditional priority). |
 
 ## Follow-ups
 
@@ -75,6 +76,11 @@ planning review batches the survivors only after every task is settled.
 | F12 | Revisit the fixed 64 MiB manifest ceilings if a future manifest grows past them, and share one id-shape definition between fetch and capture tools | open | Endorsed by review F; keep the conservative fetch check — the strict capture regex would reject real short ids. |
 | F13 | Add a fetch-side test for the JSON body idle/deadline timeout using a stalled loopback origin with an injectable short duration; clarify that JSON_BODY_IDLE is a bounded deadline on small buffered bodies, not a resetting timer | open | Endorsed by review F; the timeout path is currently untested. |
 | F14 | Add a resetting per-piece idle timeout inside `sophon/stream.rs::stream_body` for mid-stream blob stalls (never a total deadline) | open | Endorsed by review F, lower priority; touches the file shared with T09/T10 — schedule after those in-flight tasks. |
+| F15 | Replace `by_key` buckets with `HashMap<IdentityKey, usize>` to drop the Vec/collision-confirmation machinery | open | Endorsed by review G, low priority; MIC-11 alternative, cleanup only (current code is correct). |
+| F16 | Add a log-capture assertion that the T12 invalid-range warning is actually emitted | open | Endorsed by review G, low priority; app/fetch has no log-capture dev-dependency yet. |
+| F17 | Convert `file/mod.rs` `scratch_slice`/piece-copy loops to spare-capacity reads | open | Endorsed by review G conditionally (low priority) — only if the one-time-per-file 512 KiB fill proves measurable. |
+| F18 | Consider task-owned rather than thread-local hash buffers if 512 KiB per blocking-pool thread becomes a concern | open | Endorsed by review G conditionally (low priority); revisit with RSS evidence. |
+| F19 | Add a unit test that a lying declared `f.size` (larger than the real file) cannot turn a bad reuse offset into an intact verdict | open | Non-blocking follow-up from review G; existing tests cover negative/overflow/past-declared-EOF, not declared-vs-real mismatch. |
 
 ## Persistent context
 
@@ -157,6 +163,16 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Digest / hash internals after T12-T13.** `girpr_digest::Md5::try_parse_hex` is
+  public; `parse_hex` keeps identical diagnostics. Reuse keys are `(XOR of the two
+  8-byte digest halves, size)` buckets with full `IdentityKey` confirmation. Local
+  ranges are validated against the declared `f.size` (warn + skip, no clamp); real
+  length/byte re-checks live in `salvage_order_refs`, scan `source_ok`, and temp
+  `capture_slice`. `app/util-hash::md5` has a lazy thread-local 512 KiB `MD5_SCRATCH`
+  and public `scan_reader_with_buf` / `md5_reader_digest_with_buf`; spare-capacity
+  reads use `read_to_end` over `Take` (no unsafe); `RangeState` stores a finalized
+  digest and sorts the intern sweep only when order is not already sorted.
+  `stream.rs` remains T09/T11-owned. See T12/T13 notes.
 - **Fetch client policy after T11 (feeds T19/T20).** `HypClient` has a 10 s connect
   timeout and a 30 s bounded deadline only on the two buffered JSON paths (no blanket
   total on streamed bodies); non-2xx in JSON paths is Fatal, body-read is Retry,
