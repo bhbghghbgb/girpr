@@ -15,8 +15,8 @@ use girpr_util_hash::Md5;
 /// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864>
 ///
 /// The blob is **streamed**: the compressed body never sits in memory whole,
-/// and the decoded bytes land in a buffer the API's reported
-/// `uncompressed_size` **sizes**, so the decode does not have to grow it.
+/// and the decoded bytes land in a buffer that starts modest and grows
+/// geometrically, bounded by a hard ceiling instead of the API's size hint.
 ///
 /// Manifests are still never cached inside `game_dir` (V1-SIMPLIFICATION S1,
 /// see README). Starward caches the *compressed* manifest under the app
@@ -30,11 +30,13 @@ pub async fn fetch_manifest(
     // Resolve the prefix once, at the manifest boundary. The API's prefixes end
     // in the build id, not in `/`, and `Url::join` replaces a base's last path
     // segment; a trailing slash makes it append the blob below the prefix.
+    // `join_blob` refuses ids that could redirect the join to another origin
+    // or path and asserts the result stays under the prefix.
     let base = url_base(&meta.manifest_download.url_prefix)?;
-    let url = base.join(&meta.manifest.id)?;
-    // The reported size *sizes* the buffer; it does not promise the length, and
-    // it is not trusted enough to allocate on. A blob bigger than the clamp
-    // grows the buffer; a bogus number cannot ask for an impossible allocation.
+    let url = join_blob(&base, &meta.manifest.id)?;
+    // The reported size is a hint, not a promise, and is clamped to a modest
+    // start before it can reserve anything. `Vec`'s `Write` impl grows the
+    // buffer geometrically; `MAX_MANIFEST_BYTES` is the hard ceiling.
     let hint = manifest_size_hint(meta.manifest.uncompressed_size);
     let decoded: Vec<u8> = Vec::with_capacity(hint);
     let url = url.as_str();
@@ -63,25 +65,37 @@ pub async fn fetch_manifest(
     .await
 }
 
-/// The largest allocation the manifest's reported size is allowed to ask for.
+/// A modest upper bound on what the reported size may reserve up front.
 ///
-/// The `uncompressed_size` in the API's `getBuild` body is a raw number, and
-/// it is a *hint*, not a promise: the decode grows the buffer if the blob is
-/// bigger, and a blob that decodes to nothing is fine. So the only thing the
-/// number must not do is ask for an impossible allocation — `Vec::with_capacity`
-/// above `isize::MAX` panics, and a merely-large value is an OOM abort on a
-/// field nobody has checked. 64 MiB is well above the real manifest (16.8 MB
-/// for the `game` manifest of build 7.1.0) and well below anything that would
-/// hurt.
-const MAX_MANIFEST_HINT: usize = 64 << 20;
+/// The `uncompressed_size` in the API's `getBuild` body is a raw number and a
+/// *hint*, not a promise. Reserving it in full (up to 64 MiB) costs real memory
+/// for a blob that may be tiny or fail. Cap the reservation at 64 KiB and let
+/// `Vec`'s geometric growth cover a real 16.8 MB manifest in a handful of
+/// reallocations; a bogus number costs a reallocation, never an OOM abort.
+const MANIFEST_INITIAL_CAPACITY: usize = 64 << 10;
+
+/// Hard ceiling on decoded manifest bytes.
+///
+/// Comfortably above the largest measured manifest (16,827,424 bytes for the
+/// `game` manifest of build 7.1.0, verbatim from the API's `getBuild` body) and
+/// below an allocation that would hurt on its own. `stream_body` enforces it
+/// as the bytes arrive, so a hostile frame cannot grow the buffer past it.
+const MAX_MANIFEST_BYTES: u64 = 64 << 20;
+
+/// Hard ceiling on compressed manifest bytes.
+///
+/// Above the largest measured compressed manifest (9,007,187 bytes for the
+/// same build 7.1.0 body). The cap is a ceiling, not a length: a body that
+/// crosses it is refused at the piece that crossed.
+const MAX_MANIFEST_COMPRESSED: u64 = 64 << 20;
 
 /// The capacity to give the manifest's decoded buffer, from the size the API
 /// reported.
 ///
-/// Clamped, and never negative: a wrong number costs a reallocation, not a
-/// crash.
+/// Clamped to [`MANIFEST_INITIAL_CAPACITY`] and never negative: a wrong number
+/// costs a reallocation, not a crash, and the real size is reached by growth.
 fn manifest_size_hint(reported: i64) -> usize {
-    reported.clamp(0, MAX_MANIFEST_HINT as i64) as usize
+    reported.clamp(0, MANIFEST_INITIAL_CAPACITY as i64) as usize
 }
 
 async fn try_fetch_manifest(
@@ -111,10 +125,18 @@ async fn try_fetch_manifest(
         return Retry::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
     }
     // The whole blob is zstd-compressed; the checksum is the MD5 of the
-    // DECOMPRESSED bytes. There is no ceiling on the decode and none on the
-    // compressed body either: the reported size sizes the buffer, it does not
-    // promise the length, and nobody reserved the manifest's bytes.
-    let digest = match stream_body(resp.bytes_stream(), None, None, decoded).await {
+    // DECOMPRESSED bytes. Both ceilings are hard: the decode may not grow the
+    // buffer past `MAX_MANIFEST_BYTES`, and the body may not cross
+    // `MAX_MANIFEST_COMPRESSED`. `HashingWriter` and `stream_body` enforce them
+    // as the bytes arrive, the same way the chunk path caps its blob.
+    let digest = match stream_body(
+        resp.bytes_stream(),
+        Some(MAX_MANIFEST_BYTES),
+        Some(MAX_MANIFEST_COMPRESSED),
+        decoded,
+    )
+    .await
+    {
         Ok(v) => v,
         Err(f) => {
             return match f.error {
@@ -195,9 +217,9 @@ pub struct HashingWriter<W: Write> {
 impl<W: Write> HashingWriter<W> {
     /// A hashing writer over `inner`, with an optional ceiling.
     ///
-    /// `limit` is `None` for a blob whose length is not known ahead of the
-    /// decode — the manifest's, where the reported size is a capacity hint
-    /// rather than a promise.
+    /// `limit` is `None` only for callers that deliberately want no ceiling.
+    /// Both production paths pass one: for a manifest the reported size is a
+    /// capacity hint, so its ceiling is a generous fixed cap, not that hint.
     pub fn new(inner: W, limit: Option<u64>) -> Self {
         Self {
             inner,
@@ -412,9 +434,9 @@ async fn try_stream_chunk<S: ChunkSink>(
     attempt: u32,
 ) -> Retry<ChunkDigest> {
     let id = fetch.id;
-    let url = match base.join(id) {
+    let url = match join_blob(base, id) {
         Ok(url) => url,
-        Err(e) => return Retry::Fatal(anyhow::Error::new(e).context("build chunk url")),
+        Err(e) => return Retry::Fatal(e),
     };
     let url = url.as_str();
     let resp = match fetch.client.get(url).send().await {
@@ -484,10 +506,11 @@ struct StreamFailure {
 /// decoded as they arrive and the decoded bytes leave as they are produced, so
 /// neither the compressed body nor the decoded blob is ever resident as a
 /// whole. `expected` is the ceiling on the decoded size, and `None` means "no
-/// ceiling" — the case for a blob whose length is not promised by the API.
-/// `max_compressed` is the same ceiling for the compressed body: a chunk is
-/// reserved at its manifest `compressed_size`, and a body that crosses it is
-/// refused instead of being streamed to an unbounded length.
+/// ceiling" (used only by direct tests); both production paths pass a hard
+/// cap. A manifest's reported size is not a promise, so its cap is a generous
+/// fixed ceiling rather than that hint. `max_compressed` is the same ceiling
+/// for the compressed body: a body that crosses it is refused instead of
+/// being streamed to an unbounded length.
 ///
 /// A failure carries the compressed byte count accumulated before it, so the
 /// caller can charge what really arrived.
@@ -586,13 +609,59 @@ fn url_base(prefix: &str) -> Result<reqwest::Url> {
     Ok(base)
 }
 
+/// Refuse a server-supplied blob id that could redirect a URL join.
+///
+/// Ids are opaque path segments out of the API's `getBuild` body, never free
+/// URLs. The measured production shapes — `manifest_<16hex>_<32hex>` for a
+/// manifest and `<16hex>_<32hex>` for a chunk — are hex digits and `_` only, so
+/// none of these rules can reject a real id. They only rule out shapes that
+/// let `Url::join` replace the origin, escape the prefix, or inject a query or
+/// fragment. [`join_blob`] checks the joined URL as well.
+fn validate_blob_id(id: &str) -> Result<()> {
+    anyhow::ensure!(!id.is_empty(), "empty blob id");
+    anyhow::ensure!(!id.contains(':'), "blob id {id:?} contains a URL scheme");
+    anyhow::ensure!(
+        !id.contains('/'),
+        "blob id {id:?} contains a path separator"
+    );
+    anyhow::ensure!(!id.contains('\\'), "blob id {id:?} contains a backslash");
+    anyhow::ensure!(
+        !id.contains(".."),
+        "blob id {id:?} contains a parent component"
+    );
+    anyhow::ensure!(!id.contains('?'), "blob id {id:?} contains a query");
+    anyhow::ensure!(!id.contains('#'), "blob id {id:?} contains a fragment");
+    Ok(())
+}
+
+/// Join a blob id under a resolved prefix, keeping the fetch on the same
+/// origin and under the same path.
+///
+/// The shape check rejects the obvious redirects; the two assertions are the
+/// backstop for anything `Url::join` normalises differently than expected.
+fn join_blob(base: &reqwest::Url, id: &str) -> Result<reqwest::Url> {
+    validate_blob_id(id)?;
+    let url = base
+        .join(id)
+        .with_context(|| format!("join blob id {id:?}"))?;
+    anyhow::ensure!(
+        url.origin() == base.origin(),
+        "blob id {id:?} would redirect to another origin: {url}"
+    );
+    anyhow::ensure!(
+        url.path().starts_with(base.path()),
+        "blob id {id:?} would escape the blob path prefix: {url}"
+    );
+    Ok(url)
+}
+
 /// One-shot URL join for the test seam: resolve `prefix`, then append `id`.
 ///
 /// The fetch paths resolve the prefix once at their boundary and use
-/// `reqwest::Url::join` per blob; this is the same result in a single call, so
-/// a test can advertise exactly the URL production fetches.
+/// `reqwest::Url::join` per blob; this is the same shape check and join in a
+/// single call, so a test can advertise exactly the URL production fetches.
 pub fn join_url(prefix: &str, id: &str) -> Result<reqwest::Url> {
-    Ok(url_base(prefix)?.join(id)?)
+    join_blob(&url_base(prefix)?, id)
 }
 
 /// Whether a blob status is worth another attempt.
@@ -889,9 +958,10 @@ mod tests {
     /// yields the same bytes the buffered decode did, the same MD5 of the
     /// **decompressed** bytes, and the same parsed message.
     ///
-    /// The buffer is the size the API reported, and the decode fits in it —
-    /// which is the whole point of sizing it: a buffer that had to grow would
-    /// have doubled the peak.
+    /// The sink here is sized exactly to the frame to pin the byte-for-byte
+    /// differential. The production path starts modest and grows instead (see
+    /// `a_manifest_body_grows_the_buffer_from_a_modest_start`); both go through
+    /// the same hard caps.
     #[tokio::test]
     async fn the_streamed_manifest_parses_like_the_buffered_one() {
         let manifest = SophonChunkManifest {
@@ -914,12 +984,17 @@ mod tests {
         let mut raw = Vec::new();
         manifest.encode(&mut raw).expect("prost encode");
         let compressed = frame(&raw);
-        // The buffer the API's `uncompressed_size` sizes.
+        // A sink sized to the frame for the byte-for-byte differential.
         let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
         let body = futures_util::stream::iter(pieces(&compressed, 4096));
-        let digest = stream_body(body, None, None, &mut sink)
-            .await
-            .expect("the frame decodes");
+        let digest = stream_body(
+            body,
+            Some(MAX_MANIFEST_BYTES),
+            Some(MAX_MANIFEST_COMPRESSED),
+            &mut sink,
+        )
+        .await
+        .expect("the frame decodes");
         assert_eq!(sink, raw, "the decoded bytes are the manifest");
         assert_eq!(
             sink,
@@ -936,41 +1011,81 @@ mod tests {
         assert_eq!(
             sink.capacity(),
             raw.len(),
-            "the decode fitted the buffer the API's size asked for"
+            "the decode fitted the buffer sized for this differential"
         );
         let parsed = SophonChunkManifest::decode(sink.as_slice()).expect("parse");
         assert_eq!(parsed, manifest, "the same message as the buffered one");
     }
 
-    /// The five pure policy cases, folded into one process so nextest spawns one
-    /// test instead of five. Every original assertion and message is kept; a
-    /// labelled subcase names the policy that failed.
+    /// The production path starts with a modest reservation and lets the
+    /// decoded bytes grow the buffer geometrically. A body larger than the
+    /// start must arrive whole and stop well below the hard ceiling.
+    #[tokio::test]
+    async fn a_manifest_body_grows_the_buffer_from_a_modest_start() {
+        let payload: Vec<u8> = (0..128 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let mut sink: Vec<u8> = Vec::with_capacity(MANIFEST_INITIAL_CAPACITY);
+        let body = futures_util::stream::iter(pieces(&compressed, 4096));
+        let digest = stream_body(
+            body,
+            Some(MAX_MANIFEST_BYTES),
+            Some(MAX_MANIFEST_COMPRESSED),
+            &mut sink,
+        )
+        .await
+        .expect("the frame decodes");
+        assert_eq!(sink, payload, "every decoded byte arrived");
+        assert_eq!(digest.bytes, payload.len() as u64);
+        assert!(
+            sink.capacity() > MANIFEST_INITIAL_CAPACITY,
+            "the buffer grew past its modest start"
+        );
+        assert!(
+            sink.capacity() < MAX_MANIFEST_BYTES as usize,
+            "growth stops well below the hard ceiling"
+        );
+    }
+
+    /// The pure policy cases, folded into one process so nextest spawns one
+    /// test instead of several. Every assertion and message is kept; a labelled
+    /// subcase names the policy that failed.
     #[test]
     fn sophon_pure_policy_contracts() {
         let subcases: &[(&str, &dyn Fn())] = &[
-            ("the_manifest_size_hint_is_clamped", &|| {
-                // The manifest's reported size is a **hint**, and a hint
-                // cannot ask for an impossible allocation. `Vec::with_capacity`
-                // above `isize::MAX` panics, and a merely-large value is an
-                // OOM abort — on an unchecked field out of the API's JSON.
-                assert_eq!(manifest_size_hint(0), 0, "zero stays zero");
-                assert_eq!(manifest_size_hint(-5), 0, "a negative size is no size");
-                assert_eq!(
-                    manifest_size_hint(16_827_424),
-                    16_827_424,
-                    "the real manifest's size passes through"
-                );
-                assert_eq!(
-                    manifest_size_hint(i64::MAX),
-                    MAX_MANIFEST_HINT,
-                    "a bogus one cannot ask for an impossible allocation"
-                );
-                assert_eq!(
-                    manifest_size_hint(MAX_MANIFEST_HINT as i64 + 1),
-                    MAX_MANIFEST_HINT,
-                    "one past the clamp stays clamped"
-                );
-            }),
+            (
+                "the_manifest_size_hint_stays_modest_and_caps_cover_reality",
+                &|| {
+                    // The verbatim build 7.1.0 `getBuild` body kept in the capture
+                    // fixtures declares 16,827,424 decoded bytes and 9,007,187
+                    // compressed bytes for the `game` manifest. Both hard caps must
+                    // sit above those or they would reject real traffic; the
+                    // reservation must stay small or it repeats the up-front cost.
+                    const LARGEST_DECODED: u64 = 16_827_424;
+                    const LARGEST_COMPRESSED: u64 = 9_007_187;
+                    assert_eq!(manifest_size_hint(0), 0, "zero stays zero");
+                    assert_eq!(manifest_size_hint(-5), 0, "a negative size is no size");
+                    assert_eq!(
+                        manifest_size_hint(16_827_424),
+                        MANIFEST_INITIAL_CAPACITY,
+                        "even the real size reserves only a modest start"
+                    );
+                    assert_eq!(
+                        manifest_size_hint(i64::MAX),
+                        MANIFEST_INITIAL_CAPACITY,
+                        "a bogus hint cannot ask for an impossible allocation"
+                    );
+                    const {
+                        assert!(
+                            MAX_MANIFEST_BYTES > LARGEST_DECODED,
+                            "the decode cap must admit the real largest manifest"
+                        );
+                        assert!(
+                            MAX_MANIFEST_COMPRESSED > LARGEST_COMPRESSED,
+                            "the compressed cap must admit the real largest manifest"
+                        );
+                    }
+                },
+            ),
             ("only_transient_statuses_are_retryable", &|| {
                 // Pinned as a table rather than a prose claim: a retryable
                 // status must be one where a second identical request could
@@ -1036,6 +1151,40 @@ mod tests {
                     );
                 },
             ),
+            (
+                "blob_ids_admit_production_shapes_and_refuse_redirects",
+                &|| {
+                    let prefix = "https://autopatchhk.yuanshen.com/client_app/sophon/manifests/cxhpq4g4rgg0/sMXGW2ll3Fuu";
+                    // The real id from the captured build 7.1.0 body plus the
+                    // documented chunk shapes and this crate's test ids: none
+                    // may be rejected as a redirect.
+                    for id in [
+                        "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d",
+                        "ddb31a9f",
+                        "321c3cf486ed509164edec1e1981fec8",
+                        "manifest",
+                        "abc123",
+                    ] {
+                        let url = join_url(prefix, id)
+                            .unwrap_or_else(|e| panic!("production id {id:?} refused: {e:#}"));
+                        assert_eq!(url.as_str(), format!("{prefix}/{id}"));
+                    }
+                    for id in [
+                        "",
+                        "http://evil.test/x",
+                        "https:/evil.test/x",
+                        "//evil.test/x",
+                        "/etc/passwd",
+                        "../escape",
+                        "a/b/../c",
+                        "x?y=1",
+                        "x#frag",
+                        "a\\b",
+                    ] {
+                        assert!(join_url(prefix, id).is_err(), "{id:?} must be refused");
+                    }
+                },
+            ),
         ];
         for (label, run) in subcases {
             println!("subcase: {label}");
@@ -1090,6 +1239,25 @@ mod tests {
         assert!(
             !chain.contains("after "),
             "a fatal answer must not be dressed up as exhaustion: {chain}"
+        );
+    }
+
+    /// A hostile manifest id is refused at the fetch boundary, before any
+    /// request: validation is wired into `fetch_manifest`, not only the seam.
+    #[tokio::test]
+    async fn a_hostile_manifest_id_is_refused_before_a_request() {
+        let server = serve_status(200).await;
+        let mut meta = manifest_meta(&server.uri());
+        meta.manifest.id = "..".into();
+        let client = reqwest::Client::new();
+        let err = fetch_manifest(&client, &BackoffPolicy::none(), &meta)
+            .await
+            .expect_err("the id is refused");
+        assert!(format!("{err:#}").contains("parent component"), "{err:#}");
+        assert_eq!(
+            server.hits().await,
+            0,
+            "no request was sent for a hostile id"
         );
     }
 }
