@@ -27,7 +27,7 @@ tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
 rayon = "1.12.0"
 # The rw thread-count warning and the filter's own errors are reported through
 # anyhow; the leaves do not own a program's exit or output policy.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 # Structured narration from the rw runtime.
 tracing = "0.1.44"
 # The shared include/exclude glob mechanics. This crate owns only girsync's

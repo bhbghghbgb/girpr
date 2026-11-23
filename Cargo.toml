@@ -150,7 +150,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # The file layer's writer: a non-blocking queue drained by a worker thread, so
 # logging never blocks the run and the worker guard flushes the tail on exit.
 tracing-appender = "0.2.5"
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 # The retry schedule factory and the injectable sleep driver. The leaf owns
 # `backoff` and the ±50 % jitter is this program's choice, passed in as a
 # parameter, so its retry waits stay exactly as before.

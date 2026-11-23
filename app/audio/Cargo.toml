@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 # The error/context wrappers and the malformed-selection, unknown-line and
 # resolution warnings this boundary emits.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 tracing = "0.1.44"
 # The four code/display-name pairs and their canonical order, shared with the
 # capture tool so both write the same scan-file bytes. This crate keeps the

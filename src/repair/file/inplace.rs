@@ -710,6 +710,11 @@ where
 }
 
 /// Step 5: verify, redo only the still-wrong chunks, then verify again.
+///
+/// The eight parameters are the caller's whole file-write context: splitting
+/// them into a struct would only move the same state behind an indirection, so
+/// they stay explicit at this single-call-site boundary.
+#[allow(clippy::too_many_arguments)]
 async fn verify_and_retry(
     ctx: &FileCtx,
     writes: &mut FileWrites,

@@ -12,7 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 tracing = "0.1.44"
 girpr-chunk-cost = { path = "../../crates/chunk-cost" }
 girpr-fetch = { path = "../fetch" }

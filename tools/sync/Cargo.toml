@@ -47,7 +47,7 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # offending value; girsync keeps its own `{flag}` wording and deliberately keeps
 # a zero-refusal outside clap so it exits 3, not clap's parse-error 2.
 girpr-value-ranges = { path = "../../crates/value-ranges" }
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 walkdir = "2.5.1"
 # The redb cache (with `redb`, its positional `postcard` codec and `tempfile`
 # working names) now lives in its own crate below this lib. This binary and its

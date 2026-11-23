@@ -22,4 +22,4 @@ md-5 = "0.11.0"
 sha2 = "0.11.1"
 # Only for `parse_hex`, so a bad spelling reports the same message at every
 # call site.
-anyhow = "1.0.104"
+anyhow = "1.0.105"

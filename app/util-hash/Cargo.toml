@@ -19,7 +19,7 @@ test-support = []
 
 [dependencies]
 # The error/context wrappers the scan carries.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 # The one-read-pass file scanner's hasher. `Md5`/`EMPTY_MD5` themselves are
 # re-exported from `girpr-digest`; this is only the hasher behind them.
 md-5 = "0.11.0"

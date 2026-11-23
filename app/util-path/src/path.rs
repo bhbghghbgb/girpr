@@ -363,7 +363,7 @@ impl PathRoot {
     /// this root's cache and the leaf is still resolved and checked against the
     /// base, so a symlink planted inside the install is still refused.
     ///
-    /// Only pass rels returned by [`clean_rel`](crate::clean_rel) or produced by
+    /// Only pass rels returned by [`clean_rel`] or produced by
     /// `build_plan`. An untrusted rel must use [`join`](Self::join), which runs
     /// the full lexical validation. A debug build asserts the precondition so a
     /// misuse fails loudly in tests; release builds pay only for the join.

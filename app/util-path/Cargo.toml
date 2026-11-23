@@ -21,7 +21,7 @@ test-support = []
 
 [dependencies]
 # The error/context wrappers the path checks carry.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 # The Windows device-name predicate, slash folding and ASCII case folding the
 # server-path checks are spelled with. This crate keeps its own containment and
 # identity policies; the leaf owns only the platform primitives.

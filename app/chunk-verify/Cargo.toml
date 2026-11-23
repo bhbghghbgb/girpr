@@ -12,7 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 girpr-proto = { path = "../../crates/proto" }
 girpr-util-hash = { path = "../util-hash" }
 

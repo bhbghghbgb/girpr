@@ -2039,7 +2039,7 @@ mod tests {
         // the recorded one, so the verdict is stale.
         let mut changed = *data;
         changed[1] ^= 0xff;
-        std::fs::write(&path, &changed).unwrap();
+        std::fs::write(&path, changed).unwrap();
 
         let outcome = attempt_temp(
             &ctx,

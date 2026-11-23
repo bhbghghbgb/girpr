@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 # JSON-lines parsing of the launcher's ignore/blacklist lists and the context
 # wrappers every I/O error carries.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 serde_json = "1.0.154"
 # The malformed-entry warning the config-list readers emit.
 tracing = "0.1.44"

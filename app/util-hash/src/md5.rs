@@ -364,13 +364,13 @@ pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
     with_md5_scratch(|buf| md5_reader_digest_with_buf(f, buf))
 }
 
-/// [`md5_reader_digest`] with a caller-supplied read buffer.
+/// `md5_reader_digest` with a caller-supplied read buffer.
 ///
 /// The seek is this function's reset contract — the digest always starts at
 /// the beginning of the file — and stays here. The shared reader sink owns
 /// only the read loop and the MD5 context; the buffer size is the caller's.
 /// A caller with a task-owned buffer can call this directly to avoid the
-/// per-thread pool [`md5_reader_digest`] uses.
+/// per-thread pool `md5_reader_digest` uses.
 pub fn md5_reader_digest_with_buf(f: &mut File, buf: &mut [u8]) -> Result<Md5> {
     f.seek(SeekFrom::Start(0))?;
     let raw = girpr_digest::hash_reader(f, girpr_digest::Algorithms::MD5, buf)?;

@@ -32,7 +32,7 @@ girsync = { path = "../sync" }
 # file in place, and dropping the handle on failure leaves no residue.
 tempfile = "3.27"
 sled = "0.34"
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 # Hex decoding of legacy digest strings, with the bad-row context kept here in
 # the caller. The shared crate supplies only the decode primitive.
 girpr-digest = { path = "../../crates/digest" }

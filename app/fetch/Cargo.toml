@@ -20,7 +20,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # The HYP/Sophon JSON calls and the streamed downloads. These are the
