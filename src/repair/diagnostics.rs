@@ -8,13 +8,18 @@
 //! log file.
 //!
 //! This module records the same decisions as plain values while the repair
-//! runs. The record lives in thread-local storage that only the test seam
-//! reads: a shipped run writes to it and never looks at it, so no output byte,
-//! exit code, log line or CLI flag changes. Nextest runs one test per process
-//! on a current-thread runtime, so a `take` after a run sees exactly that
-//! run's decisions.
+//! runs. Records are attributed to the thread that started the repair loop,
+//! not to the thread that happens to poll a file task: file tasks run on the
+//! blocking pool, so a task carries its origin's thread id onto the pool
+//! thread while it runs. Only the test seam reads the record; a shipped run
+//! writes to it and never looks at it, so no output byte, exit code, log line
+//! or CLI flag changes. Nextest runs one test per process, so a `take` after a
+//! run sees exactly that run's decisions.
 
-use std::cell::RefCell;
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::thread::ThreadId;
 
 /// The structured decisions of one in-process repair run.
 ///
@@ -46,19 +51,61 @@ pub struct RepairDiagnostics {
     pub trim_deferred: bool,
 }
 
-thread_local! {
-    static CURRENT: RefCell<RepairDiagnostics> = RefCell::new(RepairDiagnostics::default());
+/// Records by originating thread. Keyed by thread rather than held in TLS
+/// because a file task records from a blocking-pool thread (see
+/// [`DiagnosticsOwner`]).
+static RECORDS: OnceLock<Mutex<HashMap<ThreadId, RepairDiagnostics>>> = OnceLock::new();
+
+fn records() -> &'static Mutex<HashMap<ThreadId, RepairDiagnostics>> {
+    RECORDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Drain this thread's record, leaving a fresh one behind.
+thread_local! {
+    /// The id records from this thread are attributed to.
+    static OWNER: ThreadId = std::thread::current().id();
+    /// Override set on a pool thread while it runs a moved file task.
+    static ADOPTED: Cell<Option<ThreadId>> = const { Cell::new(None) };
+}
+
+fn owner() -> ThreadId {
+    ADOPTED
+        .with(|a| a.get())
+        .unwrap_or_else(|| OWNER.with(|id| *id))
+}
+
+fn with_record<R>(f: impl FnOnce(&mut RepairDiagnostics) -> R) -> R {
+    let key = owner();
+    let mut map = records().lock().unwrap_or_else(|e| e.into_inner());
+    f(map.entry(key).or_default())
+}
+
+/// Attribute the current thread's diagnostics to `owner` while this guard is
+/// alive. A file task moved to the blocking pool adopts the thread that
+/// started the repair loop, so a `take` on that thread sees its decisions.
+pub(crate) struct DiagnosticsOwner(Option<ThreadId>);
+
+impl DiagnosticsOwner {
+    pub(crate) fn adopt(owner: ThreadId) -> Self {
+        Self(ADOPTED.with(|a| a.replace(Some(owner))))
+    }
+}
+
+impl Drop for DiagnosticsOwner {
+    fn drop(&mut self) {
+        ADOPTED.with(|a| a.set(self.0));
+    }
+}
+
+/// Drain the originating thread's record, leaving a fresh one behind.
 pub(crate) fn take() -> RepairDiagnostics {
-    CURRENT.with(|c| std::mem::take(&mut *c.borrow_mut()))
+    let key = owner();
+    let mut map = records().lock().unwrap_or_else(|e| e.into_inner());
+    map.remove(&key).unwrap_or_default()
 }
 
 /// Record the ordered tier's write direction and salvage figures.
 pub(crate) fn record_order(ascending: bool, salvaged: u64, of: u64) {
-    CURRENT.with(|c| {
-        let mut d = c.borrow_mut();
+    with_record(|d| {
         d.ascending = Some(ascending);
         d.salvaged = Some(salvaged);
         d.salvaged_of = Some(of);
@@ -67,8 +114,7 @@ pub(crate) fn record_order(ascending: bool, salvaged: u64, of: u64) {
 
 /// Record the in-place writer's chunk accounting.
 pub(crate) fn record_chunk_stats(stats: &super::file::ChunkStats) {
-    CURRENT.with(|c| {
-        let mut d = c.borrow_mut();
+    with_record(|d| {
         d.chunks_total = Some(stats.chunks_total);
         d.chunks_kept = Some(stats.chunks_kept);
         d.chunks_reused = Some(stats.chunks_reused);
@@ -78,20 +124,20 @@ pub(crate) fn record_chunk_stats(stats: &super::file::ChunkStats) {
 
 /// Record that the guarded plan-scan verdict was reused.
 pub(crate) fn record_plan_scan_reused() {
-    CURRENT.with(|c| c.borrow_mut().plan_scan_reused = true);
+    with_record(|d| d.plan_scan_reused = true);
 }
 
 /// Record that a RAM shortage (not a zero-byte mode) picked the ordered tier.
 pub(crate) fn record_ram_shortage() {
-    CURRENT.with(|c| c.borrow_mut().ram_shortage = true);
+    with_record(|d| d.ram_shortage = true);
 }
 
 /// Record that the eager dead-tail trim ran.
 pub(crate) fn record_dead_tail_trimmed() {
-    CURRENT.with(|c| c.borrow_mut().dead_tail_trimmed = true);
+    with_record(|d| d.dead_tail_trimmed = true);
 }
 
 /// Record that the trim was deferred to the end.
 pub(crate) fn record_trim_deferred() {
-    CURRENT.with(|c| c.borrow_mut().trim_deferred = true);
+    with_record(|d| d.trim_deferred = true);
 }

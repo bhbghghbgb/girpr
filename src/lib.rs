@@ -189,11 +189,12 @@ pub mod test_support {
     ///
     /// Calling this before a run clears any leftovers; calling it after one
     /// reads exactly that run's decisions. A shipped run writes to the same
-    /// thread-local but never calls this, so nothing it emits changes.
+    /// record but never calls this, so nothing it emits changes.
     ///
-    /// The record is thread-local, so a caller must run the library on a
-    /// current-thread runtime (the default for `#[tokio::test]`); a
-    /// multi-thread runtime would record on worker threads and drain nothing.
+    /// Records are attributed to the thread that started the repair loop, so
+    /// they survive file tasks being moved onto the blocking pool. A caller
+    /// must drain on that same thread, which a current-thread runtime (the
+    /// default for `#[tokio::test]`) guarantees.
     pub fn take_repair_diagnostics() -> RepairDiagnostics {
         crate::repair::diagnostics::take()
     }

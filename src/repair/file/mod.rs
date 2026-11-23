@@ -262,8 +262,8 @@ pub async fn repair_all(inputs: RepairInputs) -> Summary {
 async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
     // Each file task gets a `file{seq,total,task,path}` span so its progress
     // can be grouped in logs; `task` is the tokio async-task id (stable across
-    // thread hops), and the `picked up by worker` event records which worker
-    // took the file.
+    // thread hops), and the `picked up by file task` event records which
+    // blocking-pool thread took the file.
     let span = tracing::info_span!(
         "file",
         seq = idx + 1,
@@ -272,7 +272,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
         path = %ctx.plan.files()[idx].rel,
     );
     async move {
-        tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
+        tracing::debug!(thread = ?std::thread::current().id(), "picked up by file task");
         let started = std::time::Instant::now();
         let outcome = repair_one_file(&ctx, idx).await;
         // One per-file total, at debug: a chunk line per chunk would drown the
@@ -389,6 +389,21 @@ where
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let limit = jobs.max(1);
+    // Repair file tasks interleave long synchronous scans/stages/verifies with
+    // short awaits on the network stream. Run each whole task on the blocking
+    // pool and drive its (Send) future with `Handle::block_on` there: the sync
+    // disk work then never occupies a runtime worker, so the runtime can be
+    // sized from the host alone without `jobs` file tasks starving timers and
+    // network polling. The blocking pool grows on demand and is capped
+    // independently of `--jobs`; the network and timer drivers keep running on
+    // the runtime while a task is parked in `block_on`. The caller's tracing
+    // dispatcher is carried onto the pool thread so a file's lines still reach
+    // a scoped subscriber (the global one in production needs no carrying).
+    let handle = tokio::runtime::Handle::current();
+    let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+    // File tasks record structured diagnostics against the thread that
+    // started the repair loop; carry that id onto the pool thread as well.
+    let diag_owner = std::thread::current().id();
     // `buffer_unordered` owns the bounded window: it pulls a new `spawn`'d
     // task only when a slot frees up, so a large plan never allocates a task
     // per file up front. The iterator keeps the `--fail-fast` rule — once a
@@ -416,7 +431,15 @@ where
         Some(idx)
     });
     let mut tasks = futures_util::stream::iter(indices)
-        .map(|idx| tokio::spawn(spawn(idx)))
+        .map(|idx| {
+            let handle = handle.clone();
+            let dispatcher = dispatcher.clone();
+            let fut = spawn(idx);
+            tokio::task::spawn_blocking(move || {
+                let _diag = crate::repair::diagnostics::DiagnosticsOwner::adopt(diag_owner);
+                tracing::dispatcher::with_default(&dispatcher, || handle.block_on(fut))
+            })
+        })
         .buffer_unordered(limit);
 
     while let Some(result) = tasks.next().await {
