@@ -1,0 +1,10 @@
+.venv/
+samples/
+__pycache__/
+*.pyc
+*.cap
+*.bin
+*.enc
+*.proto.bin
+raw/
+*.log

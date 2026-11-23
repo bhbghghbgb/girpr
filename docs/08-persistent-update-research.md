@@ -439,14 +439,55 @@ keep inputs is the natural moment to revisit the documented v1 purge scope.
   so a repair started inside that window can write slightly stale revisions.
   girpr's single-shot run does not need the cache.
 * Manifest entries are NDJSON objects with `remoteName`, `md5`, `hash` (XXH64)
-  and `fileSize`; `isPatch`/force flags are `[JsonIgnore]` and must be computed,
-  not parsed. A blank line in a dispatcher manifest actually throws in Collapse
+  and `fileSize`; Collapse marks `isPatch`/force flags `[JsonIgnore]` and
+  recomputes them, although the live dispatcher does send `isPatch` on some rows
+  (§4.5). A blank line in a dispatcher manifest actually throws in Collapse
   (`IsCurrentLineJson` indexes `chars[0]`/`chars[^1]`), aborting all persistent
   processing — girpr should skip blank lines.
 * Collapse's HTTP repair path does no post-download hash validation (§3 Step 7);
   girpr's whole-file MD5 gate is a strict improvement worth keeping.
 * `audio_lang_14` is written by the installer, not by the repair routine
   (`InstallManagerBase.Sophon.cs:1337-1375`); repair only reads it.
+
+### 4.5 Server-side confirmation: no Sophon for Persistent hotfix bytes
+
+Collapse's Sophon-vs-HTTP choice is a *client-side* gate (`Repair.cs:167` routes
+on `string.IsNullOrEmpty(asset.remoteURL)`), so the code alone cannot prove the
+server has no Sophon path for the same bytes. A live probe
+(`tools/persistent-sophon-research/`, 2026-11-23 UTC, `hk4e_global`,
+`query_cur_region` res revision `49530578`, `OSRELWin7.2.0`) settled this:
+
+* The dispatcher query was fetched with the key/seed unwrapped from Collapse's
+  live release metadata (the RSA key is byte-identical to GenshinSlimmer's copy),
+  decrypted and decoded in full, including the fields the local `.proto` omits
+  (root 11/12/14, properties 38–47). None contains a Sophon/chunk/manifest pointer.
+* Both persistent manifests were downloaded and MD5-checked against the
+  dispatcher (3,164 rows: 2,631 `res_versions_external` + 533 `data_versions`).
+  The server **does** send `isPatch` on 10 rows — Collapse's parser discards it
+  (`PropertyVersioning.cs:29-30`); girpr should tolerate it.
+* **Every** Sophon manifest advertised by the live API was downloaded
+  (15 chunk manifests across builds 7.2.0/7.1.0/7.0.0 + 5 `getPatchBuild` patch
+  manifests) and cross-matched by normalized path and MD5. **Zero** hotfix MD5s
+  occur in any of them. The 1,661 path+MD5 matches are base-install copies in
+  `StreamingAssets/` that Collapse's MD5-diff rule keeps out of `Persistent/`;
+  the remaining 376 dispatcher-only MD5s (369 replaced + 7 new paths) are the
+  genuine hotfix set, including all 10 `isPatch` rows.
+* CDN probes agree: real Sophon chunks return 200 at the advertised prefix but
+  404 under dispatcher-derived `output_<rev>_<hash>` paths; hotfix full files
+  return 200 with the exact manifest MD5, ignore `?chunk=`/`?sophon=`, and answer
+  `Range` with 206.
+
+**Consequence for girpr:** there is no Sophon repair to fall back to for a
+`Persistent/` file. A full-file HTTP downloader (primary + alternate URL, with a
+post-download size/hash gate) is **mandatory**, not an implementation detail —
+the chunk-streaming repair core cannot be reused for hotfixes. This confirms
+gap row 7 in §4 and the design in §4.2 step 3. The hotfix CDN supports `Range`,
+so resumable downloads are an optional improvement; Collapse itself does not use
+them.
+
+Scope/caveats: one region, client version and revision; an unadvertised private
+manifest cannot be disproved, and CN/Bili regions were not probed. Reproduction
+scripts and exact URLs/statuses are in `tools/persistent-sophon-research/README.md`.
 
 ---
 
@@ -533,6 +574,11 @@ Launcher code (all under `reference-projects/Collapse/` unless noted):
   `GenshinSlimmer.ps1`, §2.4).
 * `reference-projects/GI-Live-Hotfix-Downloader/` — reference for understanding the
   dispatcher hotfix-version query and the download of persistent hotfix files.
+
+Live probes: `tools/persistent-sophon-research/` — re-runnable Python scripts
+(metadata unwrap, dispatcher query/decrypt/parse, HYP/Sophon enumeration,
+cross-match, CDN probes) plus `README.md` with the §4.5 evidence; `samples/` is
+gitignored.
 
 Web:
 
