@@ -892,13 +892,12 @@ async fn without_a_local_manifest_every_chunk_is_fetched() {
     let run = rig.run_lib(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
-        rig.mock.chunk_hits(),
-        vec![
-            "new_k".to_string(),
-            "new_m".to_string(),
-            "new_f".to_string()
-        ],
-        "with no reuse map every chunk downloads"
+        rig.mock.chunk_hits().into_iter().collect::<BTreeSet<_>>(),
+        ["new_k", "new_m", "new_f"]
+            .into_iter()
+            .map(String::from)
+            .collect::<BTreeSet<_>>(),
+        "with no reuse map every chunk downloads, in whatever order the window finishes"
     );
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
 }

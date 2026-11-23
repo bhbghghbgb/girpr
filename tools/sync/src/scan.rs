@@ -397,4 +397,33 @@ mod tests {
 
         assert_eq!(rels, vec!["one", "one/mid.txt", "one/two", "top.txt"]);
     }
+
+    /// A regular file's walk entry must carry exactly the size and mtime a
+    /// fresh `std::fs::metadata` reports: those fields feed the mirror's
+    /// comparison, so they are part of the cache's byte vocabulary. walkdir
+    /// caches Windows metadata during enumeration under `follow_links(true)`,
+    /// so this locks that equivalence against a future walkdir upgrade. Links
+    /// are a different path (the walk marks them with `path_is_symlink`); this
+    /// case is a plain file.
+    #[test]
+    fn walk_live_reports_the_same_size_and_mtime_as_std_fs_metadata() {
+        let root = girpr_tempdir::TempDir::new("girsync_scan", "metadata");
+        let path = root.join("regular.bin");
+        std::fs::write(&path, b"a regular file with some bytes").unwrap();
+
+        let meta = std::fs::metadata(&path).unwrap();
+        let live = walk_live(&root, 4).unwrap();
+        let ent = live
+            .iter()
+            .find(|e| e.rel == "regular.bin")
+            .expect("the regular file is in the walk");
+
+        assert_eq!(ent.size, meta.len(), "size from the walk's metadata");
+        assert_eq!(
+            ent.mtime_ns,
+            mtime_ns_of(&meta),
+            "mtime_ns from the walk's metadata"
+        );
+        assert!(!ent.is_link, "a plain file is not marked as a link");
+    }
 }

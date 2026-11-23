@@ -10,6 +10,7 @@ use crate::common::{
 };
 use girpr::{RunExit, Summary};
 use girpr_repair_policy::RepairMode;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
@@ -266,8 +267,11 @@ async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
         "the scanned estimate is the ordered tier's real cost: {estimate} vs {downloaded}"
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_p".to_string(), "chunk_t".to_string()],
+        mock.chunk_hits().into_iter().collect::<BTreeSet<_>>(),
+        ["chunk_p", "chunk_t"]
+            .into_iter()
+            .map(String::from)
+            .collect::<BTreeSet<_>>(),
         "the source the losing direction needed is downloaded"
     );
 
@@ -865,8 +869,11 @@ async fn an_overlapping_layout_reaches_the_manifest_digest_after_the_redo() {
          file-level retry: {logs}"
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_overlap_a".to_string(), "chunk_overlap_b".to_string()],
+        mock.chunk_hits().into_iter().collect::<BTreeSet<_>>(),
+        ["chunk_overlap_a", "chunk_overlap_b"]
+            .into_iter()
+            .map(String::from)
+            .collect::<BTreeSet<_>>(),
         "A is patched, and B is fetched again only because the digest failed"
     );
 

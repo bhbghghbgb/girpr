@@ -16,14 +16,16 @@ use girpr_model::region::{CHANNEL_ENDPOINT, Host};
 /// generous.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Idle window for a buffered JSON wrapper body read.
+/// Bounded deadline for a buffered JSON wrapper body read.
 ///
-/// HYP/Sophon wrapper bodies are small (the captured `getBuild` answers are
-/// ~4.5 KiB), so thirty seconds without another byte means the transport is
-/// stuck. This is deliberately **not** a client-wide total timeout: that would
-/// abort a large chunk or manifest stream on a slow link. Streamed bodies are
-/// fetched through `sophon::stream`, whose transport errors are already
-/// retryable; only the two buffered JSON reads need this guard.
+/// `tokio::time::timeout` wraps the whole `resp.bytes()` future once: this is a
+/// **deadline on these small buffered bodies**, not a resetting per-byte idle
+/// timer and not a client-wide total request timeout. A body that trickles one
+/// byte every 29 s still hits it. That is intended — HYP/Sophon wrapper answers
+/// are a few KiB and must resolve inside the retry budget — while large chunk
+/// and manifest bodies go through `sophon::stream` and must keep working on a
+/// slow link (no blanket total timeout there). The name is kept for continuity;
+/// the bound is a fixed window from the start of the read.
 const JSON_BODY_IDLE: Duration = Duration::from_secs(30);
 
 /// Minimal HYP client (Starward parity): getGameConfigs / getGameBranches /
@@ -45,6 +47,11 @@ pub struct HypClient {
     /// Retry wait policy: production uses exponential backoff with jitter,
     /// tests use [`BackoffPolicy::none`] so retries are instant.
     backoff: BackoffPolicy,
+    /// Deadline for the two buffered JSON body reads. Production uses
+    /// [`JSON_BODY_IDLE`]; the field exists so a test can stall a loopback body
+    /// and exercise the deadline in milliseconds. It bounds the small buffered
+    /// body only — never a total timeout on a streamed download.
+    json_body_idle: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,6 +337,7 @@ impl HypClient {
             channel,
             sub_channel,
             backoff,
+            json_body_idle: JSON_BODY_IDLE,
         })
     }
 
@@ -369,6 +377,7 @@ impl HypClient {
 
     async fn get_node<T: DeserializeOwned>(&self, url: &str, node: &str) -> Result<T> {
         tracing::debug!(api = "hyp", url = %url, "GET");
+        let deadline = self.json_body_idle;
         retry(5, &self.backoff, |attempt| async move {
             match self.client.get(url).send().await {
                 Ok(resp) => {
@@ -386,9 +395,10 @@ impl HypClient {
                         );
                     }
                     // A stalled body read must feed the retry loop. The bound is
-                    // an idle window on these small buffered bodies, not a total
-                    // request timeout, so large streamed downloads are untouched.
-                    let body = match tokio::time::timeout(JSON_BODY_IDLE, resp.bytes()).await {
+                    // a deadline on these small buffered bodies (see
+                    // `JSON_BODY_IDLE`), not a total request timeout, so large
+                    // streamed downloads are untouched.
+                    let body = match tokio::time::timeout(deadline, resp.bytes()).await {
                         Ok(Ok(body)) => body,
                         Ok(Err(e)) => {
                             return Retry::Retry(
@@ -397,7 +407,7 @@ impl HypClient {
                         }
                         Err(_) => {
                             return Retry::Retry(anyhow::anyhow!(
-                                "read body timed out after {JSON_BODY_IDLE:?} url={url}"
+                                "read body timed out after {deadline:?} url={url}"
                             ));
                         }
                     };
@@ -459,6 +469,7 @@ impl HypClient {
         // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
         // Returns retcode -202 when tag unknown -> caller maps to None.
         tracing::debug!(api = "sophon", url = %url, "GET");
+        let deadline = self.json_body_idle;
         retry(5, &self.backoff, |attempt| async move {
             match self.client.get(url).send().await {
                 Ok(r) => {
@@ -471,14 +482,14 @@ impl HypClient {
                                 .context(format!("sophon api status {status} url={url}")),
                         );
                     }
-                    let body = match tokio::time::timeout(JSON_BODY_IDLE, r.bytes()).await {
+                    let body = match tokio::time::timeout(deadline, r.bytes()).await {
                         Ok(Ok(body)) => body,
                         Ok(Err(e)) => {
                             return Retry::Retry(anyhow::Error::from(e).context("read body"));
                         }
                         Err(_) => {
                             return Retry::Retry(anyhow::anyhow!(
-                                "read body timed out after {JSON_BODY_IDLE:?} url={url}"
+                                "read body timed out after {deadline:?} url={url}"
                             ));
                         }
                     };
@@ -641,6 +652,10 @@ fn urlencode(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_http::{serve_bodies, serve_with_status};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -729,6 +744,87 @@ mod tests {
             BackoffPolicy::none(),
         )
         .unwrap()
+    }
+
+    /// A loopback origin that announces a longer body than it writes and then
+    /// holds the connection open. A JSON client can only finish `resp.bytes()`
+    /// by hitting its deadline. Each connection gets its own task so retries
+    /// open fresh sockets while an earlier stalled one is still held; the task
+    /// ends when the timed-out client closes its side, so no sleep or manual
+    /// shutdown is needed.
+    async fn stalled_body_origin() -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::clone(&hits);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let hits = Arc::clone(&accepted);
+                tokio::spawn(async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    // Announce 16 body bytes but write two. `resp.bytes()` waits
+                    // for the remaining bytes, which never arrive.
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nok",
+                        )
+                        .await;
+                    let _ = socket.flush().await;
+                    // A read on a quiet connection is the stall: it returns only
+                    // when the timed-out client drops the body and closes.
+                    let mut probe = [0u8; 1];
+                    let _ = socket.read(&mut probe).await;
+                });
+            }
+        });
+        (uri, hits)
+    }
+
+    /// A body that never completes must hit the injected deadline in both JSON
+    /// paths. The deadline is a bounded, non-resetting window on the whole
+    /// buffered body — no bytes arrive here at all, so a resetting idle timer
+    /// would hang. The failure is transport-class, so it is retried with the
+    /// zero-wait test policy and finally reported with the deadline in the
+    /// error, not as a parse failure or a silent success.
+    #[tokio::test]
+    async fn both_json_paths_time_out_a_stalled_body() {
+        let deadline = Duration::from_millis(60);
+        let (uri, hits) = stalled_body_origin().await;
+        let mut client = client_for(Biz::Hk4eGlobal);
+        client.json_body_idle = deadline;
+
+        let node_err = tokio::time::timeout(Duration::from_secs(5), async {
+            client
+                .get_node::<Vec<GameConfig>>(&uri, "launch_configs")
+                .await
+        })
+        .await
+        .expect("the stalled body must hit the injected deadline")
+        .expect_err("a body that never completes cannot succeed");
+        assert!(
+            format!("{node_err:#}").contains("read body timed out"),
+            "the deadline must be the reported cause: {node_err:#}"
+        );
+
+        let direct_err = tokio::time::timeout(Duration::from_secs(5), async {
+            client.get_direct::<ChunkBuild>(&uri).await
+        })
+        .await
+        .expect("the stalled body must hit the injected deadline")
+        .expect_err("a body that never completes cannot succeed");
+        assert!(
+            format!("{direct_err:#}").contains("read body timed out"),
+            "the deadline must be the reported cause: {direct_err:#}"
+        );
+        assert!(
+            hits.load(Ordering::SeqCst) >= 1,
+            "the loopback origin must have seen a request"
+        );
     }
 
     /// A retryable retcode on the first call and a real node on the second: the

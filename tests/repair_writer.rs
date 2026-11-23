@@ -12,7 +12,15 @@ use crate::common::{
 use girpr::RunExit;
 use girpr::test_support::summary_record;
 use girpr_repair_policy::RepairMode;
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
+
+/// The bounded per-chunk fetch window records hits in arrival order, which is
+/// not stable across runs. Compare the chunks as a set so an assertion says
+/// *which* chunks were fetched, not which finished first.
+fn hit_set(mock: &MockServer) -> BTreeSet<String> {
+    mock.chunk_hits().into_iter().collect()
+}
 
 // ---------------------------------------------------------------------------
 // --max-write-bytes, --fail-fast, --purge-only
@@ -48,7 +56,7 @@ async fn verified_local_slice_is_reused_without_redownload() {
         read_game_file(&dir, &fx.files[0].rel).unwrap(),
         fx.files[0].data
     );
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+    assert_eq!(hit_set(&mock), BTreeSet::from(["chunk_foo1".to_string()]));
 
     mock.stop();
 }
@@ -88,7 +96,7 @@ async fn partial_tmp_prefix_is_resumed() {
         !dir.join("game").join("foo.dat_tmp").exists(),
         "tmp promoted"
     );
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+    assert_eq!(hit_set(&mock), BTreeSet::from(["chunk_foo1".to_string()]));
 
     mock.stop();
 }
@@ -127,8 +135,8 @@ async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
         "the `_tmp` was deleted by the failed gate and rebuilt"
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_foo0".to_string(), "chunk_foo1".to_string()]),
         "the full-length corrupt `_tmp` was not reused"
     );
 
@@ -178,8 +186,8 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
         "the in-place path must not create a temp file"
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_foo1".to_string()]),
         "the intact chunk is kept, not fetched"
     );
 
@@ -251,8 +259,8 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
         fx.files[0].data
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_foo0".to_string(), "chunk_foo1".to_string()]),
         "after the delete there is nothing left to reuse, so both chunks are fetched"
     );
     assert!(!dir.join("game").join("foo.dat_tmp").exists());
@@ -325,8 +333,8 @@ async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_t".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_t".to_string()]),
         "both moved chunks are salvaged; only the new one is downloaded"
     );
     // The file is the new one.
@@ -371,8 +379,8 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_p".to_string(), "chunk_t".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_p".to_string(), "chunk_t".to_string()]),
         "the source that the other direction needed was lost, so it downloaded"
     );
     // The same file the RAM tier produces.
@@ -975,7 +983,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=ok"), "{line}");
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+    assert_eq!(hit_set(&mock), BTreeSet::from(["chunk_foo1".to_string()]));
     assert!(
         summary.download.settled() < est,
         "a run with a loaded local manifest reuses something: {} vs {est}",
@@ -1008,8 +1016,8 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
+        hit_set(&mock),
+        BTreeSet::from(["chunk_foo1".to_string()]),
         "with no local manifest there is no reuse *map*, but the in-place \
          repair keeps the chunk that is already correct where it belongs — \
          the scan finds it without any manifest"
@@ -1076,8 +1084,13 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     // chunk only once. Without the rollback the whole `_tmp` would be thrown
     // away when the final MD5 failed, and the good chunk would be downloaded
     // twice as well.
+    // This case counts fetches, not just distinct chunks: the corrupt chunk is
+    // asked for twice. Sort rather than using `hit_set` so the duplicate
+    // survives, while arrival order stays irrelevant under the fetch window.
+    let mut hits = mock.chunk_hits();
+    hits.sort();
     assert_eq!(
-        mock.chunk_hits(),
+        hits,
         vec![
             "chunk_foo0".to_string(),
             "chunk_foo0".to_string(),

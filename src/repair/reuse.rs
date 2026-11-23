@@ -198,7 +198,8 @@ pub fn sources_for(chunks: &[SophonChunk], reuse: Option<&FileReuse>) -> Sources
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sophon::ReuseEntry;
+    use crate::hyp::ChunkManifestMeta;
+    use crate::sophon::{ReuseEntry, SophonChunkFile, WantedManifest, build_local_chunk_map};
     use crate::util::Md5;
 
     /// A chunk with the given destination offset and length. The salvage rule
@@ -440,5 +441,59 @@ mod tests {
     fn sources_for_gives_a_chunk_with_no_entry_no_source() {
         let chunks = vec![chunk("a", 0, 4)];
         assert_eq!(sources_for(&chunks, None), vec![None]);
+    }
+
+    /// A local manifest can lie about `f.size` and let a reuse offset past the
+    /// real EOF pass the map's declared-size range check (warn + skip, no
+    /// clamp). That declared size is only an early diagnostic: the salvage
+    /// order bounds sources by the file's **real** length, so the lying size
+    /// cannot turn the bad offset into an intact verdict.
+    #[test]
+    fn a_lying_declared_size_cannot_make_a_bad_offset_intact() {
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let real_len = 16u64;
+        let declared_size = 4096i64; // the local manifest lies
+        let bad_offset = 2048i64; // past the real EOF, inside the declared size
+        let local = WantedManifest {
+            meta: ChunkManifestMeta {
+                category_id: "game".into(),
+                category_name: "game".into(),
+                matching_field: "game".into(),
+                manifest: Default::default(),
+                chunk_download: Default::default(),
+                manifest_download: Default::default(),
+            },
+            files: vec![SophonChunkFile {
+                file: "game/foo.dat".into(),
+                chunks: vec![chunk_at("stale", md5, bad_offset, 8)],
+                is_folder: false,
+                size: declared_size,
+                md5: "m1".into(),
+            }],
+        };
+        let map = build_local_chunk_map(&[local]);
+        let target = chunk_at("target", md5, 0, 8);
+        let sources = sources_for(std::slice::from_ref(&target), map.get("game/foo.dat"));
+
+        // The declared size let the bad offset into the map and on to the
+        // source list; no clamp moved it to zero.
+        assert_eq!(sources, vec![Some(bad_offset as u64)]);
+
+        // With the real length the source reaches past EOF, so neither
+        // direction keeps it: the chunk must download. The declared size alone
+        // would have called it intact — that is the verdict the real length
+        // has to override.
+        let real = salvage_order(std::slice::from_ref(&target), &sources, real_len);
+        assert_eq!(
+            real.live,
+            vec![false],
+            "a source past the real EOF is not intact"
+        );
+        let declared = salvage_order(&[target], &sources, declared_size as u64);
+        assert_eq!(
+            declared.live,
+            vec![true],
+            "the lying size alone would have said intact"
+        );
     }
 }

@@ -10,7 +10,7 @@ use crate::common::{
 };
 use girpr::RunExit;
 use girpr::test_support::summary_record;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -48,8 +48,11 @@ async fn include_repairs_exactly_the_selected_file() {
         "an out-of-scope file is not even verified"
     );
     assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        mock.chunk_hits().into_iter().collect::<BTreeSet<_>>(),
+        ["chunk_foo0", "chunk_foo1"]
+            .into_iter()
+            .map(String::from)
+            .collect::<BTreeSet<_>>(),
         "only the selected file's chunks are fetched"
     );
     // docs/04 §2.1: a scoped run must not advance config.ini.
