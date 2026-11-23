@@ -3,10 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use rayon::prelude::*;
+
 use crate::assemble::{Decision, PatchMap};
-use crate::blobs::ChunkIndex;
 use crate::blobs::chunks::Set;
 use crate::blobs::props::BlobProps;
+use crate::blobs::{ChunkIndex, IndexedBlob};
 use crate::emit::index::Manifest;
 use crate::emit::selfcheck::Assertion;
 use crate::hash;
@@ -28,72 +30,87 @@ use super::report::{A18, A18_ID, REDERIVED};
 /// produces exactly those, and `verify` reporting them as failures is what tells
 /// an operator that the bundle they are holding cannot be materialized.
 pub fn check_blobs(root: &Path, index: &ChunkIndex, ceiling: u64) -> Vec<Assertion> {
-    let mut rows = Vec::new();
-    for b in &index.blobs {
-        let id = b.props.chunk_id.as_str();
-        let Some(rel) = b.props.stored_path.as_deref() else {
-            let why = match b.props.why_unusable() {
-                Some(reason) => {
-                    format!("no path: the index lists it but nothing was stored ({reason})")
-                }
-                None => "no path: the index lists it but nothing was stored".into(),
-            };
-            rows.push(Assertion::fail(
-                "A6",
-                crate::emit::selfcheck::wording("A6"),
-                id,
-                "a stored blob at a path",
-                &why,
-            ));
-            continue;
+    // Every blob is independent: A6 re-derives one row from one stored file, with
+    // no shared state and no dependence on any other blob. The MD5 + SHA-256 +
+    // zstd measure is CPU-bound, so spread it over rayon's bounded pool. Each
+    // worker opens its own file handle (`check_one_blob` calls `std::fs::read`,
+    // which opens and closes its own descriptor); nothing is shared but the
+    // read-only index and root.
+    //
+    // Completion order is not output order. Collect `(id, row)` and sort by id:
+    // `ChunkIndex::blobs` is documented and built as ordered by id, so this
+    // reproduces the serial loop's row order exactly for every bundle's index.
+    // `assertions_from_parallel_matches_serial` pins that byte-for-byte equality.
+    let mut rows: Vec<(&str, Assertion)> = index
+        .blobs
+        .par_iter()
+        .map(|b| (b.props.chunk_id.as_str(), check_one_blob(root, b, ceiling)))
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+/// A6 for one indexed blob: the single row the serial loop used to push inline.
+fn check_one_blob(root: &Path, b: &IndexedBlob, ceiling: u64) -> Assertion {
+    let id = b.props.chunk_id.as_str();
+    let Some(rel) = b.props.stored_path.as_deref() else {
+        let why = match b.props.why_unusable() {
+            Some(reason) => {
+                format!("no path: the index lists it but nothing was stored ({reason})")
+            }
+            None => "no path: the index lists it but nothing was stored".into(),
         };
-        // Defence in depth: `Bundle::open` refuses this shape before a reader
-        // gets here, but A6 is also callable through `reverify` on an index a
-        // caller built itself. The join must never be the first check.
-        if let Some(problem) = crate::paths::relative_path_problem(rel) {
-            rows.push(Assertion::fail(
-                "A6",
-                crate::emit::selfcheck::wording("A6"),
-                rel,
-                "a stored blob at a path inside the bundle",
-                &format!("unsafe path: {problem}"),
-            ));
-            continue;
-        }
-        // **Bytes at a path are not a usable blob.** Version 3 keeps a partial
-        // fetch and a blob whose measurement did not return, both with
-        // `stored_path` set. A6 is about a chunk that can be assembled from, so
-        // it asks the same predicate assembly does rather than only whether the
-        // file exists.
-        if let Some(why) = b.props.why_unusable() {
-            rows.push(Assertion::fail(
-                "A6",
-                crate::emit::selfcheck::wording("A6"),
-                rel,
-                "a complete, measured blob with a valid fetch",
-                &why,
-            ));
-            continue;
-        }
-        let path = root.join(rel);
-        match std::fs::read(&path) {
-            Err(e) => rows.push(Assertion::fail(
-                "A6",
-                crate::emit::selfcheck::wording("A6"),
-                rel,
-                &describe_indexed(&b.props),
-                &format!("unreadable: {e}"),
-            )),
-            Ok(raw) => rows.push(Assertion::check(
-                "A6",
-                crate::emit::selfcheck::wording("A6"),
-                rel,
-                &describe_indexed(&b.props),
-                &describe_bytes(&raw, ceiling),
-            )),
-        }
+        return Assertion::fail(
+            "A6",
+            crate::emit::selfcheck::wording("A6"),
+            id,
+            "a stored blob at a path",
+            &why,
+        );
+    };
+    // Defence in depth: `Bundle::open` refuses this shape before a reader
+    // gets here, but A6 is also callable through `reverify` on an index a
+    // caller built itself. The join must never be the first check.
+    if let Some(problem) = crate::paths::relative_path_problem(rel) {
+        return Assertion::fail(
+            "A6",
+            crate::emit::selfcheck::wording("A6"),
+            rel,
+            "a stored blob at a path inside the bundle",
+            &format!("unsafe path: {problem}"),
+        );
     }
-    rows
+    // **Bytes at a path are not a usable blob.** Version 3 keeps a partial
+    // fetch and a blob whose measurement did not return, both with
+    // `stored_path` set. A6 is about a chunk that can be assembled from, so
+    // it asks the same predicate assembly does rather than only whether the
+    // file exists.
+    if let Some(why) = b.props.why_unusable() {
+        return Assertion::fail(
+            "A6",
+            crate::emit::selfcheck::wording("A6"),
+            rel,
+            "a complete, measured blob with a valid fetch",
+            &why,
+        );
+    }
+    let path = root.join(rel);
+    match std::fs::read(&path) {
+        Err(e) => Assertion::fail(
+            "A6",
+            crate::emit::selfcheck::wording("A6"),
+            rel,
+            &describe_indexed(&b.props),
+            &format!("unreadable: {e}"),
+        ),
+        Ok(raw) => Assertion::check(
+            "A6",
+            crate::emit::selfcheck::wording("A6"),
+            rel,
+            &describe_indexed(&b.props),
+            &describe_bytes(&raw, ceiling),
+        ),
+    }
 }
 
 /// How `chunks/index.json` describes a stored blob, in one comparable string.
@@ -770,4 +787,117 @@ pub fn check_agreement(b: &Bundle, rows: &[Assertion]) -> bool {
         ok = false;
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blobs::props::BlobProps;
+    use crate::manifest::proto::SophonChunk;
+
+    fn chunk(id: &str, raw: &[u8], body: &[u8]) -> SophonChunk {
+        SophonChunk {
+            id: id.to_string(),
+            uncompressed_md5: hash::md5_hex(body),
+            offset: 0,
+            compressed_size: raw.len() as i64,
+            uncompressed_size: body.len() as i64,
+            unknown_field6: 0,
+            compressed_md5: hash::md5_hex(raw),
+        }
+    }
+
+    fn stored(root: &std::path::Path, id: &str, rel: &str, body: &[u8]) -> IndexedBlob {
+        let raw = zstd::encode_all(body, 1).unwrap();
+        let full = root.join(rel);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(&full, &raw).unwrap();
+        let mut props = BlobProps::measure(&raw, &chunk(id, &raw, body)).unwrap();
+        props.set_stored(rel);
+        IndexedBlob {
+            props,
+            referenced_by: Vec::new(),
+            sets: Vec::new(),
+        }
+    }
+
+    fn no_path(id: &str) -> IndexedBlob {
+        let body = vec![3u8; 8];
+        let raw = zstd::encode_all(&body[..], 1).unwrap();
+        IndexedBlob {
+            props: BlobProps::unmeasured(&chunk(id, &raw, &body)),
+            referenced_by: Vec::new(),
+            sets: Vec::new(),
+        }
+    }
+
+    fn unsafe_path(id: &str) -> IndexedBlob {
+        let body = vec![4u8; 8];
+        let raw = zstd::encode_all(&body[..], 1).unwrap();
+        let mut props = BlobProps::unmeasured(&chunk(id, &raw, &body));
+        props.set_stored("../../escape.zst");
+        IndexedBlob {
+            props,
+            referenced_by: Vec::new(),
+            sets: Vec::new(),
+        }
+    }
+
+    /// The hard gate for the parallelization: the ordered rows the parallel
+    /// walk emits are byte-for-byte the rows the serial walk emitted, across
+    /// every A6 branch (green, unreadable, no path, unsafe path).
+    #[test]
+    fn assertions_from_parallel_matches_serial() {
+        let root = girpr_tempdir::TempDir::new("gircap-a6-parallel", "order");
+        // Ids in ascending order, as `ChunkIndex::blobs` is specified to be.
+        let blobs = vec![
+            stored(&root, "aa", "chunks/aa/01", &[1u8; 64]),
+            stored(&root, "bb", "chunks/bb/02", &[2u8; 64]),
+            no_path("cc"),
+            unsafe_path("dd"),
+            stored(&root, "ee", "chunks/ee/05", &[5u8; 64]),
+        ];
+        // Make "bb" unreadable without changing its index row: the unreadable
+        // branch must land in the same slot as it did serially.
+        std::fs::remove_file(root.join("chunks/bb/02")).unwrap();
+        let index = ChunkIndex::build(blobs);
+        let ceiling = crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES;
+
+        let parallel = check_blobs(&root, &index, ceiling);
+        let serial: Vec<Assertion> = index
+            .blobs
+            .iter()
+            .map(|b| check_one_blob(&root, b, ceiling))
+            .collect();
+
+        assert_eq!(parallel, serial, "parallel A6 rows drifted from serial");
+        assert_eq!(parallel.len(), 5);
+        assert!(
+            parallel[0].ok && parallel[4].ok,
+            "the two stored blobs pass"
+        );
+        assert!(!parallel[1].ok, "the unreadable blob fails");
+        assert!(!parallel[2].ok, "the no-path blob fails");
+        assert!(!parallel[3].ok, "the unsafe-path blob fails");
+    }
+
+    /// The collection must remain correct under repeated runs with a genuinely
+    /// parallel pool: completion order cannot leak into the emitted rows.
+    #[test]
+    fn parallel_a6_rows_are_stable_across_runs() {
+        let root = girpr_tempdir::TempDir::new("gircap-a6-parallel", "stable");
+        let blobs: Vec<_> = (0..24u8)
+            .map(|i| {
+                let id = format!("k{i:02}");
+                let rel = format!("chunks/k{i:02}/{i:02}");
+                stored(&root, &id, &rel, &[i; 32])
+            })
+            .collect();
+        let index = ChunkIndex::build(blobs);
+        let ceiling = crate::config::DEFAULT_MAX_DECOMPRESSED_BYTES;
+        let first = check_blobs(&root, &index, ceiling);
+        for _ in 0..8 {
+            assert_eq!(check_blobs(&root, &index, ceiling), first);
+        }
+    }
 }

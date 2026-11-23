@@ -644,6 +644,7 @@ dependencies = [
  "ini_core",
  "percent-encoding",
  "prost",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",

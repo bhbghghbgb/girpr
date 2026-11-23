@@ -257,6 +257,11 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 # --log-file run. No rolling: a capture writes one log, it is not a daemon.
 tracing-appender = "0.2.5"
 chrono = { version = "0.4.45", features = ["clock"] }
+# Bounded CPU parallelism for the two independent per-item loops: verify's A6
+# per-blob measure and capture's per-capture assembly. Already in the workspace
+# lockfile through girsync, so this adds no new crate to the graph. Both loops
+# collect results in input order and do every ordered write on the caller thread.
+rayon = "1.12.0"
 
 [dev-dependencies]
 # gircap's own test modules exercise `hash::gzip`, the test-only reference
