@@ -31,8 +31,8 @@ machine data or change log.
 | T16 | Move scope-typo refusal earlier and surface purge diagnostics | completed | 9923b4c9 | §6 COR-06/COR-07/COR-09 (474–512). Early check_scope_selection after build_plan for !purge_wanted (before walk); full post-walk check retained for purge runs. SUMMARY gains conditional numeric purge_errors=N / purge_hidden=N (only when non-zero) via existing Extra::Num path — T16's sole data-plane exception. Deviation: no hidden-byte counter exists, so purge_hidden is a path count, documented as such. plan_work_and_purge gained private purge_wanted: bool. Strict refusal not added. |
 | T17 | Reduce logging cost without changing the data plane | completed | 39fa35a0, 8fc260ba, 76bc4ecf | §7 LOG-01..03 (517–559); assumptions 11–12 (867–871). Chose release default file level Info over moving per-chunk lines to trace (assumption 11 pins the --log-file-level debug opt-in spelling); new public girpr_log::default_file_level() — shared crate, so gircap/girsync release builds also default Info. Expensive body/error fields gated behind enabled!(TRACE)/(DEBUG). Appender uses lossy(false) with stock 128k channel (backpressure deliberate, no dropped_lines report). Data plane untouched. |
 | T18 | Low-risk micro-optimization sweep | completed | 97b9f6e5, 19e89da4, 5b01ea28 | §8 MIC-02/03/06/07 (574–589, 600–609); §4 MEM-02 (309–319). Implemented MIC-06 (local Option state), MIC-07 (single write_all), MIC-03 purge.rs (stable sort_by_cached_key — unstable would reorder same-depth dirs), MEM-02 (borrowed &str keep-set probes off Windows, fold unchanged). SKIPPED: MIC-02 whole (glob require_literal_separator:false means * crosses /, so visibility is not inherited — fast path would change purge decisions); MIC-03 plan.rs site stale (plain rel sort); MEM-02 PurgeKeys three copies/membership hash (optional + needs lifetime redesign). |
-| T19 | Cut allocations in gircap's HTTP recording pipeline | pending_review | 54d186e4 | §9 TOOL-01/07/08/09/10 (643–652, 691–715); assumption 14 (875–877) validated with a byte-level golden fixture (passed pre- and post-change). API: HttpResponse::chunk() -> Result<Option<bytes::Bytes>, String>; RequestRecord::req_headers is Arc<BTreeMap<...>> (serde rc); Fetcher::map_concurrently closure takes Arc<Fetcher> first. TOOL-07 edge: content_type now from joined resp_headers (differs for repeated/non-UTF-8; pinned bundle uses single ASCII). |
-| T20 | Memoize decoded blobs and serialize the manifest once | pending_review | 6d4e3888, 12e73ec4 | §9 TOOL-03/04/11/12 (661–678, 716–728); assumption 15 (878–880). Implemented TOOL-11 (move measured md5/error into rows) and TOOL-12 (new public write_json_gz_counted: serialize once to a counted temp with RAII cleanup, then copy/gzip; byte-identical test). SKIPPED TOOL-03/04 memoization: ChunkSource::memoizing already exists in verify but is unbounded and deliberately not used in capture (+39.5 MB RSS trade-off); no real bundle to measure (only 44 KB synthetic), so assumption 15 cannot be validated. "Each blob decoded once" does NOT hold across A6->rebuild or measure->assemble. Reviewer to decide final state. |
+| T19 | Cut allocations in gircap's HTTP recording pipeline | completed | 54d186e4 | §9 TOOL-01/07/08/09/10 (643–652, 691–715); assumption 14 (875–877) validated with a byte-level golden fixture (passed pre- and post-change). API: HttpResponse::chunk() -> Result<Option<bytes::Bytes>, String>; RequestRecord::req_headers is Arc<BTreeMap<...>> (serde rc); Fetcher::map_concurrently closure takes Arc<Fetcher> first. TOOL-07 edge: content_type now from joined resp_headers (differs for repeated/non-UTF-8; pinned bundle uses single ASCII). |
+| T20 | Memoize decoded blobs and serialize the manifest once | completed | 6d4e3888, 12e73ec4 | §9 TOOL-03/04/11/12 (661–678, 716–728); assumption 15 (878–880). Implemented TOOL-11 (move measured md5/error into rows) and TOOL-12 (new public write_json_gz_counted: serialize once to a counted temp with RAII cleanup, then copy/gzip; byte-identical test). SKIPPED TOOL-03/04 memoization: ChunkSource::memoizing already exists in verify but is unbounded and deliberately not used in capture (+39.5 MB RSS trade-off); no real bundle to measure (only 44 KB synthetic), so assumption 15 cannot be validated. "Each blob decoded once" does NOT hold across A6->rebuild or measure->assemble. Reviewed J: completed (partial with validated skip — do not enable capture memoization without a total-byte bound and a real-bundle measurement). |
 | T21 | Fix gircap indexing and canonicalization correctness | todo | | §9 TOOL-05/06/13/17/19/20 (679–690, 729–737, 763–768, 780–795); assumptions 16–17 (881–888) |
 | T22 | Parallelize gircap verification and capture assembly | todo | | §9 TOOL-14/15 (740–752); assumption 17 (885–888) |
 | T23 | Make gircap declared-size mismatch errors honest | todo | | §9 TOOL-21 (796–805) |
@@ -55,6 +55,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | G | T12, T13 | done | No fix/revert needed. Dropped Sha256 symmetry; endorsed five other follow-ups (mostly low/conditional priority). |
 | H | T14, T15, T16 | done | No fix/revert needed. T15 resolved completed with COR-08 a validated skip; dedicated exit code dropped; five other follow-ups endorsed. |
 | I | T17, T18 | done | No fix/revert needed. Endorsed order-insensitive chunk-hit test, conditional PurgeKeys revisit, and lossless-appender backpressure validation; duplicate suggestion dropped. |
+| J | T19, T20 | done | No fix/revert needed. T20 resolved completed with memoization a validated skip; all three suggested follow-ups endorsed plus a content_type edge test. |
 
 ## Follow-ups
 
@@ -91,6 +92,10 @@ planning review batches the survivors only after every task is settled.
 | F25 | Make the order-sensitive chunk-hit assertions (e.g. tests/repair_writer.rs) compare as a set to remove the pre-existing flake under T02's concurrent fetch window | open | Endorsed by review I, low priority; a BTreeSet comparison is already used in the windowed test. |
 | F26 | Revisit MEM-02's three keyed PurgeKeys copies via a borrowing-friendly type or a compact membership hash | open | Endorsed by review I conditionally — only if profiling shows the resident strings matter. |
 | F27 | Validate lossless-appender backpressure under a trace-level large repair (--log-file-level trace with the 128k channel) | open | Non-blocking validation follow-up from review I; assumption 12. |
+| F28 | Extend the recorded-JSON golden fixture with a retained 503-retry error-body capture so the attempt() error-branch content_type and error_responses.json body bytes are byte-golden-covered | open | Endorsed by review J, low priority; coverage strengthening (value already unit-asserted). |
+| F29 | Revisit T20 memoization with an explicit total-memo byte cap and a wall-clock measurement on a real capture bundle | open | Endorsed by review J; the missing preconditions for the validated skip — do not enable capture memoization without both. |
+| F30 | Measure the counted-temp serialize-once path on a ~27 MB manifest on HDD to confirm the extra disk pass beats the second serialization | open | Endorsed by review J, low priority (validation only). |
+| F31 | Pin the deliberate content_type edge with a test asserting joined/encoded value for repeated or non-UTF-8 Content-Type headers | open | Non-blocking follow-up from review J; documents an intentional difference so it is not "fixed" back. |
 
 ## Persistent context
 
@@ -173,6 +178,20 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **gircap APIs after T19-T20 (feeds T21/T22).** `HttpResponse::chunk()` returns
+  `bytes::Bytes` (not `Vec<u8>`); sinks write `&chunk`. `RequestRecord::req_headers`
+  is `Arc<BTreeMap<String,String>>` (serde `rc`); `Fetcher::map_concurrently`'s
+  closure takes `Arc<Fetcher>` first. `content_type` is derived from the joined
+  `resp_headers` at both fetcher sites (differs from old first-value behavior only for
+  repeated/non-UTF-8 headers — recorded-data-only, accepted). The byte-level golden
+  fixture (`recorded_json_fixture.rs` + `recorded_json_golden.rs`) is the assumption-14
+  gate and passes on pre- and post-change trees. `write_json_gz_counted` is the
+  serialize-once path (RAII removes the temp); a crash mid-serialize leaves a
+  `.json.tmp` instead of a partial final file — T22's parallel close-out walk must not
+  pick up `.tmp` files (currently safe because assembly is serial). TOOL-03/04
+  memoization is a validated skip: `ChunkSource::memoizing` is opt-in, unbounded,
+  verify-only, with a ~39.5 MB RSS trade-off; "each blob decoded once" does NOT hold
+  across A6->rebuild or measure->assemble. See T19/T20 notes.
 - **Logging / purge internals after T17-T18.** `girpr_log::default_file_level()` is
   public (Debug in debug builds, Info in release); release file logging defaults to
   Info across girpr, gircap and girsync via the shared crate, with
