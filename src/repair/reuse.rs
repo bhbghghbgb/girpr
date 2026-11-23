@@ -183,9 +183,14 @@ pub fn sources_for(chunks: &[SophonChunk], reuse: Option<&FileReuse>) -> Sources
     chunks
         .iter()
         .map(|c| {
+            // Entries built from a local manifest have already been range-
+            // checked there, so their offsets cannot be negative. A hand-built
+            // map with a bad offset wraps to a huge `u64` here, which every
+            // consumer rejects as past EOF — the same clamp-free answer the
+            // temp path gives, and never a plausible-looking source at 0.
             reuse
                 .and_then(|r| r.get(c))
-                .map(|entry| entry.offset.max(0) as u64)
+                .map(|entry| entry.offset as u64)
         })
         .collect()
 }

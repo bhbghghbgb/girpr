@@ -12,7 +12,6 @@
 //! that cannot be cleaned is skipped with a warning rather than failing the
 //! run, because this map only ever saves downloads.
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
 use girpr_chunk_identity::{ChunkIdentity, IdentityKey};
@@ -132,16 +131,21 @@ impl FileReuse {
         &self.entries
     }
 
-    /// The lookup key: a hash of the digest bytes, plus the size.
+    /// The lookup key: a cheap fold of the digest bytes, plus the size.
     ///
     /// Deliberately **not** a `String`: the digest was parsed once at the
-    /// boundary, and the hot path (`sources_for` asks once per chunk) hashes
-    /// the 16 bytes it already has. `size` is returned separately so the
-    /// digest hash never has to encode it.
+    /// boundary, and the hot path (`sources_for` asks once per chunk) already
+    /// has its 16 bytes. Folding the two halves avoids building a `DefaultHasher`
+    /// for every lookup; the bucket is only a candidate filter, so a collision
+    /// still falls through to the exact identity check in `get`. `size` stays
+    /// separate so the digest fold never has to encode it.
     fn key(md5: Md5, size: i64) -> (u64, i64) {
-        let mut hasher = DefaultHasher::new();
-        hasher.write(md5.as_bytes());
-        (hasher.finish(), size)
+        let bytes = md5.as_bytes();
+        let mut lower = [0u8; 8];
+        let mut upper = [0u8; 8];
+        lower.copy_from_slice(&bytes[..8]);
+        upper.copy_from_slice(&bytes[8..]);
+        (u64::from_le_bytes(lower) ^ u64::from_le_bytes(upper), size)
     }
 }
 
@@ -170,9 +174,28 @@ pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Fi
                 // makes two spellings the same value, so they cannot both
                 // survive. A string that is not a digest is not a reuse
                 // candidate at all — the chunk degrades to a download.
-                let Ok(md5) = Md5::parse_hex(&c.uncompressed_md5) else {
+                let Some(md5) = Md5::try_parse_hex(&c.uncompressed_md5) else {
                     continue;
                 };
+                // The local manifest is best effort, so a nonsensical range is
+                // skipped with a warning instead of reaching the consumers as
+                // a plausible-looking reuse source. These bounds use the
+                // length the manifest declares for the local file; consumers
+                // still re-check against the file's real length and verify the
+                // bytes before copying. This is an early diagnostic shortcut,
+                // not the only guard — a lying `size` is caught downstream.
+                let end = c.offset.checked_add(c.uncompressed_size);
+                if c.offset < 0 || c.uncompressed_size < 0 || end.is_none_or(|end| end > f.size) {
+                    tracing::warn!(
+                        file = %f.file,
+                        chunk = %c.id,
+                        offset = c.offset,
+                        size = c.uncompressed_size,
+                        file_size = f.size,
+                        "local reuse map: skipping a chunk with an invalid range"
+                    );
+                    continue;
+                }
                 e.insert(ReuseEntry {
                     md5,
                     size: c.uncompressed_size,
@@ -352,6 +375,36 @@ mod tests {
         }];
         let map = build_local_chunk_map(&wm);
         assert!(map["a/b.dat"].entries().is_empty());
+    }
+
+    /// A corrupt local manifest must not contribute reuse candidates: a
+    /// negative offset, a negative size, an end past the declared file length,
+    /// and an overflowing end are all skipped with a warning, while a valid
+    /// sibling entry survives. Dropping such an entry degrades its chunk to a
+    /// download; it can never become a plausible-looking source at offset 0.
+    #[test]
+    fn local_chunk_map_skips_invalid_ranges() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![
+                    chunk("good", "d41d8cd98f00b204e9800998ecf8427e", 8, 8),
+                    chunk("negative-offset", "0cc175b9c0f1b6a831c399e269772661", -1, 8),
+                    chunk("negative-size", "900150983cd24fb0d6963f7d28e17f72", 0, -1),
+                    chunk("past-eof", "f96b697d7cb7938d525a2f31aaf161d0", 8, 9),
+                    chunk("overflow", "c3fcd3d76192e4007dfb496cca67e13b", i64::MAX, 1),
+                ],
+                is_folder: false,
+                size: 16,
+                md5: "m1".into(),
+            }],
+        }];
+        let map = build_local_chunk_map(&wm);
+        let entries = map["a/b.dat"].entries();
+        assert_eq!(entries.len(), 1, "only the valid range survives");
+        assert_eq!(entries[0].offset, 8);
+        assert_eq!(entries[0].size, 8);
     }
 
     /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),
