@@ -4,6 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use bytes::Bytes;
 use girpr_retry::{DelaySequence, Schedule};
 
 // The sleep hook lives in the shared leaf so both tools inject the same three
@@ -36,8 +37,8 @@ impl RetryPolicy {
     /// The leaf's `Schedule` owns the doubling and the clamp: the delay before
     /// retry *k* is `BASE_DELAY * 2^(k-1)` capped at `MAX_DELAY`, with the
     /// overflow-safe clamp coming from `backoff` rather than a hand-rolled
-    /// shift. A fresh `DelaySequence` is needed per request because a `Fetcher`
-    /// is cloned into every `--jobs` worker and the backoff is stateful.
+    /// shift. A fresh `DelaySequence` is needed per request because the
+    /// schedule is stateful: every retry loop advances its own delay counter.
     ///
     /// `jitter = 0.0` is **jitter: None**. `next_delay` still draws an internal
     /// random number, but with a zero-width range the drawn value cannot change
@@ -233,14 +234,16 @@ impl HttpResponse {
     }
 
     /// The next body chunk, as bytes, or `None` when the body is exhausted.
-    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+    ///
+    /// `reqwest` yields a refcounted [`Bytes`], so the live path hands that
+    /// buffer straight through — no per-chunk `Vec` allocation or byte copy.
+    /// The in-memory path already owns a `Vec`, which [`Bytes::from`] adopts
+    /// without copying. Both sink paths write through `&chunk`, so the bytes
+    /// that reach the wire, the digests and the record are unchanged.
+    pub async fn chunk(&mut self) -> Result<Option<Bytes>, String> {
         match &mut self.body {
-            ResponseBody::Live(resp) => resp
-                .chunk()
-                .await
-                .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
-                .map_err(|e| e.to_string()),
-            ResponseBody::Memory(chunks) => Ok(chunks.pop_front()),
+            ResponseBody::Live(resp) => resp.chunk().await.map_err(|e| e.to_string()),
+            ResponseBody::Memory(chunks) => Ok(chunks.pop_front().map(Bytes::from)),
         }
     }
 }

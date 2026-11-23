@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -92,7 +93,12 @@ pub struct RequestRecord {
     /// Wall time across **all** attempts, so a slow retry reads as slowness.
     pub elapsed_ms: u64,
     /// What was sent. Keys lowercased.
-    pub req_headers: BTreeMap<String, String>,
+    ///
+    /// Shared rather than owned per row: the ~113 k chunk requests all carry the
+    /// same three base headers, and serde serializes through `Arc` unchanged, so
+    /// this keeps the recorded JSON byte-identical while cloning one atomic
+    /// count instead of three `String`s and a map per request.
+    pub req_headers: Arc<BTreeMap<String, String>>,
     /// What came back. Keys lowercased; values exactly as received. A repeated
     /// name is one key whose values are joined by `\n`.
     pub resp_headers: BTreeMap<String, String>,
@@ -129,17 +135,18 @@ impl RequestRecord {
     /// The fetcher's shared headers, plus this request's `Range` when it sent one.
     ///
     /// The only per-request part of [`RequestRecord::default_req_headers`] is
-    /// `Range`, so that is the only copy made.
+    /// `Range`, so that is the only case that builds a fresh map; the common
+    /// case just bumps the `Arc` count.
     pub fn req_headers(
-        base: &BTreeMap<String, String>,
+        base: &Arc<BTreeMap<String, String>>,
         range: Option<&str>,
-    ) -> BTreeMap<String, String> {
+    ) -> Arc<BTreeMap<String, String>> {
         match range {
-            None => base.clone(),
+            None => Arc::clone(base),
             Some(r) => {
-                let mut h = base.clone();
+                let mut h = (**base).clone();
                 h.insert("range".to_string(), r.to_string());
-                h
+                Arc::new(h)
             }
         }
     }
@@ -179,19 +186,26 @@ pub fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
     // last. `get_all` yields every value for a name.
     h.keys()
         .map(|k| {
-            let values = h
-                .get_all(k)
-                .into_iter()
-                .map(|v| {
-                    v.to_str()
-                        .map(str::to_string)
-                        // A header with non-UTF-8 bytes is recorded as its hex, not
-                        // dropped: losing it would make the record incomplete in a
-                        // way nobody could see.
-                        .unwrap_or_else(|_| hex_bytes(v.as_bytes()))
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            // Build the joined value directly. `collect::<Vec<_>>().join("\n")`
+            // allocated one `String` per value plus the joined one; a `push_str`
+            // loop allocates only the result. The `first` flag — not
+            // `values.is_empty()` — decides the separator, so an empty first
+            // value still yields the leading `\n` that `join` would.
+            let mut values = String::new();
+            let mut first = true;
+            for v in h.get_all(k) {
+                if !first {
+                    values.push('\n');
+                }
+                first = false;
+                match v.to_str() {
+                    Ok(s) => values.push_str(s),
+                    // A header with non-UTF-8 bytes is recorded as its hex, not
+                    // dropped: losing it would make the record incomplete in a
+                    // way nobody could see.
+                    Err(_) => values.push_str(&hex_bytes(v.as_bytes())),
+                }
+            }
             (k.as_str().to_string(), values)
         })
         .collect()
@@ -201,6 +215,24 @@ pub fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    /// An empty first value must still contribute its separator. The old
+    /// `collect::<Vec<_>>().join("\n")` did; a `push_str` loop keyed on
+    /// `values.is_empty()` would silently drop the leading `\n`.
+    #[test]
+    fn an_empty_first_value_still_gets_its_newline_separator() {
+        let name: HeaderName = "x-empty-first".parse().expect("header name");
+        let mut h = HeaderMap::new();
+        h.append(name.clone(), HeaderValue::from_static(""));
+        h.append(name, HeaderValue::from_static("second"));
+
+        let map = header_map(&h);
+        assert_eq!(
+            map.get("x-empty-first").map(String::as_str),
+            Some("\nsecond"),
+            "the join delimiter is byte-identical even for an empty first value"
+        );
+    }
 
     /// A header with two values is recorded under one key, both values joined
     /// by `\n` in insertion order — nothing is dropped.

@@ -548,7 +548,7 @@ mod attach_seq_tests {
                 final_url: (*u).to_string(),
                 redirected: false,
                 elapsed_ms: 1,
-                req_headers: BTreeMap::new(),
+                req_headers: std::sync::Arc::new(BTreeMap::new()),
                 resp_headers: BTreeMap::new(),
                 bytes_in: 0,
                 stored_as: None,

@@ -433,12 +433,13 @@ pub struct Fetcher {
     log: RequestLog,
     /// The headers every request carries, minus any `Range`.
     ///
-    /// **Built once.** `req_headers` is otherwise rebuilt for every record —
-    /// three `String`s and a `BTreeMap` each, three times over for 113 610
-    /// chunks, all of it identical except when a `Range` is present. `Range` is
-    /// the exception because it is per-request; that is the only thing
-    /// [`RequestRecord::req_headers`] adds.
-    base_req_headers: BTreeMap<String, String>,
+    /// **Built once and shared by every clone.** `req_headers` is otherwise
+    /// rebuilt for every record — three `String`s and a `BTreeMap` each, three
+    /// times over for 113 610 chunks, all of it identical except when a `Range`
+    /// is present. `Range` is the exception because it is per-request; that is
+    /// the only thing [`RequestRecord::req_headers`] adds, and the only case
+    /// that copies the map.
+    base_req_headers: Arc<BTreeMap<String, String>>,
     /// The ceiling on one response body, from [Transport::max_response_bytes].
     max_response_bytes: u64,
     /// The bodies of non-2xx responses, shared by every clone.
@@ -469,10 +470,11 @@ impl Fetcher {
     /// `f` returns `(index, result)` and **never** an outer `Err`: the index is
     /// how a failed task is told apart from one that died.
     ///
-    /// `f` receives a clone of this fetcher rather than a borrow, because
-    /// `JoinSet::spawn` needs a `'static` future. Cloning is three `Arc`s and
-    /// two `BTreeMap`s, so N clones are N handles on one pool and one log rather
-    /// than N fetchers with N logs.
+    /// `f` receives an [`Arc<Fetcher>`] rather than a borrow, because
+    /// `JoinSet::spawn` needs a `'static` future. One `Arc` is built for the
+    /// whole wave and cloned into each task — a refcount bump, not a fresh
+    /// copy of the fetcher's maps and strings per item. All tasks still share
+    /// one pool, one log and one error-body budget.
     pub async fn map_concurrently<T, R, F, Fut>(
         &self,
         items: &[T],
@@ -482,12 +484,13 @@ impl Fetcher {
     where
         T: Clone + Send + Sync + 'static,
         R: Send + 'static,
-        F: Fn(Fetcher, usize, T) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Fetcher>, usize, T) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = (usize, Result<R, String>)> + Send + 'static,
     {
-        let items: std::sync::Arc<[T]> = items.into();
+        let items: Arc<[T]> = items.into();
+        let fetcher = Arc::new(self.clone());
         crate::tasks::join_ordered(&items, jobs, "request", |i, items| {
-            f(self.clone(), i, items[i].clone())
+            f(Arc::clone(&fetcher), i, items[i].clone())
         })
         .await
         .into_iter()
@@ -590,7 +593,7 @@ impl Fetcher {
             policy: RetryPolicy::new(transport.retries),
             sleeper,
             log,
-            base_req_headers: RequestRecord::default_req_headers(&ua, None),
+            base_req_headers: Arc::new(RequestRecord::default_req_headers(&ua, None)),
             max_response_bytes: transport.max_response_bytes,
             error_bodies: std::sync::Arc::new(ErrorBodies::new(error_body_budget)),
         })
@@ -648,12 +651,12 @@ impl Fetcher {
         let status = resp.status;
         let final_url = resp.final_url.clone();
         let redirected = !final_url.eq_ignore_ascii_case(url);
-        let content_type = resp
-            .headers
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
+        // One traversal of the header map: `header_map` already builds the
+        // `content-type` entry for the record, so read it from there rather than
+        // looking it up in `resp.headers` a second time. For the single-valued
+        // header an origin sends, this is the identical string.
         let resp_headers = header_map(&resp.headers);
+        let content_type = resp_headers.get("content-type").cloned();
         // A body that will not read is an empty body, not a failure: the status
         // and the content-type are the parts a consumer can rely on, and they
         // have already been captured by this point. The bytes that did arrive
@@ -966,11 +969,9 @@ impl Fetcher {
             // bounds the read, and the run-wide budget bounds what is retained;
             // what does not fit is a `truncated` row rather than a lost
             // observation. See [`super::error_bodies`].
-            let content_type = resp
-                .headers
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string);
+            // `header_map` above already built this entry for the record; reuse
+            // it instead of looking the header up and copying it a second time.
+            let content_type = resp_headers.get("content-type").cloned();
             // Charge the run budget *before* reading, so concurrent failures
             // divide it instead of each buffering up to the whole remainder.
             // The reservation bounds the retain buffer; an early return or a

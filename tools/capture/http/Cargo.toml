@@ -28,6 +28,9 @@ girpr-retry = { path = "../../../crates/retry" }
 # Hex spelling of bytes for the request log's header digests. Logic-free leaf:
 # no flag, no exit code, no published shape.
 girpr-digest = { path = "../../../crates/digest" }
+# The zero-copy chunk type reqwest yields. Naming it directly lets the transport
+# hand body bytes to the sinks without copying every chunk into a fresh `Vec`.
+bytes = "1.12"
 # The transport, the client and header maps. This crate is now the sole owner of
 # reqwest for gircap: the parent package used to take a direct reqwest dep only
 # for `config::validate_base`'s `Url`, which parses with the `url` crate itself.
@@ -39,7 +42,7 @@ reqwest = "0.13.5"
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # Derive `Display`/`Error` for `ApiError` without changing its format strings.
 thiserror = "2"
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"
 # The millisecond RFC 3339 spelling in the request log is a named format in the
 # time leaf; this crate keeps only the seam its callers already use.
