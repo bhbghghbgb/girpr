@@ -100,8 +100,14 @@ where
 /// whether it is fatal (the repair binary treats a broken pipe as the end of
 /// its data plane, not a failed run; another tool may ignore it).
 pub fn write_line(out: &mut impl Write, line: &str) -> std::io::Result<()> {
-    out.write_all(line.as_bytes())?;
-    out.write_all(b"\n")
+    // One preallocated buffer and one `write_all` per record: the emitted bytes
+    // and the record's atomicity are unchanged (the writer was already locked
+    // by the caller), but the writer is entered once instead of twice. Capacities
+    // are exact so the single write cannot reallocate or split the record.
+    let mut buf = Vec::with_capacity(line.len() + 1);
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    out.write_all(&buf)
 }
 
 #[cfg(test)]
