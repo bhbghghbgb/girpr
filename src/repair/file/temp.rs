@@ -1383,6 +1383,134 @@ mod tests {
         assert_eq!(buf, &data[..5], "no stale bytes from the longer slice");
     }
 
+    /// A local manifest can lie about `f.size` and let a reuse offset past the
+    /// real EOF pass the map's declared-size range check (warn + skip, no
+    /// clamp). This extends that same scenario to the temp path: the real-length
+    /// re-check in `capture_slice` must refuse to capture the bad offset, so the
+    /// chunk falls back to a download instead of earning an intact/copy verdict.
+    /// The identical entry against a source whose real length *does* cover the
+    /// offset verifies — showing it is the real length, not the declared one,
+    /// that decides. Neither the map (T12/COR-03) nor the downstream guards
+    /// change.
+    #[test]
+    fn a_lying_declared_size_cannot_make_a_bad_offset_an_intact_temp_reuse() {
+        use crate::hyp::ChunkManifestMeta;
+        use crate::sophon::{SophonChunkFile, WantedManifest, build_local_chunk_map};
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "lying_size_temp");
+        let real_len = 16u64;
+        let declared_size = 4096i64; // the local manifest lies
+        let bad_offset = 2048i64; // past the real EOF, inside the declared size
+        let chunk_len = 8i64;
+
+        // Genuine bytes that verify `target` if they were present at the
+        // declared offset. They sit at 0 in the short file so the digest is real
+        // and the only thing that can reject the reuse is the real length.
+        let good: Vec<u8> = (0..chunk_len as usize)
+            .map(|i| (i as u8).wrapping_mul(7).wrapping_add(1))
+            .collect();
+        let md5 = util::md5::md5_digest(&good).to_hex();
+        let target = chunk_at("target", &md5, 0, chunk_len);
+
+        let local = WantedManifest {
+            meta: ChunkManifestMeta {
+                category_id: "game".into(),
+                category_name: "game".into(),
+                matching_field: "game".into(),
+                manifest: Default::default(),
+                chunk_download: Default::default(),
+                manifest_download: Default::default(),
+            },
+            files: vec![SophonChunkFile {
+                file: "game/foo.dat".into(),
+                chunks: vec![chunk_at("stale", &md5, bad_offset, chunk_len)],
+                is_folder: false,
+                size: declared_size,
+                md5: "m1".into(),
+            }],
+        };
+        let map = build_local_chunk_map(&[local]);
+        let reuse = map
+            .get("game/foo.dat")
+            .expect("the declared size admits the bad range");
+        assert_eq!(
+            reuse.get(&target).map(|entry| entry.offset),
+            Some(bad_offset),
+            "the map keeps the bad offset: warn + skip, no clamp"
+        );
+
+        // Short real source: the offset is past EOF, so the real-length re-check
+        // reports a short capture, never a complete one.
+        let short_path = dir.join("short.bin");
+        std::fs::write(&short_path, vec![0u8; real_len as usize]).unwrap();
+        let mut short_file = File::open(&short_path).unwrap();
+        let mut buf = Vec::new();
+        match capture_slice(
+            &mut short_file,
+            bad_offset as u64,
+            chunk_len as u64,
+            &mut buf,
+        ) {
+            SliceCapture::Short { have, want } => {
+                assert_eq!(have, 0, "no bytes exist past the real EOF");
+                assert_eq!(want, chunk_len as u64);
+            }
+            SliceCapture::Complete => panic!("a past-EOF offset cannot be a complete capture"),
+            SliceCapture::Failed(e) => panic!("seeking past EOF is not an I/O failure: {e}"),
+        }
+
+        // End to end on the temp path: the bad offset earns a download and
+        // nothing is copied into the sink.
+        let short_out = dir.join("short.out");
+        let mut file = temp_out(&short_out);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+        let outcome =
+            try_reuse_slice(&mut state.call(&short_path, &target, &mut out).with_reuse(reuse))
+                .unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Download),
+            "a lying declared size cannot turn a past-EOF reuse into an intact copy"
+        );
+        assert_eq!(
+            out.bytes, 0,
+            "no bytes were copied from the past-EOF offset"
+        );
+
+        // Contrast: the same entry against a source whose real length covers
+        // the offset captures and verifies, so the real length is the guard.
+        let long_len = (bad_offset + chunk_len) as usize;
+        let mut long_data = vec![0u8; long_len];
+        long_data[bad_offset as usize..].copy_from_slice(&good);
+        let long_path = dir.join("long.bin");
+        std::fs::write(&long_path, &long_data).unwrap();
+        let mut long_file = File::open(&long_path).unwrap();
+        let mut long_buf = Vec::new();
+        let captured = capture_slice(
+            &mut long_file,
+            bad_offset as u64,
+            chunk_len as u64,
+            &mut long_buf,
+        );
+        assert!(matches!(captured, SliceCapture::Complete));
+        assert_eq!(long_buf, good);
+
+        let long_out = dir.join("long.out");
+        let mut file = temp_out(&long_out);
+        let mut out = SeekRecording::new(&mut file);
+        let mut state = ReuseState::new(&ctx);
+        let outcome =
+            try_reuse_slice(&mut state.call(&long_path, &target, &mut out).with_reuse(reuse))
+                .unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Reused),
+            "with real bytes present the same entry verifies"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&long_out).unwrap(), good);
+    }
+
     /// COR-04: an unreadable reuse source is an unexpected I/O failure and is
     /// recorded in the structured diagnostics; the ordinary MD5 mismatch is
     /// the expected "candidate did not verify" outcome and is not counted.

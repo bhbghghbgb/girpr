@@ -785,6 +785,53 @@ mod tests {
         (uri, hits)
     }
 
+    /// A loopback origin that never completes its body but keeps it *arriving*:
+    /// it announces a 4 KiB body, then sends one byte every `gap` — far inside
+    /// the injected deadline — and stops after `cap` bytes. A resetting per-byte
+    /// idle timer would keep pushing its deadline out while these arrive; only a
+    /// fixed window from the start of the read still fires. Each connection gets
+    /// its own task so retries open fresh sockets. A task exits as soon as the
+    /// timed-out client closes its socket (the next write fails), with `cap` as
+    /// a backstop so no task outlives the test.
+    async fn dribbling_body_origin(gap: Duration, cap: usize) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::clone(&hits);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let hits = Arc::clone(&accepted);
+                tokio::spawn(async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    let _ = socket.flush().await;
+                    for _ in 0..cap {
+                        tokio::time::sleep(gap).await;
+                        // One byte per gap, each far inside the deadline. A
+                        // per-byte idle reset would never reach zero here.
+                        if socket.write_all(b"x").await.is_err() {
+                            break;
+                        }
+                        let _ = socket.flush().await;
+                    }
+                    // Quiet from here; a fixed deadline fired long before cap.
+                    let mut probe = [0u8; 1];
+                    let _ = socket.read(&mut probe).await;
+                });
+            }
+        });
+        (uri, hits)
+    }
+
     /// A body that never completes must hit the injected deadline in both JSON
     /// paths. The origin announces 16 body bytes, sends two, then goes quiet,
     /// so `resp.bytes()` can only finish by hitting the bound. That proves the
@@ -827,6 +874,55 @@ mod tests {
         assert!(
             hits.load(Ordering::SeqCst) >= 1,
             "the loopback origin must have seen a request"
+        );
+    }
+
+    /// `JSON_BODY_IDLE` is a fixed deadline on the buffered body, not a
+    /// per-byte resetting idle timer. The origin above goes quiet after two
+    /// bytes, so it proves only that the read is bounded — either deadline
+    /// semantic would satisfy it. This fixture is the one that distinguishes
+    /// them: a byte arrives every 20 ms (five times inside the 100 ms injected
+    /// deadline), so a resetting idle timer would never fire while they keep
+    /// coming. Both JSON paths must still report the fixed deadline, and the
+    /// call must finish inside the outer guard rather than tracking the
+    /// origin's multi-second dribble. No total timeout is added to blob streams.
+    #[tokio::test]
+    async fn a_sub_deadline_byte_dribble_still_hits_the_fixed_body_deadline() {
+        let deadline = Duration::from_millis(100);
+        // 20 ms gaps and 400 bytes (8 s of dribbling) give a resetting timer no
+        // gap to expire in and outlast the 6 s outer guard; a fixed window fires
+        // after ~5 * 100 ms of retries and closes each socket early.
+        let (uri, hits) = dribbling_body_origin(Duration::from_millis(20), 400).await;
+        let mut client = client_for(Biz::Hk4eGlobal);
+        client.json_body_idle = deadline;
+
+        let node_err = tokio::time::timeout(Duration::from_secs(6), async {
+            client
+                .get_node::<Vec<GameConfig>>(&uri, "launch_configs")
+                .await
+        })
+        .await
+        .expect("a continuous sub-deadline dribble must still hit the fixed deadline")
+        .expect_err("an incomplete body cannot succeed");
+        assert!(
+            format!("{node_err:#}").contains("read body timed out"),
+            "the fixed deadline must be the reported cause: {node_err:#}"
+        );
+
+        let direct_err = tokio::time::timeout(Duration::from_secs(6), async {
+            client.get_direct::<ChunkBuild>(&uri).await
+        })
+        .await
+        .expect("a continuous sub-deadline dribble must still hit the fixed deadline")
+        .expect_err("an incomplete body cannot succeed");
+        assert!(
+            format!("{direct_err:#}").contains("read body timed out"),
+            "the fixed deadline must be the reported cause: {direct_err:#}"
+        );
+
+        assert!(
+            hits.load(Ordering::SeqCst) >= 2,
+            "both JSON paths must have reached the origin on fresh connections"
         );
     }
 
