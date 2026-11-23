@@ -169,7 +169,10 @@ flowchart TD
   The repair-mode group (`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`) is
   emitted only when `--repair-mode` was passed; `ram_bytes=` (the peak staged
   payload) only when `--max-ram-bytes` was; `damaged_chunks=` only when
-  `--scan` was. `kept_bytes` is the disk claim in one number: the bytes that
+  `--scan` was. `purge_errors=` (walk/stat failures that make the delete total
+  a lower bound) and `purge_hidden=` (paths the scope hid from the purge) are
+  purge-walk facts that appear only when non-zero, independent of any ceiling.
+  `kept_bytes` is the disk claim in one number: the bytes that
   were already correct and did not have to be written — the complement of the
   **settled** writes, which are the file's, accumulated across its attempts
   (a chunk an abandoned attempt wrote is in the install, so it was not kept).

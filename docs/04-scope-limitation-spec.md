@@ -683,6 +683,9 @@ is byte-identical to a run that never passes the flag. Other conditional keys
 (`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`, `ram_bytes=`,
 `damaged_chunks=`) belong to other features and are specified in `README.md`
 and the `girpr_report::summary` source; they follow the same discipline.
+`purge_errors=` and `purge_hidden=` are fact keys driven by the purge walk's
+own counters rather than by a flag: they too appear only when non-zero, so a
+clean or unpurged run stays byte-identical.
 
 ### 6.1 Two numbers for every byte count
 
@@ -721,6 +724,8 @@ question a budget asks.
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
 | `stopped=<the flag>` | a runtime hard stop fired, or the post-repair delete pass was refused. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes`, `--max-delete-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so different stops cannot share a value; the first ceiling to bind keeps it |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves `download_bytes` and the plan's estimate while still exiting `0` |
+| `purge_errors=<N>` | the purge walk or a candidate stat failed `N` times, so the delete total is only a lower bound. Emitted only when non-zero, independent of any ceiling — a failed stat is reportable even on an unflagged-cleanup run. Taken from the finished plan on the caller thread, never from a scoped worker |
+| `purge_hidden=<N>` | `N` on-disk paths the active scope hid from the purge walk (a count of paths, not bytes). Emitted only when non-zero |
 
 `download_bytes` is **not** in this table: it is one of the fixed keys, and it is
 the **settled** download figure — the bytes of the files that were actually

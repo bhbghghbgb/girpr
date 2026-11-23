@@ -430,19 +430,26 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         deprecated,
     } = inputs;
 
+    // Only a purge-enabled run can have a candidate that rescues an empty
+    // selection, so only that run needs the post-walk check below. An unpurged
+    // run's verdict is decidable the moment the plan exists; it is checked
+    // inside `plan_work_and_purge` before the full install walk.
+    let purge_wanted = ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan;
     let (plan, purge_keys, purge_plan) =
-        plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest).await?;
+        plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest, purge_wanted).await?;
 
-    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
-    // The rule and its diagnosis live in the plan leaf; only the mapping to
-    // this program's usage error stays here.
-    if let Err(e) = check_scope_selection(
-        &ctx.path_scope,
-        &plan,
-        purge_candidates,
-        purge_plan.as_ref(),
-    ) {
-        return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
+    if purge_wanted {
+        let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
+        // The rule and its diagnosis live in the plan leaf; only the mapping to
+        // this program's usage error stays here.
+        if let Err(e) = check_scope_selection(
+            &ctx.path_scope,
+            &plan,
+            purge_candidates,
+            purge_plan.as_ref(),
+        ) {
+            return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
+        }
     }
 
     // The disk figures stat every planned file, and under `--scan` the scan
@@ -525,13 +532,16 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
 /// Step 4.0: the work list and, when a purge will happen, its candidates.
 ///
 /// The `plan` timer covers both, and stops before the include guard and the
-/// network work that follow.
+/// network work that follow. An unpurged run applies the include guard here,
+/// right after the plan is built: with no walk there can be no purge candidate
+/// to rescue an empty selection, so a typo must not pay for that walk.
 async fn plan_work_and_purge(
     ctx: &RunCtx,
     summary: &mut Summary,
     game_dir: &Path,
     meta: &Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
+    purge_wanted: bool,
 ) -> Result<(Arc<RepairPlan>, Option<Arc<PurgeKeys>>, Option<PurgePlan>), RunFailure> {
     let scope = &ctx.path_scope;
     let timer = PhaseTimer::start("plan");
@@ -539,6 +549,17 @@ async fn plan_work_and_purge(
         girpr_repair_plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
             .map_err(RunFailure::metadata)?,
     );
+
+    // No purge flag means no walk will run, so `purge_candidates` is necessarily
+    // 0 and the scope-typo verdict is already final. Refuse now rather than
+    // after a full install walk. Passing `None` for the purge plan keeps the
+    // exact "matched no file in the live manifest" wording an unpurged run has
+    // always produced; the alternative wording belongs to purge-enabled runs,
+    // whose post-walk check stays in `build_and_assert_plan`.
+    if !purge_wanted && let Err(e) = check_scope_selection(scope, &plan, 0, None) {
+        return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
+    }
+
     tracing::info!(
         "work list: {} files{}",
         plan.len(),
@@ -564,7 +585,6 @@ async fn plan_work_and_purge(
     // re-plan, whose candidates could in principle differ — so the bound does
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
-    let purge_wanted = ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan;
     // The keep inputs are derived only from the immutable plan and the run's
     // configuration, so fold them once and let both purge passes (and the
     // `--print-plan` numbers) share them. The walked candidates stay
@@ -594,6 +614,18 @@ async fn plan_work_and_purge(
                 "purge planning task failed before any delete: {e}"
             ))
         })?;
+        // Surface the walk's own counters on the caller thread from the
+        // finished plan, never from a scoped worker (those carry a thread-local
+        // dispatcher). They are independent of any ceiling: a lower-bound
+        // delete total is worth a machine-readable warning even when no
+        // `--max-delete-bytes` was asked for. Emitted only when non-zero, so a
+        // clean purge leaves `SUMMARY` byte-identical.
+        if plan.errors > 0 {
+            summary.flags.purge_errors = Some(plan.errors);
+        }
+        if plan.hidden > 0 {
+            summary.flags.purge_hidden = Some(plan.hidden);
+        }
         (Some(Arc::new(keys)), Some(plan))
     } else {
         (None, None)
@@ -606,7 +638,8 @@ async fn plan_work_and_purge(
 // Step 4.2 is now `girpr_repair_plan::check_scope_selection`: the rule and
 // its typed diagnosis live with the two plans they decide over. Exit `1` — a
 // property of the request — rather than `5`, and the caller owns only the
-// mapping to this binary's usage error.
+// mapping to this binary's usage error. Unpurged runs apply it earlier, in
+// `plan_work_and_purge`, where the verdict is already final.
 
 /// The server's deprecated-file list, fetched in step 3 alongside the manifests.
 ///

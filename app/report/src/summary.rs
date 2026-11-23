@@ -301,6 +301,15 @@ pub struct SummaryFlags {
     /// Emitted only when `--scan` was passed: without the scan nobody knows
     /// which chunks are damaged, only which files are.
     pub damaged_chunks: Option<u64>,
+    /// Walk/metadata failures that made the purge candidate list incomplete,
+    /// so its `total_bytes` is only a lower bound. Emitted only when non-zero,
+    /// independent of any ceiling: a failed stat is reportable whether or not
+    /// `--max-delete-bytes` was asked for.
+    pub purge_errors: Option<u64>,
+    /// On-disk paths (files and directories) the active scope hid from the
+    /// purge walk, so they were deliberately left in place. A count of paths,
+    /// not bytes. Emitted only when non-zero.
+    pub purge_hidden: Option<u64>,
 }
 
 /// One conditional `SUMMARY` entry.
@@ -398,6 +407,15 @@ pub(crate) fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.damaged_chunks {
         out.num("damaged_chunks", n);
+    }
+    // Purge diagnostics: facts about the walk, not verdicts about it. Kept
+    // next to the other fact key (`local_manifest`) and absent on a clean or
+    // unpurged run, which keeps the tail byte-identical in those cases.
+    if let Some(n) = f.purge_errors {
+        out.num("purge_errors", n);
+    }
+    if let Some(n) = f.purge_hidden {
+        out.num("purge_hidden", n);
     }
     if let Some(s) = f.stopped {
         out.word("stopped", s);

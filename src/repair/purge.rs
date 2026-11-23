@@ -442,6 +442,12 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// All entries are `/`-separated rel paths (same normalization as
 /// `girpr_repair_plan::build_plan` and the purge walk). The set is fixed,
 /// so it is built once and shared rather than allocated per call.
+///
+/// The match is against the **whole rel path**, so both rules are root-only:
+/// `config.ini` and `girpr.lock` are kept at the game dir's root, while
+/// `sub/config.ini` and `sub/girpr.lock` are ordinary orphans and are purged.
+/// That is deliberate — the legacy lock and the version file only ever lived
+/// at the root — and is pinned by `the_legacy_lock_keep_rule_is_root_only`.
 pub fn keep_set() -> &'static HashSet<String> {
     static KEEP: OnceLock<HashSet<String>> = OnceLock::new();
     KEEP.get_or_init(|| {
@@ -1206,6 +1212,42 @@ mod tests {
         assert!(keep.contains("config.ini"));
         assert!(keep.contains(girpr_lock::LOCK_FILE));
         assert_eq!(keep.len(), 2);
+    }
+
+    /// The metadata keeps are keyed by the full rel path, so they match only at
+    /// the game dir's root. A lock- or config-shaped file in a subdirectory is
+    /// not the legacy root file and is an ordinary delete candidate. Pinning
+    /// this keeps a future "helpful" widened match from silently sparing an
+    /// install's worth of nested files.
+    #[test]
+    fn the_legacy_lock_keep_rule_is_root_only() {
+        let plan = plan_of("game.dat");
+        let keys = keys_for(&plan, &no_blacklist());
+        for rel in ["config.ini", girpr_lock::LOCK_FILE] {
+            assert_eq!(
+                classify_purge_path_visible(
+                    rel,
+                    true,
+                    keys.expected(),
+                    keys.server_keep(),
+                    keys.blacklist(),
+                ),
+                PurgeVerdict::Keep,
+                "{rel} at the root is kept"
+            );
+            let nested = format!("nested/{rel}");
+            assert_eq!(
+                classify_purge_path_visible(
+                    &nested,
+                    true,
+                    keys.expected(),
+                    keys.server_keep(),
+                    keys.blacklist(),
+                ),
+                PurgeVerdict::Purge,
+                "{nested} is not the root-level metadata file"
+            );
+        }
     }
 
     /// The sweep's expected failure — something appeared after the plan was

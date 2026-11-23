@@ -264,6 +264,8 @@ fn every_conditional_key_has_a_known_name_and_typed_rendering() {
         kept_bytes: Some(900),
         ram_bytes: Some(4096),
         damaged_chunks: Some(7),
+        purge_errors: None,
+        purge_hidden: None,
     };
     let rec = summary_record(&s, 5);
     assert_eq!(
@@ -344,6 +346,44 @@ fn local_manifest_stands_alone() {
     assert!(!rec.text().contains("local_manifest"));
     let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
     assert!(v.get("local_manifest").is_none(), "{rec:?}");
+}
+
+/// The purge walk's failures and scope-hidden paths are facts about the run,
+/// independent of any ceiling. They appear only when non-zero, stay numeric on
+/// both planes, and do not drag any other conditional key along with them.
+#[test]
+fn purge_diagnostics_are_numeric_facts_and_only_when_nonzero() {
+    let mut s = Summary {
+        files_total: 2,
+        ..Summary::default()
+    };
+    s.flags.purge_errors = Some(3);
+    s.flags.purge_hidden = Some(5);
+    let rec = summary_record(&s, 0);
+    let line = rec.text();
+    assert!(
+        line.contains("purge_errors=3 purge_hidden=5"),
+        "fixed order, no other key between them: {line}"
+    );
+    assert!(!line.contains("limited"), "{line}");
+    assert!(!line.contains("scoped"), "{line}");
+    assert!(!line.contains("stopped"), "{line}");
+    let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
+    assert_eq!(v["purge_errors"], 3);
+    assert_eq!(v["purge_hidden"], 5);
+
+    // A clean or unpurged run emits neither key; the default tail stays empty
+    // so its SUMMARY is byte-identical to one that never had these fields.
+    let clean = Summary {
+        files_total: 2,
+        ..Summary::default()
+    };
+    let clean_rec = summary_record(&clean, 0);
+    assert!(!clean_rec.text().contains("purge_errors"));
+    assert!(!clean_rec.text().contains("purge_hidden"));
+    let clean_v: serde_json::Value = serde_json::from_str(&clean_rec.json()).unwrap();
+    assert!(clean_v.get("purge_errors").is_none());
+    assert!(clean_v.get("purge_hidden").is_none());
 }
 
 #[test]

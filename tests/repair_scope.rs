@@ -197,6 +197,13 @@ async fn an_include_matching_nothing_is_a_usage_error() {
     let msg = format!("{:#}", err.source);
     assert!(msg.contains("game/nope.dat"), "must name the glob: {msg}");
     assert!(msg.contains("plan_files=0"), "{msg}");
+    // An unpurged run's verdict is final before any walk, so it keeps the
+    // "matched no file in the live manifest" wording (not the purge-enabled
+    // "files-cleanup has no candidates" variant).
+    assert!(
+        msg.contains("matched no file in the live manifest"),
+        "{msg}"
+    );
 
     // `--exclude` matching nothing is unremarkable and must still succeed.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
