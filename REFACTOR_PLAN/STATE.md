@@ -19,8 +19,8 @@ machine data or change log.
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | completed | ff48e189 | §2 S-05 (173–185); assumptions (183–184) hold. Walk stays serial; stat/delete parallel via bounded scoped threads (no new dependency); results in index slots, log lines emitted on caller thread in plan order; empty-dir sweep after all deletes. DirEntry carried into stat stage to keep Windows cached metadata (no extra syscall); tracing dispatcher is thread-local so scoped workers cannot log. |
 | T05 | Eliminate the duplicate plan/scan per-file stat pass | completed | 0b4031c5 | §2 S-06 (186–198). Reuse of scan data into DiskFigure::Measured rejected: scan uses follow-symlink `metadata` + bytes-read length, plan needs `symlink_metadata` is_file/length (classification + verdict mtime guard). Chose genuine overlap: plan stat task launched before scan awaited, JoinHandle held in PlanWork and awaited after limits gate; aborted on limit refusal. Relevant to T06. |
 | T06 | Reuse scan verdicts and remove double reads in the repair path | pending_review | bcd10762, d45c3c49, 10394ad7 | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849). IO-01 guarded verdict shared with temp (byte-identical conditions); IO-02 single capture read into one reusable per-file chunk buffer; IO-04 layout() once, passed as &Layout; COR-04 reuse I/O fallback counter + info/warn (MD5 mismatch stays debug). IO-03 premise false: staged-source hash is a required TOCTOU re-check, kept and documented. Temp staging buffer holds one chunk, not charged to --max-ram-bytes (temp mode never used it); peak temp RSS rises by one chunk. Guard helpers moved to file/mod.rs; attempt_temp gained FileId; added RepairDiagnostics.reuse_io_fallbacks. F07 guard-equivalence fails — no code change. |
-| T07 | Add validated path joins and cache canonicalization | pending_review | 36883118 | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) holds — only five plan-derived join callers. Deviation: parent cache keeps leaf canonicalization (dropping it would allow a file-level symlink escape); game_dir canonicalized once per phase (twice per run), second PathRoot via syscall-free new_canonical. New API: PathRoot::join_validated/new_canonical, Lock::acquire_canonical, lock_path_for_canonical. |
-| T08 | Remove redundant post-phase mkdir syscalls and materialization | pending_review | c24b6f71 | §3 IO-07/IO-08 (277–293). Audio-cache walk streamed (no Vec); mkdir dedup via HashSet of successful creates only (failures retried, phase stays best-effort); ASCII byte fast path for trailing-dot/space check with lossy fallback for non-ASCII. New private `move_audio_cache_with_mkdir` test seam; `rel_from_base` no longer imported in post.rs. |
+| T07 | Add validated path joins and cache canonicalization | completed | 36883118 | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) holds — only five plan-derived join callers. Deviation: parent cache keeps leaf canonicalization (dropping it would allow a file-level symlink escape); game_dir canonicalized once per phase (twice per run), second PathRoot via syscall-free new_canonical. New API: PathRoot::join_validated/new_canonical, Lock::acquire_canonical, lock_path_for_canonical. |
+| T08 | Remove redundant post-phase mkdir syscalls and materialization | completed | c24b6f71 | §3 IO-07/IO-08 (277–293). Audio-cache walk streamed (no Vec); mkdir dedup via HashSet of successful creates only (failures retried, phase stays best-effort); ASCII byte fast path for trailing-dot/space check with lossy fallback for non-ASCII. New private `move_audio_cache_with_mkdir` test seam; `rel_from_base` no longer imported in post.rs. |
 | T09 | Bound streaming decode output and validate blob IDs | todo | | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) |
 | T10 | Move streaming decode/write off async workers | todo | | §5 NET-07 (404–413); same class as S-02/T01 |
 | T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | todo | | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) |
@@ -50,6 +50,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | B | T02, T03 | done | No fix/revert needed. Endorsed stress case with per-chunk timing and conditional deprecated prefetch deferral; dropped temp-mode windowing. |
 | C | T04, T05 | done | No fix/revert needed. Endorsed purge-scale measurement; endorsed scan-probe sharing only if folded into T06. |
 | D | T06 | done | No fix/revert needed. F07 closed (guard-equivalence fails); endorsed temp-RSS measurement follow-up. |
+| E | T07, T08 | done | No fix/revert needed. Endorsed CleanRel newtype, install-scale syscall measurement, and audio-cache scale measurement. |
 
 ## Follow-ups
 
@@ -67,6 +68,9 @@ planning review batches the survivors only after every task is settled.
 | F06 | Measure purge wall time at scale (10k+ orphans, SSD/HDD, both platforms) before claiming a cross-platform speedup | open | Endorsed by review C; on Windows the stat stage issues no syscall (cached DirEntry metadata), so only delete benefits there. |
 | F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | dropped | T06 investigation confirmed guard-equivalence fails (scan needs follow-symlink modified + bytes-read file_len; plan needs symlink_metadata is_file/length); review D closed it. No code change. |
 | F08 | Measure peak temp-mode RSS with large reuse slices under tight `--max-ram-bytes`/`--max-write-bytes` to decide whether a bounded spool fallback is worth adding while keeping the single read | open | Endorsed by review D; one-chunk transient RAM is bounded but uncharged to the budget and unmeasured. |
+| F09 | Add a `CleanRel` newtype returned by `clean_rel` to enforce the `join_validated` precondition structurally instead of by debug assertion | open | Endorsed by review E, low priority; all five current call sites are correct and test-covered. |
+| F10 | Measure the path syscall reduction from T07 on a large install before claiming a speedup | open | Endorsed by review E; report figures are static reasoning. |
+| F11 | Measure the audio-cache move at scale (many files per destination directory) to quantify the mkdir/syscall reduction | open | Endorsed by review E; report figures are static reasoning. |
 
 ## Persistent context
 
@@ -149,6 +153,20 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Path APIs after T07 (feeds T14/T16/T17).** `PathRoot::join_validated` and
+  `PathRoot::new_canonical`, `Lock::acquire_canonical` and `lock_path_for_canonical` are
+  public. The resolved-parent cache (`Arc<Mutex<HashMap>>`) is shared only by clones of
+  a phase-bound root; clones must not outlive the phase. Leaf canonicalization is
+  deliberately retained — do not remove it. Five plan-derived join call sites use the
+  fast path; each `contained_join` fallback remains full validation. A parent cached
+  while missing and swapped for an outside symlink mid-phase could bypass containment
+  via a missing leaf — no in-tree code does this today, but any future mid-run symlink
+  creation or longer-lived roots must re-validate the full joined path. See T07 note.
+- **Post-phase seam after T08 (feeds T16/T17).** `move_audio_cache_with_mkdir` is the
+  private test seam; `rel_from_base` is no longer imported in `post.rs`. The audio-cache
+  walk is streamed and dry-run shares that single pass, so audio-cache logging/scope
+  changes must preserve the single-pass structure. Unreadable-entry warnings now
+  interleave with per-file logs (not a pinned contract). See T08 note.
 - **Repair-file API after T06.** Guarded verdict helpers live in `file/mod.rs` and take
   a stat from the caller; `attempt_temp` takes a `FileId`; `RepairDiagnostics` gained a
   public `reuse_io_fallbacks` counter. `file.layout()` is computed once per file and
