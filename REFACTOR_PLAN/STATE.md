@@ -29,8 +29,8 @@ machine data or change log.
 | T14 | Classify lock and directory failures correctly | completed | e604bb45, dc3f9cfd | §6 COR-01 (417–428); assumption 10 (864–866) validated in-repo (two lock test assertions + 3 docs updated; no CLI-contract pin; external automation unverifiable). Deviation: lock contention uses existing `RunFailure::write` (exit 3), not a new code, preserving the pinned exit-code table; held() chain names the holder. create_dir_all failure -> write (exit 3) with `ctx.game_dir` path. app/lock untouched. |
 | T15 | Fix stale scan/check verdicts, surface scan failures, close tmp TOCTOU | completed | 56a1c625, c4f21a4c | §6 COR-02/COR-05/COR-08 (429–441, 464–472, 496–504); assumption 9 (862–863). Partially implemented: COR-02 documented, not changed — --check-only --scan is a deliberate plan-answer check (verified by commit d046eb54 and a_scanned_check_uses_the_scan_digest_but_still_checks_the_length); COR-05 adds ScanReport::failures + scan_failed(), surfaced on the scan-phase tracing line (not PLAN stdout) with estimates unchanged. COR-08 SKIPPED: no portable safe handle-relative rename (std has no File::rename; Linux no rename-by-fd; Windows needs FFI but workspace denies unsafe_code) — promote_tmp left path-based. Reviewed H: completed (partial with one validated skip — do not re-validate mtime/re-hash or use unsafe FFI). |
 | T16 | Move scope-typo refusal earlier and surface purge diagnostics | completed | 9923b4c9 | §6 COR-06/COR-07/COR-09 (474–512). Early check_scope_selection after build_plan for !purge_wanted (before walk); full post-walk check retained for purge runs. SUMMARY gains conditional numeric purge_errors=N / purge_hidden=N (only when non-zero) via existing Extra::Num path — T16's sole data-plane exception. Deviation: no hidden-byte counter exists, so purge_hidden is a path count, documented as such. plan_work_and_purge gained private purge_wanted: bool. Strict refusal not added. |
-| T17 | Reduce logging cost without changing the data plane | pending_review | 39fa35a0, 8fc260ba, 76bc4ecf | §7 LOG-01..03 (517–559); assumptions 11–12 (867–871). Chose release default file level Info over moving per-chunk lines to trace (assumption 11 pins the --log-file-level debug opt-in spelling); new public girpr_log::default_file_level() — shared crate, so gircap/girsync release builds also default Info. Expensive body/error fields gated behind enabled!(TRACE)/(DEBUG). Appender uses lossy(false) with stock 128k channel (backpressure deliberate, no dropped_lines report). Data plane untouched. |
-| T18 | Low-risk micro-optimization sweep | pending_review | 97b9f6e5, 19e89da4, 5b01ea28 | §8 MIC-02/03/06/07 (574–589, 600–609); §4 MEM-02 (309–319). Implemented MIC-06 (local Option state), MIC-07 (single write_all), MIC-03 purge.rs (stable sort_by_cached_key — unstable would reorder same-depth dirs), MEM-02 (borrowed &str keep-set probes off Windows, fold unchanged). SKIPPED: MIC-02 whole (glob require_literal_separator:false means * crosses /, so visibility is not inherited — fast path would change purge decisions); MIC-03 plan.rs site stale (plain rel sort); MEM-02 PurgeKeys three copies/membership hash (optional + needs lifetime redesign). |
+| T17 | Reduce logging cost without changing the data plane | completed | 39fa35a0, 8fc260ba, 76bc4ecf | §7 LOG-01..03 (517–559); assumptions 11–12 (867–871). Chose release default file level Info over moving per-chunk lines to trace (assumption 11 pins the --log-file-level debug opt-in spelling); new public girpr_log::default_file_level() — shared crate, so gircap/girsync release builds also default Info. Expensive body/error fields gated behind enabled!(TRACE)/(DEBUG). Appender uses lossy(false) with stock 128k channel (backpressure deliberate, no dropped_lines report). Data plane untouched. |
+| T18 | Low-risk micro-optimization sweep | completed | 97b9f6e5, 19e89da4, 5b01ea28 | §8 MIC-02/03/06/07 (574–589, 600–609); §4 MEM-02 (309–319). Implemented MIC-06 (local Option state), MIC-07 (single write_all), MIC-03 purge.rs (stable sort_by_cached_key — unstable would reorder same-depth dirs), MEM-02 (borrowed &str keep-set probes off Windows, fold unchanged). SKIPPED: MIC-02 whole (glob require_literal_separator:false means * crosses /, so visibility is not inherited — fast path would change purge decisions); MIC-03 plan.rs site stale (plain rel sort); MEM-02 PurgeKeys three copies/membership hash (optional + needs lifetime redesign). |
 | T19 | Cut allocations in gircap's HTTP recording pipeline | todo | | §9 TOOL-01/07/08/09/10 (643–652, 691–715); assumption 14 (875–877) |
 | T20 | Memoize decoded blobs and serialize the manifest once | todo | | §9 TOOL-03/04/11/12 (661–678, 716–728); assumption 15 (878–880) |
 | T21 | Fix gircap indexing and canonicalization correctness | todo | | §9 TOOL-05/06/13/17/19/20 (679–690, 729–737, 763–768, 780–795); assumptions 16–17 (881–888) |
@@ -54,6 +54,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | F | T09, T10, T11 | done | No fix/revert needed. All four suggested follow-ups endorsed; the high-jobs poll check folded into F01/F02. |
 | G | T12, T13 | done | No fix/revert needed. Dropped Sha256 symmetry; endorsed five other follow-ups (mostly low/conditional priority). |
 | H | T14, T15, T16 | done | No fix/revert needed. T15 resolved completed with COR-08 a validated skip; dedicated exit code dropped; five other follow-ups endorsed. |
+| I | T17, T18 | done | No fix/revert needed. Endorsed order-insensitive chunk-hit test, conditional PurgeKeys revisit, and lossless-appender backpressure validation; duplicate suggestion dropped. |
 
 ## Follow-ups
 
@@ -87,6 +88,9 @@ planning review batches the survivors only after every task is settled.
 | F22 | Surface the post-repair re-plan errors/hidden counters by threading `&mut Summary` through the post phase | open | Endorsed by review H, low priority; only the up-front purge plan's counters are currently surfaced. |
 | F23 | Consider strict refusal on purge errors as a separate, explicitly opted-in change | open | Endorsed by review H; must stay opt-in and separate, never a silent change. |
 | F24 | Add an end-to-end test injecting an unreadable purge candidate to assert the new SUMMARY keys | open | Endorsed by review H; current coverage of the new keys is unit-level. |
+| F25 | Make the order-sensitive chunk-hit assertions (e.g. tests/repair_writer.rs) compare as a set to remove the pre-existing flake under T02's concurrent fetch window | open | Endorsed by review I, low priority; a BTreeSet comparison is already used in the windowed test. |
+| F26 | Revisit MEM-02's three keyed PurgeKeys copies via a borrowing-friendly type or a compact membership hash | open | Endorsed by review I conditionally — only if profiling shows the resident strings matter. |
+| F27 | Validate lossless-appender backpressure under a trace-level large repair (--log-file-level trace with the 128k channel) | open | Non-blocking validation follow-up from review I; assumption 12. |
 
 ## Persistent context
 
@@ -169,6 +173,16 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Logging / purge internals after T17-T18.** `girpr_log::default_file_level()` is
+  public (Debug in debug builds, Info in release); release file logging defaults to
+  Info across girpr, gircap and girsync via the shared crate, with
+  `--log-file-level debug|trace` still opting in. The file appender is lossless
+  (`lossy(false)`), so verbose opt-in deliberately backpressures rather than drops.
+  Purge keep-set probes use borrowed `&str` off Windows and a folded owned key on
+  Windows; the depth sort is a stable `sort_by_cached_key` (same-depth walk order
+  preserved); MIC-02 is deliberately skipped because `*` crosses `/`. `retry_state`
+  threads state by value with no lock; `report_core::write_line` emits a record in
+  one `write_all`. See T17/T18 notes.
 - **Fail-fast / diagnostics after T14-T16.** Live-lock and game-dir-creation failures
   now exit 3 (`RunFailure::write`) with FATAL; the pinned exit-code table is unchanged
   (external automation pinning exit 1 is unverifiable). `--check-only --scan` is
