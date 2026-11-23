@@ -20,7 +20,9 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use walkdir::WalkDir;
 
-use crate::util::path::{path_key, rel_from_base};
+#[cfg(windows)]
+use crate::util::path::path_key;
+use crate::util::path::rel_from_base;
 use girpr_repair_plan::{PathScope, PurgeCandidate, PurgeKeys, PurgePlan};
 
 /// Upper bound on the scoped workers a purge stat or delete stage opens. Enough
@@ -280,7 +282,11 @@ fn finish_plan(game_dir: &Path, walk: WalkResult) -> PurgePlan {
         .into_iter()
         .filter(|d| *d != game_dir && !kept_dirs.contains(d))
         .collect();
-    dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
+    // Deepest first. `sort_by_cached_key` computes the depth once per directory
+    // instead of on every comparison (`components()` walks the path lexically).
+    // It is a *stable* sort with the same key as before, so directories at the
+    // same depth keep their walk order — byte-for-byte identical removal order.
+    dirs.sort_by_cached_key(|a| std::cmp::Reverse(a.components().count()));
     let total_bytes = files.iter().fold(0u64, |n, c| n.saturating_add(c.bytes));
     // The scope and a purge flag agreeing is correct, but it should be
     // visible. `plan_purge` runs once per purge pass, so a run with both
@@ -526,17 +532,25 @@ pub fn classify_purge_path_visible(
     if !visible {
         return PurgeVerdict::Keep;
     }
-    let key = path_key(rel);
+    // The three sets are keyed with `path_key`. That fold is the identity on
+    // non-Windows hosts, so there a borrowed `&str` probe hits the same buckets
+    // with no throwaway `String` per walked path (`HashSet<String>` borrows `str`).
+    // Only Windows, where the key is ASCII-folded, needs an owned folded copy.
+    #[cfg(windows)]
+    let folded: Option<String> = Some(path_key(rel));
+    #[cfg(not(windows))]
+    let folded: Option<String> = None;
+    let key: &str = folded.as_deref().unwrap_or(rel);
     // 1. In the live manifest → keep.
-    if expected.contains(&key) {
+    if expected.contains(key) {
         return PurgeVerdict::Keep;
     }
     // 2. config.ini → keep.
-    if server_keep.contains(&key) {
+    if server_keep.contains(key) {
         return PurgeVerdict::Keep;
     }
     // 3. Blacklisted → excluded from repair, still part of the install.
-    if blacklist.contains(&key) {
+    if blacklist.contains(key) {
         return PurgeVerdict::Keep;
     }
     // 4. Collapse audio pkg-version parity → keep.
@@ -563,6 +577,7 @@ fn file_name(rel: &str) -> &str {
 mod tests {
     use super::*;
     use crate::repair::scope::{LimitHit, Limits, Preflight};
+    use crate::util::path::path_key;
     use girpr_repair_plan::{PlannedFile, RepairPlan};
     use girpr_tempdir::TempDir;
     use std::sync::Arc;
