@@ -15,7 +15,7 @@ machine data or change log.
 |----|-------|-------|---------------|------|
 | T01 | Right-size the Tokio runtime and move repair file I/O off async workers | completed | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). Reviewed A: no fix/revert needed. |
 | T02 | Fetch and decode chunks within one file in a bounded window | pending_review | e385b8dd | §2 S-03 (143–157); assumption 2 (841–842). Scoped to in-place Staged tier with disjoint layout; salvage/Ordered, overlapping layouts and temp stay sequential (temp resume-by-length/rollback couples writes). Ceiling ledger CAS settles out of order exactly; per-chunk wire counts change on failure (siblings still fetched); RAM contract unchanged. |
-| T03 | Run the three independent plan-phase network fetches concurrently | in_progress | | §2 S-04 (158–172) |
+| T03 | Run the three independent plan-phase network fetches concurrently | pending_review | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | todo | | §2 S-05 (173–185) |
 | T05 | Eliminate the duplicate plan/scan per-file stat pass | todo | | §2 S-06 (186–198) |
 | T06 | Reuse scan verdicts and remove double reads in the repair path | todo | | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849) |
@@ -134,6 +134,10 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Plan-phase fetch API after T03.** `src/repair/phases/manifest.rs` exports
+  `ManifestBudget` (shared 4-permit semaphore); `fetch_latest` / `local_reuse_map` take
+  it, and `PlanInputs` has a `deprecated` field. T11/T12 fetch work must build on this.
+  See T03 note for the scope-typo advisory-request deviation.
 - **No lingering references at cleanup.** No source, test, comment, manifest, doc
   table or commit message may reference `REFACTOR_PLAN/` or
   `docs/OPTIMIZATION_REPORT.md`.
