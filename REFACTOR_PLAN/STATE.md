@@ -97,19 +97,20 @@ planning review batches the survivors only after every task is settled.
 | F28 | Extend the recorded-JSON golden fixture with a retained 503-retry error-body capture so the attempt() error-branch content_type and error_responses.json body bytes are byte-golden-covered | dropped | Endorsed by review J, low priority; coverage strengthening (value already unit-asserted). Dropped by follow-up planning: golden-fixture churn; value already unit-asserted. |
 | F29 | Revisit T20 memoization with an explicit total-memo byte cap and a wall-clock measurement on a real capture bundle | dropped | Endorsed by review J; the missing preconditions for the validated skip — do not enable capture memoization without both. Dropped by follow-up planning: needs a total-byte cap and a real bundle, neither available. |
 | F30 | Measure the counted-temp serialize-once path on a ~27 MB manifest on HDD to confirm the extra disk pass beats the second serialization | dropped | Endorsed by review J, low priority (validation only). Dropped by follow-up planning: validation-only HDD timing. |
-| F31 | Pin the deliberate content_type edge with a test asserting joined/encoded value for repeated or non-UTF-8 Content-Type headers | batched | Non-blocking follow-up from review J; documents an intentional difference so it is not "fixed" back. Batch 2 (gircap artifact e2e). |
-| F32 | End-to-end capture test planting a file link sorting before its real target and asserting published `checksums.json` lists both paths | batched | Endorsed by review K; current T21 regression test is at walk() level. Batch 2 (gircap artifact e2e). |
+| F31 | Pin the deliberate content_type edge with a test asserting joined/encoded value for repeated or non-UTF-8 Content-Type headers | done | Non-blocking follow-up from review J; documents an intentional difference so it is not "fixed" back. Batch 2 (gircap artifact e2e). Batch 2 reviewed; no fix needed. |
+| F32 | End-to-end capture test planting a file link sorting before its real target and asserting published `checksums.json` lists both paths | done | Endorsed by review K; current T21 regression test is at walk() level. Batch 2 (gircap artifact e2e). Batch 2 reviewed; no fix needed. |
 | F33 | Measure gircap walk syscalls on a large bundle to validate the TOOL-13/17 reduction | dropped | Endorsed by review K; current evidence is structural, not measured. Dropped by follow-up planning: needs a large bundle; validates a deleted report claim. |
 | F34 | Consider bounded assembly batching if peak RSS shows the all-results-resident trade-off is a concern, keeping ordered writes | dropped | Endorsed by review K conditionally; measure first. Dropped by follow-up planning: conditional on RSS evidence. |
 | F35 | Consider streaming per-worker A6 reads to cut transient memory while preserving exact row text (MD5+SHA-256+zstd measure) | dropped | Endorsed by review K conditionally; non-trivial. Dropped by follow-up planning: conditional and non-trivial; needs memory evidence. |
 | F36 | Wall-clock timing on a real capture bundle to validate the gircap parallel speedup claim | dropped | Endorsed by review K; report figures are static reasoning. Dropped by follow-up planning: needs a real bundle; validates a deleted report claim. |
-| F37 | End-to-end materialize assertion that an under-declared blob surfaces the new declared-size-mismatch text | batched | Endorsed by review K; validates T23's user-visible contract. Batch 2 (gircap artifact e2e). |
+| F37 | End-to-end materialize assertion that an under-declared blob surfaces the new declared-size-mismatch text | done | Endorsed by review K; validates T23's user-visible contract. Batch 2 (gircap artifact e2e). Batch 2 reviewed; no fix needed. |
 | F38 | Measure girsync's walk-stat and per-worker-allocation reductions at scale (large tree, both platforms) | dropped | Endorsed by review L; current gains are structural, not measured. Dropped by follow-up planning: scale/two-platform measurement; validates a deleted report claim. |
 | F39 | Add a direct regression test that walk_live reports the same size/mtime_ns as std::fs::metadata for a regular file | done | Non-blocking follow-up from review L; locks TOOL-02's byte-equivalence assumption against a future walkdir upgrade. Batch 1 (test hardening). Batch 1 reviewed; fix commit 62e6be61 (comment-only). |
 | F40 | Add a byte-dribble loopback test with a short injected deadline to pin that JSON_BODY_IDLE is a fixed window, not a per-byte resetting idle timer | open | Proposed by batch-1 review; only fixture that distinguishes the two semantics. |
 | F41 | In the stalled-body test, assert the retry budget is actually consumed (one request per attempt) rather than only hits >= 1 | open | Non-blocking suggestion from batch-1 review; low priority. |
 | F42 | Extend the F19 lying-declared-size scenario to the temp path's real-length re-check (capture_slice) | open | Non-blocking suggestion from batch-1 review; pins both downstream guards. |
 | F43 | Add a link counterpart to F39 asserting is_link and the target's size/mtime, gated for platform-specific junction behavior | open | Non-blocking suggestion from batch-1 review. |
+| F44 | Add an e2e test for directory-symlink dedup through the published-checksums path, asserting the exact path set and no double-counted file_count/total_bytes | open | Endorsed by batch-2 review, low priority; complements F32, soft-skips without symlink privilege. |
 
 ## Persistent context
 
@@ -201,6 +202,12 @@ relevant task's `note` instead of silently proceeding):
   link flag. sled2redb is untouched: TOOL-18 is a validated stale skip (`write_records`
   already batches via `CacheWrite::maybe_commit` with a final commit and atomic
   NamedTempFile publish). See T24 note.
+- **Follow-up batch 2 outcome.** F31, F32 and F37 are done (implementation
+  9d79c13f, no fix needed). The F32 symlink e2e test soft-skips on hosts where
+  `symlink_file` is denied (verified on the Windows runner), so a green run there is
+  NOT evidence of symlink coverage — the assertions execute only on symlink-capable
+  hosts. Batch 2 was test-only: no production code, golden fixture, artifact bytes,
+  data-plane string, keeper or pinned contract changed.
 - **Follow-up batch 1 outcome.** F13, F19, F25 and F39 are done (implementation
   604390b8, comment-only fix 62e6be61). `HypClient::json_body_idle` is private,
   defaults to `JSON_BODY_IDLE` (30 s), and is settable only from hyp.rs's test module;
