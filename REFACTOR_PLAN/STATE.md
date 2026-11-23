@@ -13,7 +13,7 @@ machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | todo | | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10 |
+| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | in_progress | | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10 |
 | T02 | Fetch and decode chunks within one file in a bounded window | todo | | §2 S-03 (143–157); assumption 2 (841–842) |
 | T03 | Run the three independent plan-phase network fetches concurrently | todo | | §2 S-04 (158–172) |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | todo | | §2 S-05 (173–185) |
