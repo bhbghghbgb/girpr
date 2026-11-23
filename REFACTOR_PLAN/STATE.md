@@ -14,8 +14,8 @@ machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Right-size the Tokio runtime and move repair file I/O off async workers | completed | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). Reviewed A: no fix/revert needed. |
-| T02 | Fetch and decode chunks within one file in a bounded window | pending_review | e385b8dd | §2 S-03 (143–157); assumption 2 (841–842). Scoped to in-place Staged tier with disjoint layout; salvage/Ordered, overlapping layouts and temp stay sequential (temp resume-by-length/rollback couples writes). Ceiling ledger CAS settles out of order exactly; per-chunk wire counts change on failure (siblings still fetched); RAM contract unchanged. |
-| T03 | Run the three independent plan-phase network fetches concurrently | pending_review | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
+| T02 | Fetch and decode chunks within one file in a bounded window | completed | e385b8dd | §2 S-03 (143–157); assumption 2 (841–842). Scoped to in-place Staged tier with disjoint layout; salvage/Ordered, overlapping layouts and temp stay sequential (temp resume-by-length/rollback couples writes). Ceiling ledger CAS settles out of order exactly; per-chunk wire counts change on failure (siblings still fetched); RAM contract unchanged. |
+| T03 | Run the three independent plan-phase network fetches concurrently | completed | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | todo | | §2 S-05 (173–185) |
 | T05 | Eliminate the duplicate plan/scan per-file stat pass | todo | | §2 S-06 (186–198) |
 | T06 | Reuse scan verdicts and remove double reads in the repair path | todo | | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849) |
@@ -47,6 +47,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01 | done | No fix/revert needed; offload committed before runtime shrink and tests pass. Endorsed follow-up: stress test above blocking-pool cap; dropped: --jobs help clarification. |
+| B | T02, T03 | done | No fix/revert needed. Endorsed stress case with per-chunk timing and conditional deprecated prefetch deferral; dropped temp-mode windowing. |
 
 ## Follow-ups
 
@@ -58,6 +59,9 @@ planning review batches the survivors only after every task is settled.
 |----|-------------|-------|------|
 | F01 | Stress-test a plan with `--jobs` above Tokio's default blocking-pool cap (512) to confirm queuing, no deadlock/starvation, and that the file-window bound holds | open | Endorsed by review A; ties to assumption 1 (report lines 837–840) and T01. |
 | F02 | Validate a full repair at `--jobs 1/4/64` (and on HDD where possible), not just the host-independent worker arithmetic | open | Non-blocking validation follow-up from review A; assumption 1 (report lines 837–840). |
+| F03 | Add a many-small-chunks end-to-end stress case with per-chunk timing to confirm real network/decompression overlap from the T02 window, not just structural correctness | open | Endorsed by review B; temp-mode windowing extension (its resume-by-length/rollback coupling) dropped. |
+| F04 | Conditionally defer the deprecated prefetch when `path_scope.has_includes()` is active, restoring the "no advisory request on scope typo" property while keeping overlap in the common unscoped case | open | Endorsed by review B; low priority — the extra advisory request is harmless, usage error/message unchanged. |
+| F05 | Validate peak RSS under high `--jobs` with the 4x per-file decoder window to confirm tight `--max-ram-bytes` ceilings are not pressured by transient decoder scratch | open | Non-blocking validation follow-up from review B. |
 
 ## Persistent context
 
@@ -130,6 +134,12 @@ relevant task's `note` instead of silently proceeding):
   (`src/repair/diagnostics.rs`). T10 (NET-07) must keep its fetch-stream offload
   consistent with this and must not add a redundant `spawn_blocking` around
   `stream_chunk_to` on that path, nor move it back onto runtime workers. See T01 note.
+- **T02 window gating (feeds T10).** The bounded per-chunk fetch window applies only
+  where `Tier::Staged && layout.overlaps.is_empty()`; disjointness rests on
+  `validate_chunk_ranges` at plan time and defensively in `repair_one_file`. The ledger
+  settles out of order exactly; per-chunk wire counts rise on failure (siblings still
+  fetched). T02 added no `spawn_blocking` — T10 must preserve the blocking context.
+  See T02 note.
 - **Runtime / `--jobs` after T01.** Worker count is host-derived
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
