@@ -13,7 +13,7 @@ machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | in_progress | | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10 |
+| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | pending_review | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). |
 | T02 | Fetch and decode chunks within one file in a bounded window | todo | | §2 S-03 (143–157); assumption 2 (841–842) |
 | T03 | Run the three independent plan-phase network fetches concurrently | todo | | §2 S-04 (158–172) |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | todo | | §2 S-05 (173–185) |
@@ -123,6 +123,11 @@ relevant task's `note` instead of silently proceeding):
 - **Pairings.** S-01/S-02 land together (assumption 1); NET-07 is the same class as
   S-02; IO-01/02/03 share assumptions 3–4. If one of a pair is skipped, record the
   reason and pass it to the other's session as a pointer.
+- **T01 offload pattern (feeds T10).** T01 drives each repair file task's future on
+  Tokio's blocking pool with `Handle::block_on`, so `stream_chunk_to` is already polled
+  from a blocking context on the repair path; diagnostics are keyed by owner thread
+  (`src/repair/diagnostics.rs`). T10 (NET-07) must keep its fetch-stream offload
+  consistent with this. See T01 note.
 - **No lingering references at cleanup.** No source, test, comment, manifest, doc
   table or commit message may reference `REFACTOR_PLAN/` or
   `docs/OPTIMIZATION_REPORT.md`.
