@@ -21,9 +21,9 @@ machine data or change log.
 | T06 | Reuse scan verdicts and remove double reads in the repair path | pending_review | bcd10762, d45c3c49, 10394ad7 | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849). IO-01 guarded verdict shared with temp (byte-identical conditions); IO-02 single capture read into one reusable per-file chunk buffer; IO-04 layout() once, passed as &Layout; COR-04 reuse I/O fallback counter + info/warn (MD5 mismatch stays debug). IO-03 premise false: staged-source hash is a required TOCTOU re-check, kept and documented. Temp staging buffer holds one chunk, not charged to --max-ram-bytes (temp mode never used it); peak temp RSS rises by one chunk. Guard helpers moved to file/mod.rs; attempt_temp gained FileId; added RepairDiagnostics.reuse_io_fallbacks. F07 guard-equivalence fails — no code change. |
 | T07 | Add validated path joins and cache canonicalization | completed | 36883118 | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) holds — only five plan-derived join callers. Deviation: parent cache keeps leaf canonicalization (dropping it would allow a file-level symlink escape); game_dir canonicalized once per phase (twice per run), second PathRoot via syscall-free new_canonical. New API: PathRoot::join_validated/new_canonical, Lock::acquire_canonical, lock_path_for_canonical. |
 | T08 | Remove redundant post-phase mkdir syscalls and materialization | completed | c24b6f71 | §3 IO-07/IO-08 (277–293). Audio-cache walk streamed (no Vec); mkdir dedup via HashSet of successful creates only (failures retried, phase stays best-effort); ASCII byte fast path for trailing-dot/space check with lossy fallback for non-ASCII. New private `move_audio_cache_with_mkdir` test seam; `rel_from_base` no longer imported in post.rs. |
-| T09 | Bound streaming decode output and validate blob IDs | pending_review | 9b914411 | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) validated on captured 7.1.0 bundle (16.8 MB manifest, 9 MB compressed) — both 64 MiB caps exceed it. Deviation: conservative unsafe-shape id check (not strict capture regex) so short hex/test ids still pass; origin/path-prefix assertion is the backstop. MAX_MANIFEST_HINT removed; new MANIFEST_INITIAL_CAPACITY/MAX_MANIFEST_BYTES/MAX_MANIFEST_COMPRESSED; join_url now rejects hostile ids. |
-| T10 | Move streaming decode/write off async workers | pending_review | ec5b52ab | §5 NET-07 (404–413); same class as S-02/T01. Report premise false in current tree: sole production caller write_downloaded_chunk runs inside T01's Handle::block_on blocking-pool file tasks, so a spawn_blocking wrapper would be redundant and is forbidden by T01 policy. Took the sanctioned document-and-enforce outcome (rustdoc contract on stream_chunk_to/write_downloaded_chunk); no executable code change. No runtime assertion (Tokio 1.54 exposes none); enforcement by documented contract + Send bound. |
-| T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | pending_review | 76daf1ce | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) validated on capture (9 MB GETs take 11 s; all JSON responses 200). 10 s connect + 30 s idle on JSON reads (no blanket total); status check in both JSON paths, non-2xx classified Fatal (pinned 500 test); body-read Retry, wrapper-parse Fatal, data:null -> SophonNotFound. MIC-12 not needed (already in-place retain_mut); stream.rs untouched (T09-owned); tokio `time` feature added as normal dep. |
+| T09 | Bound streaming decode output and validate blob IDs | completed | 9b914411 | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) validated on captured 7.1.0 bundle (16.8 MB manifest, 9 MB compressed) — both 64 MiB caps exceed it. Deviation: conservative unsafe-shape id check (not strict capture regex) so short hex/test ids still pass; origin/path-prefix assertion is the backstop. MAX_MANIFEST_HINT removed; new MANIFEST_INITIAL_CAPACITY/MAX_MANIFEST_BYTES/MAX_MANIFEST_COMPRESSED; join_url now rejects hostile ids. |
+| T10 | Move streaming decode/write off async workers | completed | ec5b52ab | §5 NET-07 (404–413); same class as S-02/T01. Report premise false in current tree: sole production caller write_downloaded_chunk runs inside T01's Handle::block_on blocking-pool file tasks, so a spawn_blocking wrapper would be redundant and is forbidden by T01 policy. Took the sanctioned document-and-enforce outcome (rustdoc contract on stream_chunk_to/write_downloaded_chunk); no executable code change. No runtime assertion (Tokio 1.54 exposes none); enforcement by documented contract + Send bound. |
+| T11 | Add HTTP timeouts, status checks and fetch-layer micro-optimizations | completed | 76daf1ce | §5 NET-01..04 (349–385); §4 MEM-05 (337–345); §8 MIC-04/05/12 (591–599, 630–636); assumptions 6–7 (853–858) validated on capture (9 MB GETs take 11 s; all JSON responses 200). 10 s connect + 30 s idle on JSON reads (no blanket total); status check in both JSON paths, non-2xx classified Fatal (pinned 500 test); body-read Retry, wrapper-parse Fatal, data:null -> SophonNotFound. MIC-12 not needed (already in-place retain_mut); stream.rs untouched (T09-owned); tokio `time` feature added as normal dep. |
 | T12 | Validate reuse offsets and parse digests once | todo | | §6 COR-03 (442–451); §8 MIC-01/08/11 (564–573, 610–613, 624–629) |
 | T13 | Reuse hash scratch buffers and tighten range handling | todo | | §4 MEM-03/04 (320–336); §8 MIC-09/10 (614–623) |
 | T14 | Classify lock and directory failures correctly | todo | | §6 COR-01 (417–428); assumption 10 (864–866) |
@@ -51,6 +51,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | C | T04, T05 | done | No fix/revert needed. Endorsed purge-scale measurement; endorsed scan-probe sharing only if folded into T06. |
 | D | T06 | done | No fix/revert needed. F07 closed (guard-equivalence fails); endorsed temp-RSS measurement follow-up. |
 | E | T07, T08 | done | No fix/revert needed. Endorsed CleanRel newtype, install-scale syscall measurement, and audio-cache scale measurement. |
+| F | T09, T10, T11 | done | No fix/revert needed. All four suggested follow-ups endorsed; the high-jobs poll check folded into F01/F02. |
 
 ## Follow-ups
 
@@ -60,7 +61,7 @@ planning review batches the survivors only after every task is settled.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| F01 | Stress-test a plan with `--jobs` above Tokio's default blocking-pool cap (512) to confirm queuing, no deadlock/starvation, and that the file-window bound holds | open | Endorsed by review A; ties to assumption 1 (report lines 837–840) and T01. |
+| F01 | Stress-test a plan with `--jobs` above Tokio's default blocking-pool cap (512) to confirm queuing, no deadlock/starvation, that the file-window bound holds, and that chunk streaming is polled off runtime workers | open | Endorsed by reviews A and F; ties to assumption 1 (report lines 837–840), T01 and the T10 documented-contract check. |
 | F02 | Validate a full repair at `--jobs 1/4/64` (and on HDD where possible), not just the host-independent worker arithmetic | open | Non-blocking validation follow-up from review A; assumption 1 (report lines 837–840). |
 | F03 | Add a many-small-chunks end-to-end stress case with per-chunk timing to confirm real network/decompression overlap from the T02 window, not just structural correctness | open | Endorsed by review B; temp-mode windowing extension (its resume-by-length/rollback coupling) dropped. |
 | F04 | Conditionally defer the deprecated prefetch when `path_scope.has_includes()` is active, restoring the "no advisory request on scope typo" property while keeping overlap in the common unscoped case | open | Endorsed by review B; low priority — the extra advisory request is harmless, usage error/message unchanged. |
@@ -71,6 +72,9 @@ planning review batches the survivors only after every task is settled.
 | F09 | Add a `CleanRel` newtype returned by `clean_rel` to enforce the `join_validated` precondition structurally instead of by debug assertion | open | Endorsed by review E, low priority; all five current call sites are correct and test-covered. |
 | F10 | Measure the path syscall reduction from T07 on a large install before claiming a speedup | open | Endorsed by review E; report figures are static reasoning. |
 | F11 | Measure the audio-cache move at scale (many files per destination directory) to quantify the mkdir/syscall reduction | open | Endorsed by review E; report figures are static reasoning. |
+| F12 | Revisit the fixed 64 MiB manifest ceilings if a future manifest grows past them, and share one id-shape definition between fetch and capture tools | open | Endorsed by review F; keep the conservative fetch check — the strict capture regex would reject real short ids. |
+| F13 | Add a fetch-side test for the JSON body idle/deadline timeout using a stalled loopback origin with an injectable short duration; clarify that JSON_BODY_IDLE is a bounded deadline on small buffered bodies, not a resetting timer | open | Endorsed by review F; the timeout path is currently untested. |
+| F14 | Add a resetting per-piece idle timeout inside `sophon/stream.rs::stream_body` for mid-stream blob stalls (never a total deadline) | open | Endorsed by review F, lower priority; touches the file shared with T09/T10 — schedule after those in-flight tasks. |
 
 ## Persistent context
 
@@ -153,6 +157,13 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Fetch client policy after T11 (feeds T19/T20).** `HypClient` has a 10 s connect
+  timeout and a 30 s bounded deadline only on the two buffered JSON paths (no blanket
+  total on streamed bodies); non-2xx in JSON paths is Fatal, body-read is Retry,
+  `get_direct` wrapper-parse is Fatal, and `data:null` maps to `SophonNotFound`.
+  `hyp_base()` / `sophon_base()` return `&str`; `app/fetch` declares tokio with the
+  `time` feature. MIC-12 was intentionally unchanged (deprecated list already
+  normalized in place). See T11 note.
 - **Fetch manifest caps / ID validation after T09 (feeds T11, T19/T20).**
   `app/fetch/src/sophon/stream.rs` no longer has `MAX_MANIFEST_HINT`; it now has
   `MANIFEST_INITIAL_CAPACITY` (64 KiB), `MAX_MANIFEST_BYTES` and
