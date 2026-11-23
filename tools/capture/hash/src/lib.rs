@@ -403,6 +403,14 @@ pub fn zstd_decompress(bytes: &[u8], what: &str, limit: u64) -> Result<Vec<u8>, 
 /// that is smaller than the frame is refused rather than decoded past, and a
 /// false huge declaration is clamped by the run's `ceiling`. The returned length
 /// is whatever actually decoded within that bound.
+///
+/// **An over-limit refusal says which bound was hit.** When the cap came from a
+/// declaration below the ceiling, the frame disagrees with the index and the
+/// error names the declared size; when it came from the ceiling, the frame tried
+/// to expand past the run's hard bound and the error names the ceiling. Both
+/// name the bytes observed (a lower bound, since the read stops one byte past
+/// the cap). This is text only — the limit itself is unchanged, so a real bomb
+/// is still stopped at `min(expected, ceiling)`.
 pub fn zstd_decompress_from<R: std::io::Read>(
     mut reader: R,
     what: &str,
@@ -430,10 +438,40 @@ pub fn zstd_decompress_from<R: std::io::Read>(
         return Err(zstd_error_streamed(
             head,
             what,
-            format!("the decoded output exceeds the {limit} B decode limit"),
+            zstd_over_limit_from(expected, ceiling, limit, out.len() as u64),
         ));
     }
     Ok(out)
+}
+
+/// Why an over-limit streamed decode was refused: a lying declaration versus a
+/// genuine ceiling hit.
+///
+/// [`zstd_decompress_from`] caps its read at `min(expected, ceiling) + 1`, so the
+/// bytes in hand are a *lower bound* on the frame's real length — exactly one
+/// past the cap. When that cap came from a declaration below the ceiling, the
+/// frame disagrees with the index and is not (as far as this read can tell) a
+/// bomb; when it came from the ceiling, the frame really did try to expand past
+/// the hard bound. Both messages name the bound and the observed lower bound,
+/// and both keep the "decode limit" token so downstream substring checks still
+/// match. The limit itself is untouched — this is text only.
+fn zstd_over_limit_from(
+    expected: Option<u64>,
+    ceiling: u64,
+    limit: u64,
+    decoded_lower_bound: u64,
+) -> String {
+    match expected {
+        Some(declared) if declared < ceiling => format!(
+            "declared size mismatch: the decoded output (at least {decoded_lower_bound} B) \
+             exceeds the declared expected size of {declared} B; decode limit {limit} B \
+             reached (absolute ceiling {ceiling} B)"
+        ),
+        _ => format!(
+            "decode ceiling exceeded: the decoded output (at least {decoded_lower_bound} B) \
+             exceeds the {ceiling} B hard ceiling; decode limit {limit} B reached"
+        ),
+    }
 }
 
 /// The over-limit refusal for the buffered form, keeping the blob's own detail.

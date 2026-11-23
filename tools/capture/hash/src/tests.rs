@@ -340,6 +340,77 @@ fn a_decompression_bomb_is_refused_at_the_decode_limit_before_it_is_materialised
     assert_eq!(ok.len(), payload.len());
 }
 
+/// An index that under-declares a frame and a frame that really expands past
+/// the ceiling are different failures; their errors must say which one happened
+/// and name both values. The limit itself is unchanged, so a bomb is still
+/// refused: a lying small declaration is stopped even earlier than a bomb with
+/// no declaration, and a lying large one is clamped to the ceiling.
+#[test]
+fn a_declared_size_mismatch_is_reported_distinctly_from_a_ceiling_hit() {
+    use std::io::Cursor;
+    let payload = vec![7_u8; 1 << 16];
+    let frame = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+    let declared = 16_u64;
+    assert!(declared < payload.len() as u64);
+
+    // The declaration (not the ceiling) is the cap: a lying index. One byte past
+    // the cap is all this read can observe, so the decoded side is a lower bound.
+    let mismatch = zstd_decompress_from(
+        Cursor::new(&frame),
+        "chunk m",
+        Some(declared),
+        TEST_DECOMPRESSED_CEILING,
+    )
+    .expect_err("a frame past its declaration is refused");
+    assert!(mismatch.contains("declared size mismatch"), "{mismatch}");
+    assert!(
+        mismatch.contains("declared expected size of 16 B"),
+        "{mismatch}"
+    );
+    assert!(mismatch.contains("at least 17 B"), "{mismatch}");
+    assert!(mismatch.contains("decode limit"), "{mismatch}");
+    assert!(!mismatch.contains("decode ceiling exceeded"), "{mismatch}");
+
+    // No declaration, so the ceiling is the cap: the frame tried to expand past
+    // the hard bound. This is a bomb, not an index disagreement.
+    let ceiling = 1 << 12;
+    let hit = zstd_decompress_from(Cursor::new(&frame), "chunk c", None, ceiling)
+        .expect_err("a frame past the ceiling is refused");
+    assert!(hit.contains("decode ceiling exceeded"), "{hit}");
+    assert!(hit.contains("4096 B hard ceiling"), "{hit}");
+    assert!(hit.contains("at least 4097 B"), "{hit}");
+    assert!(hit.contains("decode limit"), "{hit}");
+    assert!(!hit.contains("declared size mismatch"), "{hit}");
+
+    // A declaration at or above the ceiling is clamped to it, so a lying *large*
+    // declaration cannot turn a ceiling hit into a mismatch (ceiling not weakened).
+    let hit = zstd_decompress_from(
+        Cursor::new(&frame),
+        "chunk c",
+        Some(payload.len() as u64 * 4),
+        ceiling,
+    )
+    .expect_err("a declaration above the ceiling is clamped and still refused");
+    assert!(hit.contains("decode ceiling exceeded"), "{hit}");
+    assert!(hit.contains("4096 B hard ceiling"), "{hit}");
+
+    // The ceiling still binds on its own: a smaller one stops the same bomb.
+    let tight =
+        zstd_decompress_from(Cursor::new(&frame), "chunk c", None, 64).expect_err("64 B ceiling");
+    assert!(tight.contains("64 B hard ceiling"), "{tight}");
+
+    // An accurate declaration below the ceiling still decodes — the distinction
+    // is text on the refusal path, not a new reason to refuse a legitimate body.
+    let ok = zstd_decompress_from(
+        Cursor::new(&frame),
+        "chunk c",
+        Some(payload.len() as u64),
+        TEST_DECOMPRESSED_CEILING,
+    )
+    .expect("an accurate declaration still decodes");
+    assert_eq!(ok.len(), payload.len());
+}
+
 /// The limit follows the declaration and never exceeds the absolute
 /// ceiling; the one byte the decoder is allowed past it is the overrun
 /// probe, not part of the limit.
