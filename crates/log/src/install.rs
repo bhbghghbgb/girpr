@@ -16,7 +16,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
 
 use crate::plan::{EnvOptions, LogPlan};
@@ -45,16 +45,22 @@ pub fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
 /// The three parts of a file sink that every project builds the same way.
 ///
 /// `file` is whatever the caller opened — a plain `File`, or a project-specific
-/// `MakeWriter` over one — and it is handed straight to the non-blocking
-/// appender so logging never blocks the run. The returned guard is *not*
-/// installed or stored here: how long it lives is each project's policy.
-/// The filter is the file's level spec with itself as the fallback, so a bad
-/// spec is reported once and the file still receives records.
+/// `MakeWriter` over one — and it is handed to the non-blocking appender. The
+/// appender is **lossless**: its bounded channel exerts backpressure on the
+/// logger when full instead of silently dropping lines, so the file stays the
+/// complete record of the run. The trade-off is deliberate — a very verbose
+/// run can block a logging caller until the worker drains — and is the reason
+/// per-chunk lines are off by default in a release build; an operator who opts
+/// into `--log-file-level debug`/`trace` is choosing that backpressure.
+/// The returned guard is *not* installed or stored here: how long it lives is
+/// each project's policy. The filter is the file's level spec with itself as
+/// the fallback, so a bad spec is reported once and the file still receives
+/// records.
 pub fn file_sink<W>(file: W, plan: &LogPlan) -> (NonBlocking, WorkerGuard, EnvFilter)
 where
     W: std::io::Write + Send + 'static,
 {
-    let (writer, guard) = tracing_appender::non_blocking(file);
+    let (writer, guard) = NonBlockingBuilder::default().lossy(false).finish(file);
     let filter = crate::filter(&plan.file_filter(), &plan.file_filter());
     (writer, guard, filter)
 }
@@ -107,7 +113,9 @@ pub fn warn_subscriber_install(out: &mut dyn Write, error: impl std::fmt::Displa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     /// A scratch path under the system temp dir, unique per test.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
@@ -117,6 +125,40 @@ mod tests {
             "girpr-log-install-{label}-{}-{n}",
             std::process::id()
         ))
+    }
+
+    struct SharedVec(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedVec {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("not poisoned").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The shared sink is lossless: everything queued before the guard drops
+    /// reaches the writer, with no silent drop-counter to go with it.
+    #[test]
+    fn file_sink_preserves_every_queued_line_on_flush() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let plan = crate::LogPlan::resolve(
+            "girpr",
+            crate::LogOptions::default(),
+            crate::EnvOptions::default(),
+        );
+        let (mut writer, guard, _filter) = file_sink(SharedVec(Arc::clone(&bytes)), &plan);
+        for i in 0..32 {
+            writeln!(writer, "line {i}").expect("queue the line");
+        }
+        drop(guard);
+
+        let written = String::from_utf8(bytes.lock().expect("not poisoned").clone())
+            .expect("the lines are utf-8");
+        assert_eq!(written.lines().count(), 32, "no line is dropped: {written}");
     }
 
     #[test]
