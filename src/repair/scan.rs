@@ -164,7 +164,7 @@ impl ScanReport {
                 // base here, exactly as `contained_join` always did.
                 let joined = root.map_or_else(
                     || util::contained_join(game_dir, &f.rel),
-                    |root| root.join(&f.rel),
+                    |root| root.join_validated(&f.rel),
                 );
                 let resolved = match joined {
                     Ok(path) => resolve_mode(requested, &path),
@@ -351,7 +351,7 @@ fn scan_one(
 ) -> Scanned {
     let joined = root.map_or_else(
         || util::contained_join(game_dir, &file.rel),
-        |root| root.join(&file.rel),
+        |root| root.join_validated(&file.rel),
     );
     let path = match joined {
         Ok(p) => p,

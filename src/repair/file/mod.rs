@@ -666,7 +666,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     }
     let joined = ctx.root.as_ref().map_or_else(
         || util::contained_join(&ctx.game_dir, &file.rel),
-        |root| root.join(&file.rel),
+        |root| root.join_validated(&file.rel),
     );
     let final_path = joined?;
     if let Some(parent) = final_path.parent()

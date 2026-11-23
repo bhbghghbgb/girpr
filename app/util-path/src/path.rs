@@ -7,7 +7,9 @@
 //! the `/` form both produce.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// What a file-length probe found.
 ///
@@ -284,10 +286,21 @@ pub fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
 /// form as [`contained_join`] uses, so the missing-base lifecycle is unchanged.
 /// The cached form is **not** refreshed implicitly: a caller that creates the
 /// base later must build a fresh `PathRoot` after that.
+///
+/// The resolved form of each parent directory is cached as well, keyed by the
+/// unresolved parent, so files that share a directory resolve that directory
+/// once. The cache is owned by this root and shared only by its clones, so it
+/// lives for one phase of one invocation and cannot carry a resolution from a
+/// previous run into this one. Its entries are valid containment references
+/// even when the tree grows during a run: a directory that appears later only
+/// shortens the "missing tail" a cached parent carries, and either spelling
+/// stays under (or outside) the resolved base.
 #[derive(Debug, Clone)]
 pub struct PathRoot {
     base: PathBuf,
     resolved: PathBuf,
+    /// One resolution per parent directory, shared by every clone of the root.
+    parents: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
 }
 
 impl PathRoot {
@@ -298,7 +311,24 @@ impl PathRoot {
         Ok(Self {
             base: base.to_path_buf(),
             resolved,
+            parents: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Build a root for a path **already known to be canonical**.
+    ///
+    /// The caller must have obtained `base` from a successful `canonicalize`
+    /// (or know it is one, e.g. the canonicalizing half of a phase that just
+    /// resolved it). Skipping the resolution here avoids a second canonicalize
+    /// of a path whose canonical form is already in hand. Passing a non-canonical
+    /// base would make the containment comparison use a non-canonical reference,
+    /// so this is a separate, narrowly-scoped constructor rather than a default.
+    pub fn new_canonical(base: &Path) -> Self {
+        Self {
+            base: base.to_path_buf(),
+            resolved: base.to_path_buf(),
+            parents: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Join a server-controlled relative path under this root, refusing
@@ -308,16 +338,80 @@ impl PathRoot {
     /// still [`contained_rel`], and the joined path is still resolved and
     /// compared with the resolved base.
     pub fn join(&self, rel: &str) -> Result<PathBuf> {
-        self.join_rel(contained_rel(rel)?)
+        self.join_clean(&contained_rel(rel)?)
     }
 
-    /// The filesystem half of [`join`](Self::join), after the lexical check.
-    fn join_rel(&self, rel: PathBuf) -> Result<PathBuf> {
+    /// Join a rel that `build_plan` already cleaned and validated.
+    ///
+    /// This skips the lexical half of [`join`](Self::join) — the `contained_rel`
+    /// → `validate_rel` → path-shape walk that allocates three collections per
+    /// file. The filesystem half is unchanged: the parent is resolved through
+    /// this root's cache and the leaf is still resolved and checked against the
+    /// base, so a symlink planted inside the install is still refused.
+    ///
+    /// Only pass rels returned by [`clean_rel`](crate::clean_rel) or produced by
+    /// `build_plan`. An untrusted rel must use [`join`](Self::join), which runs
+    /// the full lexical validation. A debug build asserts the precondition so a
+    /// misuse fails loudly in tests; release builds pay only for the join.
+    pub fn join_validated(&self, rel: &str) -> Result<PathBuf> {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            clean_rel(rel).is_ok_and(|cleaned| cleaned == rel),
+            "join_validated requires a rel already cleaned by build_plan"
+        );
+        self.join_clean(Path::new(rel))
+    }
+
+    /// Resolve a parent directory, caching its resolved form for this root's
+    /// lifetime. `resolve_existing_prefix` resolves the nearest existing
+    /// ancestor and re-appends the missing tail, so an absent parent is handled
+    /// exactly as it is for the whole joined path.
+    fn resolve_parent(&self, parent: &Path) -> Result<PathBuf> {
+        if let Some(hit) = self
+            .parents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(parent)
+        {
+            return Ok(hit.clone());
+        }
+        let resolved = resolve_existing_prefix(parent)
+            .with_context(|| format!("resolve {}", parent.display()))?;
+        self.parents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(parent.to_path_buf(), resolved.clone());
+        Ok(resolved)
+    }
+
+    /// The filesystem half of [`join`](Self::join) and
+    /// [`join_validated`](Self::join_validated), after the lexical check.
+    ///
+    /// The parent is resolved once per directory via [`Self::resolve_parent`].
+    /// The leaf is still resolved on its own: a file that is itself a symlink to
+    /// a path outside the install must be refused even though its parent stays
+    /// inside it. Only after both halves are resolved is the containment
+    /// comparison made, so the check is exactly as strict as resolving the
+    /// whole joined path was — the cache removes repeated walks, not the check.
+    fn join_clean(&self, rel: &Path) -> Result<PathBuf> {
         let joined = self.base.join(rel);
-        let joined_resolved = resolve_existing_prefix(&joined)
-            .with_context(|| format!("resolve {}", joined.display()))?;
+        let (parent, name) = match (joined.parent(), joined.file_name()) {
+            (Some(parent), Some(name)) => (parent, name),
+            _ => anyhow::bail!("path names no file: {}", joined.display()),
+        };
+        let resolved_parent = self.resolve_parent(parent)?;
+        let leaf = resolved_parent.join(name);
+        // A missing leaf is the common case for a repair (the file is about to
+        // be written). The cached parent already carries any missing tail, so
+        // that spelling is the resolved result. An existing leaf is resolved
+        // here so a symlink at the leaf cannot slip past the comparison.
+        let resolved = match std::fs::canonicalize(&leaf) {
+            Ok(resolved) => resolved,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => resolved_parent,
+            Err(e) => return Err(e).with_context(|| format!("resolve {}", leaf.display())),
+        };
         anyhow::ensure!(
-            joined_resolved.starts_with(&self.resolved),
+            resolved.starts_with(&self.resolved),
             "path escapes {}: {}",
             self.base.display(),
             joined.display()
@@ -341,7 +435,7 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
     // The lexical refusal comes first, as it always has: a bad rel is reported
     // without touching the filesystem, even when the base is also unreadable.
     let rel = contained_rel(rel)?;
-    PathRoot::new(base)?.join_rel(rel)
+    PathRoot::new(base)?.join_clean(&rel)
 }
 
 /// The legacy `.girpr_tmp` sibling name, kept only as a test fixture.
@@ -865,6 +959,75 @@ mod tests {
         assert!(before.join("game/foo.dat").is_ok());
         // And an escape is refused through the cached form too.
         assert!(after.join("../outside.dat").is_err());
+    }
+
+    /// The opt-in fast path skips only lexical revalidation: for a rel already
+    /// cleaned by `build_plan` it lands on the same path as the full `join`,
+    /// against an existing base, a missing base and a canonical-built root.
+    #[test]
+    fn join_validated_matches_join_for_clean_rels() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_path_root", "validated");
+        let root = PathRoot::new(&dir).unwrap();
+        for rel in ["a.dat", "game/foo.dat", "game/sub/deep.dat"] {
+            assert_eq!(
+                root.join(rel).unwrap(),
+                root.join_validated(rel).unwrap(),
+                "{rel}"
+            );
+        }
+
+        let missing = dir.join("not-created-yet");
+        let missing_root = PathRoot::new(&missing).unwrap();
+        assert_eq!(
+            missing_root.join("game/foo.dat").unwrap(),
+            missing_root.join_validated("game/foo.dat").unwrap()
+        );
+
+        let canonical = dir.canonicalize().unwrap();
+        let canonical_root = PathRoot::new_canonical(&canonical);
+        assert_eq!(
+            canonical_root.join_validated("game/foo.dat").unwrap(),
+            PathRoot::new(&canonical)
+                .unwrap()
+                .join_validated("game/foo.dat")
+                .unwrap()
+        );
+    }
+
+    /// Siblings in one directory reuse the cached parent resolution, and a
+    /// parent created later only shortens its missing tail — the resolved form
+    /// and the containment answer stay the same.
+    #[test]
+    fn join_validated_shares_a_parent_and_survives_parent_creation() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_path_root", "shared_parent");
+        let root = PathRoot::new(&dir).unwrap();
+        let a = root.join_validated("game/sub/a.dat").unwrap();
+        let b = root.join_validated("game/sub/b.dat").unwrap();
+        assert_eq!(a.parent(), b.parent());
+        assert_eq!(a, dir.join("game/sub/a.dat"));
+        assert_eq!(b, dir.join("game/sub/b.dat"));
+
+        std::fs::create_dir_all(dir.join("game/sub")).unwrap();
+        assert_eq!(root.join_validated("game/sub/a.dat").unwrap(), a);
+    }
+
+    /// The cache removes repeated parent walks, not the containment check: a
+    /// leaf that is itself a symlink out of the install is still refused, even
+    /// though its parent resolved inside it.
+    #[cfg(unix)]
+    #[test]
+    fn join_validated_refuses_a_leaf_symlink_out_of_the_base() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_path_root", "outside_leaf");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_path_root", "leaf");
+        if let Err(e) = try_symlink_dir(&outside, &dir.join("escape")) {
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
+        let root = PathRoot::new(&dir).unwrap();
+        // Warm the cache for the parent (the base itself) with a clean sibling.
+        assert!(root.join_validated("ok.dat").is_ok());
+        assert!(root.join("escape").is_err());
+        assert!(root.join_validated("escape").is_err());
     }
 
     /// A symlink inside the install that points out of it is an escape even

@@ -109,7 +109,7 @@ where
                     // one; `None` keeps the old `contained_join` fallback.
                     let path = root.map_or_else(
                         || util::contained_join(&game_dir, &f.rel),
-                        |root| root.join(&f.rel),
+                        |root| root.join_validated(&f.rel),
                     );
                     match scan.as_deref().and_then(|s| s.get(&plan, FileId::new(idx))) {
                         Some(v) => check(f, &path, DigestSource::Scanned(v)),

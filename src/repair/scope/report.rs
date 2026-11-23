@@ -90,7 +90,7 @@ impl DiskPlan {
         let figures = plan.iter().map(|(_, f)| {
             let joined = root.map_or_else(
                 || util::contained_join(game_dir, &f.rel),
-                |root| root.join(&f.rel),
+                |root| root.join_validated(&f.rel),
             );
             let path = match joined {
                 Ok(p) => p,

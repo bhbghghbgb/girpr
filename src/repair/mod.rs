@@ -188,14 +188,21 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // execution phase so a run that refuses before doing any work leaves no
     // directory behind. Reads tolerate a missing dir, so the plan phase can
     // proceed against it.
-    let game_dir = ctx
-        .game_dir
-        .canonicalize()
-        .unwrap_or_else(|_| ctx.game_dir.clone());
+    // Canonicalize once here and keep the answer: a successful canonicalize is
+    // idempotent, so the root can take the canonical form directly instead of
+    // resolving the same base a second time.
+    let (game_dir, game_dir_canonical) = match ctx.game_dir.canonicalize() {
+        Ok(canonical) => (canonical, true),
+        Err(_) => (ctx.game_dir.clone(), false),
+    };
     // Resolve the install root once for the plan-phase callers. `None` means
     // the base itself could not be resolved; those callers then fall back to
     // `contained_join`, so a refusal stays per file and keeps its message.
-    let root = util::PathRoot::new(&game_dir).ok();
+    let root = if game_dir_canonical {
+        Some(util::PathRoot::new_canonical(&game_dir))
+    } else {
+        util::PathRoot::new(&game_dir).ok()
+    };
 
     // NOTE: no unconditional temp sweep. All cleanup is the single
     // Collapse-style files-cleanup (`plan::purge`), run before and/or
@@ -800,8 +807,8 @@ async fn execute_phase(
     // === execution phase: everything below may touch the disk ===
 
     // 5. prepare `game_dir`, then take the single-writer lock.
-    let (game_dir, root) = prepare_install(ctx, game_dir, readonly)?;
-    let _lock = acquire_lock(ctx, &game_dir, readonly)?;
+    let (game_dir, root, game_dir_canonical) = prepare_install(ctx, game_dir, readonly)?;
+    let _lock = acquire_lock(ctx, &game_dir, game_dir_canonical, readonly)?;
 
     // 5.1 the explicit `--audio` selection.
     write_explicit_audio(ctx, &game_dir, &meta, readonly)?;
@@ -879,23 +886,33 @@ async fn execute_phase(
 ///
 /// `create_dir_all` is deferred from the top of the run so a refusal in the
 /// plan half creates nothing.
+/// The second element reports whether `game_dir` is canonical, so the lock can
+/// reuse that form instead of resolving it a third time. A `false` keeps the
+/// full canonicalizing lock path: a non-canonical spelling must still map all
+/// runs of one install onto the same lock file.
 fn prepare_install(
     ctx: &RunCtx,
     game_dir: PathBuf,
     readonly: bool,
-) -> Result<(PathBuf, Option<util::PathRoot>), RunFailure> {
+) -> Result<(PathBuf, Option<util::PathRoot>, bool), RunFailure> {
     if !readonly {
         std::fs::create_dir_all(&ctx.game_dir)
             .context("create game dir")
             .map_err(RunFailure::usage)?;
     }
     // The directory may have been created by the line above, so canonicalize
-    // again before any path is built from it.
-    let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
-    // The plan-phase root cached the pre-create form (or a missing tail). The
-    // base exists now, so resolve it again for the execute-phase callers.
-    let root = util::PathRoot::new(&game_dir).ok();
-    Ok((game_dir, root))
+    // again before any path is built from it. This is the phase's one
+    // canonicalize; the root and the lock both reuse the result.
+    let (game_dir, game_dir_canonical) = match game_dir.canonicalize() {
+        Ok(canonical) => (canonical, true),
+        Err(_) => (game_dir, false),
+    };
+    let root = if game_dir_canonical {
+        Some(util::PathRoot::new_canonical(&game_dir))
+    } else {
+        util::PathRoot::new(&game_dir).ok()
+    };
+    Ok((game_dir, root, game_dir_canonical))
 }
 
 /// Take the single-writer lock when this run mutates the install.
@@ -907,13 +924,22 @@ fn prepare_install(
 fn acquire_lock(
     ctx: &RunCtx,
     game_dir: &Path,
+    game_dir_canonical: bool,
     readonly: bool,
 ) -> Result<Option<lock::Lock>, RunFailure> {
     if !lock::takes_lock(readonly, ctx.check_only, ctx.print_plan) {
         return Ok(None);
     }
-    let lock = lock::Lock::acquire(game_dir)
-        .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+    // The execute phase already canonicalized this path. Reuse that form so the
+    // lock does not touch the filesystem again; a path that could not be
+    // canonicalized still goes through the full form to keep the lock keyed by
+    // a single spelling of the install.
+    let lock = if game_dir_canonical {
+        lock::Lock::acquire_canonical(game_dir)
+    } else {
+        lock::Lock::acquire(game_dir)
+    }
+    .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
     tracing::info!(path = %lock.path().display(), "single-writer lock taken");
     Ok(Some(lock))
 }

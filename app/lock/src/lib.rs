@@ -60,6 +60,16 @@ impl Lock {
         Self::acquire_at(lock_path(game_dir))
     }
 
+    /// Take the lock for a game dir already known to be canonical.
+    ///
+    /// The repair facade resolves `game_dir` before it reaches this call, so
+    /// recomputing the canonical form inside [`lock_path`] would touch the
+    /// filesystem again before the lock is held. This form skips that step;
+    /// callers that only have a path spelling must use [`acquire`](Self::acquire).
+    pub fn acquire_canonical(game_dir: &Path) -> Result<Lock> {
+        Self::acquire_at(lock_path_for_canonical(game_dir))
+    }
+
     /// The implementation, with the path injected so tests can take two
     /// locks for one key without depending on the global temp directory.
     fn acquire_at(path: PathBuf) -> Result<Lock> {
@@ -111,7 +121,17 @@ pub fn lock_path(game_dir: &Path) -> PathBuf {
     let canonical = game_dir
         .canonicalize()
         .unwrap_or_else(|_| game_dir.to_path_buf());
-    std::env::temp_dir().join(format!("girpr-{:016x}.lock", key_for(&canonical)))
+    lock_path_for_canonical(&canonical)
+}
+
+/// Where the lock for an **already-canonical** game dir lives.
+///
+/// `game_dir` must be the canonical form: the key is computed from the path as
+/// given, so two spellings of one install must already have been folded into one
+/// before reaching here. The repair facade satisfies that by canonicalizing
+/// once per phase and passing the result on; other callers use [`lock_path`].
+pub fn lock_path_for_canonical(game_dir: &Path) -> PathBuf {
+    std::env::temp_dir().join(format!("girpr-{:016x}.lock", key_for(game_dir)))
 }
 
 /// A stable key for a canonical path.
@@ -412,6 +432,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    /// Reusing an already-canonical path must pick the same lock file as the
+    /// canonicalizing form. A mismatch would split runs of one install across
+    /// two locks, so the fast path is pinned against the full one.
+    #[test]
+    fn lock_path_for_canonical_agrees_with_lock_path() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "canonical");
+        let canonical = dir.canonicalize().unwrap();
+        assert_eq!(lock_path_for_canonical(&canonical), lock_path(&canonical));
     }
 
     #[test]
