@@ -17,7 +17,7 @@ machine data or change log.
 | T02 | Fetch and decode chunks within one file in a bounded window | completed | e385b8dd | §2 S-03 (143–157); assumption 2 (841–842). Scoped to in-place Staged tier with disjoint layout; salvage/Ordered, overlapping layouts and temp stay sequential (temp resume-by-length/rollback couples writes). Ceiling ledger CAS settles out of order exactly; per-chunk wire counts change on failure (siblings still fetched); RAM contract unchanged. |
 | T03 | Run the three independent plan-phase network fetches concurrently | completed | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | pending_review | ff48e189 | §2 S-05 (173–185); assumptions (183–184) hold. Walk stays serial; stat/delete parallel via bounded scoped threads (no new dependency); results in index slots, log lines emitted on caller thread in plan order; empty-dir sweep after all deletes. DirEntry carried into stat stage to keep Windows cached metadata (no extra syscall); tracing dispatcher is thread-local so scoped workers cannot log. |
-| T05 | Eliminate the duplicate plan/scan per-file stat pass | in_progress | | §2 S-06 (186–198) |
+| T05 | Eliminate the duplicate plan/scan per-file stat pass | pending_review | 0b4031c5 | §2 S-06 (186–198). Reuse of scan data into DiskFigure::Measured rejected: scan uses follow-symlink `metadata` + bytes-read length, plan needs `symlink_metadata` is_file/length (classification + verdict mtime guard). Chose genuine overlap: plan stat task launched before scan awaited, JoinHandle held in PlanWork and awaited after limits gate; aborted on limit refusal. Relevant to T06. |
 | T06 | Reuse scan verdicts and remove double reads in the repair path | todo | | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849) |
 | T07 | Add validated path joins and cache canonicalization | todo | | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) |
 | T08 | Remove redundant post-phase mkdir syscalls and materialization | todo | | §3 IO-07/IO-08 (277–293) |
@@ -144,6 +144,12 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Plan stat vs scan stat are not interchangeable (feeds T06).** `DiskPlan::new`
+  needs `symlink_metadata` for is_file()/length; `scan_one` uses follow-symlink
+  `metadata` plus a bytes-read length for the mtime verdict guard. Sharing one stat
+  would change symlink/dir → temp classification and verdict-trust semantics. T05
+  therefore overlaps the two blocking tasks rather than merging them; T06 must keep
+  the `symlink_metadata` source for the mode decision. See T05 note.
 - **Plan-phase fetch API after T03.** `src/repair/phases/manifest.rs` exports
   `ManifestBudget` (shared 4-permit semaphore); `fetch_latest` / `local_reuse_map` take
   it, and `PlanInputs` has a `deprecated` field. T11/T12 fetch work must build on this.
