@@ -13,18 +13,22 @@
 //! The selected manifests are fetched **concurrently**, but the fan-out is
 //! bounded: one decoded manifest can be tens of MiB, so opening every fetch at
 //! once would trade latency for peak memory. The bound is a small dedicated
-//! cap, not the file-worker count. Results are put back in selection order as
-//! they arrive, so the plan's per-manifest order and the error `fetch_latest`
-//! reports do not depend on completion order. Once the first failure in
-//! selection order is settled, the remaining fetches are dropped instead of
-//! waited out.
+//! cap, not the file-worker count, and is shared by every fan-out of a run via
+//! [`ManifestBudget`]: the latest and local phases run together without doubling
+//! the number of decoded manifests held at once. Results are put back in
+//! selection order as they arrive, so the plan's per-manifest order and the
+//! error `fetch_latest` reports do not depend on completion order. Once the
+//! first failure in selection order is settled, the remaining fetches are
+//! dropped instead of waited out.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use anyhow::Context;
 use futures_util::{Stream, StreamExt};
 use girpr_repair_plan::LocalChunkMap;
 use reqwest::Client;
+use tokio::sync::Semaphore;
 
 use crate::hyp::ChunkBuild;
 use crate::hyp::ChunkManifestMeta;
@@ -44,6 +48,36 @@ const MAX_MANIFEST_CONCURRENCY: usize = 4;
 /// The manifest fan-out for a run, bounded by [`MAX_MANIFEST_CONCURRENCY`].
 fn manifest_concurrency(jobs: usize) -> usize {
     jobs.clamp(1, MAX_MANIFEST_CONCURRENCY)
+}
+
+/// A run-wide fetch budget shared by every manifest fan-out.
+///
+/// The latest-manifest and local-reuse fan-outs are fetched together, so a
+/// per-phase cap would allow twice as many decoded manifests in memory at once.
+/// One semaphore keeps the total in flight at [`MAX_MANIFEST_CONCURRENCY`] — the
+/// same peak a single phase had before they overlapped — while still letting a
+/// fetch start as soon as a slot frees rather than waiting for a phase barrier.
+#[derive(Clone)]
+pub struct ManifestBudget(Arc<Semaphore>);
+
+impl ManifestBudget {
+    /// A fresh budget with [`MAX_MANIFEST_CONCURRENCY`] permits.
+    pub fn new() -> Self {
+        Self(Arc::new(Semaphore::new(MAX_MANIFEST_CONCURRENCY)))
+    }
+
+    /// Hold a slot until the fetch (and its decode) finishes. The owned
+    /// semaphore is never closed; a closed one would only mean no cap, so an
+    /// error is treated as "no permit" rather than a panic.
+    async fn acquire(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        self.0.acquire().await.ok()
+    }
+}
+
+impl Default for ManifestBudget {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Which build's manifests a fan-out belongs to, for the log line.
@@ -124,8 +158,10 @@ struct ManifestFetches<'a> {
 }
 
 impl<'a> ManifestFetches<'a> {
-    /// Start fetching `build`'s selected manifests, at most
-    /// [`MAX_MANIFEST_CONCURRENCY`] at once.
+    /// Start fetching `build`'s selected manifests. The per-phase buffer is
+    /// `manifest_concurrency(jobs)`; the run-wide [`ManifestBudget`] is what
+    /// bounds the total across the concurrently running fan-outs.
+    #[allow(clippy::too_many_arguments)] // one borrow per selection input plus the shared budget
     fn start(
         http: &'a Client,
         backoff: &'a BackoffPolicy,
@@ -134,16 +170,23 @@ impl<'a> ManifestFetches<'a> {
         ignore: &'a std::collections::HashSet<String>,
         jobs: usize,
         kind: BuildKind,
+        budget: ManifestBudget,
     ) -> Self {
         let manifests = sophon::select_manifests(build, audio_langs, ignore);
         let limit = manifest_concurrency(jobs);
         tracing::info!("{} concurrency={limit}", kind.log_prefix());
         // The stream owns its copy of the selection (plain references), so it
-        // does not borrow the vector the struct keeps for lookups.
+        // does not borrow the vector the struct keeps for lookups. Each fetch
+        // holds a budget slot until it finishes, so two joined fan-outs cannot
+        // double the number of decoded manifests resident at once.
         let results = futures_util::stream::iter(manifests.clone().into_iter().enumerate())
-            .map(move |(index, m)| async move {
-                let files = sophon::fetch_manifest(http, backoff, m).await;
-                (index, files)
+            .map(move |(index, m)| {
+                let budget = budget.clone();
+                async move {
+                    let _permit = budget.acquire().await;
+                    let files = sophon::fetch_manifest(http, backoff, m).await;
+                    (index, files)
+                }
             })
             .buffer_unordered(limit);
         Self {
@@ -205,6 +248,7 @@ pub async fn fetch_latest(
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
     jobs: usize,
+    budget: ManifestBudget,
 ) -> Result<Vec<(String, Vec<SophonChunkFile>)>, RunFailure> {
     let mut fetches = ManifestFetches::start(
         http,
@@ -214,6 +258,7 @@ pub async fn fetch_latest(
         ignore,
         jobs,
         BuildKind::Latest,
+        budget,
     );
     let mut per_manifest: Vec<(String, Vec<SophonChunkFile>)> = Vec::new();
     // The loop visits selections left to right, so the first error it meets is
@@ -245,6 +290,7 @@ pub async fn local_reuse_map(
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
     jobs: usize,
+    budget: ManifestBudget,
 ) -> LocalChunkMap {
     let Some(local_build) = local_build else {
         return LocalChunkMap::new();
@@ -257,6 +303,7 @@ pub async fn local_reuse_map(
         ignore,
         jobs,
         BuildKind::Local,
+        budget,
     );
 
     let mut wanted: Vec<WantedManifest> = Vec::new();
@@ -533,6 +580,7 @@ mod tests {
                 &HashSet::new(),
                 &HashSet::new(),
                 4,
+                ManifestBudget::new(),
             ),
         )
         .await
@@ -578,6 +626,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             4,
+            ManifestBudget::new(),
         )
         .await
         .expect_err("the game manifest is down");
@@ -626,7 +675,15 @@ mod tests {
             let ignore = HashSet::new();
             let backoff = BackoffPolicy::none();
 
-            let fetched = fetch_latest(&client, &backoff, &build, &audio_langs, &ignore, jobs);
+            let fetched = fetch_latest(
+                &client,
+                &backoff,
+                &build,
+                &audio_langs,
+                &ignore,
+                jobs,
+                ManifestBudget::new(),
+            );
             let observed = async {
                 tokio::time::timeout(Duration::from_secs(2), gate.wait_for(bound))
                     .await
@@ -650,6 +707,87 @@ mod tests {
                 "the bound holds for the whole run, not just the first burst"
             );
         }
+    }
+
+    /// The latest and local fan-outs share one budget: joining them starts no
+    /// more than `MAX_MANIFEST_CONCURRENCY` fetches at once rather than one cap
+    /// each. The single gate holds every request until the observed bound is
+    /// reached, so the in-flight count is asserted rather than timed.
+    #[tokio::test]
+    async fn joined_fan_outs_share_one_concurrency_budget() {
+        let (body, checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
+        let gate = Arc::new(InFlight::new());
+        let ids = ["l0", "l1", "l2", "l3", "l4", "l5"];
+        let server = serve(
+            ids.iter()
+                .map(|id| {
+                    (
+                        *id,
+                        Reply::GatedBody {
+                            body: body.clone(),
+                            gate: gate.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        )
+        .await;
+        let latest = build(
+            server.base(),
+            ids.iter().map(|id| meta(id, id, &checksum)).collect(),
+        );
+        let local = latest.clone();
+        let client = Client::new();
+        let audio_langs = HashSet::new();
+        let ignore = HashSet::new();
+        let backoff = BackoffPolicy::none();
+        let budget = ManifestBudget::new();
+
+        let latest_fetch = fetch_latest(
+            &client,
+            &backoff,
+            &latest,
+            &audio_langs,
+            &ignore,
+            usize::MAX,
+            budget.clone(),
+        );
+        let local_fetch = local_reuse_map(
+            &client,
+            &backoff,
+            Some(&local),
+            &audio_langs,
+            &ignore,
+            usize::MAX,
+            budget,
+        );
+        let observed = async {
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                gate.wait_for(MAX_MANIFEST_CONCURRENCY),
+            )
+            .await
+            .expect("the joined fan-outs reach the shared bound");
+            assert_eq!(
+                gate.current.load(Ordering::SeqCst),
+                MAX_MANIFEST_CONCURRENCY,
+                "the two joined fan-outs start no more than the shared cap at once"
+            );
+            let _ = gate.release.send(true);
+        };
+        let (manifests, map, ()) =
+            futures_util::future::join3(latest_fetch, local_fetch, observed).await;
+
+        assert_eq!(
+            manifests.expect("every gated manifest answers").len(),
+            ids.len()
+        );
+        assert!(map.contains_key("game/ok.dat"));
+        assert_eq!(
+            gate.peak.load(Ordering::SeqCst),
+            MAX_MANIFEST_CONCURRENCY,
+            "the shared bound holds for the whole run"
+        );
     }
 
     /// An aborted gated connection releases its in-flight slot. Dropping the
@@ -680,6 +818,7 @@ mod tests {
             &audio_langs,
             &ignore,
             1,
+            ManifestBudget::new(),
         ));
         tokio::select! {
             () = gate.wait_for(1) => {}
@@ -718,6 +857,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             1,
+            ManifestBudget::new(),
         )
         .await
         .expect("the manifest answers");
@@ -756,6 +896,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             4,
+            ManifestBudget::new(),
         )
         .await;
         let entries = map

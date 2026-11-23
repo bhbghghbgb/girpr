@@ -17,11 +17,11 @@
 //!
 //! The run has two halves:
 //!
-//! **Plan** — metadata → `REPORT` → manifests → `girpr_repair_plan::build_plan` → the
-//! purge plan → the server's deprecated list. Nothing on disk has been touched
-//! at the end of this half, so every decision the run will act on is already
-//! made and inspectable. That is what lets the scope-of-work ceilings refuse
-//! *before* any of it runs.
+//! **Plan** — metadata → `REPORT` → manifests (with the local reuse map and the
+//! server's deprecated list fetched alongside) → `girpr_repair_plan::build_plan`
+//! → the purge plan. Nothing on disk has been touched at the end of this half,
+//! so every decision the run will act on is already made and inspectable. That
+//! is what lets the scope-of-work ceilings refuse *before* any of it runs.
 //!
 //! **Execute** — `create_dir_all` → `--purge-before` → `--check-only` → the
 //! repair loop → the post-phase. Every write and delete lives here.
@@ -30,7 +30,7 @@
 //! 1. prepare `game_dir` (create when missing, unless read-only),
 //! 2. metadata, then the begin report, so a parser sees the on-disk and target
 //!    versions before anything is downloaded,
-//! 3. manifests → work list → deprecated list (nothing written yet),
+//! 3. manifests + reuse map + deprecated list (in parallel) → work list (nothing written yet),
 //! 4. `create_dir_all` + `--purge-before` cleanup, to free room for the repair,
 //! 5. `--check-only` returns here, before any download (exit `0` clean / `4`
 //!    damaged),
@@ -80,6 +80,7 @@ use crate::report::{self, Summary};
 use crate::sophon::SophonChunkFile;
 use crate::util;
 
+use phases::manifest::ManifestBudget;
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
 use scan::ScanReport;
@@ -205,12 +206,16 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // 1 + 2 + 2.5. local state, server metadata, and the begin report.
     let meta = fetch_and_report(ctx, &game_dir).await?;
 
-    // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
+    // 3. manifests (latest, per-manifest prefix kept), local chunk map and the
+    // best-effort deprecated list — three independent network phases under one
+    // shared client and budget.
     let http = meta.hyp.http();
-    let (per_manifest, local_map) = load_manifests_and_reuse(ctx, &meta, &http, summary).await?;
+    let (per_manifest, local_map, deprecated) =
+        fetch_plan_network(ctx, &meta, &http, summary).await?;
 
-    // 4. work list, purge candidates, deprecated list, scan, estimates, and the
-    // ceilings — everything decided before a byte is written.
+    // 4. work list, purge candidates, scan, estimates, and the ceilings —
+    // everything decided before a byte is written. The deprecated list was
+    // already fetched in step 3; only its use happens here.
     let Some(work) = build_and_assert_plan(PlanInputs {
         ctx,
         summary,
@@ -219,6 +224,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         meta: &meta,
         per_manifest,
         local_map: &local_map,
+        deprecated,
     })
     .await?
     else {
@@ -300,36 +306,62 @@ async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFail
     Ok(meta)
 }
 
-/// Step 3: the latest manifests (with each manifest's chunk URL prefix kept)
-/// and the local chunk-reuse map.
-async fn load_manifests_and_reuse(
+/// Step 3: the latest manifests (with each manifest's chunk URL prefix kept),
+/// the local chunk-reuse map, and the advisory deprecated-file list.
+///
+/// These are three independent network requests: none consumes another's
+/// output, and the deprecated list is best-effort. They are started together
+/// under one shared client (the manifest fetches use `http`, a clone of the
+/// metadata client's pool; the deprecated fetch uses the same pool through
+/// `meta.hyp`) and one shared [`ManifestBudget`], so the wall-clock is the
+/// slowest phase rather than their sum and the peak decoded-manifest memory is
+/// unchanged. `try_join!` keeps `fetch_latest`'s fatal error short-circuiting
+/// the other two; the two best-effort phases are wrapped so their success is
+/// never mistaken for a reason to fail the run.
+async fn fetch_plan_network(
     ctx: &RunCtx,
     meta: &Meta,
     http: &reqwest::Client,
     summary: &mut Summary,
-) -> Result<(Vec<(String, Vec<SophonChunkFile>)>, Arc<LocalChunkMap>), RunFailure> {
+) -> Result<
+    (
+        Vec<(String, Vec<SophonChunkFile>)>,
+        Arc<LocalChunkMap>,
+        Arc<[String]>,
+    ),
+    RunFailure,
+> {
     let timer = PhaseTimer::start("manifest");
     let backoff = &ctx.backoff;
-    let per_manifest = manifest::fetch_latest(
-        http,
-        backoff,
-        &meta.latest_build,
-        &meta.audio,
-        &meta.ignore,
-        ctx.jobs,
-    )
-    .await?;
-    let local_map = Arc::new(
-        manifest::local_reuse_map(
+    let budget = ManifestBudget::new();
+
+    let (per_manifest, local_map, deprecated) = tokio::try_join!(
+        manifest::fetch_latest(
             http,
             backoff,
-            meta.local_build.as_ref(),
+            &meta.latest_build,
             &meta.audio,
             &meta.ignore,
             ctx.jobs,
-        )
-        .await,
-    );
+            budget.clone(),
+        ),
+        async {
+            Ok::<_, RunFailure>(
+                manifest::local_reuse_map(
+                    http,
+                    backoff,
+                    meta.local_build.as_ref(),
+                    &meta.audio,
+                    &meta.ignore,
+                    ctx.jobs,
+                    budget,
+                )
+                .await,
+            )
+        },
+        async { Ok::<_, RunFailure>(load_deprecated(ctx, meta).await) },
+    )?;
+    let local_map = Arc::new(local_map);
     timer.finish();
     // The local manifest loading is the one degradation that changes the
     // reported numbers while leaving the exit code at `0`: with no local build
@@ -347,7 +379,7 @@ async fn load_manifests_and_reuse(
             "unavailable"
         });
     }
-    Ok((per_manifest, local_map))
+    Ok((per_manifest, local_map, deprecated))
 }
 
 /// The inputs to [`build_and_assert_plan`]: the values `plan_phase` already
@@ -360,17 +392,21 @@ struct PlanInputs<'a> {
     meta: &'a Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     local_map: &'a Arc<LocalChunkMap>,
+    /// The advisory list fetched alongside the manifests in step 3; passed
+    /// through to the plan so step 4 only decides how it is used.
+    deprecated: Arc<[String]>,
 }
 
-/// Step 4: the work list, the purge candidates, the deprecated list, the scan,
-/// the download estimate, and the scope-of-work ceilings.
+/// Step 4: the work list, the purge candidates, the scan, the download
+/// estimate, and the scope-of-work ceilings. The deprecated list is fetched in
+/// step 3 and only consumed here.
 ///
 /// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
 /// [`PlanOutcome::Finished`] return so a helper never hands back an exit code.
 ///
-/// The body is the five conceptual steps in order (plan + purge, the include
-/// guard, the deprecated list, the scan, the estimate + ceilings); each one
-/// keeps its own side effects and log lines.
+/// The body is the remaining conceptual steps in order (plan + purge, the
+/// include guard, the scan, the estimate + ceilings); each one keeps its own
+/// side effects and log lines.
 async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork>, RunFailure> {
     let PlanInputs {
         ctx,
@@ -380,6 +416,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         meta,
         per_manifest,
         local_map,
+        deprecated,
     } = inputs;
 
     let (plan, purge_keys, purge_plan) =
@@ -397,7 +434,6 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
     }
 
-    let deprecated = load_deprecated(ctx, meta).await;
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
 
     // The estimate is a pure computation; the summary values it derives are
@@ -514,11 +550,11 @@ async fn plan_work_and_purge(
 // property of the request — rather than `5`, and the caller owns only the
 // mapping to this binary's usage error.
 
-/// Step 4.3: the server's deprecated-file list.
+/// The server's deprecated-file list, fetched in step 3 alongside the manifests.
 ///
-/// Fetched here rather than in the post-phase: it is part of what the run will
-/// act on, so it belongs with the rest of the plan. Still best-effort (the list
-/// is advisory).
+/// Fetched in the plan rather than the post-phase: it is part of what the run
+/// will act on. Still best-effort (the list is advisory) and independent of the
+/// manifests and the reuse map, so it overlaps with both.
 ///
 /// `--dry-run` needs it because the post-phase now runs in a dry run and lists
 /// the deprecated deletes it would make. `--check-only` and `--print-plan` still
@@ -530,9 +566,9 @@ async fn plan_work_and_purge(
 /// `dry_run || !readonly` reduces to `dry_run || !dry_run` — always true — and
 /// the gate is just `!print_plan && !check_only`.
 ///
-/// It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
-/// extra network call. The call is needed exactly when the post-phase will list
-/// its deletes: any run that reaches the execution half.
+/// Overlapping the fetch means a run refused by the step 4.2 scope guard may
+/// have made this one advisory request before the refusal. The request is
+/// read-only and best-effort, and the guard's outcome and message are unchanged.
 async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Arc<[String]> {
     let wants_deprecated = !ctx.print_plan && !ctx.check_only;
     if wants_deprecated {
