@@ -12,7 +12,7 @@ use tracing::{debug, info, trace};
 
 use crate::cache::{CacheDb, CacheWrite};
 use crate::config::ScanMode;
-use crate::hash::hash_file;
+use crate::hash::{CHUNK, hash_file_with_buf};
 use crate::planner::HashPlan;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
@@ -127,69 +127,76 @@ pub fn resolve_folder(
     let pool = rw.pool()?;
     let outcome = pool.install(|| {
         use rayon::prelude::*;
-        pending.par_iter().try_for_each(|rel| -> Result<()> {
-            // The permit covers the read. The row write is cache work, which the
-            // gate deliberately does not cover, and taking the mutex while holding
-            // a permit would put an fsync inside the rw wait-for graph.
-            let computed = {
-                let _permit = rw.acquire(side);
-                let path = root.join(rel);
-                let algos = plan.get(rel);
-                debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
-                let r =
-                    hash_file(&path, &algos).with_context(|| format!("hash {}", path.display()));
-                trace!(
-                    rel = %rel,
-                    algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
-                    "hashed"
+        // One scratch buffer per worker, allocated once and reused for every file
+        // that worker hashes. The old shape allocated and zeroed a 512 KiB `Vec`
+        // per file; `try_for_each_init` ties the buffer to the worker's fold
+        // instead, so the allocation is bounded by the pool, not the tree.
+        pending.par_iter().try_for_each_init(
+            || vec![0u8; CHUNK],
+            |buf, rel| -> Result<()> {
+                // The permit covers the read. The row write is cache work, which the
+                // gate deliberately does not cover, and taking the mutex while holding
+                // a permit would put an fsync inside the rw wait-for graph.
+                let computed = {
+                    let _permit = rw.acquire(side);
+                    let path = root.join(rel);
+                    let algos = plan.get(rel);
+                    debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
+                    let r = hash_file_with_buf(&path, &algos, buf)
+                        .with_context(|| format!("hash {}", path.display()));
+                    trace!(
+                        rel = %rel,
+                        algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
+                        "hashed"
+                    );
+                    r?
+                };
+                let e = &phase_a.map[*rel];
+                let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
+                let mut sink = sink
+                    .lock()
+                    .map_err(|_| anyhow!("resolve lock is poisoned"))?;
+                if let Some(w) = sink.batch.as_mut() {
+                    w.put(rel, &row)?;
+                }
+                sink.map.insert(
+                    (*rel).clone(),
+                    EffRec {
+                        kind: "file".into(),
+                        size: row.size,
+                        mtime_ns: row.mtime_ns,
+                        hashes: row.hashes,
+                        is_link: e.is_link,
+                    },
                 );
-                r?
-            };
-            let e = &phase_a.map[*rel];
-            let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
-            let mut sink = sink
-                .lock()
-                .map_err(|_| anyhow!("resolve lock is poisoned"))?;
-            if let Some(w) = sink.batch.as_mut() {
-                w.put(rel, &row)?;
-            }
-            sink.map.insert(
-                (*rel).clone(),
-                EffRec {
-                    kind: "file".into(),
-                    size: row.size,
-                    mtime_ns: row.mtime_ns,
-                    hashes: row.hashes,
-                    is_link: e.is_link,
-                },
-            );
-            sink.hashed += 1;
-            // Logged under the lock so the `done` counts appear in the order they
-            // were reached rather than the order workers got scheduled to log.
-            //
-            // The message names the phase. Two phases report progress under one
-            // name, and the fields do not tell them apart: the phase that
-            // reads no bytes reports `hashed = 0` for the whole run, so a
-            // reader (or a parser) that cannot say which phase an event came
-            // from cannot say anything about it. The name says, and it says
-            // it the way this phase's start and done events say it.
-            if sink.hashed.is_multiple_of(100)
-                || sink.hashed == total
-                || sink.last_prog.elapsed().as_secs() >= 5
-            {
-                info!(
-                    root = %root.display(),
-                    done = sink.hashed,
-                    total,
-                    hashed = sink.hashed,
-                    cache_hit = 0,
-                    elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "effective progress: phase c"
-                );
-                sink.last_prog = std::time::Instant::now();
-            }
-            Ok(())
-        })
+                sink.hashed += 1;
+                // Logged under the lock so the `done` counts appear in the order they
+                // were reached rather than the order workers got scheduled to log.
+                //
+                // The message names the phase. Two phases report progress under one
+                // name, and the fields do not tell them apart: the phase that
+                // reads no bytes reports `hashed = 0` for the whole run, so a
+                // reader (or a parser) that cannot say which phase an event came
+                // from cannot say anything about it. The name says, and it says
+                // it the way this phase's start and done events say it.
+                if sink.hashed.is_multiple_of(100)
+                    || sink.hashed == total
+                    || sink.last_prog.elapsed().as_secs() >= 5
+                {
+                    info!(
+                        root = %root.display(),
+                        done = sink.hashed,
+                        total,
+                        hashed = sink.hashed,
+                        cache_hit = 0,
+                        elapsed_s = t_eff.elapsed().as_secs_f64(),
+                        "effective progress: phase c"
+                    );
+                    sink.last_prog = std::time::Instant::now();
+                }
+                Ok(())
+            },
+        )
     });
     outcome?;
 

@@ -1097,6 +1097,46 @@ fn an_empty_file_hashes_to_the_digest_of_nothing() {
     assert_eq!(never_fed.finish(), hash_file(&path, &set).unwrap());
 }
 
+/// **The caller-owned buffer produces the same digest however it is sized.**
+/// The copy phase already hands a reusable buffer to its stream loop; a hashing
+/// worker now does the same. Buffer length only decides how many reads the loop
+/// makes, so a tiny buffer (many reads), a `CHUNK` buffer and a buffer larger
+/// than the file must all agree with [`hash_file`] byte for byte.
+#[test]
+fn a_borrowed_buffer_matches_hash_file_at_any_size() {
+    let dir = girpr_tempdir::TempDir::new("girsync_hash", "buf");
+    let body: Vec<u8> = (0..(CHUNK * 2 + 12345)).map(|i| (i % 251) as u8).collect();
+    let path = write(&dir, "f.bin", &body);
+    let set = algos(&["md5", "sha256"]);
+    let reference = hash_file(&path, &set).unwrap();
+
+    let mut tiny = [0u8; 7];
+    assert_eq!(
+        hash_file_with_buf(&path, &set, &mut tiny).unwrap(),
+        reference,
+        "a tiny buffer forces many reads"
+    );
+    let mut chunk = vec![0u8; CHUNK];
+    assert_eq!(
+        hash_file_with_buf(&path, &set, &mut chunk).unwrap(),
+        reference,
+        "a CHUNK buffer matches hash_file"
+    );
+    let mut big = vec![0u8; body.len() + 1];
+    assert_eq!(
+        hash_file_with_buf(&path, &set, &mut big).unwrap(),
+        reference,
+        "a buffer larger than the file matches hash_file"
+    );
+
+    // An empty request never touches the buffer, empty or not.
+    assert!(
+        hash_file_with_buf(&path, &AlgoSet::NONE, &mut [])
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// `Digests::new(&[])` must be the inert object, because `--hash-all-of none` is
 /// the mode where a copy never builds one. A context built and thrown away is
 /// the per-file allocation [`hash_file`] is written to avoid.

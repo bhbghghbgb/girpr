@@ -1,4 +1,4 @@
-//! [`Digests`] and [`hash_file`]: streaming file digests in a single pass.
+//! [`Digests`], [`hash_file`] and [`hash_file_with_buf`]: streaming file digests in a single pass.
 
 use anyhow::{Context, Result};
 use girpr_digest::{Algorithms, Sink};
@@ -72,17 +72,35 @@ impl Digests {
 /// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
 /// stores them as-is instead of hex, halving hash disk cost.
 pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<DigestSet> {
-    // Before any context is built: with nothing requested there is nothing to
+    // Before any buffer is allocated: with nothing requested there is nothing to
     // digest, and opening the file at all would turn a stat-only decision into a
     // read. The empty set below is the whole answer.
     if algos.is_empty() {
         return Ok(DigestSet::default());
     }
+    let mut buf = vec![0u8; CHUNK];
+    hash_file_with_buf(path, algos, &mut buf)
+}
+
+/// Digest `path` with every requested algorithm, reading through the caller's
+/// buffer.
+///
+/// This is [`hash_file`] with the scratch space handed in rather than allocated
+/// per call: a caller hashing many files (a rayon worker, say) allocates once
+/// and reuses the same slice for each one. `buf` may be any non-empty size; its
+/// length only decides how many reads the loop makes, never the digest. An empty
+/// `algos` returns an empty set without touching the file or the buffer.
+pub fn hash_file_with_buf(path: &Path, algos: &AlgoSet, buf: &mut [u8]) -> Result<DigestSet> {
+    if algos.is_empty() {
+        return Ok(DigestSet::default());
+    }
+    // A zero-length slice would make `read` return 0 forever rather than report
+    // EOF, so refuse it explicitly instead of spinning.
+    anyhow::ensure!(!buf.is_empty(), "hash buffer must not be empty");
     let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut digests = Digests::new(algos);
-    let mut buf = vec![0u8; CHUNK];
     loop {
-        let n: usize = f.read(&mut buf)?;
+        let n: usize = f.read(buf)?;
         if n == 0 {
             break;
         }
