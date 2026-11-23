@@ -33,9 +33,9 @@ machine data or change log.
 | T18 | Low-risk micro-optimization sweep | completed | 97b9f6e5, 19e89da4, 5b01ea28 | §8 MIC-02/03/06/07 (574–589, 600–609); §4 MEM-02 (309–319). Implemented MIC-06 (local Option state), MIC-07 (single write_all), MIC-03 purge.rs (stable sort_by_cached_key — unstable would reorder same-depth dirs), MEM-02 (borrowed &str keep-set probes off Windows, fold unchanged). SKIPPED: MIC-02 whole (glob require_literal_separator:false means * crosses /, so visibility is not inherited — fast path would change purge decisions); MIC-03 plan.rs site stale (plain rel sort); MEM-02 PurgeKeys three copies/membership hash (optional + needs lifetime redesign). |
 | T19 | Cut allocations in gircap's HTTP recording pipeline | completed | 54d186e4 | §9 TOOL-01/07/08/09/10 (643–652, 691–715); assumption 14 (875–877) validated with a byte-level golden fixture (passed pre- and post-change). API: HttpResponse::chunk() -> Result<Option<bytes::Bytes>, String>; RequestRecord::req_headers is Arc<BTreeMap<...>> (serde rc); Fetcher::map_concurrently closure takes Arc<Fetcher> first. TOOL-07 edge: content_type now from joined resp_headers (differs for repeated/non-UTF-8; pinned bundle uses single ASCII). |
 | T20 | Memoize decoded blobs and serialize the manifest once | completed | 6d4e3888, 12e73ec4 | §9 TOOL-03/04/11/12 (661–678, 716–728); assumption 15 (878–880). Implemented TOOL-11 (move measured md5/error into rows) and TOOL-12 (new public write_json_gz_counted: serialize once to a counted temp with RAII cleanup, then copy/gzip; byte-identical test). SKIPPED TOOL-03/04 memoization: ChunkSource::memoizing already exists in verify but is unbounded and deliberately not used in capture (+39.5 MB RSS trade-off); no real bundle to measure (only 44 KB synthetic), so assumption 15 cannot be validated. "Each blob decoded once" does NOT hold across A6->rebuild or measure->assemble. Reviewed J: completed (partial with validated skip — do not enable capture memoization without a total-byte bound and a real-bundle measurement). |
-| T21 | Fix gircap indexing and canonicalization correctness | pending_review | af8a2890 | §9 TOOL-05/06/13/17/19/20 (679–690, 729–737, 763–768, 780–795); assumptions 16–17 (881–888) validated. O(1) build-id/admission indexes; TOOL-13 uses path_is_symlink() + ancestor stack (file_type() returns target under follow_links(true)); shared canonical walk rejected — tree changes between fixpoint passes. Dedup directory-only with first-sorting-link regression test. TOOL-20 removed three per-write debug asserts (incl. T20's in write_json_gz_counted) into a test. No production symlink creation; first-match semantics kept. |
-| T22 | Parallelize gircap verification and capture assembly | pending_review | fbc134ba, b4bade9a | §9 TOOL-14/15 (740–752); assumption 17 (885–888) validated. rayon added to gircap. Verify A6 per-blob over rayon, collect (id,row) sorted by id; assembly CPU parallel but writes/rows/digests/path_map/tracing stay serial in index order (path_map proven Send+Sync but not actually shared — preserves write order, abort semantics and .json.tmp/close-out safety). New trade-off: all assembled results briefly resident. A6 row order relies on ChunkIndex::blobs being id-ordered (hand-edited unsorted index could change first-red-A6 headline). |
-| T23 | Make gircap declared-size mismatch errors honest | pending_review | 68e83ac5 | §9 TOOL-21 (796–805). Text-only fix: private zstd_over_limit_from; mismatch says "declared size mismatch ... declared expected size of N B", bomb says "decode ceiling exceeded ... C B hard ceiling"; both keep the "decode limit" token. Ceiling/limit enforcement code unchanged; zstd_measure_from untouched so verify A6 report strings/artifact bytes unaffected. Chose text distinction over measure-first (would change decode behavior/RSS). |
+| T21 | Fix gircap indexing and canonicalization correctness | completed | af8a2890 | §9 TOOL-05/06/13/17/19/20 (679–690, 729–737, 763–768, 780–795); assumptions 16–17 (881–888) validated. O(1) build-id/admission indexes; TOOL-13 uses path_is_symlink() + ancestor stack (file_type() returns target under follow_links(true)); shared canonical walk rejected — tree changes between fixpoint passes. Dedup directory-only with first-sorting-link regression test. TOOL-20 removed three per-write debug asserts (incl. T20's in write_json_gz_counted) into a test. No production symlink creation; first-match semantics kept. |
+| T22 | Parallelize gircap verification and capture assembly | completed | fbc134ba, b4bade9a | §9 TOOL-14/15 (740–752); assumption 17 (885–888) validated. rayon added to gircap. Verify A6 per-blob over rayon, collect (id,row) sorted by id; assembly CPU parallel but writes/rows/digests/path_map/tracing stay serial in index order (path_map proven Send+Sync but not actually shared — preserves write order, abort semantics and .json.tmp/close-out safety). New trade-off: all assembled results briefly resident. A6 row order relies on ChunkIndex::blobs being id-ordered (hand-edited unsorted index could change first-red-A6 headline). |
+| T23 | Make gircap declared-size mismatch errors honest | completed | 68e83ac5 | §9 TOOL-21 (796–805). Text-only fix: private zstd_over_limit_from; mismatch says "declared size mismatch ... declared expected size of N B", bomb says "decode ceiling exceeded ... C B hard ceiling"; both keep the "decode limit" token. Ceiling/limit enforcement code unchanged; zstd_measure_from untouched so verify A6 report strings/artifact bytes unaffected. Chose text distinction over measure-first (would change decode behavior/RSS). |
 | T24 | Cut girsync and sled2redb I/O and transaction cost | todo | | §9 TOOL-02/16/18 (654–659, 756–762, 770–777) |
 | T25 | Validate and, if safe, shrink the build-time dependency surface | todo | | §10 B-01 (818–823); assumption 13 (872–874) |
 
@@ -56,6 +56,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | H | T14, T15, T16 | done | No fix/revert needed. T15 resolved completed with COR-08 a validated skip; dedicated exit code dropped; five other follow-ups endorsed. |
 | I | T17, T18 | done | No fix/revert needed. Endorsed order-insensitive chunk-hit test, conditional PurgeKeys revisit, and lossless-appender backpressure validation; duplicate suggestion dropped. |
 | J | T19, T20 | done | No fix/revert needed. T20 resolved completed with memoization a validated skip; all three suggested follow-ups endorsed plus a content_type edge test. |
+| K | T21, T22, T23 | done | No fix/revert needed. All six suggested follow-ups endorsed. |
 
 ## Follow-ups
 
@@ -96,6 +97,12 @@ planning review batches the survivors only after every task is settled.
 | F29 | Revisit T20 memoization with an explicit total-memo byte cap and a wall-clock measurement on a real capture bundle | open | Endorsed by review J; the missing preconditions for the validated skip — do not enable capture memoization without both. |
 | F30 | Measure the counted-temp serialize-once path on a ~27 MB manifest on HDD to confirm the extra disk pass beats the second serialization | open | Endorsed by review J, low priority (validation only). |
 | F31 | Pin the deliberate content_type edge with a test asserting joined/encoded value for repeated or non-UTF-8 Content-Type headers | open | Non-blocking follow-up from review J; documents an intentional difference so it is not "fixed" back. |
+| F32 | End-to-end capture test planting a file link sorting before its real target and asserting published `checksums.json` lists both paths | open | Endorsed by review K; current T21 regression test is at walk() level. |
+| F33 | Measure gircap walk syscalls on a large bundle to validate the TOOL-13/17 reduction | open | Endorsed by review K; current evidence is structural, not measured. |
+| F34 | Consider bounded assembly batching if peak RSS shows the all-results-resident trade-off is a concern, keeping ordered writes | open | Endorsed by review K conditionally; measure first. |
+| F35 | Consider streaming per-worker A6 reads to cut transient memory while preserving exact row text (MD5+SHA-256+zstd measure) | open | Endorsed by review K conditionally; non-trivial. |
+| F36 | Wall-clock timing on a real capture bundle to validate the gircap parallel speedup claim | open | Endorsed by review K; report figures are static reasoning. |
+| F37 | End-to-end materialize assertion that an under-declared blob surfaces the new declared-size-mismatch text | open | Endorsed by review K; validates T23's user-visible contract. |
 
 ## Persistent context
 
@@ -178,6 +185,17 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **gircap concurrency / errors after T21-T23.** gircap depends on `rayon` 1.12.0
+  (already in the lockfile via girsync). Verify A6 order relies on
+  `ChunkIndex::blobs` being id-ordered by contract (test-pinned), not by `build()`; a
+  hand-edited unsorted index could shift the first-red A6 headline but cannot affect
+  artifact bytes or write order. T21's link-only canonicalization relies on walkdir
+  semantics (`file_type()` follows links; `path_is_symlink()` reports links) and dedups
+  directories only. T22 runs only CPU work on rayon — all writes, selfcheck rows,
+  digests, path_map recording and tracing stay serial in `record()`, so close-out runs
+  after build returns (no .json.tmp hazard); the all-results-resident trade-off is
+  documented. T23 gives distinct declared-size-mismatch vs ceiling error strings while
+  keeping the `decode limit` token; `zstd_measure_from` is unchanged.
 - **gircap APIs after T19-T20 (feeds T21/T22).** `HttpResponse::chunk()` returns
   `bytes::Bytes` (not `Vec<u8>`); sinks write `&chunk`. `RequestRecord::req_headers`
   is `Arc<BTreeMap<String,String>>` (serde `rc`); `Fetcher::map_concurrently`'s
