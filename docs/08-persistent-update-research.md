@@ -503,7 +503,7 @@ the conflicts and blockers that were settled before that flag can be implemented
 * **§5.1 conflicts** — places where the new work (or its §4 prerequisites) meets
   an existing `girpr` rule that already has a defined meaning. Each row gives the
   competing meanings, the semantics this research suggests, and an **Answer**
-  column holding the final call.
+  column holding the final call for settled rows (`Open` where it is still due).
 * **§5.2 blockers** — choices that reading the two launchers or the live probe
   cannot settle. The §4 prerequisites are deliberately **not** blockers: the
   decoder, the two manifests, the full-file downloader, the marker writes, the
@@ -512,9 +512,17 @@ the conflicts and blockers that were settled before that flag can be implemented
   manifests into a `gircap` bundle (§6 step 2) is a prerequisite
   for testing, not a decision.
 
-"Suggested" is the report's recommendation; the last column records the chosen
-answer. B4 is conditional: (b) is the launch target, with (a) as the fallback if
-implementation-time research cannot verify CN/Bili.
+"Suggested" is the report's recommendation; the Answer column records the chosen
+answer for those settled rows. B4 is conditional: (b) is the launch target, with
+(a) as the fallback if implementation-time research cannot verify CN/Bili.
+
+A second pass over the published outputs added **C18–C20 and B9**. Unlike the
+rows above, those are still **Open** — the Answer column records the decision
+that is needed, not a call already made. All four change a published result
+(marker bytes, `SUMMARY`, or an exit code); none is a schema or implementation
+question. C18 and C19 resolve tensions inside the settled answers (C7(d) vs.
+C8; C8 vs. the Collapse precedent in §2.1), so they should be decided with those
+rows in view rather than read as new work.
 
 ### 5.1 Conflicts with existing `girpr` functions and contracts
 
@@ -537,6 +545,9 @@ implementation-time research cannot verify CN/Bili.
 | C15 | **Atomic publish vs. purge classification of `*_tmp`.** `purge` treats `*_tmp` as a candidate; Collapse also leaves partial `*_persist` files on a failed download (§4.4). | (a) download to a temp name, full-file MD5, then atomic publish before the post-repair re-plan; (b) write the final path directly; (c) add a persistent-`_tmp` keep pattern. | **(a)** — util-path's atomic publish already exists; (b) is exactly the partial-marker failure §4.4 warns about. | **(a)** — chosen. |
 | C16 | **Missing `res_versions_streaming` vs. `base_res_version_hash`.** Collapse simply omits the marker when the source file is absent (§4.4); `girpr` normally refuses malformed inputs at plan time. | (a) omit that one marker and report it; (b) refuse the run; (c) synthesize the hash from the Sophon manifest. | **(a)** — match the game's and Collapse's behaviour; make the omission visible on the data plane rather than failing a repair that is otherwise sound. | **(a)** — chosen. |
 | C17 | **Tree-wide read-only stripping (§4 row 8) vs. per-file clearing.** Collapse calls `TryUnassignReadOnlyFiles` on the whole game tree up front; `girpr` clears the flag only when an in-place open fails, and otherwise falls back to `{path}_tmp` for that one file. Hotfix files are often read-only. | (a) strip read-only flags tree-wide when the flag is on; (b) strip only on persistent paths, before overwriting each file; (c) keep per-file clearing and rely on the temp path. | **(b)** — a tree-wide attribute change is a surprising mutation of files the run does not otherwise touch; a persistent file that still cannot be opened should fall back to the same temp path as any other file, not fail the run. | **(b)** — chosen. |
+| C18 | **A scoped `--with-persistent` vs. what a revision file asserts.** C7(d) lets a scoped run write the install-wide marker block whenever the marker paths themselves are in scope, on the `--audio` precedent that writing a global list does not assert the files it names are present. But a revision file *does* assert that every hotfix at that revision is installed — that is exactly C8's reason for the all-or-nothing gate — so a scope that admits the markers while excluding any dispatcher hotfix path publishes a false assertion, and the game trusts a partially installed revision. | (a) write markers anyway (C7(d) taken literally — the scope is the user's choice); (b) suppress the marker block and manifest mirrors whenever any dispatcher hotfix path in the current persistent set is out of scope, and report it; (c) refuse the combination (exit `1`). | **(b)** — C8's invariant is load-bearing: a marker that tells the game to skip its check must describe a *complete* revision. Suppressing is the same answer a scoped run already gives `config.ini` (`SUMMARY config_bumped=0`), and unlike (c) it keeps C7(d)'s chosen "allow scoped runs" semantics; (a) is the only option that can hand the game a knowingly incomplete install. The suppression must be visible on the data plane so a scoped run that also stops publishing markers is not read as a clean one. | **Open** |
+| C19 | **A run that repairs no persistent file vs. refreshing the markers.** §2.1 records Collapse's precedent that a check finding no broken files leaves the old markers untouched, and C8's gate is phrased around files that *failed*. A byte-intact install with stale, missing or wrong-version markers is exactly the state that makes the game re-verify — the feature's reason for existing — so "nothing was broken" must not silently mean "nothing was published". | (a) always write the full marker block and both manifest mirrors under the flag, after every persistent file passes its gate (including files that passed unchanged); (b) write them only when at least one persistent file was repaired (Collapse parity); (c) write only markers that are stale/missing, leaving correct ones untouched. | **(a)** — the flag asks for an install *state*, not a repair count; markers already correct are rewritten with identical bytes, so this is idempotent, whereas (b) leaves the explicit request unfulfilled on the common "files fine, markers stale" install. C8 still gates on failure, not on whether work happened, so this does not weaken the all-or-nothing rule. | **Open** |
+| C20 | **`--purge-only` vs. persistent work.** `--purge-only` runs the post-phase but deliberately puts no bytes in place: it skips the repair loop and the `config.ini` bump (`SUMMARY config_bumped=0`). Marker writes are being placed in that same post-phase (C3/C9), so the mode would otherwise publish revision claims for hotfixes a cleanup-only run never installed. | (a) skip all persistent work for the mode — no dispatcher query, no manifest mirror, no markers; the already-widened keep-set (C1/C2) still protects existing markers; (b) query and write markers anyway, treating them as bookkeeping; (c) refuse `--with-persistent --purge-only` (exit `1`). | **(a)** — a revision claim without bytes in place is the same desync the `config.ini` bump rule exists to prevent, and C1/C12/B5 already made the keep-set a run-wide safety fix, so existing markers survive a cleanup-only run either way; (b) contradicts that rule. (c) is defensible but adds a flag-combination error no other mode pairing has. | **Open** |
 
 ### 5.2 Blockers that need a decision
 
@@ -555,6 +566,7 @@ to implementation/planning.
 | B6 | **How far beyond Collapse to go (§4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. | **(a)** — chosen. |
 | B7 | **Ceiling contract (C11).** Folding persistent bytes into the existing ceilings changes what those flags mean for opted-in runs. | (a) fold them in and document the broader meaning; (b) add dedicated persistent ceilings so the existing ones keep their exact definition; (c) leave persistent bytes unbounded. | **(a)** — enforceable ceilings are the point of the tier; (b) is defensible if a caller needs to budget the two paths separately, but doubles the flag surface. (c) is not acceptable. | **(a)** — chosen. |
 | B8 | **Legal/ToS posture.** Querying `query_cur_region` directly and shipping/deriving its RSA key is a product risk that source inspection cannot answer. | (a) acceptable, same as Collapse and the community tools; (b) acceptable only with user-supplied keys; (c) not acceptable — drop live dispatch and support captured bundles only. | **(a)** is this report's technical recommendation; the final call belongs to the project owner and is recorded here rather than assumed. | **(a)** — chosen. |
+| B9 | **Which version is authoritative for the dispatcher query and the markers.** Collapse queries `query_cur_region` with the *locally installed* version (`GameVersion.VersionString`) and writes that value into `ScriptVersion`. girpr repairs an arbitrary older install to `meta.latest`: the local version describes the *pre-repair* state, and a fresh install has no local version at all. The version in the query selects the revision set the dispatcher returns (§3 Step 3), so this choice decides both which hotfix bytes are fetched and which revision numbers are published. | (a) `meta.latest` is authoritative: query with it; if the response's own version field (probe `game_version_from_props`) disagrees, exit `2` rather than publish a revision the install does not have; (b) local version authoritative (Collapse parity): query with `meta.local_version`, write `ScriptVersion` from the response and still bump `config.ini` to latest — two version claims in one install, and no query at all on a fresh install; (c) dispatcher authoritative: install its hotfix set and bump `config.ini` to its version. | **(a)** — the bytes girpr puts in place are the latest base build, so only its revision set can describe the finished install; (b) can fetch stale hotfixes and make the game re-verify, which is this feature's failure case, and cannot start from a fresh install. Requires that the versioned key/seed from B2(a) cover `meta.latest`, and that the version disagreement be reported as a metadata failure rather than silently reconciled. | **Open** |
 
 ---
 
@@ -562,7 +574,10 @@ to implementation/planning.
 
 1. Decide the dispatcher strategy (port the Collapse decoder vs. a minimal
    maintained key/seed table) and add it behind a dedicated flag so the existing
-   repair-only default and its byte contracts stay byte-identical.
+   repair-only default and its byte contracts stay byte-identical. Settle the
+   still-open output decisions in §5 (C18–C20, B9) with that strategy — they fix
+   which markers are published, in which modes, and for which version, not how
+   the decoder is built.
 2. Capture a real dispatcher response + both persistent manifests into a
    `gircap` bundle (`docs/06`) before coding, so the protobuf fields, NDJSON
    schema (`hash` field in 7.1+) and exact marker contents can be pinned by tests.
