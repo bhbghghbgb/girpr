@@ -49,6 +49,12 @@ pub struct ScanReport {
     pub bytes: u64,
     /// The chunks that are wrong where they belong, over the whole plan.
     pub damaged_chunks: u64,
+    /// Files this scan could not answer for, as `(plan index, reason)` pairs:
+    /// a task that panicked or was cancelled, or a file the scan could not
+    /// read or resolve. The estimate for such a file stays conservative — an
+    /// unreached file is estimated in full and an unreadable one as all chunks
+    /// wrong — so a failure is never turned into a silent "intact" verdict.
+    pub failures: Vec<(usize, String)>,
     /// When the scan started. The in-place writer reports how old the plan
     /// scan is when it reuses a verdict; `None` for a report built by hand.
     pub scanned_at: Option<SystemTime>,
@@ -75,6 +81,15 @@ impl ScanReport {
     /// from another plan is not an answer, even at an in-range index.
     pub(crate) fn matches_plan(&self, plan: &RepairPlan) -> bool {
         self.plan_fingerprint == Some(plan.fingerprint())
+    }
+
+    /// How many files the scan could not answer for.
+    ///
+    /// Each one is either estimated in full (no verdict) or recorded as all
+    /// chunks wrong; the count is surfaced beside the scan's phase figures so
+    /// a partial scan is visible instead of silently reading as a clean one.
+    pub fn scan_failed(&self) -> usize {
+        self.failures.len()
     }
 
     /// A report for `files`, bound to `plan` — the test-only constructor for
@@ -256,6 +271,10 @@ fn est_file_download_bytes(
 struct Scanned {
     verdict: Verdict,
     bytes: u64,
+    /// A complete, operator-facing reason when the scan could not answer for
+    /// this file (bad path, unreadable file). `None` for a normal scan, even
+    /// one that found the file damaged: damage is an answer, not a failure.
+    failure: Option<String>,
 }
 
 /// Scan every planned file, in parallel.
@@ -316,16 +335,17 @@ pub async fn scan_plan(
             Err(e) => {
                 // `scan_one` catches unreadable files itself and answers
                 // "nothing is correct", so the only error here is a panic or a
-                // cancellation. Dropping it silently would undercount the scan
-                // with no trace of why; the estimate stays safe (an unreached
-                // file is estimated in full, see `est_download_bytes`).
-                tracing::warn!(
-                    error = %format!("{e:#}"),
-                    "scan task failed; unreached files are estimated in full"
-                );
+                // cancellation. The estimate stays safe (an unreached file is
+                // estimated in full, see `est_download_bytes`), but the reason
+                // must be collected and surfaced: a partial scan is not a
+                // clean one.
+                out.failures.push((idx, format!("scan task failed: {e:#}")));
                 continue;
             }
         };
+        if let Some(reason) = scanned.failure {
+            out.failures.push((idx, reason));
+        }
         out.bytes += scanned.bytes;
         out.damaged_chunks += scanned.verdict.damaged_chunks();
         out.files[idx] = Some(scanned.verdict);
@@ -336,8 +356,20 @@ pub async fn scan_plan(
         files = out.files.iter().filter(|verdict| verdict.is_some()).count(),
         bytes = out.bytes,
         damaged_chunks = out.damaged_chunks,
+        scan_failed = out.scan_failed(),
         "scan"
     );
+    // The count above is visible in the phase line. The reasons stay on the
+    // report and are also emitted here, at the default level, so a file the
+    // scan could not answer for is never silent. The conservative estimate is
+    // unchanged: a failure never becomes an "intact" verdict.
+    for (idx, reason) in &out.failures {
+        tracing::warn!(
+            file_index = idx,
+            reason = %reason,
+            "scan failed for a file; estimated conservatively"
+        );
+    }
     timer.disarm();
     out
 }
@@ -373,6 +405,7 @@ fn scan_one(
                     file_len: 0,
                     modified: None,
                 },
+                failure: Some(format!("{}: path escapes the game dir: {e:#}", file.rel)),
             };
         }
     };
@@ -384,12 +417,20 @@ fn scan_one(
         .and_then(|m| m.modified().ok());
     let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
-    let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
-        // An unreadable file is not a failed scan: the verdict is "nothing
-        // is correct", which is what the repair would find too.
-        tracing::debug!(file = %file.rel, error = %format!("{e:#}"), "scan: unreadable");
-        util::Scan::absent(dest_ranges.len(), source_ranges.len())
-    });
+    let (scan, failure) = match util::scan_file(&path, &dest_ranges, &source_ranges) {
+        Ok(scan) => (scan, None),
+        Err(e) => {
+            // An unreadable file still gets the conservative "nothing is
+            // correct" verdict — that is what the repair would find too — but
+            // the scan did not answer for it, so keep the reason for the
+            // report and the phase line instead of leaving it at debug level.
+            tracing::debug!(file = %file.rel, error = %format!("{e:#}"), "scan: unreadable");
+            (
+                util::Scan::absent(dest_ranges.len(), source_ranges.len()),
+                Some(format!("{}: unreadable: {e:#}", file.rel)),
+            )
+        }
+    };
     // Back to one verdict per chunk, in the plan's order: a chunk with no
     // source has no intact source, by definition. The scan answers one verdict
     // per source range, so the two lists are the same length here.
@@ -408,6 +449,7 @@ fn scan_one(
             file_len: scan.file_len,
             modified,
         },
+        failure,
     }
 }
 
@@ -739,6 +781,7 @@ mod tests {
             ],
             bytes: 0,
             damaged_chunks: 0,
+            failures: Vec::new(),
             scanned_at: None,
             plan_fingerprint: Some(plan.fingerprint()),
         };
@@ -786,6 +829,7 @@ mod tests {
             })],
             bytes: 1,
             damaged_chunks: 0,
+            failures: Vec::new(),
             scanned_at: None,
             plan_fingerprint: Some(plan_a.fingerprint()),
         };
@@ -795,6 +839,118 @@ mod tests {
         assert!(
             report.get(&plan_b, FileId::new(0)).is_none(),
             "a verdict from another plan must not be applied"
+        );
+    }
+
+    /// A file the scan could not resolve is recorded with its reason and still
+    /// gets the conservative verdict: a failure is never turned into a silent
+    /// "intact" answer, and both the count and the reason reach the log.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unresolvable_file_is_recorded_as_a_scan_failure() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "scan_failure");
+        let plan = Arc::new(RepairPlan::from_files(
+            "1.0",
+            vec![
+                PlannedFile {
+                    rel: "..\\outside.dat".into(),
+                    size: 4,
+                    md5: "m".into(),
+                    url_prefix: Arc::from(""),
+                    chunks: vec![chunk_at("c0", "m0", 0, 4)],
+                },
+                PlannedFile {
+                    rel: "present.dat".into(),
+                    size: 4,
+                    md5: util::md5::md5_digest(b"aaaa").to_hex(),
+                    url_prefix: Arc::from(""),
+                    chunks: vec![chunk_at("c1", "m1", 0, 4)],
+                },
+            ],
+        ));
+        std::fs::write(dir.join("present.dat"), b"aaaa").unwrap();
+
+        let (report, logs) = girpr_log::test_support::logs_of_async(scan_plan(
+            &dir,
+            None,
+            Arc::clone(&plan),
+            Arc::new(LocalChunkMap::new()),
+            2,
+        ))
+        .await;
+
+        assert_eq!(report.scan_failed(), 1, "one file could not be resolved");
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].0, 0, "the escaping file is index 0");
+        assert!(
+            report.failures[0].1.contains("escapes"),
+            "the reason names the escape: {:?}",
+            report.failures[0].1
+        );
+        // The unreached file still gets the conservative all-wrong verdict:
+        // its chunk is a download, not a silent "intact".
+        let v = report
+            .get(&plan, FileId::new(0))
+            .expect("a conservative verdict exists");
+        assert_eq!(v.dest_ok, vec![false]);
+        assert_eq!(v.source_ok, vec![false]);
+        assert_eq!(
+            est_file_download_bytes(
+                &plan.files()[0].chunks,
+                Some(v),
+                &[None],
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            4,
+            "an unreached file is estimated in full"
+        );
+        assert!(
+            logs.contains("scan_failed=1"),
+            "the phase line surfaces the count: {logs}"
+        );
+        assert!(
+            logs.contains("scan failed for a file"),
+            "the reason is surfaced at the default level: {logs}"
+        );
+    }
+
+    /// A clean scan records no failures, so the new count is zero and no
+    /// failure reason is emitted.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_clean_scan_records_no_failures() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "scan_clean");
+        let bytes = b"aaaa";
+        std::fs::write(dir.join("a.dat"), bytes).unwrap();
+        let plan = Arc::new(RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
+                rel: "a.dat".into(),
+                size: 4,
+                md5: util::md5::md5_digest(bytes).to_hex(),
+                url_prefix: Arc::from(""),
+                chunks: vec![chunk_at("c0", "m0", 0, 4)],
+            }],
+        ));
+
+        let (report, logs) = girpr_log::test_support::logs_of_async(scan_plan(
+            &dir,
+            None,
+            Arc::clone(&plan),
+            Arc::new(LocalChunkMap::new()),
+            2,
+        ))
+        .await;
+
+        assert_eq!(report.scan_failed(), 0);
+        assert!(report.failures.is_empty());
+        assert!(report.get(&plan, FileId::new(0)).is_some());
+        assert!(
+            logs.contains("scan_failed=0"),
+            "the count is present even when zero: {logs}"
+        );
+        assert!(
+            !logs.contains("scan failed for a file"),
+            "a clean scan emits no failure reason: {logs}"
         );
     }
 }
