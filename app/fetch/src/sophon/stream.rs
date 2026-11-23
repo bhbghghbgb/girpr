@@ -274,6 +274,11 @@ impl<W: Write> Write for HashingWriter<W> {
 /// Where a streamed blob's decoded bytes land.
 ///
 /// The trait exists for one requirement: **a retry has to start the blob over.** A streamed body is written as it decodes, so a failed attempt can leave half a chunk in the sink, and the next attempt must not append to it. [`stream_chunk_to`] therefore asks the sink to restart before it tries again.
+///
+/// The methods here are called synchronously from the streaming decode, on
+/// the thread that polls the stream's future. An implementation backed by
+/// blocking I/O — the file sink in the repair path — therefore relies on the
+/// caller honouring [`stream_chunk_to`]'s blocking-context contract.
 pub trait ChunkSink: Write {
     /// Throw away what the failed attempt wrote and start the blob again.
     fn restart(&mut self) -> std::io::Result<()>;
@@ -367,6 +372,22 @@ pub struct ChunkFetch<'a, S: ChunkSink> {
 /// The digest is known when the stream ends, which is one byte too late to
 /// gate the write — the one thing the streaming path gives up. The file-level
 /// gate (the whole-file MD5) is what decides whether the file is good.
+///
+/// # Blocking-context contract
+///
+/// Only the network receive is async. The zstd decode and every [`ChunkSink`]
+/// call (`write`, `flush`, `restart`) run synchronously on the thread that
+/// polls this future, so a sink that performs disk I/O blocks that thread for
+/// the whole body. Callers must therefore poll this future from a blocking
+/// context — Tokio's blocking pool via `Handle::block_on` — and never from an
+/// async runtime worker, where the disk work would starve timers and network
+/// polling.
+///
+/// The future is `Send` and the `reqwest` body is awaited here, outside any
+/// blocking task: driving it from a blocking thread does not stop the reactor.
+/// Only decoded bytes cross into the sink; no `reqwest` future is ever moved
+/// into a blocking closure. A caller that cannot provide a blocking context
+/// must bridge the sink side itself rather than poll this future on a worker.
 pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<ChunkDigest> {
     let ChunkFetch {
         client,
@@ -514,6 +535,11 @@ struct StreamFailure {
 ///
 /// A failure carries the compressed byte count accumulated before it, so the
 /// caller can charge what really arrived.
+///
+/// Only `body.next().await` is async: the zstd decode and the writes into
+/// `sink` run inline on the thread polling this future. When the sink is a
+/// file, the caller must poll from a blocking context — see the contract on
+/// [`stream_chunk_to`].
 async fn stream_body<S, B, E>(
     mut body: S,
     expected: Option<u64>,

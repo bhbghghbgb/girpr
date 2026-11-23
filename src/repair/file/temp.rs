@@ -680,6 +680,17 @@ pub(super) struct DownloadedChunk<'a, W: Write + Seek> {
 /// NOTE(starward-parity): Starward writes the decompressed chunk straight into
 /// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
+///
+/// # Threading
+///
+/// This future is polled by the file task that owns it, and that task is
+/// driven with `Handle::block_on` on Tokio's blocking pool (see
+/// `join_file_tasks` in the file module). The zstd decode and the
+/// `ChunkFileSink` writes therefore already run on a blocking thread. Keep the
+/// stream call there: an extra `spawn_blocking` hop would be redundant, and
+/// moving it back onto a runtime worker would put the disk work where it
+/// starves timers and network polling. `stream_chunk_to` needs no wrapper here
+/// because its blocking-context contract is already met.
 pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
     chunk: DownloadedChunk<'_, W>,
 ) -> Result<()> {
@@ -722,6 +733,9 @@ pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
     // ceiling is a ceiling: a settle that pushes the live figure past it trips
     // the stop right there, even if this was the run's last chunk.
     let mut consumed = 0u64;
+    // Polled on the file task's blocking-pool thread; the decode and sink
+    // writes below are synchronous. No spawn_blocking wrapper here — that
+    // would duplicate the context the file task already provides.
     let digest = match sophon::stream_chunk_to(sophon::ChunkFetch {
         client: &ctx.http,
         backoff: &ctx.backoff,
