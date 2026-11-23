@@ -767,7 +767,7 @@ async fn verify_and_retry(
         util::scan_reader(handle, ranges, &[])
     })?;
     let final_md5 = scan.file_md5;
-    if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
+    if !Md5::try_parse_hex(&file.md5).is_some_and(|expected| expected == final_md5) {
         let message = format!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel, file.md5, final_md5

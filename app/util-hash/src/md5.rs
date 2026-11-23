@@ -219,7 +219,7 @@ fn intern(
     len: u64,
     md5: &str,
 ) -> usize {
-    let expect = Md5::parse_hex(md5).ok();
+    let expect = Md5::try_parse_hex(md5);
     let key = (offset, len, expect);
     if let Some(&i) = index.get(&key) {
         return i;

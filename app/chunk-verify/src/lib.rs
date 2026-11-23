@@ -155,7 +155,7 @@ pub fn verify_in_place(
     expect: &str,
 ) -> Result<Verified> {
     let scan = read(&[])?;
-    if Md5::parse_hex(expect).is_ok_and(|expected| expected == scan.file_md5) {
+    if Md5::try_parse_hex(expect).is_some_and(|expected| expected == scan.file_md5) {
         return Ok(Verified::Matches(scan.file_md5));
     }
     let scan = read(dest_ranges)?;

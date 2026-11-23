@@ -98,13 +98,33 @@ impl Md5 {
     ///
     /// Either case is accepted. Anything that is not exactly 32 hex digits is
     /// an error, so a caller that wants "unknown" can turn it into `None`.
+    /// Callers that only want "is this a digest" should use
+    /// [`Self::try_parse_hex`] instead: this one builds an `anyhow::Error`
+    /// describing the bad spelling, which those callers immediately discard.
     pub fn parse_hex(s: &str) -> Result<Self> {
+        Self::try_parse_hex(s).ok_or_else(|| {
+            if s.len() != 32 {
+                anyhow!("an MD5 is 32 hex digits, not {} bytes", s.len())
+            } else {
+                anyhow!("not a hex MD5: {s:?}")
+            }
+        })
+    }
+
+    /// Parse a hex MD5 into the 16 bytes it spells, without allocating on
+    /// failure.
+    ///
+    /// The same spelling rule as [`Self::parse_hex`] — either case, exactly 32
+    /// hex digits — but returns `None` instead of an `anyhow::Error`, so the
+    /// common "unknown digest" path allocates nothing. The two are kept in
+    /// lockstep by sharing this one parse: `parse_hex` only adds the reason.
+    pub fn try_parse_hex(s: &str) -> Option<Self> {
         if s.len() != 32 {
-            bail!("an MD5 is 32 hex digits, not {} bytes", s.len());
+            return None;
         }
         let mut out = [0u8; 16];
-        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow!("not a hex MD5: {s:?}"))?;
-        Ok(Self(out))
+        hex::decode_to_slice(s, &mut out).ok()?;
+        Some(Self(out))
     }
 
     /// The digest as lowercase hex.
@@ -122,7 +142,7 @@ impl Md5 {
     /// Either case is accepted; a string that is not a digest (the empty MD5
     /// above all) matches nothing.
     pub fn matches_hex(self, s: &str) -> bool {
-        Self::parse_hex(s).is_ok_and(|other| other == self)
+        Self::try_parse_hex(s).is_some_and(|other| other == self)
     }
 }
 
@@ -321,6 +341,29 @@ mod tests {
         assert!(Md5::parse_hex("").is_err());
         assert!(Md5::parse_hex(&"g".repeat(32)).is_err());
         assert!(Md5::parse_hex(&"a".repeat(31)).is_err());
+    }
+
+    /// The non-allocating parse agrees with `parse_hex` for every input, so a
+    /// caller can swap one for the other without changing which digests match.
+    #[test]
+    fn try_parse_hex_agrees_with_parse_hex() {
+        let bs = "g".repeat(32);
+        let short = "a".repeat(31);
+        let long = "a".repeat(33);
+        let inputs = [
+            EMPTY_MD5,
+            "D41D8CD98F00B204E9800998ECF8427E",
+            "0cc175b9c0f1b6a831c399e269772661",
+            "",
+            "md5-a",
+            &bs,
+            &short,
+            &long,
+            "d41d8cd98f00b204e9800998ecf8427f",
+        ];
+        for s in inputs {
+            assert_eq!(Md5::try_parse_hex(s), Md5::parse_hex(s).ok(), "{s:?}");
+        }
     }
 
     #[test]

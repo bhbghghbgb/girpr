@@ -86,9 +86,7 @@ impl<'a> ChunkIdentity<'a> {
     /// empty string above all) is not an identity: a chunk carrying one names
     /// no bytes and degrades to whatever "unknown" means for the caller.
     pub fn parse(&self) -> Option<IdentityKey> {
-        Md5::parse_hex(self.digest)
-            .ok()
-            .map(|digest| IdentityKey::new(digest, self.size))
+        Md5::try_parse_hex(self.digest).map(|digest| IdentityKey::new(digest, self.size))
     }
 
     /// Does this view name the same chunk as `key`?
@@ -97,7 +95,7 @@ impl<'a> ChunkIdentity<'a> {
     /// must match exactly. A non-digest spelling matches nothing.
     pub fn matches(&self, key: IdentityKey) -> bool {
         self.size == key.size
-            && Md5::parse_hex(self.digest).is_ok_and(|digest| digest == key.digest)
+            && Md5::try_parse_hex(self.digest).is_some_and(|digest| digest == key.digest)
     }
 }
 
