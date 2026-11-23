@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -5,6 +7,24 @@ use serde::{Deserialize, Serialize};
 use crate::retry::{BackoffPolicy, Retry, retry};
 use girpr_model::region::Region as Biz;
 use girpr_model::region::{CHANNEL_ENDPOINT, Host};
+
+/// How long to wait for a TCP/TLS connection to a HYP or Sophon endpoint.
+///
+/// A connection that cannot be established must yield to the retry loop instead
+/// of stalling until the OS TCP timeout (minutes). Captured requests complete
+/// end to end in a few seconds, so ten seconds just for the handshake is
+/// generous.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Idle window for a buffered JSON wrapper body read.
+///
+/// HYP/Sophon wrapper bodies are small (the captured `getBuild` answers are
+/// ~4.5 KiB), so thirty seconds without another byte means the transport is
+/// stuck. This is deliberately **not** a client-wide total timeout: that would
+/// abort a large chunk or manifest stream on a slow link. Streamed bodies are
+/// fetched through `sophon::stream`, whose transport errors are already
+/// retryable; only the two buffered JSON reads need this guard.
+const JSON_BODY_IDLE: Duration = Duration::from_secs(30);
 
 /// Minimal HYP client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
@@ -298,6 +318,7 @@ impl HypClient {
         let client = reqwest::Client::builder()
             .user_agent("UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)")
             .pool_max_idle_per_host(16)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .context("build http client")?;
         Ok(Self {
@@ -312,12 +333,12 @@ impl HypClient {
         })
     }
 
-    fn hyp_base(&self) -> String {
-        self.hyp_base.clone()
+    fn hyp_base(&self) -> &str {
+        &self.hyp_base
     }
 
-    fn sophon_base(&self) -> String {
-        self.sophon_base.clone()
+    fn sophon_base(&self) -> &str {
+        &self.sophon_base
     }
 
     /// Build a HYP API URL.
@@ -352,14 +373,36 @@ impl HypClient {
             match self.client.get(url).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = match resp.bytes().await {
-                        Ok(body) => body,
-                        Err(e) => {
-                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                    // These JSON routes answer 200 and put failures in `retcode`;
+                    // a non-2xx is a broken endpoint, not a usable wrapper. Refuse
+                    // it before touching the body (the same check the blob path
+                    // makes) so a 503 with `{"retcode":0}` cannot be mistaken for
+                    // success. It is final: an identical request cannot fix a
+                    // status the server has already decided.
+                    if let Err(e) = resp.error_for_status_ref() {
+                        return Retry::Fatal(
+                            anyhow::Error::new(e)
+                                .context(format!("hyp api status {status} url={url}")),
+                        );
+                    }
+                    // A stalled body read must feed the retry loop. The bound is
+                    // an idle window on these small buffered bodies, not a total
+                    // request timeout, so large streamed downloads are untouched.
+                    let body = match tokio::time::timeout(JSON_BODY_IDLE, resp.bytes()).await {
+                        Ok(Ok(body)) => body,
+                        Ok(Err(e)) => {
+                            return Retry::Retry(
+                                anyhow::Error::from(e).context("read body"),
+                            );
+                        }
+                        Err(_) => {
+                            return Retry::Retry(anyhow::anyhow!(
+                                "read body timed out after {JSON_BODY_IDLE:?} url={url}"
+                            ));
                         }
                     };
                     tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
-                    let w: NodeWrapper = match serde_json::from_slice(&body) {
+                    let mut w: NodeWrapper = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
                             return Retry::Fatal(
@@ -380,11 +423,14 @@ impl HypClient {
                         }
                         Retry::Retry(err)
                     } else {
+                        // Consume the node out of the owned wrapper: cloning a
+                        // potentially large node just to deserialize it costs a
+                        // full deep copy that is immediately dropped.
                         let node_val = w
                             .data
-                            .as_ref()
-                            .and_then(|d| d.get(node))
-                            .cloned()
+                            .as_mut()
+                            .and_then(|d| d.as_object_mut())
+                            .and_then(|o| o.remove(node))
                             .unwrap_or(serde_json::Value::Null);
                         tracing::debug!(api = "hyp", url = %url, node, attempt, "ok");
                         match serde_json::from_value(node_val) {
@@ -412,18 +458,36 @@ impl HypClient {
             match self.client.get(url).send().await {
                 Ok(r) => {
                     let status = r.status();
-                    let body = match r.bytes().await {
-                        Ok(body) => body,
-                        Err(e) => {
-                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                    // Same route-family rule as `get_node` and the blob path: a
+                    // non-2xx here is a broken endpoint, not a wrapper to trust.
+                    if let Err(e) = r.error_for_status_ref() {
+                        return Retry::Fatal(
+                            anyhow::Error::new(e)
+                                .context(format!("sophon api status {status} url={url}")),
+                        );
+                    }
+                    let body = match tokio::time::timeout(JSON_BODY_IDLE, r.bytes()).await {
+                        Ok(Ok(body)) => body,
+                        Ok(Err(e)) => {
+                            return Retry::Retry(anyhow::Error::from(e).context("read body"));
+                        }
+                        Err(_) => {
+                            return Retry::Retry(anyhow::anyhow!(
+                                "read body timed out after {JSON_BODY_IDLE:?} url={url}"
+                            ));
                         }
                     };
                     tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    // The whole body is buffered, so a parse error is
+                    // deterministic for these bytes: five backoffs cannot change
+                    // it. Report it as a malformed response on the first attempt.
                     let w: Wrapper<T> = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
                             tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
-                            return Retry::Retry(anyhow::anyhow!("parse sophon wrapper: {}", e));
+                            return Retry::Fatal(
+                                anyhow::Error::from(e).context("parse sophon wrapper"),
+                            );
                         }
                     };
                     if w.retcode != 0 {
@@ -448,7 +512,10 @@ impl HypClient {
                         tracing::debug!(api = "sophon", url = %url, attempt, "ok");
                         Retry::Done(d)
                     } else {
-                        Retry::Retry(anyhow::anyhow!("sophon api empty data url={}", url))
+                        // `retcode:0` with no data is the same "nothing here"
+                        // answer as `-202`; give the caller its not-found marker
+                        // instead of spending the retry budget on fixed bytes.
+                        Retry::Fatal(SophonNotFound.into())
                     }
                 }
                 Err(e) => {
@@ -479,7 +546,7 @@ impl HypClient {
         pkg: &GameBranchPackage,
         tag: Option<&str>,
     ) -> Result<ChunkBuild> {
-        self.get_direct(&sophon_build_url(&self.sophon_base(), pkg, tag))
+        self.get_direct(&sophon_build_url(self.sophon_base(), pkg, tag))
             .await
     }
 
@@ -545,12 +612,18 @@ pub fn production_bases(host: &str) -> (String, String) {
 }
 
 fn urlencode(s: &str) -> String {
-    let mut o = String::new();
+    use std::fmt::Write as _;
+    // Unescaped bytes keep the input length; escapes grow from there. Reserve
+    // once so the common all-safe case allocates exactly once.
+    let mut o = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-.~_".contains(&b) {
             o.push(b as char);
         } else {
-            o.push_str(&format!("%{:02X}", b));
+            // Format straight into the buffer: the old `format!` built a
+            // temporary `String` for every escaped byte. Writing to a `String`
+            // cannot fail, so the infallible result is discarded.
+            let _ = write!(o, "%{b:02X}");
         }
     }
     o
@@ -559,7 +632,7 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_http::serve_bodies;
+    use crate::test_http::{serve_bodies, serve_with_status};
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -726,6 +799,64 @@ mod tests {
             1,
             "a fatal retcode must not be retried"
         );
+        assert!(
+            err.downcast_ref::<SophonNotFound>().is_some(),
+            "the caller needs the not-found marker: {err:#}"
+        );
+    }
+
+    /// A non-2xx status is decided before the body: a `503` carrying a wrapper
+    /// that used to look like success must not be accepted, in either JSON path.
+    #[tokio::test]
+    async fn both_json_paths_refuse_a_non_2xx_before_reading_the_body() {
+        let ok_node = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"exe_file_name":"GenshinImpact.exe"}]}}"#;
+        let node_server = serve_with_status(503, vec![ok_node]).await;
+        let node_err = client_for(Biz::Hk4eGlobal)
+            .get_node::<Vec<GameConfig>>(&node_server.uri(), "launch_configs")
+            .await
+            .expect_err("a 503 is not a successful wrapper");
+        assert_eq!(node_server.hits().await, 1, "a decided status is final");
+        assert!(format!("{node_err:#}").contains("503"), "{node_err:#}");
+
+        let ok_build = r#"{"retcode":0,"message":"OK","data":{"build_id":"build_test"}}"#;
+        let direct_server = serve_with_status(503, vec![ok_build]).await;
+        let direct_err = client_for(Biz::Hk4eGlobal)
+            .get_direct::<ChunkBuild>(&direct_server.uri())
+            .await
+            .expect_err("a 503 is not a successful wrapper");
+        assert_eq!(direct_server.hits().await, 1, "a decided status is final");
+        assert!(format!("{direct_err:#}").contains("503"), "{direct_err:#}");
+    }
+
+    /// Malformed wrapper bytes are deterministic, so `get_direct` must report
+    /// them on the first attempt instead of spending five backoffs.
+    #[tokio::test]
+    async fn get_direct_treats_a_malformed_body_as_fatal() {
+        let server = serve_bodies(vec!["<html>not json</html>"]).await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_direct::<ChunkBuild>(&server.uri())
+            .await
+            .expect_err("a malformed wrapper is fatal");
+        assert_eq!(
+            server.hits().await,
+            1,
+            "identical bytes cannot parse better"
+        );
+        let chain = format!("{err:#}");
+        assert!(chain.contains("parse sophon wrapper"), "{chain}");
+        assert!(!chain.contains("after 5 attempts"), "{chain}");
+    }
+
+    /// `retcode:0` with no data is a clean not-found, not five retries ending
+    /// in a generic "empty data" error.
+    #[tokio::test]
+    async fn get_direct_maps_data_null_to_a_clean_not_found() {
+        let server = serve_bodies(vec![r#"{"retcode":0,"message":"OK","data":null}"#]).await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_direct::<ChunkBuild>(&server.uri())
+            .await
+            .expect_err("no data is a not-found");
+        assert_eq!(server.hits().await, 1, "the answer is final");
         assert!(
             err.downcast_ref::<SophonNotFound>().is_some(),
             "the caller needs the not-found marker: {err:#}"

@@ -46,6 +46,15 @@ pub(crate) async fn serve_status(status: u16) -> Mock {
     serve(status, vec![""]).await
 }
 
+/// A throwaway HTTP server that answers the nth request with `status` and the
+/// nth body, repeating the last one, and counts the requests it saw.
+///
+/// Used where a caller must prove a status is decided before its body is read
+/// (for example a non-2xx carrying a JSON wrapper that used to be trusted).
+pub(crate) async fn serve_with_status(status: u16, bodies: Vec<&'static str>) -> Mock {
+    serve(status, bodies).await
+}
+
 /// The canned-response setup the two servers above share.
 ///
 /// The script walks `bodies` in order, repeating the last one once it runs out.

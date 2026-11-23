@@ -27,6 +27,9 @@ serde_json = "1.0.154"
 # heavy dependencies this crate isolates: an edit to the repair, report or CLI
 # modules above leaves this crate (and its reqwest/zstd/prost tree) cached.
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
+# The idle window on the two buffered JSON body reads uses the timer directly;
+# a client-wide total timeout would abort large streamed bodies instead.
+tokio = { version = "1.54.1", default-features = false, features = ["time"] }
 prost = "0.14.6"
 zstd = "0.14.4"
 # `StreamExt` combinators and the `Stream` trait the chunk sink is driven with.
