@@ -20,7 +20,11 @@
 //! - **stage** — the bytes of the chunks that have to *move* inside the file
 //!   are read into RAM, so the write order cannot destroy them;
 //! - **patch** — the wrong chunks are written, ascending: from the staged
-//!   bytes when there are any, from a download otherwise;
+//!   bytes when there are any, from a download otherwise. When the layout is
+//!   disjoint and the staged tier is in charge, the downloads are fetched and
+//!   decoded in a bounded window and written through per-chunk handles at
+//!   their precomputed offsets; the salvage tier and any overlapping layout
+//!   stay strictly sequential;
 //! - **verify** — one read is the gate: the whole-file MD5 decides. Only a
 //!   mismatch takes a second read, which holds the per-chunk verdicts that
 //!   name what to redo. A file that matches pays for neither the second read
@@ -53,8 +57,12 @@
 //! - a staged source's MD5 is still checked before it is staged, so that path
 //!   keeps the stronger property it always had.
 //!
-//! Files run in parallel, bounded to `jobs` in flight; chunks inside a file
-//! are strictly sequential.
+//! Files run in parallel, bounded to `jobs` in flight. Inside one file, the
+//! salvage (ordered) tier and any overlapping layout stay strictly sequential;
+//! the staged tier of a disjoint layout overlaps the fetch and zstd decode of
+//! up to `CHUNK_FETCH_WINDOW` download chunks, each written at its own offset
+//! through its own handle so concurrent writes never reach the same range.
+//! The temp path keeps its own sequential, resume-by-length write order.
 //!
 //! The bound is a `buffer_unordered` over spawned file tasks, owned by the
 //! driver, as in the scan/check/manifest phases. Dropping that driver drops

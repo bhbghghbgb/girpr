@@ -685,6 +685,39 @@ mod tests {
         assert_eq!(s.download.live(), 1 + u64::MAX / 2);
     }
 
+    /// A settled figure is a sum, so the order in which chunks settle against
+    /// an active ceiling cannot change the result: every byte is counted once
+    /// and the ceiling still binds afterwards. This is the property the
+    /// in-file fetch window relies on when sibling chunks finish out of order.
+    #[test]
+    fn out_of_order_settlement_against_a_ceiling_is_exact() {
+        let mut s = Summary::default();
+        s.set_verified_write_limit(Some(100));
+        let s = Arc::new(s);
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let s = Arc::clone(&s);
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        s.note_write_bytes(3);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            s.write.settled(),
+            120,
+            "every out-of-order settle counted exactly once"
+        );
+        assert!(
+            !s.note_write_bytes(1),
+            "the ceiling still binds after the settles crossed it"
+        );
+    }
+
     /// The no-ceiling charge takes the `fetch_add` fast path: every call
     /// answers yes, and concurrent charges still add up to the exact sum.
     #[test]

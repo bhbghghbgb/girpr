@@ -11,6 +11,7 @@ use crate::common::{
 };
 use girpr::test_support::summary_record;
 use girpr::{OutputFormat, RunExit};
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 
 /// How many times `stream_chunk_to` asks a *retryable* origin — the linear
@@ -669,12 +670,30 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1, "{name}");
         let hits = mock.chunk_hits();
+        // The scoped file has two disjoint chunks. The staged tier fetches
+        // them in a bounded window, so both are in flight when one fails;
+        // what the retry policy pins is each chunk's own request count, not
+        // the total for the file. A 404 asks each chunk once, a 500 asks each
+        // chunk `ATTEMPTS` times, and no other id is touched.
+        let mut per_chunk: BTreeMap<&str, usize> = BTreeMap::new();
+        for id in &hits {
+            *per_chunk.entry(id.as_str()).or_insert(0) += 1;
+        }
         assert_eq!(
-            hits.len(),
-            want_hits,
-            "{name}: the origin was asked {want_hits} time(s): {hits:?}"
+            per_chunk.len(),
+            2,
+            "{name}: both chunks of the scoped file were fetched: {hits:?}"
         );
-        assert!(hits.iter().all(|id| id == "chunk_foo0"), "{name}: {hits:?}");
+        assert!(
+            per_chunk
+                .keys()
+                .all(|id| *id == "chunk_foo0" || *id == "chunk_foo1"),
+            "{name}: only the scoped file's chunks were fetched: {hits:?}"
+        );
+        assert!(
+            per_chunk.values().all(|&n| n == want_hits),
+            "{name}: each chunk was asked {want_hits} time(s): {per_chunk:?}"
+        );
         assert!(
             elapsed < max_elapsed,
             "{name} must not spend the budget in sleep, took {elapsed:?}"

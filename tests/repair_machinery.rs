@@ -554,6 +554,34 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
 }
 
+/// One file with many disjoint chunks and no local reuse: every chunk is a
+/// download. The staged tier fetches and decodes them in a bounded window and
+/// writes each at its own offset through its own handle. Overlapping the work
+/// must not change the assembled bytes or the fetch set — `run_lib` uses one
+/// job, so any overlap here is within the file, not across files.
+#[tokio::test]
+async fn a_disjoint_file_is_repaired_byte_exactly_through_the_fetch_window() {
+    let chunks = run_of("win_", 8, 4096, 0x41);
+    let spec = FixtureSpec::new(vec![FileSpec::new("game/window.dat", chunks.clone())]);
+    let rig = Rig::start(&spec).await;
+    // Nothing on disk and no local manifest: all eight chunks are downloads.
+    let want = lay_out(&chunks);
+
+    let run = rig.run_lib(&["--repair-mode", "inplace"]).await;
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(run.num("summary", "repaired"), 1);
+    assert_eq!(
+        rig.mock.chunk_hits().into_iter().collect::<BTreeSet<_>>(),
+        chunks.iter().map(|c| c.id.clone()).collect::<BTreeSet<_>>(),
+        "every chunk was fetched, in whatever order the window finished"
+    );
+    assert_eq!(
+        rig.read("game/window.dat"),
+        want,
+        "the windowed writes land at the same offsets as the sequential path"
+    );
+}
+
 /// Set a fixture file's mtime explicitly, so a test never depends on how a
 /// write advances a coarse filesystem's clock.
 fn set_mtime(path: &Path, stamp: SystemTime) {

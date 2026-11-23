@@ -11,6 +11,8 @@
 use std::io::Write;
 use std::time::{Duration, SystemTime};
 
+use futures_util::StreamExt;
+
 use super::mode::{open_inplace, open_rw};
 use super::temp::{DownloadedChunk, write_downloaded_chunk};
 use super::{
@@ -26,6 +28,16 @@ use girpr_chunk_verify::{
 };
 use girpr_repair_plan::FileId;
 use girpr_repair_policy::RepairMode;
+
+/// How many downloaded chunks one file may fetch and decode at once.
+///
+/// The bound is per in-flight chunk, not per staged byte: each window task
+/// streams straight into its own file handle at the chunk's offset, so no
+/// decoded chunk is held in RAM and the extra memory is one decoder's worth
+/// per task. Ordering-sensitive layouts (an overlap or the salvage tier) and
+/// the temp path never use this window — they keep the single-handle,
+/// single-chunk write order their correctness depends on.
+const CHUNK_FETCH_WINDOW: usize = 4;
 
 /// Repair one file **in place**.
 ///
@@ -459,6 +471,14 @@ async fn patch_chunks(
         captured,
         tier,
     } = patch;
+    // The layout is the disjointness proof. With no overlap, each chunk owns a
+    // byte range no other chunk ever writes, so its download can be fetched,
+    // decoded and written independently of the others. An overlap or the
+    // ordered tier keeps the strict sequential order: a source the order
+    // keeps alive can live inside another chunk's range.
+    let layout = file.layout();
+    let disjoint_downloads = tier == Tier::Staged && layout.overlaps.is_empty();
+
     // The order (ordered tier only): the direction that keeps the most
     // sources alive, and which sources those are. Only the sources the scan
     // found intact can be salvaged — the rest have to be downloaded.
@@ -485,9 +505,27 @@ async fn patch_chunks(
         }
     };
 
+    // For a disjoint staged layout, fetch+decode the download chunks in a
+    // bounded window before the write loop. Each task streams into its own
+    // handle at the chunk's offset; results are folded in chunk order so the
+    // per-file accounting and the first error are deterministic even though
+    // the network work overlaps. Every task is drained, so a reservation made
+    // by an in-flight chunk is settled even when an earlier one fails.
+    if disjoint_downloads {
+        let idxs: Vec<usize> = bad
+            .iter()
+            .copied()
+            .filter(|&i| captured[i].is_none())
+            .collect();
+        if !idxs.is_empty() {
+            window_download_chunks(ctx, file, prefix, final_path, &idxs, stats, writes).await?;
+        }
+    }
+
     // Ascending in the staged tier (forward writes), in the salvage order in
     // the ordered tier. One scratch buffer serves the whole patch: the chunks
-    // are written one at a time, so the copy pieces reuse it.
+    // written on this handle are written one at a time, so the copy pieces
+    // reuse it.
     let mut scratch = Vec::new();
     let mut write_order: Vec<usize> = (0..bad.len()).collect();
     if let Some(o) = &order
@@ -503,6 +541,10 @@ async fn patch_chunks(
             // A staged source: the bytes are already verified.
             write_at(ctx, writes, handle, dst, bytes)?;
             stats.chunks_reused += 1;
+        } else if disjoint_downloads {
+            // Already fetched, decoded, written and accounted for by the
+            // bounded window.
+            continue;
         } else if let Some(o) = &order
             && o.live[k]
             && let Some(src) = sources[i]
@@ -534,7 +576,6 @@ async fn patch_chunks(
     // A hole in the chunk coverage would keep the old file's stale bytes,
     // so it is zero-filled. The fill happens **after** the writes: in the
     // ordered tier a hole can still hold a source that a later chunk needs.
-    let layout = file.layout();
     for (offset, len) in &layout.gaps {
         zero_fill(ctx, writes, handle, *offset, *len)?;
     }
@@ -544,6 +585,97 @@ async fn patch_chunks(
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
     Ok(())
+}
+
+/// Fetch+decode+write the download chunks of a disjoint staged layout in a
+/// bounded window.
+///
+/// Each task opens its own read+write handle on the target and drives the
+/// existing [`write_downloaded_chunk`] path into it. The layout has already
+/// proved the chunks' ranges are disjoint, so the concurrent writes cannot
+/// reach the same bytes; the per-chunk reservation and digest checks are the
+/// same ones the sequential path uses, and the shared meter is atomic, so
+/// settlement is exact regardless of completion order.
+///
+/// Results are collected in input order and folded only after every task has
+/// finished. That keeps the recorded figures and the reported error
+/// deterministic, and it drains tasks whose reservation was already charged
+/// when a sibling failed — dropping them mid-flight would leak the charge
+/// against the download ceiling.
+async fn window_download_chunks(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    final_path: &std::path::Path,
+    idxs: &[usize],
+    stats: &mut ChunkStats,
+    writes: &mut FileWrites,
+) -> Result<()> {
+    let futures = idxs.iter().copied().map(|i| {
+        let c = &file.chunks[i];
+        async move {
+            // A fresh handle has its own cursor, so this task's seek and
+            // streamed writes cannot move another task's cursor. The file was
+            // opened (and possibly created) before the patch began.
+            let mut out = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(final_path)
+                .with_context(|| format!("open {} for chunk {}", final_path.display(), c.id))?;
+            // Per-task accumulators: the shared `stats`/`writes` are borrowed
+            // mutably by the caller and cannot be captured by a window task.
+            // Their settled bytes are folded below once all tasks are done.
+            let mut local_stats = ChunkStats::default();
+            let mut local_writes = FileWrites::default();
+            write_downloaded_chunk(DownloadedChunk {
+                ctx,
+                prefix,
+                c,
+                out: &mut out,
+                stats: &mut local_stats,
+                writes: &mut local_writes,
+            })
+            .await?;
+            Ok::<_, anyhow::Error>((local_stats, local_writes))
+        }
+    });
+
+    let results = bounded_window(CHUNK_FETCH_WINDOW, futures).await;
+    let mut first_error = None;
+    for result in results {
+        match result {
+            Ok((chunk_stats, chunk_writes)) => {
+                stats.download_bytes += chunk_stats.download_bytes;
+                stats.chunks_downloaded += chunk_stats.chunks_downloaded;
+                writes.settled += chunk_writes.settled;
+            }
+            Err(e) if first_error.is_none() => first_error = Some(e),
+            Err(_) => {}
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Drive futures `window` at a time and return their outputs in input order.
+///
+/// `buffered` keeps at most `window` futures in flight while preserving the
+/// order of results, and `collect` runs every future to completion. Both
+/// matter here: bounded overlap without losing deterministic accounting, and
+/// no in-flight future dropped with an unsettled reservation.
+async fn bounded_window<F, T, E>(
+    window: usize,
+    futures: impl IntoIterator<Item = F>,
+) -> Vec<Result<T, E>>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    futures_util::stream::iter(futures)
+        .buffered(window.max(1))
+        .collect()
+        .await
 }
 
 /// Step 5: verify, redo only the still-wrong chunks, then verify again.
@@ -2214,6 +2346,69 @@ mod tests {
         assert!(
             !trim_is_free(&huge_file, &huge, &[Some(u64::MAX)]),
             "a source that overflows r + s is outside the target, never inside"
+        );
+    }
+
+    /// The bounded window caps the number of futures alive at once and yields
+    /// their outputs in input order. Those are the two properties the download
+    /// window relies on: bounded network/decompression overlap, and
+    /// deterministic per-file accounting and first-error reporting even though
+    /// the fetches complete out of order.
+    #[tokio::test]
+    async fn the_chunk_window_bounds_in_flight_work_and_keeps_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let count = 12;
+        let futures: Vec<_> = (0..count)
+            .map(|i| {
+                let live = Arc::clone(&live);
+                let peak = Arc::clone(&peak);
+                async move {
+                    let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<_, ()>(i)
+                }
+            })
+            .collect();
+
+        let out = bounded_window(3, futures).await;
+        assert_eq!(out, (0..count).map(Ok).collect::<Vec<_>>());
+        assert!(
+            peak.load(Ordering::SeqCst) <= 3,
+            "more than three futures were in flight at once"
+        );
+        assert_eq!(live.load(Ordering::SeqCst), 0, "every future was drained");
+    }
+
+    /// The window drives every task to completion even when one of them fails,
+    /// so a chunk that reserved download bytes before a sibling failed still
+    /// settles its reservation. The first error is reported in input order.
+    #[tokio::test]
+    async fn the_chunk_window_drains_every_task_and_reports_the_first_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let finished = Arc::new(AtomicUsize::new(0));
+        let futures: Vec<_> = (0..6)
+            .map(|i| {
+                let finished = Arc::clone(&finished);
+                async move {
+                    tokio::task::yield_now().await;
+                    finished.fetch_add(1, Ordering::SeqCst);
+                    if i == 2 { Err(i) } else { Ok(i) }
+                }
+            })
+            .collect();
+
+        let out = bounded_window(2, futures).await;
+        assert_eq!(out[2], Err(2), "the failing chunk is reported in its slot");
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            6,
+            "no task was dropped with an unsettled reservation"
         );
     }
 }
