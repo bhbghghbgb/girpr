@@ -334,6 +334,37 @@ impl Bundle {
         }
     }
 
+    /// Replace one stored blob with a frame that decodes to one byte more than
+    /// the index declares, leaving the declaration (and the A11 layout it drives)
+    /// untouched. A6 re-derives with `zstd_measure_from` and the ceiling, so it is
+    /// unaffected by the declaration; the closure rebuild decodes with the
+    /// declared size and must surface the declared-size-mismatch error.
+    /// Re-checksum so the failure a reader meets is the decode, not A16.
+    fn under_declare_one_blob(&self) {
+        let index_path = self.root.join("chunks/index.json");
+        let index: ChunkIndex = read_json(&index_path);
+        let b = index
+            .blobs
+            .iter()
+            .find(|b| b.props.stored_path.is_some())
+            .expect("a stored blob");
+        let rel = b.props.stored_path.clone().expect("a stored path");
+        let declared = b.props.uncompressed_size;
+        let path = self.root.join(&rel);
+        let raw = std::fs::read(&path).expect("read the stored blob");
+        let mut body = zstd::decode_all(raw.as_slice()).expect("decode the original frame");
+        assert_eq!(
+            body.len() as u64,
+            declared,
+            "the fixture declares the frame's real length"
+        );
+        body.push(0xA5);
+        let bigger = zstd::encode_all(body.as_slice(), 1).expect("re-encode a bigger frame");
+        std::fs::write(&path, bigger).expect("write the under-declared blob");
+        let c = Checksums::scan(&self.root).expect("scan");
+        write_json(&self.root.join("verify/checksums.json"), &c);
+    }
+
     /// Flip one byte inside a stored blob's frame, leaving the magic intact.
     fn corrupt_one_blob_byte(&self) -> String {
         let index: ChunkIndex = read_json(&self.root.join("chunks/index.json"));
@@ -628,6 +659,43 @@ fn materialize_rebuilds_both_files_byte_for_byte() {
         pair.new.as_ref().unwrap().bytes,
         std::fs::read(b.root.join(format!("expected/{DLL}"))).unwrap()
     );
+}
+
+/// An under-declared blob surfaces the distinct declared-size-mismatch text
+/// through the whole `materialize` command, not just at the hash leaf. The
+/// bundle's selfcheck is left claiming A6 passes (A6 re-derives with the ceiling
+/// and is unaffected by the declaration), so the only cause of the closure
+/// failure is the frame disagreeing with its declaration. The shared `decode
+/// limit` token must remain in the surfaced text for downstream substring
+/// checks; a ceiling hit must not be reported for a merely lying index.
+#[test]
+fn materialize_surfaces_the_declared_size_mismatch_for_an_under_declared_blob() {
+    let b = Bundle::build("under-declared-blob");
+    b.under_declare_one_blob();
+    let plan = gircap::config::MaterializePlan {
+        artifact: b.root.clone(),
+        out: Some(b.scratch.join("materialized")),
+    };
+    let (summary, code) = block_on(gircap::run::materialize(plan))
+        .expect("materialize reaches a verdict rather than refusing the bundle");
+    assert_eq!(code, gircap::exit::ExitCode::AssertionFailed);
+    let detail = match summary.get("detail") {
+        Some(gircap::report::Val::Str(s)) => s.as_str(),
+        other => panic!("the closure failure is reported as a detail: {other:?}"),
+    };
+    assert!(
+        detail.contains("declared size mismatch"),
+        "the distinct mismatch text must surface: {detail}"
+    );
+    assert!(
+        detail.contains("decode limit"),
+        "the shared token must survive for downstream substring checks: {detail}"
+    );
+    assert!(
+        !detail.contains("decode ceiling exceeded"),
+        "a lying index is not a decompression bomb: {detail}"
+    );
+    assert!(detail.contains("chunk "), "names the chunk: {detail}");
 }
 
 /// `materialize` writes beside the bundle by default, and writing inside it is

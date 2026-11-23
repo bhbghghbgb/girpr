@@ -106,6 +106,60 @@ fn a_non_utf8_header_value_is_still_recorded_as_hex() {
     );
 }
 
+/// `content_type` is deliberately read from the joined response header map
+/// (`resp_headers.get("content-type")`), not from the first `Content-Type` wire
+/// value. For the single ASCII header a real origin sends the two are identical,
+/// which is why the recorded-JSON golden fixture cannot tell them apart. An
+/// origin that repeats the header exposes the difference: the derived value is
+/// every value joined by `\n`. Pin it here so a future reader does not "fix" it
+/// back to first-value semantics.
+#[tokio::test]
+async fn content_type_is_the_joined_value_when_the_origin_repeats_it() {
+    use girpr_loopback_mock::{Reply, ScriptedServer};
+    let reply = Reply::new(200, b"body")
+        .header("content-type", "application/json")
+        .header("content-type", "text/plain");
+    let server = ScriptedServer::start(vec![reply]);
+    let f = fetcher(1, Arc::new(RecordingSleep::default()));
+    let url = format!("{}/content-type", server.uri());
+
+    let obs = f
+        .observe(&url, Kind::Probe)
+        .await
+        .expect("a 200 is observed");
+    assert_eq!(obs.status, 200);
+    assert_eq!(
+        obs.content_type.as_deref(),
+        Some("application/json\ntext/plain"),
+        "content_type is the joined header value, not the first one"
+    );
+    // The provenance row records the same joined value under resp_headers, so
+    // the field the reader sees and the field the code branches on agree.
+    assert_eq!(
+        recorded(&f)
+            .resp_headers
+            .get("content-type")
+            .map(String::as_str),
+        Some("application/json\ntext/plain")
+    );
+}
+
+/// The other half of the same edge: a non-UTF-8 `Content-Type` value is recorded
+/// as lowercase hex, not dropped. The joined-map derivation is pinned end to end
+/// by [`content_type_is_the_joined_value_when_the_origin_repeats_it`]; this pins
+/// the encoding a non-UTF-8 value contributes to that joined map.
+#[test]
+fn content_type_from_non_utf8_bytes_is_hex_encoded_in_the_joined_value() {
+    let name: HeaderName = "content-type".parse().expect("header name");
+    let mut h = HeaderMap::new();
+    h.append(
+        name,
+        HeaderValue::from_bytes(&[0xff, 0x80]).expect("binary value"),
+    );
+    let map = header_map(&h);
+    assert_eq!(map.get("content-type").map(String::as_str), Some("ff80"));
+}
+
 // ---------------------------------------------------------------- URLs --
 
 // --------------------------------------------------------------- retry --
