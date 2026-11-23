@@ -13,7 +13,7 @@ machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | pending_review | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). |
+| T01 | Right-size the Tokio runtime and move repair file I/O off async workers | completed | 3fd12e3c, 7c488216 | §2 S-01/S-02 (109–141); assumption 1 (837–840); pair with T10. Deviation: whole file task runs on the blocking pool via Handle::block_on instead of per-call-site spawn_blocking; diagnostics keyed by owner thread (src/repair/diagnostics.rs). T10 offload must match (see persistent context). Reviewed A: no fix/revert needed. |
 | T02 | Fetch and decode chunks within one file in a bounded window | todo | | §2 S-03 (143–157); assumption 2 (841–842) |
 | T03 | Run the three independent plan-phase network fetches concurrently | todo | | §2 S-04 (158–172) |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | todo | | §2 S-05 (173–185) |
@@ -46,7 +46,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| — | — | — | no reviews yet |
+| A | T01 | done | No fix/revert needed; offload committed before runtime shrink and tests pass. Endorsed follow-up: stress test above blocking-pool cap; dropped: --jobs help clarification. |
 
 ## Follow-ups
 
@@ -56,7 +56,8 @@ planning review batches the survivors only after every task is settled.
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| — | — | — | none yet |
+| F01 | Stress-test a plan with `--jobs` above Tokio's default blocking-pool cap (512) to confirm queuing, no deadlock/starvation, and that the file-window bound holds | open | Endorsed by review A; ties to assumption 1 (report lines 837–840) and T01. |
+| F02 | Validate a full repair at `--jobs 1/4/64` (and on HDD where possible), not just the host-independent worker arithmetic | open | Non-blocking validation follow-up from review A; assumption 1 (report lines 837–840). |
 
 ## Persistent context
 
@@ -127,7 +128,12 @@ relevant task's `note` instead of silently proceeding):
   Tokio's blocking pool with `Handle::block_on`, so `stream_chunk_to` is already polled
   from a blocking context on the repair path; diagnostics are keyed by owner thread
   (`src/repair/diagnostics.rs`). T10 (NET-07) must keep its fetch-stream offload
-  consistent with this. See T01 note.
+  consistent with this and must not add a redundant `spawn_blocking` around
+  `stream_chunk_to` on that path, nor move it back onto runtime workers. See T01 note.
+- **Runtime / `--jobs` after T01.** Worker count is host-derived
+  (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
+  bounds the in-flight file window. Values above the blocking pool's default 512 cap
+  queue rather than add concurrency.
 - **No lingering references at cleanup.** No source, test, comment, manifest, doc
   table or commit message may reference `REFACTOR_PLAN/` or
   `docs/OPTIMIZATION_REPORT.md`.
