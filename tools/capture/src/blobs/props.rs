@@ -488,17 +488,23 @@ impl BlobProps {
         measured: Result<hash::Measure, String>,
         chunk: &SophonChunk,
     ) -> BlobProps {
-        let decoded_size = measured.as_ref().ok().map(|m| m.len);
-        let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
+        // `measured` is owned here, so take its fields by value rather than
+        // cloning the md5 and the error text out of a borrowed `Result`. The
+        // comparison is made before the digest moves into the row, which is the
+        // same `Some(&str)` comparison the borrowed form performed.
+        let (md5_decompressed, decode_error, decoded_size) = match measured {
+            Ok(m) => (Some(m.md5), None, Some(m.len)),
+            Err(e) => (None, Some(e), None),
+        };
+        let md5_decompressed_matches = md5_decompressed.as_deref() == Some(&chunk.uncompressed_md5);
         BlobProps {
-            md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
+            md5_decompressed: md5_decompressed.unwrap_or_default(),
             uncompressed_size: decoded_size.unwrap_or(0),
-            decode_error: measured.as_ref().err().cloned(),
+            decode_error,
             verified: Some(Verified {
                 raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
                 md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
-                md5_decompressed_matches: md5_decompressed.as_deref()
-                    == Some(&chunk.uncompressed_md5),
+                md5_decompressed_matches,
                 decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
             }),
             ..Self::skeleton(chunk, Some(&compressed))
