@@ -786,11 +786,14 @@ mod tests {
     }
 
     /// A body that never completes must hit the injected deadline in both JSON
-    /// paths. The deadline is a bounded, non-resetting window on the whole
-    /// buffered body — no bytes arrive here at all, so a resetting idle timer
-    /// would hang. The failure is transport-class, so it is retried with the
-    /// zero-wait test policy and finally reported with the deadline in the
-    /// error, not as a parse failure or a silent success.
+    /// paths. The origin announces 16 body bytes, sends two, then goes quiet,
+    /// so `resp.bytes()` can only finish by hitting the bound. That proves the
+    /// buffered read is bounded; pinning the non-resetting property needs a
+    /// separate fixture that keeps arriving in sub-deadline gaps (the fixed
+    /// window itself is specified on `JSON_BODY_IDLE` above). The failure is
+    /// transport-class, so it is retried with the zero-wait test policy and
+    /// finally reported with the deadline in the error, not as a parse failure
+    /// or a silent success.
     #[tokio::test]
     async fn both_json_paths_time_out_a_stalled_body() {
         let deadline = Duration::from_millis(60);
