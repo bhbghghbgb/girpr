@@ -228,7 +228,11 @@ fn open_and_scan(
             // The target cannot be opened for writing. That is not a failed
             // file: the temp path does not need write access to the target,
             // so the repair still happens — through the other path.
-            tracing::debug!(error = %format!("{e:#}"), "in-place open failed");
+            // `%format!("{e:#}")` would build the error chain even when debug
+            // is off; render it only for a listening subscriber.
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!(error = %format!("{e:#}"), "in-place open failed");
+            }
             return Ok(OpenScan::Finished(Inplace::Unavailable(
                 "the target cannot be opened for writing",
             )));

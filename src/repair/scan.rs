@@ -424,7 +424,11 @@ fn scan_one(
             // correct" verdict — that is what the repair would find too — but
             // the scan did not answer for it, so keep the reason for the
             // report and the phase line instead of leaving it at debug level.
-            tracing::debug!(file = %file.rel, error = %format!("{e:#}"), "scan: unreadable");
+            // `%format!("{e:#}")` would build the whole error chain even when
+            // debug is off; render it only for a listening subscriber.
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!(file = %file.rel, error = %format!("{e:#}"), "scan: unreadable");
+            }
             (
                 util::Scan::absent(dest_ranges.len(), source_ranges.len()),
                 Some(format!("{}: unreadable: {e:#}", file.rel)),

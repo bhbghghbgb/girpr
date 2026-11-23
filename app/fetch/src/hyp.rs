@@ -401,7 +401,12 @@ impl HypClient {
                             ));
                         }
                     };
-                    tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    // `%` fields take their value by value, so the full-body
+                    // lossy conversion would run on every response even with
+                    // trace off. Render it only when a subscriber is listening.
+                    if tracing::enabled!(tracing::Level::TRACE) {
+                        tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    }
                     let mut w: NodeWrapper = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
@@ -477,7 +482,10 @@ impl HypClient {
                             ));
                         }
                     };
-                    tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    // Same lazy-body rule as the HYP response line above.
+                    if tracing::enabled!(tracing::Level::TRACE) {
+                        tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    }
                     // The whole body is buffered, so a parse error is
                     // deterministic for these bytes: five backoffs cannot change
                     // it. Report it as a malformed response on the first attempt.
