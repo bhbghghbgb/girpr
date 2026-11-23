@@ -18,7 +18,7 @@ machine data or change log.
 | T03 | Run the three independent plan-phase network fetches concurrently | completed | 3ca00e39 | §2 S-04 (158–172); early-deprecated assumption (170–171) holds. Deviation: deprecated fetch now runs before the step 4.2 scope guard, so a scope typo may issue one extra best-effort advisory request before the same usage error. New public `ManifestBudget`; `fetch_latest`/`local_reuse_map` take a budget; `PlanInputs` gained `deprecated` — relevant to T11/T12. |
 | T04 | Parallelize purge walk/stat/delete while keeping deterministic log order | completed | ff48e189 | §2 S-05 (173–185); assumptions (183–184) hold. Walk stays serial; stat/delete parallel via bounded scoped threads (no new dependency); results in index slots, log lines emitted on caller thread in plan order; empty-dir sweep after all deletes. DirEntry carried into stat stage to keep Windows cached metadata (no extra syscall); tracing dispatcher is thread-local so scoped workers cannot log. |
 | T05 | Eliminate the duplicate plan/scan per-file stat pass | completed | 0b4031c5 | §2 S-06 (186–198). Reuse of scan data into DiskFigure::Measured rejected: scan uses follow-symlink `metadata` + bytes-read length, plan needs `symlink_metadata` is_file/length (classification + verdict mtime guard). Chose genuine overlap: plan stat task launched before scan awaited, JoinHandle held in PlanWork and awaited after limits gate; aborted on limit refusal. Relevant to T06. |
-| T06 | Reuse scan verdicts and remove double reads in the repair path | in_progress | | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849) |
+| T06 | Reuse scan verdicts and remove double reads in the repair path | pending_review | bcd10762, d45c3c49, 10394ad7 | §3 IO-01..IO-04 (202–251); §6 COR-04 (453–462); assumptions 3–4 (843–849). IO-01 guarded verdict shared with temp (byte-identical conditions); IO-02 single capture read into one reusable per-file chunk buffer; IO-04 layout() once, passed as &Layout; COR-04 reuse I/O fallback counter + info/warn (MD5 mismatch stays debug). IO-03 premise false: staged-source hash is a required TOCTOU re-check, kept and documented. Temp staging buffer holds one chunk, not charged to --max-ram-bytes (temp mode never used it); peak temp RSS rises by one chunk. Guard helpers moved to file/mod.rs; attempt_temp gained FileId; added RepairDiagnostics.reuse_io_fallbacks. F07 guard-equivalence fails — no code change. |
 | T07 | Add validated path joins and cache canonicalization | todo | | §3 IO-05/IO-06 (252–276); assumption 5 (850–852) |
 | T08 | Remove redundant post-phase mkdir syscalls and materialization | todo | | §3 IO-07/IO-08 (277–293) |
 | T09 | Bound streaming decode output and validate blob IDs | todo | | §4 MEM-01 (297–308); §5 NET-05/NET-06 (386–403); assumption 8 (859–861) |
@@ -64,7 +64,7 @@ planning review batches the survivors only after every task is settled.
 | F04 | Conditionally defer the deprecated prefetch when `path_scope.has_includes()` is active, restoring the "no advisory request on scope typo" property while keeping overlap in the common unscoped case | open | Endorsed by review B; low priority — the extra advisory request is harmless, usage error/message unchanged. |
 | F05 | Validate peak RSS under high `--jobs` with the 4x per-file decoder window to confirm tight `--max-ram-bytes` ceilings are not pressured by transient decoder scratch | open | Non-blocking validation follow-up from review B. |
 | F06 | Measure purge wall time at scale (10k+ orphans, SSD/HDD, both platforms) before claiming a cross-platform speedup | open | Endorsed by review C; on Windows the stat stage issues no syscall (cached DirEntry metadata), so only delete benefits there. |
-| F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | open | Endorsed by review C but fold into T06, not standalone; requires identical verdict `modified`/`file_len` guard semantics and symlink/dir classification. |
+| F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | open | Endorsed by review C but fold into T06, not standalone. T06 investigated: guard-equivalence fails (scan needs follow-symlink modified + bytes-read file_len; plan needs symlink_metadata is_file/length), so no code change — awaiting review D to drop/close. |
 
 ## Persistent context
 
@@ -147,6 +147,13 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **Repair-file API after T06.** Guarded verdict helpers live in `file/mod.rs` and take
+  a stat from the caller; `attempt_temp` takes a `FileId`; `RepairDiagnostics` gained a
+  public `reuse_io_fallbacks` counter. `file.layout()` is computed once per file and
+  passed as `&Layout`. The temp reuse staging buffer holds one chunk at a time and is
+  not charged to `--max-ram-bytes` (temp mode never used that budget), so peak temp RSS
+  rises by one chunk. The staged-source hash is a required TOCTOU re-check, not a
+  redundant double hash — do not remove it.
 - **Plan stat vs scan stat are not interchangeable (feeds T06).** `DiskPlan::new`
   needs `symlink_metadata` for is_file()/length; `scan_one` uses follow-symlink
   `metadata` plus a bytes-read length for the mtime verdict guard. Sharing one stat
