@@ -49,6 +49,7 @@ amount of work (see `REVIEW-CHECKPOINTS.md`).
 | A | T01 | done | No fix/revert needed; offload committed before runtime shrink and tests pass. Endorsed follow-up: stress test above blocking-pool cap; dropped: --jobs help clarification. |
 | B | T02, T03 | done | No fix/revert needed. Endorsed stress case with per-chunk timing and conditional deprecated prefetch deferral; dropped temp-mode windowing. |
 | C | T04, T05 | done | No fix/revert needed. Endorsed purge-scale measurement; endorsed scan-probe sharing only if folded into T06. |
+| D | T06 | done | No fix/revert needed. F07 closed (guard-equivalence fails); endorsed temp-RSS measurement follow-up. |
 
 ## Follow-ups
 
@@ -64,7 +65,8 @@ planning review batches the survivors only after every task is settled.
 | F04 | Conditionally defer the deprecated prefetch when `path_scope.has_includes()` is active, restoring the "no advisory request on scope typo" property while keeping overlap in the common unscoped case | open | Endorsed by review B; low priority — the extra advisory request is harmless, usage error/message unchanged. |
 | F05 | Validate peak RSS under high `--jobs` with the 4x per-file decoder window to confirm tight `--max-ram-bytes` ceilings are not pressured by transient decoder scratch | open | Non-blocking validation follow-up from review B. |
 | F06 | Measure purge wall time at scale (10k+ orphans, SSD/HDD, both platforms) before claiming a cross-platform speedup | open | Endorsed by review C; on Windows the stat stage issues no syscall (cached DirEntry metadata), so only delete benefits there. |
-| F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | open | Endorsed by review C but fold into T06, not standalone. T06 investigated: guard-equivalence fails (scan needs follow-symlink modified + bytes-read file_len; plan needs symlink_metadata is_file/length), so no code change — awaiting review D to drop/close. |
+| F07 | Let `scan_one` capture a `symlink_metadata`-derived `is_file`/`length` so one syscall serves plan and scan | dropped | T06 investigation confirmed guard-equivalence fails (scan needs follow-symlink modified + bytes-read file_len; plan needs symlink_metadata is_file/length); review D closed it. No code change. |
+| F08 | Measure peak temp-mode RSS with large reuse slices under tight `--max-ram-bytes`/`--max-write-bytes` to decide whether a bounded spool fallback is worth adding while keeping the single read | open | Endorsed by review D; one-chunk transient RAM is bounded but uncharged to the budget and unmeasured. |
 
 ## Persistent context
 
