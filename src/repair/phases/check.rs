@@ -3,6 +3,16 @@
 //!
 //! This is the one place that answers "is my install intact?" without touching
 //! it: no `config.ini` bump, no purge, no `*_tmp` sweep, no audio scan write.
+//!
+//! **With `--scan`, this answers the plan's question, not a fresh one.** The
+//! plan-phase scan already read every file once, so the check reuses those
+//! verdicts instead of hashing again — that is what makes `--check-only --scan`
+//! a single read of the install. Presence and length are still re-stat'd
+//! against the current disk, but the digest is the scan's: a same-length
+//! content change *after* the scan is deliberately not re-hashed and can be
+//! reported intact. An operator who needs an answer about the current bytes
+//! must run `--check-only` without `--scan`.
+//!
 //! The exit status is [`RunExit::Success`](crate::RunExit::Success) when clean
 //! and [`RunExit::CheckFailed`](crate::RunExit::CheckFailed) when any file
 //! fails size, MD5, or is unreadable. A check task that panics is a run failure
@@ -32,6 +42,13 @@ use girpr_repair_plan::{FileId, PlannedFile, RepairPlan};
 /// reading the files again: the scan already read them, and the answer it
 /// carries is the same one. That is what makes `--check-only --scan` a
 /// single read of the install.
+///
+/// The verdict here is the one the *plan-phase scan* produced, not a fresh
+/// read. Presence and length are checked against the disk; the digest is not
+/// re-hashed. A content change that keeps the length after the scan is
+/// therefore reported with the scan's digest and may yield a clean result.
+/// This is intentional — `--check-only --scan` answers the plan's question in
+/// one read. A fresh check of the current bytes must omit `--scan`.
 ///
 /// The checks are blocking filesystem reads, so each file is checked on the
 /// blocking pool and `jobs` bounds how many run at once. The results are folded
@@ -243,7 +260,9 @@ fn record_check(summary: &Summary, outcome: &CheckOutcome) {
 #[derive(Clone, Copy)]
 enum DigestSource<'a> {
     /// The plan-phase scan already hashed the file; its verdict also knows
-    /// which chunks are wrong where they belong.
+    /// which chunks are wrong where they belong. The digest is the scan's,
+    /// not a fresh read: a same-length change after the scan is not seen.
+    /// Presence and length are still re-checked against the disk.
     Scanned(&'a Verdict),
     /// The check hashes the file itself, and only after the presence and
     /// length checks pass, so an absent or wrongly sized file is never read.
@@ -1143,7 +1162,9 @@ mod tests {
     /// A scanned check trusts the scan's digest — it must not read the file a
     /// second time — but the presence and length checks still run against the
     /// disk, so a file that changed after the scan is still caught where those
-    /// checks can see it.
+    /// checks can see it. A content change that keeps the length is deliberately
+    /// *not* caught: `--check-only --scan` answers the plan's question in one
+    /// read, not a fresh question about the current bytes.
     #[test]
     fn a_scanned_check_uses_the_scan_digest_but_still_checks_the_length() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "scanned_trusts_digest");
