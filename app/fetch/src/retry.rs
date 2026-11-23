@@ -9,11 +9,12 @@
 //!
 //! A retry may need to keep work across attempts (a scratch buffer, a byte
 //! counter, a partially written file). [`RetryState`] and [`retry_state`] hand
-//! that state back to a slot the driver's closure and its futures share, so the
-//! attempt future can own it while it runs.
+//! that state to each attempt by value and take it back on a retry, so the
+//! attempt future owns it while it runs. The loop holds the pending state in a
+//! local slot; the driver is sequential, so no synchronization is needed.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use girpr_retry::{DelaySequence, RealSleep, Schedule, Sleep, ZeroSleep};
@@ -136,11 +137,12 @@ where
 /// taking it back on a retry.
 ///
 /// The shared leaf's delay sequence cannot carry a value from one attempt's
-/// answer into the next. The captured-mutation adapter keeps the state in a
-/// slot shared by the loop and its attempts: each attempt takes the state out,
-/// and a retry puts the state the attempt returned back for the next call. A
-/// `Done` or `Fatal` answer ends the loop with the state dropped; the waits are
-/// the same as [`retry`].
+/// answer into the next. Each attempt takes the state out of a local slot and a
+/// retry puts the state the attempt returned back for the next call. The driver
+/// is a single sequential loop — the attempt future is awaited before the slot
+/// is refilled — so no lock is needed: [`RetryState`] moves the state by value,
+/// there is no concurrent accessor. A `Done` or `Fatal` answer ends the loop
+/// with the state dropped; the waits are the same as [`retry`].
 #[allow(clippy::expect_used)] // the slot is always filled on entry and refilled on a retry
 pub async fn retry_state<T, S, F, Fut>(
     attempts: u32,
@@ -156,18 +158,16 @@ where
         return Err(anyhow::anyhow!("no attempts"));
     }
     let mut delays = backoff.build();
-    let slot = Arc::new(Mutex::new(Some(state)));
+    let mut slot = Some(state);
     for attempt_no in 1..=attempts {
         let carried = slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
             .expect("retry state present for the next attempt");
         match attempt(carried, attempt_no).await {
             RetryState::Done(v) => return Ok(v),
             RetryState::Fatal(e) => return Err(e),
             RetryState::Retry(next, e) => {
-                *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(next);
+                slot = Some(next);
                 if attempt_no >= attempts {
                     return Err(e.context(format!("after {attempts} attempts")));
                 }
