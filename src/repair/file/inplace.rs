@@ -136,6 +136,12 @@ async fn attempt_inplace_inner(
     // The eager/deferred trim decision.
     trim_dead_tail(file, &sources, &handle, final_path)?;
 
+    // The layout is pure and read-only: sort and index the chunks once here,
+    // then hand the same answer to the patch and the verify/redo tail. Each of
+    // those used to build its own `Vec<(u64, u64)>` and sort it, up to three
+    // times per file.
+    let layout = file.layout();
+
     // 3. the tier, and the staging that goes with it.
     let (tier, payload, _reservation) = choose_tier(ctx, file, &sources, &scan.source_ok, &bad);
     let captured = stage_sources(
@@ -162,13 +168,24 @@ async fn attempt_inplace_inner(
             bad: &bad,
             captured: &captured,
             tier,
+            layout: &layout,
         },
         stats,
     )
     .await?;
 
     // 5. verify, redo what is still wrong, verify again.
-    verify_and_retry(ctx, writes, &mut handle, &dest_ranges, file, prefix, stats).await
+    verify_and_retry(
+        ctx,
+        writes,
+        &mut handle,
+        &dest_ranges,
+        &layout,
+        file,
+        prefix,
+        stats,
+    )
+    .await
 }
 
 /// What [`open_and_scan`] ended with.
@@ -460,6 +477,7 @@ struct Patch<'a> {
     bad: &'a [usize],
     captured: &'a [Option<Vec<u8>>],
     tier: Tier,
+    layout: &'a girpr_repair_plan::Layout,
 }
 
 /// Step 4: write the wrong chunks, fill the holes, and end at the target size.
@@ -479,13 +497,13 @@ async fn patch_chunks(
         bad,
         captured,
         tier,
+        layout,
     } = patch;
     // The layout is the disjointness proof. With no overlap, each chunk owns a
     // byte range no other chunk ever writes, so its download can be fetched,
     // decoded and written independently of the others. An overlap or the
     // ordered tier keeps the strict sequential order: a source the order
     // keeps alive can live inside another chunk's range.
-    let layout = file.layout();
     let disjoint_downloads = tier == Tier::Staged && layout.overlaps.is_empty();
 
     // The order (ordered tier only): the direction that keeps the most
@@ -693,6 +711,7 @@ async fn verify_and_retry(
     writes: &mut FileWrites,
     handle: &mut std::fs::File,
     dest_ranges: &[util::ScanRange<'_>],
+    layout: &girpr_repair_plan::Layout,
     file: &PlannedFile,
     prefix: &str,
     stats: &mut ChunkStats,
@@ -744,7 +763,7 @@ async fn verify_and_retry(
     // The digest and, when the layout has an overlap, the verdicts the
     // terminal decision needs are the same read: the scan hashes the whole
     // file as it sweeps the ranges.
-    let (scan, checked) = read_after_redo(file, dest_ranges, |ranges| {
+    let (scan, checked) = read_after_redo(layout, dest_ranges, |ranges| {
         util::scan_reader(handle, ranges, &[])
     })?;
     let final_md5 = scan.file_md5;
@@ -753,7 +772,7 @@ async fn verify_and_retry(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel, file.md5, final_md5
         );
-        if redo_mismatch_is_terminal(file, &scan, checked) {
+        if redo_mismatch_is_terminal(layout, &scan, checked) {
             return Err(FinalDigestMismatch(message).into());
         }
         return Err(anyhow::anyhow!(message));
@@ -778,11 +797,11 @@ async fn verify_and_retry(
 /// number is missing or surplus answers, not correct ones — see
 /// [`redo_mismatch_is_terminal`].
 fn read_after_redo(
-    file: &PlannedFile,
+    layout: &girpr_repair_plan::Layout,
     dest_ranges: &[util::ScanRange<'_>],
     read: impl FnOnce(&[util::ScanRange<'_>]) -> Result<util::Scan>,
 ) -> Result<(util::Scan, usize)> {
-    let ranges = overlapping_ranges(file, dest_ranges);
+    let ranges = overlapping_ranges(layout, dest_ranges);
     let checked = ranges.len();
     Ok((read(&ranges)?, checked))
 }
@@ -803,10 +822,9 @@ fn read_after_redo(
 /// already known, and asking the scan for it again only hashes their bytes a
 /// second time.
 fn overlapping_ranges<'a>(
-    file: &PlannedFile,
+    layout: &girpr_repair_plan::Layout,
     dest_ranges: &'a [util::ScanRange<'a>],
 ) -> Vec<util::ScanRange<'a>> {
-    let layout = file.layout();
     if layout.overlaps.is_empty() {
         // No overlap: the layout is the whole proof, and there is no verdict
         // to ask for.
@@ -848,8 +866,12 @@ fn overlapping_ranges<'a>(
 /// which verdict belongs to which range is unknown. Both decide nothing and
 /// the mismatch keeps its retries — the same defensive shape
 /// [`verify_in_place`] uses for the chunks it has to redo.
-fn redo_mismatch_is_terminal(file: &PlannedFile, scan: &util::Scan, expected: usize) -> bool {
-    if file.layout().overlaps.is_empty() {
+fn redo_mismatch_is_terminal(
+    layout: &girpr_repair_plan::Layout,
+    scan: &util::Scan,
+    expected: usize,
+) -> bool {
+    if layout.overlaps.is_empty() {
         return true;
     }
     expected > 0 && scan.dest_ok.len() == expected && scan.dest_ok.iter().all(|&ok| ok)
@@ -1359,10 +1381,19 @@ mod tests {
         let mut writes = FileWrites::default();
         let mut stats = ChunkStats::default();
 
-        let err = verify_and_retry(&ctx, &mut writes, &mut handle, &[], &file, "", &mut stats)
-            .await
-            .err()
-            .expect("the empty file cannot carry a non-empty digest");
+        let err = verify_and_retry(
+            &ctx,
+            &mut writes,
+            &mut handle,
+            &[],
+            &file.layout(),
+            &file,
+            "",
+            &mut stats,
+        )
+        .await
+        .err()
+        .expect("the empty file cannot carry a non-empty digest");
         assert!(
             err.downcast_ref::<FinalDigestMismatch>().is_some(),
             "the file loop must see the deterministic mismatch as terminal: {err:#}"
@@ -1410,7 +1441,7 @@ mod tests {
         };
         let gapped_dest = [(0u64, 1u64, "md5-a"), (2, 1, "md5-b")];
         let mut reads = 0;
-        let (scan, checked) = read_after_redo(&gapped, &gapped_dest, |ranges| {
+        let (scan, checked) = read_after_redo(&gapped.layout(), &gapped_dest, |ranges| {
             reads += 1;
             assert!(
                 ranges.is_empty(),
@@ -1427,7 +1458,7 @@ mod tests {
         assert_eq!(reads, 1, "the post-redo tail reads the file exactly once");
         assert_eq!(checked, 0, "no range was asked for, so no verdict is read");
         assert!(
-            redo_mismatch_is_terminal(&gapped, &scan, checked),
+            redo_mismatch_is_terminal(&gapped.layout(), &scan, checked),
             "a gap is zero-filled and does not make the digest changeable"
         );
 
@@ -1435,7 +1466,7 @@ mod tests {
         // the next attempt would write nothing and repeat the same bytes.
         let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
         let mut reads = 0;
-        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |ranges| {
+        let (scan, checked) = read_after_redo(&overlapping.layout(), &overlap_dest, |ranges| {
             reads += 1;
             assert_eq!(
                 ranges.len(),
@@ -1457,7 +1488,7 @@ mod tests {
         );
         assert_eq!(checked, 3, "every overlapping range was asked for");
         assert!(
-            redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            redo_mismatch_is_terminal(&overlapping.layout(), &scan, checked),
             "identical duplicates cannot make a retry assemble different bytes"
         );
         // This is the branch that builds `FinalDigestMismatch`, so the file
@@ -1467,7 +1498,7 @@ mod tests {
         // A genuine overlap: at least one range cannot match, so the next
         // attempt may assemble different bytes.
         let mut reads = 0;
-        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+        let (scan, checked) = read_after_redo(&overlapping.layout(), &overlap_dest, |_ranges| {
             reads += 1;
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
@@ -1479,7 +1510,7 @@ mod tests {
         .unwrap();
         assert_eq!(reads, 1, "one pass decides either way");
         assert!(
-            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            !redo_mismatch_is_terminal(&overlapping.layout(), &scan, checked),
             "an overlapping plan whose ranges cannot all match keeps its retries"
         );
     }
@@ -1512,7 +1543,7 @@ mod tests {
         let dest = [(0u64, 4u64, "md5-a"), (2, 4, "md5-b"), (8, 4, "md5-c")];
 
         let mut reads = 0;
-        let (scan, checked) = read_after_redo(&file, &dest, |ranges| {
+        let (scan, checked) = read_after_redo(&file.layout(), &dest, |ranges| {
             reads += 1;
             assert_eq!(
                 ranges.len(),
@@ -1534,7 +1565,7 @@ mod tests {
         assert_eq!(reads, 1, "the narrowing costs no extra pass");
         assert_eq!(checked, 2, "the decision reads two verdicts");
         assert!(
-            redo_mismatch_is_terminal(&file, &scan, checked),
+            redo_mismatch_is_terminal(&file.layout(), &scan, checked),
             "the overlapping chunks match, so the mismatch is final"
         );
 
@@ -1579,7 +1610,7 @@ mod tests {
             (10, 4, "md5-d"),
         ];
 
-        let named = overlapping_ranges(&file, &dest);
+        let named = overlapping_ranges(&file.layout(), &dest);
         assert_eq!(
             named.len(),
             2,
@@ -1637,7 +1668,7 @@ mod tests {
 
         // The scan answers one verdict for one of the three overlapping
         // ranges. The two it did not answer are not passes.
-        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+        let (scan, checked) = read_after_redo(&overlapping.layout(), &overlap_dest, |_ranges| {
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
                 file_len: 2,
@@ -1648,12 +1679,12 @@ mod tests {
         .unwrap();
         assert_eq!(checked, 3, "the overlap needs a verdict for every range");
         assert!(
-            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            !redo_mismatch_is_terminal(&overlapping.layout(), &scan, checked),
             "a missing verdict is a missing answer, never a pass"
         );
 
         // And the same for the empty list: no verdict at all decides nothing.
-        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+        let (scan, checked) = read_after_redo(&overlapping.layout(), &overlap_dest, |_ranges| {
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
                 file_len: 2,
@@ -1663,7 +1694,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            !redo_mismatch_is_terminal(&overlapping.layout(), &scan, checked),
             "no verdict at all decides nothing"
         );
 
@@ -1675,7 +1706,7 @@ mod tests {
             source_ok: Vec::new(),
         };
         assert!(
-            redo_mismatch_is_terminal(&overlapping, &complete, checked),
+            redo_mismatch_is_terminal(&overlapping.layout(), &complete, checked),
             "every overlapping range matches, so the mismatch is final"
         );
     }
@@ -1705,7 +1736,7 @@ mod tests {
         // The wrong caller asks for no ranges for an overlapping layout. The
         // empty verdict list must not be read as "nothing can have changed".
         assert!(
-            !redo_mismatch_is_terminal(&overlapping, &empty, 0),
+            !redo_mismatch_is_terminal(&overlapping.layout(), &empty, 0),
             "no overlap is the layout's answer, not the empty range list's"
         );
 
@@ -1715,7 +1746,7 @@ mod tests {
             ..empty.clone()
         };
         assert!(
-            !redo_mismatch_is_terminal(&overlapping, &surplus, 1),
+            !redo_mismatch_is_terminal(&overlapping.layout(), &surplus, 1),
             "a surplus verdict means the answers cannot be mapped to the ranges"
         );
 
@@ -1725,7 +1756,7 @@ mod tests {
             ..empty.clone()
         };
         assert!(
-            redo_mismatch_is_terminal(&overlapping, &exact, 1),
+            redo_mismatch_is_terminal(&overlapping.layout(), &exact, 1),
             "the asked-for verdicts all match, so the mismatch is final"
         );
 
@@ -1739,7 +1770,7 @@ mod tests {
             chunks: vec![chunk_at("a", "md5-a", 0, 1), chunk_at("b", "md5-b", 2, 1)],
         };
         assert!(
-            redo_mismatch_is_terminal(&gapped, &empty, 0),
+            redo_mismatch_is_terminal(&gapped.layout(), &empty, 0),
             "no overlap is proof by itself"
         );
     }
