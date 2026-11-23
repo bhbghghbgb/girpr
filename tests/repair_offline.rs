@@ -358,8 +358,8 @@ async fn a_second_run_against_the_same_install_is_refused() {
         .expect_err("the second run is refused");
     assert_eq!(
         err.exit_code,
-        RunExit::Usage,
-        "a live lock is a usage refusal"
+        RunExit::Write,
+        "a live lock is a write-path refusal"
     );
     let msg = format!("{:#}", err.source);
     assert!(
@@ -380,8 +380,8 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let err = run(ctx).await.expect_err("a scoped run is refused too");
     assert_eq!(
         err.exit_code,
-        RunExit::Usage,
-        "a live lock is a usage refusal"
+        RunExit::Write,
+        "a live lock is a write-path refusal"
     );
 
     // The lock is released when the run that holds it ends; the file is left

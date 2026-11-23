@@ -896,9 +896,12 @@ fn prepare_install(
     readonly: bool,
 ) -> Result<(PathBuf, Option<util::PathRoot>, bool), RunFailure> {
     if !readonly {
+        // A failed mkdir (permission, full disk, a file in the path) is a
+        // write-path failure, not a bad request: name the path and let the OS
+        // error carry the reason.
         std::fs::create_dir_all(&ctx.game_dir)
-            .context("create game dir")
-            .map_err(RunFailure::usage)?;
+            .with_context(|| format!("create game dir {}", ctx.game_dir.display()))
+            .map_err(RunFailure::write)?;
     }
     // The directory may have been created by the line above, so canonicalize
     // again before any path is built from it. This is the phase's one
@@ -934,12 +937,15 @@ fn acquire_lock(
     // lock does not touch the filesystem again; a path that could not be
     // canonicalized still goes through the full form to keep the lock keyed by
     // a single spelling of the install.
+    // A live lock is a write-path refusal, not a bad request. The error from
+    // `held()` already names the holder; classifying it with the write
+    // failures stops automation reading a busy install as a bad invocation.
     let lock = if game_dir_canonical {
         lock::Lock::acquire_canonical(game_dir)
     } else {
         lock::Lock::acquire(game_dir)
     }
-    .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+    .map_err(|e| RunFailure::write(e.context("single-writer lock")))?;
     tracing::info!(path = %lock.path().display(), "single-writer lock taken");
     Ok(Some(lock))
 }
@@ -1292,8 +1298,8 @@ fn normalize_deprecated(list: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunExit, Summary, fetch_deprecated, finish, normalize_deprecated, note_stopped, phases,
-        spawn_blocking_traced,
+        RunCtx, RunExit, Summary, fetch_deprecated, finish, normalize_deprecated, note_stopped,
+        phases, prepare_install, spawn_blocking_traced,
     };
     use crate::Biz;
     use crate::hyp::HypClient;
@@ -1425,6 +1431,59 @@ mod tests {
             &list[..],
             ["old/legacy.dll", "kept/file.dat", "a/b/c.dat"],
             "the fetch drops unsafe names and hands on / forms in input order"
+        );
+    }
+
+    /// A failed `create_dir_all` is a write-path failure (exit 3), not a bad
+    /// request. The refusal carries the path and the underlying OS error so
+    /// the caller can tell a full disk or a permissions problem from a typo.
+    #[test]
+    fn a_failed_game_dir_creation_is_a_write_failure_naming_the_path() {
+        use std::collections::HashSet;
+
+        use crate::repair::scope::Limits;
+        use crate::report::OutputFormat;
+        use girpr_repair_plan::PathScope;
+        use girpr_repair_policy::RepairMode;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_repair", "mkdir_fail");
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"not a directory").expect("a regular file, not a directory");
+        let game_dir = blocker.join("child");
+
+        let ctx = RunCtx {
+            game_dir: game_dir.clone(),
+            biz: Biz::Hk4eGlobal,
+            audio: HashSet::new(),
+            audio_explicit: false,
+            path_scope: PathScope::default(),
+            limits: Limits::default(),
+            repair_mode: RepairMode::Auto,
+            repair_mode_explicit: false,
+            jobs: 1,
+            check_only: false,
+            scan: false,
+            purge_only: false,
+            fail_fast: false,
+            dry_run: false,
+            print_plan: false,
+            plan_out: None,
+            purge_after: false,
+            purge_before: false,
+            output: OutputFormat::Text,
+            hyp_base_override: None,
+            sophon_base_override: None,
+            backoff: BackoffPolicy::none(),
+        };
+
+        let err = prepare_install(&ctx, game_dir.clone(), false)
+            .expect_err("a path under a regular file cannot be created");
+        assert_eq!(err.exit_code, RunExit::Write);
+        let msg = format!("{err:#}");
+        assert!(msg.contains("create game dir"), "{msg}");
+        assert!(
+            msg.contains(game_dir.to_string_lossy().as_ref()),
+            "the refusal names the path: {msg}"
         );
     }
 }
