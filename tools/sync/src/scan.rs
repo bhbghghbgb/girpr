@@ -198,7 +198,13 @@ pub fn walk_live_with(
                         is_link,
                     });
                 } else if ft.is_file() {
-                    let meta = std::fs::metadata(ent.path())
+                    // `DirEntry` already carries this entry's metadata. On Windows
+                    // that is the copy cached during enumeration, so taking it here
+                    // saves a stat per regular file; elsewhere it is the same bytes a
+                    // fresh stat would give for a non-link entry. The link flag above
+                    // stays on `path_is_symlink`, which reads the entry, not the target.
+                    let meta = ent
+                        .metadata()
                         .with_context(|| format!("stat {}", ent.path().display()))?;
                     files += 1;
                     out.push(LiveEnt {
