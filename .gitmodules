@@ -1,0 +1,12 @@
+[submodule "reference-projects/Collapse"]
+	path = reference-projects/Collapse
+	url = https://github.com/CollapseLauncher/Collapse
+[submodule "reference-projects/Starward"]
+	path = reference-projects/Starward
+	url = https://github.com/Scighost/Starward
+[submodule "reference-projects/GenshinSlimmer"]
+	path = reference-projects/GenshinSlimmer
+	url = https://github.com/dnullptr/GenshinSlimmer.git
+[submodule "reference-projects/GI-Live-Hotfix-Downloader"]
+	path = reference-projects/GI-Live-Hotfix-Downloader
+	url = https://github.com/GesthosNetwork/GI-Live-Hotfix-Downloader.git

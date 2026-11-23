@@ -465,19 +465,23 @@ keep inputs is the natural moment to revisit the documented v1 purge scope.
 5. Verify on a real install: update Persistent with `girpr`, copy the game to a
    second machine, launch once, and confirm no verification/re-download occurs.
 
-## 6. Suggested additional reference clone
+## 6. Additional reference projects
 
 Two repositories found during this research are direct, independent documentation
 sources for the *in-game* half of the update mechanism, which neither existing
-reference project covers:
+reference project covers. Both are pinned as git submodules under `reference-projects/`:
 
 ```powershell
-git clone https://github.com/dnullptr/GenshinSlimmer.git reference-projects/GenshinSlimmer
-git clone https://github.com/GesthosNetwork/GI-Live-Hotfix-Downloader.git reference-projects/GI-Live-Hotfix-Downloader
+git submodule add https://github.com/dnullptr/GenshinSlimmer.git reference-projects/GenshinSlimmer
+git submodule add https://github.com/GesthosNetwork/GI-Live-Hotfix-Downloader.git reference-projects/GI-Live-Hotfix-Downloader
 ```
 
-* `GenshinSlimmer` documents the *verification state* (see §2.4).
-* `GI-Live-Hotfix-Downloader` generates `GenshinImpact_Data/Persistent` from live
+* `reference-projects/GenshinSlimmer` — reference for understanding the role of the
+  different persistent files written by the game client (the *verification state*,
+  §2.4).
+* `reference-projects/GI-Live-Hotfix-Downloader` — reference for understanding the
+  process of querying the dispatcher for hotfix versions and the download of
+  persistent hotfix files. It generates `GenshinImpact_Data/Persistent` from live
   dispatch and shows the revision format (`1284249_ba7ad33643` — number + hash)
   with separate `res` / `silence` / `data` revisions, i.e. the same triple Collapse
   writes as separate scalar files. It is a second, independent implementation of
@@ -524,6 +528,11 @@ Launcher code (all under `reference-projects/Collapse/` unless noted):
 * `reference-projects/Starward/src/Starward.RPC/GameInstall/{GameInstallService.cs,
   GamePackageService.cs,GameInstallHelper.cs}` — no-Persistent behaviour, config.ini
   and audio-marker writes.
+* `reference-projects/GenshinSlimmer/` — reference for understanding the role of the
+  different persistent files written by the game client (`README.md`,
+  `GenshinSlimmer.ps1`, §2.4).
+* `reference-projects/GI-Live-Hotfix-Downloader/` — reference for understanding the
+  dispatcher hotfix-version query and the download of persistent hotfix files.
 
 Web:
 

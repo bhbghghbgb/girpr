@@ -4,6 +4,21 @@ Scope: GI only (`hk4e_cn` / `hk4e_global` / `hk4e_bilibili`), Rust tool, automat
 (no UI), minimize disk usage before / during / after patching. Repair-capable: local files may be
 corrupt or any older version; after the run the game must be at the current live version.
 
+## Reference projects (`reference-projects/`)
+
+The checkouts under `reference-projects/` are read-only references for this design; no product code
+imports them. Each one covers a different part of the GI update/repair mechanism:
+
+- `reference-projects/Starward` — reference for HYP metadata discovery, Sophon chunk manifests and
+  the version-agnostic repair core this tool ports (§1, §4).
+- `reference-projects/Collapse` — reference for the extra-file purge and the dispatcher/persistent
+  manifest handling that Starward lacks (§1, §3; see also `docs/08`).
+- `reference-projects/GenshinSlimmer` — reference for understanding the role of the different
+  persistent files written by the game client (`docs/08` §2.4).
+- `reference-projects/GI-Live-Hotfix-Downloader` — reference for understanding the process of
+  querying the dispatcher for hotfix versions and the download of persistent hotfix files
+  (`docs/08` §6).
+
 ## 1. How each launcher discovers the file list
 
 ### Starward (`reference-projects/Starward`)
