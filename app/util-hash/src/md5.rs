@@ -1,11 +1,57 @@
 use anyhow::{Context, Result};
 use md5::Digest;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 const MD5_BUF: usize = 512 * 1024;
+
+// One read buffer per thread, allocated on first use and reused by every hash
+// and scan on that thread. Repair file tasks run to completion on a blocking
+// pool thread, so this is one allocation per worker rather than one per call.
+// Callers that own a task's whole lifetime can pass their own buffer to the
+// `*_with_buf` variants instead of going through this pool.
+std::thread_local! {
+    static MD5_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Borrow this thread's reusable hash buffer, sized to the production block.
+///
+/// The buffer is filled with zeros **once**, when a thread first hashes; every
+/// later call reuses those bytes and returns them to this pool, so there is no
+/// per-call allocation or zero-fill. The `_with_buf` helpers only ever read the
+/// first `n` bytes returned by `read`, so the untouched tail stays initialized
+/// and unobserved.
+fn with_md5_scratch<R>(f: impl FnOnce(&mut [u8]) -> R) -> R {
+    MD5_SCRATCH.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        if buf.len() < MD5_BUF {
+            buf.resize(MD5_BUF, 0);
+        }
+        f(&mut buf)
+    })
+}
+
+/// Read up to `want` bytes from `f` into `buf`'s spare capacity, without a
+/// zero-fill pass first.
+///
+/// `Read::read_to_end` over a bounded `Take` appends straight into the `Vec`'s
+/// spare capacity (it grows the length by only the bytes actually read), so a
+/// reserved scratch buffer is refilled without ever memsetting bytes the read
+/// immediately overwrites. `buf` keeps its allocation across calls. The `Take`
+/// limit makes a short source end the read exactly as a failed `read_exact`
+/// would; the caller checks the byte count.
+fn read_into_vec(f: &mut File, buf: &mut Vec<u8>, want: usize) -> Result<usize> {
+    let have = buf.capacity() - buf.len();
+    if have < want {
+        buf.try_reserve_exact(want - have)
+            .with_context(|| format!("reserve {want} bytes for a file read"))?;
+    }
+    let n = (&mut *f).take(want as u64).read_to_end(buf)?;
+    Ok(n)
+}
 
 // The strict 16-byte `Md5` newtype and the empty-file oracle come from the
 // shared digest mechanics. girpr keeps the semantics — `EMPTY` means "unknown,
@@ -74,6 +120,11 @@ struct RangeState {
     /// Bytes of this range actually read. A range that runs past the end of
     /// the file is short, and a short range is never correct.
     seen: u64,
+    /// The finished digest, stored once after the read loop. Keeping bytes
+    /// rather than the context means a range interned into both verdict lists
+    /// is finalized once, and `is_ok` never clones the whole per-range context
+    /// just to answer a verdict.
+    digest: Option<Md5>,
 }
 
 impl RangeState {
@@ -86,7 +137,13 @@ impl RangeState {
         let Some(expect) = self.expect else {
             return false;
         };
-        self.seen == self.len && Md5::from(self.ctx.clone().finalize()) == expect
+        self.seen == self.len && self.digest == Some(expect)
+    }
+
+    /// Finalize the digest once, after the last byte has been fed in.
+    fn finalize(&mut self) {
+        let ctx = std::mem::replace(&mut self.ctx, md5::Md5::new());
+        self.digest = Some(Md5::from(ctx.finalize()));
     }
 }
 
@@ -122,15 +179,16 @@ pub fn scan_file(path: &Path, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) 
 /// position is whatever the caller's last read or write left it at, and a
 /// scan that started there would hash half a file.
 pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
-    let mut buf = vec![0u8; MD5_BUF];
-    scan_reader_with_buf(f, dest, source, &mut buf)
+    with_md5_scratch(|buf| scan_reader_with_buf(f, dest, source, buf))
 }
 
 /// [`scan_reader`] with a caller-supplied read buffer.
 ///
 /// The sweep's arithmetic is driven by the bytes actually read, so a smaller
-/// buffer crosses the same range boundaries as the production-sized one.
-fn scan_reader_with_buf(
+/// buffer crosses the same range boundaries as the production-sized one. A
+/// caller that keeps one buffer for the life of a task can call this directly
+/// instead of going through the per-thread pool [`scan_reader`] uses.
+pub fn scan_reader_with_buf(
     f: &mut File,
     dest: &[ScanRange<'_>],
     source: &[ScanRange<'_>],
@@ -153,8 +211,13 @@ fn scan_reader_with_buf(
     // The sweep walks the file once, in 512 KiB blocks, and feeds every range
     // the bytes that fall inside it. The ranges are sorted by offset so the
     // block's overlap with them is a contiguous walk, not a scan of the list.
+    // Ranges reach us in chunk order (already ascending by offset) on the hot
+    // path, so detect that and skip the sort there; the public API still takes
+    // ranges in any order, so the sort remains for that case.
     let mut order: Vec<usize> = (0..ranges.len()).collect();
-    order.sort_by_key(|&i| (ranges[i].offset, ranges[i].len));
+    if !order.is_sorted_by_key(|&i| (ranges[i].offset, ranges[i].len)) {
+        order.sort_by_key(|&i| (ranges[i].offset, ranges[i].len));
+    }
 
     let mut whole = md5::Md5::new();
     let mut pos: u64 = 0;
@@ -198,6 +261,13 @@ fn scan_reader_with_buf(
         total += n as u64;
     }
 
+    // Every range is done now, including ones that ended before the last block
+    // and ones that ran past EOF. Finalize each digest exactly once here rather
+    // than cloning the whole context inside `is_ok` for every verdict.
+    for r in &mut ranges {
+        r.finalize();
+    }
+
     Ok(Scan {
         file_md5: Md5::from(whole.finalize()),
         file_len: total,
@@ -231,6 +301,7 @@ fn intern(
         expect,
         ctx: md5::Md5::new(),
         seen: 0,
+        digest: None,
     });
     index.insert(key, i);
     i
@@ -248,11 +319,17 @@ pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     // of truncating, and reserve fallibly: a corrupt manifest must fail this
     // read, not abort the process with an allocation failure.
     let len = usize::try_from(len).with_context(|| format!("range of {len} bytes is too large"))?;
+    // Read straight into reserved spare capacity instead of zeroing `len`
+    // bytes and overwriting all of them. `read_to_end` over a `Take(len)` stops
+    // at the range end (or at EOF), exactly as `read_exact` would; a short
+    // source still ends in an error, as before.
     let mut out = Vec::new();
     out.try_reserve_exact(len)
         .with_context(|| format!("reserve {len} bytes for a file range"))?;
-    out.resize(len, 0);
-    f.read_exact(&mut out)?;
+    let n = read_into_vec(f, &mut out, len)?;
+    if n != len {
+        anyhow::bail!("short read: wanted {len} bytes, got {n}");
+    }
     Ok(out)
 }
 
@@ -284,8 +361,7 @@ pub fn md5_file_digest(path: &Path) -> Result<Md5> {
 /// rule [`scan_reader`] follows. This is the verify gate that only needs the
 /// whole-file answer: it does not build a digest per range.
 pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
-    let mut buf = vec![0u8; MD5_BUF];
-    md5_reader_digest_with_buf(f, &mut buf)
+    with_md5_scratch(|buf| md5_reader_digest_with_buf(f, buf))
 }
 
 /// [`md5_reader_digest`] with a caller-supplied read buffer.
@@ -293,7 +369,9 @@ pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
 /// The seek is this function's reset contract — the digest always starts at
 /// the beginning of the file — and stays here. The shared reader sink owns
 /// only the read loop and the MD5 context; the buffer size is the caller's.
-fn md5_reader_digest_with_buf(f: &mut File, buf: &mut [u8]) -> Result<Md5> {
+/// A caller with a task-owned buffer can call this directly to avoid the
+/// per-thread pool [`md5_reader_digest`] uses.
+pub fn md5_reader_digest_with_buf(f: &mut File, buf: &mut [u8]) -> Result<Md5> {
     f.seek(SeekFrom::Start(0))?;
     let raw = girpr_digest::hash_reader(f, girpr_digest::Algorithms::MD5, buf)?;
     let md5 = raw
@@ -333,14 +411,15 @@ pub fn md5_reader_slice_digest(
     buf: &mut Vec<u8>,
 ) -> Result<Md5> {
     f.seek(SeekFrom::Start(offset))?;
-    if buf.len() < MD5_BUF {
-        buf.resize(MD5_BUF, 0);
-    }
     let mut ctx = md5::Md5::new();
     let mut remaining = len;
     while remaining > 0 {
-        let want = (remaining as usize).min(buf.len());
-        let n = f.read(&mut buf[..want])?;
+        let want = (remaining as usize).min(MD5_BUF);
+        // `buf` is a reusable scratch: clear it so each read fills the same
+        // capacity from index 0, and let `read_into_vec` append only the bytes
+        // that were actually initialized. No zero-fill, no per-call allocation.
+        buf.clear();
+        let n = read_into_vec(f, buf, want)?;
         if n == 0 {
             break;
         }
@@ -631,6 +710,118 @@ mod tests {
         std::fs::write(dir.join("f.dat"), b"abc").unwrap();
         let mut f = File::open(dir.join("f.dat")).unwrap();
         assert!(read_range(&mut f, 0, u64::MAX).is_err());
+    }
+
+    /// The spare-capacity read returns exactly the bytes the zero-filling
+    /// `resize` + `read_exact` path did, at every offset and length, including
+    /// one that crosses the reserve boundary. A short source is still an error.
+    #[test]
+    fn read_range_matches_the_zero_filled_reference_at_any_offset() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "read_range_equiv");
+        let data: Vec<u8> = (0..MD5_BUF + 4096).map(|i| (i % 251) as u8).collect();
+        let path = dir.join("f.dat");
+        std::fs::write(&path, &data).unwrap();
+        let mut f = File::open(&path).unwrap();
+        for &(offset, len) in &[
+            (0u64, 0u64),
+            (0, 1),
+            (7, 64),
+            (64, MD5_BUF as u64 + 123),
+            (MD5_BUF as u64 - 10, 20),
+        ] {
+            let got = read_range(&mut f, offset, len).unwrap();
+            let start = offset as usize;
+            let end = (start + len as usize).min(data.len());
+            let want = if start >= data.len() {
+                &[][..]
+            } else {
+                &data[start..end]
+            };
+            assert_eq!(got, want, "offset {offset} len {len}");
+        }
+        let mut f = File::open(&path).unwrap();
+        assert!(
+            read_range(&mut f, 0, data.len() as u64 + 1).is_err(),
+            "a short read is still an error"
+        );
+    }
+
+    /// The reusable slice scratch agrees byte for byte with the one-shot digest
+    /// for every buffer size, and never grows past one read block (it is not
+    /// charged with the whole requested range).
+    #[test]
+    fn slice_digest_agrees_across_scratch_buffer_sizes() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "slice_equiv");
+        let data: Vec<u8> = (0..MD5_BUF * 2 + 37).map(|i| (i % 251) as u8).collect();
+        let path = dir.join("f.dat");
+        std::fs::write(&path, &data).unwrap();
+        let cases = [
+            (0u64, 0u64),
+            (0, 3),
+            (5, MD5_BUF as u64 + 9),
+            (MD5_BUF as u64 + 1, 100),
+            (data.len() as u64 - 5, 50),
+        ];
+        for &(offset, len) in &cases {
+            let start = offset as usize;
+            let end = (start + len as usize).min(data.len());
+            let want = if start >= data.len() {
+                md5_digest(b"")
+            } else {
+                md5_digest(&data[start..end])
+            };
+            for cap in [1usize, 7, 64, MD5_BUF] {
+                let mut f = File::open(&path).unwrap();
+                let mut buf = Vec::with_capacity(cap);
+                let got = md5_reader_slice_digest(&mut f, offset, len, &mut buf).unwrap();
+                assert_eq!(got, want, "offset {offset} len {len} cap {cap}");
+                assert!(buf.len() <= MD5_BUF, "scratch stays one block");
+            }
+        }
+    }
+
+    /// Reusing the per-thread buffer (and interleaving other hash calls through
+    /// it) changes no scan answer, and a caller-owned small buffer agrees with
+    /// the pool byte for byte. The shared range at offset 0 is interned once and
+    /// lands in both verdict lists, which also pins the finalize-once change.
+    #[test]
+    fn repeated_scans_through_the_thread_pool_are_identical() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "reuse_pool");
+        let data = four_blocks();
+        let path = dir.join("f.dat");
+        std::fs::write(&path, &data).unwrap();
+        let dest = Ranges::of(&[
+            (0, 64, hex(&data[0..64])),
+            (64, 65, hex(&data[64..129])),
+            (129, 66, hex(&data[129..195])),
+        ]);
+        let source = Ranges::of(&[(64, 65, hex(&data[64..129])), (0, 64, hex(&data[0..64]))]);
+        let first = scan_file(&path, &dest.view(), &source.view()).unwrap();
+        for _ in 0..3 {
+            let _ = md5_file_digest(&path).unwrap();
+            let mut f = File::open(&path).unwrap();
+            let mut buf = vec![0u8; 64];
+            let with_buf =
+                scan_reader_with_buf(&mut f, &dest.view(), &source.view(), &mut buf).unwrap();
+            assert_eq!(with_buf, first, "a caller buffer and the pool agree");
+            let again = scan_file(&path, &dest.view(), &source.view()).unwrap();
+            assert_eq!(again, first, "reusing the thread buffer changes no answer");
+        }
+        assert_eq!(first.dest_ok, vec![true, true, true]);
+        assert_eq!(first.source_ok, vec![true, true]);
+    }
+
+    /// Two verdicts over the same bytes with different expectations stay
+    /// independent: finalizing each interned range once must not mix them up.
+    #[test]
+    fn the_same_bytes_with_two_expectations_get_independent_verdicts() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "two_expect");
+        std::fs::write(dir.join("f.dat"), b"abcdef").unwrap();
+        let good = hex(b"abcdef");
+        let wrong = hex(b"xyzxyz");
+        let dest = Ranges::of(&[(0, 6, good), (0, 6, wrong), (0, 6, hex(b"abcdef"))]);
+        let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
+        assert_eq!(scan.dest_ok, vec![true, false, true]);
     }
 
     /// Whole-file MD5 throughput, on the path the repair gate uses:
