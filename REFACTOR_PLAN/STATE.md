@@ -37,7 +37,7 @@ machine data or change log.
 | T22 | Parallelize gircap verification and capture assembly | completed | fbc134ba, b4bade9a | §9 TOOL-14/15 (740–752); assumption 17 (885–888) validated. rayon added to gircap. Verify A6 per-blob over rayon, collect (id,row) sorted by id; assembly CPU parallel but writes/rows/digests/path_map/tracing stay serial in index order (path_map proven Send+Sync but not actually shared — preserves write order, abort semantics and .json.tmp/close-out safety). New trade-off: all assembled results briefly resident. A6 row order relies on ChunkIndex::blobs being id-ordered (hand-edited unsorted index could change first-red-A6 headline). |
 | T23 | Make gircap declared-size mismatch errors honest | completed | 68e83ac5 | §9 TOOL-21 (796–805). Text-only fix: private zstd_over_limit_from; mismatch says "declared size mismatch ... declared expected size of N B", bomb says "decode ceiling exceeded ... C B hard ceiling"; both keep the "decode limit" token. Ceiling/limit enforcement code unchanged; zstd_measure_from untouched so verify A6 report strings/artifact bytes unaffected. Chose text distinction over measure-first (would change decode behavior/RSS). |
 | T24 | Cut girsync and sled2redb I/O and transaction cost | pending_review | b8d34961, 01f717e1 | §9 TOOL-02/16/18 (654–659, 756–762, 770–777). TOOL-02: ent.metadata() in live walk (walkdir 2.5.1 caches for regular files under follow_links(true)), path_is_symlink kept. TOOL-16: new public girsync_cache::hash::hash_file_with_buf; phase C uses rayon try_for_each_init (Result-returning closure) for per-worker buffers. TOOL-18 SKIPPED (stale): write_records already batches via cache.begin_write() + COMMIT_* + final commit, publishes via NamedTempFile; sled2redb untouched. |
-| T25 | Validate and, if safe, shrink the build-time dependency surface | in_progress | | §10 B-01 (818–823); assumption 13 (872–874) |
+| T25 | Validate and, if safe, shrink the build-time dependency surface | skipped | | §10 B-01 (818–823); assumption 13 (872–874) FAILS workspace-wide: cargo tree -i chrono --workspace shows gircap is a second direct chrono consumer with chrono-typed public API feeding girpr_time; removing chrono cannot preserve the four pinned spellings/tests or the API without an out-of-scope rewrite. No code change, no commit. |
 
 ## Reviews
 
@@ -185,6 +185,14 @@ relevant task's `note` instead of silently proceeding):
   (`available.max(2).saturating_add(1)`) and independent of `--jobs`; `--jobs` only
   bounds the in-flight file window. Values above the blocking pool's default 512 cap
   queue rather than add concurrency.
+- **chrono build surface (T25 skip).** `cargo tree -i chrono --workspace` shows two
+  direct consumers: `girpr-time` and `gircap`. gircap's public API (`ManifestInput.started`,
+  `capture_id`, `artifact_dir`) passes chrono `DateTime<Utc>` into `girpr_time`, so the
+  four pinned spellings in `crates/time` (compact_stamp, rfc3339_millis_z,
+  rfc3339_secs_z, rfc3339) and their chrono-typed tests/signatures are a coupled
+  contract. Any future replacement must be coordinated across both crates; trimming
+  chrono's `clock` feature from `girpr-time` alone would not remove the workspace-wide
+  shims because gircap independently enables `clock`. No code change was made.
 - **gircap concurrency / errors after T21-T23.** gircap depends on `rayon` 1.12.0
   (already in the lockfile via girsync). Verify A6 order relies on
   `ChunkIndex::blobs` being id-ordered by contract (test-pinned), not by `build()`; a
