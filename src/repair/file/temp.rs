@@ -388,24 +388,23 @@ fn capture_slice<R: Read + Seek>(
     while remaining > 0 {
         let piece = (remaining as usize).min(COPY_BUF);
         let start = buf.len();
-        buf.resize(start + piece, 0);
-        match sf.read(&mut buf[start..start + piece]) {
-            Ok(0) => {
-                buf.truncate(start);
-                return SliceCapture::Short {
-                    have: len - remaining,
-                    want: len,
-                };
-            }
-            Ok(n) => {
-                buf.truncate(start + n);
-                remaining -= n as u64;
-            }
+        // `read_to_end` over a bounded `Take` appends into the spare capacity
+        // reserved above: only bytes actually read are admitted to `buf`, with
+        // no zero-fill of the piece before the read overwrites it.
+        let n = match (&mut *sf).take(piece as u64).read_to_end(buf) {
+            Ok(n) => n,
             Err(e) => {
                 buf.truncate(start);
                 return SliceCapture::Failed(e);
             }
+        };
+        if n == 0 {
+            return SliceCapture::Short {
+                have: len - remaining,
+                want: len,
+            };
         }
+        remaining -= n as u64;
     }
     SliceCapture::Complete
 }
@@ -1360,6 +1359,28 @@ mod tests {
         assert!(matches!(outcome, SliceCapture::Short { have: 4, want: 8 }));
         assert_eq!(reader.seeks.len(), 1, "a short slice does not seek back");
         assert_eq!(reader.bytes_read, 4, "only the available bytes were read");
+    }
+
+    /// The spare-capacity capture returns exactly the slice bytes with no
+    /// zero-fill and no stale tail, and reuses one buffer across calls.
+    #[test]
+    fn a_captured_slice_contains_only_the_bytes_that_were_read() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "capture_spare");
+        let src = dir.join("source.bin");
+        let data: Vec<u8> = (0..COPY_BUF + 16).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let mut f = File::open(&src).unwrap();
+        // Pre-filled with garbage: `clear` resets the length and the read must
+        // admit only initialized bytes, never a padding or stale byte.
+        let mut buf = vec![0xAAu8; 8];
+
+        let outcome = capture_slice(&mut f, 3, (COPY_BUF + 4) as u64, &mut buf);
+        assert!(matches!(outcome, SliceCapture::Complete));
+        assert_eq!(buf, &data[3..3 + COPY_BUF + 4]);
+
+        let outcome = capture_slice(&mut f, 0, 5, &mut buf);
+        assert!(matches!(outcome, SliceCapture::Complete));
+        assert_eq!(buf, &data[..5], "no stale bytes from the longer slice");
     }
 
     /// COR-04: an unreadable reuse source is an unexpected I/O failure and is
