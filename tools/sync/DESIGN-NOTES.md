@@ -787,8 +787,9 @@ arm's exact-match rule ever stops being exact, this is where it changes.
 **Do not add `bitflags` (or any dependency) for `AlgoSet`.** `bitflags` is already
 in `Cargo.lock` transitively, so it would cost nothing to compile — which is
 exactly why it is worth refusing. `AlgoSet` is a newtype whose `Debug`
-has to be hand-written anyway to keep printing `["md5", "sha256"]`, and this crate
-hand-rolls `RwLimits`, `StatTrust` and `CasePairing` in preference to derives.
+has to be hand-written anyway to keep printing `["md5", "sha256", "xxhash64"]`,
+and this crate hand-rolls `RwLimits`, `StatTrust` and `CasePairing` in preference
+to derives.
 Consistency wins, and a bitset crate is not a rule the crate can enforce for us.
 
 **Do not weaken `plan_pairs`' coverage check or `pair_verdict`'s `unverifiable`

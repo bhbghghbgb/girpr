@@ -86,10 +86,10 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run] [...]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run] [...]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 **Each occurrence of a hash flag names one algorithm**, and the flag is
@@ -238,7 +238,7 @@ by doing *less* would be wrong.
 
 ### `--hash-all-of` / `--hash-any-of`
 
-Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive, and
+Both are repeatable (`md5`, `sha256`, `xxhash64`; default `md5`) and mutually exclusive, and
 **each occurrence names one algorithm** — `--hash-all-of md5 --hash-all-of sha256`
 asks for two, and `--hash-all-of md5 sha256` is refused before the run starts.
 They answer one question — *how many of the named algorithms must a comparison be able
@@ -388,7 +388,7 @@ same disagreement is logged as an event whose message is
 The two are different strings and answer different questions — a parser reads
 the event's fields, and the error text is what the run says as it fails. The
 algorithm named is the **first in canonical order** among those that disagreed
-(`md5` before `sha256`), never the order the flags were typed in: the copy
+(`md5`, then `sha256`, then `xxhash64`), never the order the flags were typed in: the copy
 computes and judges a *set* of algorithms, and a set carries no order, so
 `--hash-all-of sha256 --hash-all-of md5` still names `md5` first. It is the same
 fixed order the `digest-differs` tag uses, so a parser can switch on the algorithm
@@ -725,8 +725,8 @@ Worth knowing:
 
 `digest-differs` names the algorithms that **actually disagreed**, which under
 `--hash-any-of` is not the list you asked for — the planner settles a pair with one
-digest, and the tag says which. The list is always in a **fixed order** (`md5` before
-`sha256`), not the order the flags were typed, so
+digest, and the tag says which. The list is always in a **fixed order** (`md5`,
+then `sha256`, then `xxhash64`), not the order the flags were typed, so
 `--hash-all-of sha256 --hash-all-of md5` reports `digest-differs:md5+sha256`. That
 makes the tag a function of the disagreement rather than of how two flags were
 ordered, which is what lets a parser switch on it. A failed copy's verify message

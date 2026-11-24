@@ -115,6 +115,33 @@ fn update_populates_every_algorithm_under_any_of() {
     );
 }
 
+/// **`xxhash64` is a supported flag value, not a typo that survives as a foreign
+/// row.** Both flags accept it, `update` stores it in the eight-byte typed slot,
+/// and the bytes are the published XXH64 vector for an empty file.
+#[test]
+fn xxhash64_is_accepted_by_both_flags_and_stored_as_a_digest() {
+    let t = temp_root("hm_xxhash64_flag");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"");
+    let d = dir.display().to_string();
+
+    for flag in ["--hash-all-of", "--hash-any-of"] {
+        let (code, stderr) = bin(&["update", "--dir", &d, flag, "xxhash64"]);
+        assert_eq!(code, 0, "{flag} accepts xxhash64: {stderr}");
+    }
+
+    let got = &recs_of(&dir)["a.txt"].hashes;
+    assert_eq!(
+        got.get_algo(HashAlg::Xxhash64),
+        Some(&[0xef, 0x46, 0xdb, 0x37, 0x51, 0xd8, 0xe9, 0x99][..]),
+        "the empty-file XXH64 vector, as raw big-endian bytes"
+    );
+    assert!(
+        got.get_algo(HashAlg::Md5).is_none(),
+        "only xxhash64 was asked for"
+    );
+}
+
 /// One in-process invocation: exit code and the error text a caller reads on
 /// stderr — clap's parse-error text or the `anyhow` string `main` logs as fatal.
 fn bin(args: &[&str]) -> (i32, String) {

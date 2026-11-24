@@ -40,6 +40,7 @@ impl Digests {
             sink: Sink::new(Algorithms::new(
                 algos.contains(HashAlg::Md5),
                 algos.contains(HashAlg::Sha256),
+                algos.contains(HashAlg::Xxhash64),
             )),
         }
     }
@@ -51,16 +52,17 @@ impl Digests {
     }
 
     /// The digests of everything fed so far. Values are **raw** bytes (16 for
-    /// md5, 32 for sha256), which is what the cache stores.
+    /// md5, 32 for sha256, 8 for xxhash64), which is what the cache stores.
     ///
     /// Assigned to the slots directly rather than through `insert_named`: the
-    /// sink knows exactly which algorithm each of its two halves is, so there
+    /// sink knows exactly which algorithm each of its halves is, so there
     /// is no name to route and no decision to get wrong.
     pub fn finish(self) -> DigestSet {
         let raw = self.sink.finish();
         DigestSet {
             md5: raw.md5,
             sha256: raw.sha256,
+            xxhash64: raw.xxhash64,
             ..Default::default()
         }
     }
@@ -69,8 +71,9 @@ impl Digests {
 /// Digest `path` with every requested algorithm in a single pass.
 ///
 /// An empty `algos` returns an empty set without touching the file.
-/// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
-/// stores them as-is instead of hex, halving hash disk cost.
+/// Values are **raw** digest bytes (16 for md5, 32 for sha256, 8 for
+/// xxhash64): the cache stores them as-is instead of hex, halving hash disk
+/// cost.
 pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<DigestSet> {
     // Before any buffer is allocated: with nothing requested there is nothing to
     // digest, and opening the file at all would turn a stat-only decision into a
