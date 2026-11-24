@@ -89,6 +89,20 @@ pub fn first_out_of_scope_marker<'a>(
         .map(|m| m.path.as_str())
 }
 
+/// First **mirror** the active path scope hides, if any (C7(d)).
+///
+/// The post phase writes mirrors as well as markers, so the usage guard must
+/// cover every rel it publishes, not just the rendered marker paths.
+pub fn first_out_of_scope_mirror<'a>(
+    mirrors: &'a [(String, Vec<u8>)],
+    visible: impl Fn(&str) -> bool,
+) -> Option<&'a str> {
+    mirrors
+        .iter()
+        .find(|(rel, _)| !visible(rel))
+        .map(|(rel, _)| rel.as_str())
+}
+
 /// First **hotfix** asset the active path scope hides, if any (C7(f)).
 ///
 /// A new-path row in `StreamingAssets` does not carry a revision claim, so it
@@ -103,17 +117,22 @@ pub fn first_out_of_scope_hotfix<'a>(
         .map(|a| a.rel.as_str())
 }
 
-/// The combined C7 decision: a marker outside the scope is a usage error;
-/// a hotfix path outside the scope suppresses markers and mirrors while the
-/// in-scope files are still repaired.
+/// The combined C7 decision: a marker or mirror outside the scope is a usage
+/// error, because the post phase writes both; a hotfix path outside the scope
+/// suppresses markers and mirrors while the in-scope files are still repaired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeDecision<'a> {
     Proceed,
     MarkersOutOfScope(&'a str),
+    MirrorOutOfScope(&'a str),
     HotfixOutOfScope(&'a str),
 }
 
-/// Apply the two scope guards in their pinned order.
+/// Apply the scope guards in their pinned order.
+///
+/// Every file the post phase writes is covered: rendered markers first, then
+/// mirrors, then the hotfix assets whose partial install would make a revision
+/// claim false.
 pub fn scope_decision<'a>(
     plan: &'a PersistentPlan,
     markers: &'a [MarkerSet],
@@ -121,6 +140,8 @@ pub fn scope_decision<'a>(
 ) -> ScopeDecision<'a> {
     if let Some(path) = first_out_of_scope_marker(markers, &visible) {
         ScopeDecision::MarkersOutOfScope(path)
+    } else if let Some(path) = first_out_of_scope_mirror(&plan.mirrors, &visible) {
+        ScopeDecision::MirrorOutOfScope(path)
     } else if let Some(path) = first_out_of_scope_hotfix(&plan.assets, &visible) {
         ScopeDecision::HotfixOutOfScope(path)
     } else {
@@ -264,7 +285,10 @@ mod tests {
                     BaseTree::StreamingAssets,
                 ),
             ],
-            mirrors: vec![],
+            mirrors: vec![(
+                "GenshinImpact_Data/Persistent/res_versions_persist".into(),
+                b"raw manifest".to_vec(),
+            )],
             marker_paths: markers.iter().map(|m| m.path.clone()).collect(),
             expected_rels: vec![],
             total_bytes: 2,
@@ -286,6 +310,13 @@ mod tests {
             scope_decision(&plan, &markers, hide_hotfix),
             ScopeDecision::HotfixOutOfScope("GenshinImpact_Data/Persistent/hotfix.dat")
         );
+        // A hidden mirror is a usage error too: post writes it just like a
+        // marker, and an out-of-scope write is never allowed.
+        let hide_mirror = |rel: &str| !rel.contains("_versions_persist");
+        assert_eq!(
+            scope_decision(&plan, &markers, hide_mirror),
+            ScopeDecision::MirrorOutOfScope("GenshinImpact_Data/Persistent/res_versions_persist")
+        );
         let hide_new = |rel: &str| !rel.contains("StreamingAssets/new.dat");
         assert_eq!(
             scope_decision(&plan, &markers, hide_new),
@@ -294,6 +325,10 @@ mod tests {
         assert_eq!(
             first_out_of_scope_marker(&markers, |_: &str| false),
             Some(markers[0].path.as_str())
+        );
+        assert_eq!(
+            first_out_of_scope_mirror(&plan.mirrors, |_: &str| false),
+            Some("GenshinImpact_Data/Persistent/res_versions_persist")
         );
     }
 

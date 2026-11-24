@@ -1001,3 +1001,205 @@ async fn a_damaged_marker_makes_check_only_exit_four() {
     assert_eq!(summary.flags.persistent, Some("listed"));
     mock.stop();
 }
+
+// ---------------------------------------------------------------------------
+// review fixes: post-repair base hash, mirror scope, exit precedence
+// ---------------------------------------------------------------------------
+
+/// C7(d) also covers the mirrors post writes: excluding a mirror while all
+/// markers remain in scope is a usage error (exit 1), not an out-of-scope write.
+#[tokio::test]
+async fn a_mirror_file_out_of_scope_exits_one() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let server = manifest_server(RES);
+    let dir = temp_dir("persistent_mirror_scope");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, dispatch_for(&server, RES));
+    ctx.path_scope = scope(
+        &["GenshinImpact_Data/Persistent/*"],
+        &["GenshinImpact_Data/Persistent/*_versions_persist"],
+    );
+
+    let err = run(ctx)
+        .await
+        .expect_err("a mirror post would write must be in scope");
+    assert_eq!(err.exit_code, RunExit::Usage);
+    let text = format!("{err:#}");
+    assert!(text.contains("mirror file"), "{text}");
+    assert!(text.contains("outside the active path scope"), "{text}");
+    mock.stop();
+}
+
+/// A fixture whose one base file is the streaming source the persistent marker
+/// hashes. The repair loop can therefore correct or create it before post.
+fn streaming_source_fixture(source: &[u8]) -> girpr_test_fixtures::GameFixture {
+    build_fixture_spec(&girpr_test_fixtures::FixtureSpec::new(vec![
+        girpr_test_fixtures::FileSpec::new(
+            "GenshinImpact_Data/StreamingAssets/res_versions_streaming",
+            vec![girpr_test_fixtures::ChunkSpec::new(
+                "stream_chunk",
+                source.to_vec(),
+                0,
+            )],
+        ),
+    ]))
+}
+
+fn streaming_source_path(dir: &Path) -> PathBuf {
+    dir.join("GenshinImpact_Data/StreamingAssets/res_versions_streaming")
+}
+
+/// A damaged streaming source is corrected by the base repair. The published
+/// hash must describe the repaired bytes, not the pre-repair bytes the plan
+/// read while rendering the marker.
+#[tokio::test]
+async fn a_repaired_streaming_source_publishes_the_fresh_base_hash() {
+    let source = b"res_versions_streaming bytes";
+    let mock = MockServer::start(streaming_source_fixture(source), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_fresh_hash_repaired_source");
+    let stale = vec![b'x'; source.len()];
+    write_game_file(&dir, &hotfix_rel(), HOTFIX_A);
+    std::fs::create_dir_all(streaming_source_path(&dir).parent().unwrap()).unwrap();
+    std::fs::write(streaming_source_path(&dir), &stale).unwrap();
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        std::fs::read(streaming_source_path(&dir)).unwrap(),
+        source,
+        "the base repair corrected the damaged source"
+    );
+    assert_eq!(
+        std::fs::read(persistent_file(&dir, "base_res_version_hash")).unwrap(),
+        md5hex(source).as_bytes(),
+        "the marker describes the repaired bytes"
+    );
+    assert_ne!(
+        std::fs::read(persistent_file(&dir, "base_res_version_hash")).unwrap(),
+        md5hex(&stale).as_bytes(),
+        "the pre-repair hash is never published"
+    );
+    assert_eq!(
+        summary.flags.persistent_base_hash, None,
+        "the source exists, so nothing is omitted"
+    );
+    assert!(
+        !line(&summary).contains("persistent_base_hash=omitted"),
+        "{}",
+        line(&summary)
+    );
+    mock.stop();
+}
+
+/// On a fresh install the plan omits the base hash marker (C16), but the base
+/// repair creates the source. Post adds the marker and clears the omit flag.
+#[tokio::test]
+async fn a_streaming_source_created_by_repair_adds_the_base_hash_marker() {
+    let source = b"created by the base repair";
+    let mock = MockServer::start(streaming_source_fixture(source), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_fresh_hash_created_source");
+    write_game_file(&dir, &hotfix_rel(), HOTFIX_A);
+    // No streaming source on disk: the plan renders only the eight C16 markers.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        std::fs::read(streaming_source_path(&dir)).unwrap(),
+        source,
+        "the repair created the source"
+    );
+    assert_eq!(
+        std::fs::read(persistent_file(&dir, "base_res_version_hash")).unwrap(),
+        md5hex(source).as_bytes(),
+        "the marker that C16 omitted at plan time is published"
+    );
+    assert_eq!(
+        summary.flags.persistent_base_hash, None,
+        "the omit status changed and SUMMARY follows it"
+    );
+    assert!(
+        !line(&summary).contains("persistent_base_hash=omitted"),
+        "{}",
+        line(&summary)
+    );
+    mock.stop();
+}
+
+/// Check-only re-reads the same source, so it agrees with the freshly published
+/// block instead of comparing against the bytes the plan saw.
+#[tokio::test]
+async fn check_only_agrees_with_the_published_fresh_base_hash() {
+    let source = b"res_versions_streaming bytes";
+    let mock = MockServer::start(streaming_source_fixture(source), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_check_fresh_hash");
+    let stale = vec![b'x'; source.len()];
+    write_game_file(&dir, &hotfix_rel(), HOTFIX_A);
+    std::fs::create_dir_all(streaming_source_path(&dir).parent().unwrap()).unwrap();
+    std::fs::write(streaming_source_path(&dir), &stale).unwrap();
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    let (_, code) = run(ctx).await.expect("the repair completes");
+    assert_eq!(code, RunExit::Success);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.check_only = true;
+    let (summary, code) = run(ctx).await.expect("the check completes");
+    assert_eq!(code, RunExit::Success, "the published block is intact");
+    assert_eq!(summary.flags.persistent, Some("listed"));
+    mock.stop();
+}
+
+/// A failed persistent file and a later ceiling stop are both visible, but the
+/// failure wins the exit code: 3, not 5. `stopped=` still names the ceiling.
+#[tokio::test]
+async fn a_failed_file_outranks_a_later_ceiling_stop() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx.clone(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let corrupt = vec![0xabu8; 64];
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, &corrupt)]);
+    let dir = temp_dir("persistent_failure_beats_ceiling");
+    // A corrupt hotfix fails before the base repair; those base files need
+    // writes, so the write ceiling stops them a moment later.
+    for f in &fx.files {
+        write_game_file(&dir, &f.rel, b"not the game data");
+    }
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.limits.write_bytes = Some(1);
+
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
+    assert_eq!(code, RunExit::Write, "a failed file is exit 3");
+    assert_eq!(summary.flags.persistent, Some("failed"));
+    assert_eq!(summary.flags.persistent_failed, Some(1));
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-write-bytes"),
+        "the ceiling is still recorded"
+    );
+    assert!(
+        line(&summary).contains("stopped=--max-write-bytes"),
+        "{}",
+        line(&summary)
+    );
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the post-phase is skipped on failure or ceiling"
+    );
+    mock.stop();
+}

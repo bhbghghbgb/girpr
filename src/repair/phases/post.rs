@@ -32,7 +32,7 @@ use crate::util::path::{
 };
 
 use super::metadata::Meta;
-use crate::repair::persistent::{PersistentState, Suppression};
+use crate::repair::persistent::{self, PersistentState, Suppression};
 use crate::repair::purge;
 use crate::repair::spawn_blocking_traced;
 use girpr_repair_plan::{PathScope, PurgeKeys, PurgePlan};
@@ -59,9 +59,9 @@ pub async fn run(
     purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    summary: &Summary,
+    summary: &mut Summary,
     deprecated: &Arc<[String]>,
-    persistent: Option<&crate::repair::persistent::PersistentState>,
+    persistent: Option<&PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let timer = crate::phase::PhaseTimer::start("post");
     match run_inner(
@@ -93,9 +93,9 @@ async fn run_inner(
     purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    summary: &Summary,
+    summary: &mut Summary,
     deprecated: &Arc<[String]>,
-    persistent: Option<&crate::repair::persistent::PersistentState>,
+    persistent: Option<&PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
     // The deprecated list can be long and every entry is a stat plus a delete:
@@ -125,7 +125,14 @@ async fn run_inner(
     // returned above, so it publishes nothing. A failed marker or mirror is a
     // write failure, which skips the bump: the version must never advance over
     // an incomplete verification block.
-    publish_persistent(ctx, game_dir, persistent, dry)?;
+    publish_persistent(
+        ctx,
+        game_dir,
+        &meta.config.exe_file_name,
+        persistent,
+        dry,
+        summary,
+    )?;
     // `config.ini` is bumped last so the on-disk version only
     // advances once the bytes are in place. A dry run never put any bytes in
     // place, so it stops here: the mode lists what the phase would do and must
@@ -172,8 +179,10 @@ async fn run_inner(
 fn publish_persistent(
     ctx: &RunCtx,
     game_dir: &Path,
+    exe_file_name: &str,
     persistent: Option<&PersistentState>,
     dry: bool,
+    summary: &mut Summary,
 ) -> Result<(), RunFailure> {
     let Some(state) = persistent else {
         return Ok(());
@@ -184,29 +193,39 @@ fn publish_persistent(
         );
         return Ok(());
     }
-    match state.suppression {
-        Suppression::Suppressed => tracing::warn!(
+    if state.suppression == Suppression::Suppressed {
+        tracing::warn!(
             "persistent markers and mirrors suppressed: a hotfix path is outside the path scope"
-        ),
-        Suppression::Proceed if dry => {
-            for marker in &state.markers {
-                tracing::info!("dry run: would write marker {}", marker.path);
-            }
-            for (rel, _) in &state.plan.mirrors {
-                tracing::info!("dry run: would write mirror {rel}");
-            }
+        );
+        return Ok(());
+    }
+    // The plan rendered `base_res_version_hash` before the base repair ran.
+    // Re-read its source now, so a file the repair created or corrected is
+    // hashed from its final bytes — the game wipes Persistent state on a
+    // stale hash. One shared helper feeds both this publish and check-only.
+    let (markers, omitted) =
+        persistent::refresh_markers_after_repair(game_dir, exe_file_name, state)?;
+    if omitted != state.base_hash_omitted {
+        // C16's omit status is only decided now: a source that was absent at
+        // plan time can have been created by the repair (and vice versa).
+        summary.flags.persistent_base_hash = omitted.then_some("omitted");
+    }
+    if dry {
+        for marker in &markers {
+            tracing::info!("dry run: would write marker {}", marker.path);
         }
-        Suppression::Proceed => {
-            // C19: the full block is written on every clean run, even when no
-            // persistent file needed repair this time. The bytes come from the
-            // plan: mirror values are the verified raw manifests, marker values
-            // are already rendered without a trailing newline.
-            for (rel, bytes) in &state.plan.mirrors {
-                publish_bytes(game_dir, rel, bytes, "mirror")?;
-            }
-            for marker in &state.markers {
-                publish_bytes(game_dir, &marker.path, marker.value.as_bytes(), "marker")?;
-            }
+        for (rel, _) in &state.plan.mirrors {
+            tracing::info!("dry run: would write mirror {rel}");
+        }
+    } else {
+        // C19: the full block is written on every clean run, even when no
+        // persistent file needed repair this time. Mirror values are the
+        // verified raw manifests; marker values are the freshly re-read block.
+        for (rel, bytes) in &state.plan.mirrors {
+            publish_bytes(game_dir, rel, bytes, "mirror")?;
+        }
+        for marker in &markers {
+            publish_bytes(game_dir, &marker.path, marker.value.as_bytes(), "marker")?;
         }
     }
     Ok(())

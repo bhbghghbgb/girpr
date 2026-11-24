@@ -32,7 +32,7 @@ use crate::config::RunFailure;
 use crate::report::{self, Summary};
 use crate::util;
 
-use crate::repair::persistent::PersistentState;
+use crate::repair::persistent::{self, PersistentState};
 use crate::repair::scan::ScanReport;
 use girpr_chunk_verify::Verdict;
 use girpr_fetch::persistent::{hotfix_is_intact, verify_manifest_bytes};
@@ -268,15 +268,34 @@ fn record_check(summary: &Summary, outcome: &CheckOutcome) {
 /// 2. every mirror's bytes against the dispatcher's descriptor MD5/size —
 ///    a truncated or replaced `*_versions_persist` is damage even when the
 ///    hotfix files themselves are intact;
-/// 3. every rendered marker's presence and exact bytes — C16's omitted
-///    `base_res_version_hash` is absent from `state.markers`, so an omission is
-///    expected, not damage.
+/// 3. every marker's presence and exact bytes, with the base hash source
+///    re-read here so the block is the one publish would write — a C16 omission
+///    is expected, not damage.
 ///
 /// Each bad item increments `files_failed` and the returned count, so the
 /// caller turns any of them into `RunExit::CheckFailed` (exit 4). A clean item
 /// increments `files_skipped`, matching the base check's counters.
-pub fn verify_persistent(game_dir: &Path, state: &PersistentState, summary: &Summary) -> u64 {
+pub fn verify_persistent(
+    game_dir: &Path,
+    exe_file_name: &str,
+    state: &PersistentState,
+    summary: &Summary,
+) -> u64 {
     let mut bad = 0u64;
+    // C5 must answer about the marker block publish would write, not the one
+    // the plan rendered from pre-repair bytes. The same helper post uses
+    // re-reads the base hash source here, so check and publish cannot disagree.
+    let markers = match persistent::refresh_markers_after_repair(game_dir, exe_file_name, state) {
+        Ok((markers, _)) => markers,
+        Err(e) => {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "CHECK fail: persistent base hash source unreadable"
+            );
+            summary.files_failed.fetch_add(1, Ordering::Relaxed);
+            return 1;
+        }
+    };
     for asset in &state.plan.assets {
         let row = PersistentRow {
             remote_name: asset.rel.clone(),
@@ -323,7 +342,7 @@ pub fn verify_persistent(game_dir: &Path, state: &PersistentState, summary: &Sum
             tracing::warn!(file = %rel, "CHECK fail: persistent mirror");
         });
     }
-    for marker in &state.markers {
+    for marker in &markers {
         let intact = match util::contained_join(game_dir, &marker.path) {
             Ok(target) => {
                 std::fs::read(&target).is_ok_and(|bytes| bytes == marker.value.as_bytes())

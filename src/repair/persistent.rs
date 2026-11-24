@@ -23,8 +23,8 @@ use girpr_dispatch::{
 use girpr_fetch::persistent::{fetch_all_manifests, parse_manifest};
 use girpr_model::Region;
 use girpr_persistent_plan::{
-    ManifestInput, MarkerSet, PersistentPlan, ScopeDecision, build_plan, render_markers,
-    scope_decision,
+    BaseTree, Folder, ManifestInput, MarkerSet, PersistentPlan, ScopeDecision, asset_rel,
+    base_res_version_hash_marker, build_plan, render_markers, scope_decision,
 };
 use reqwest::Client;
 use tokio::runtime::Handle;
@@ -262,6 +262,51 @@ pub fn read_base_hash_source(
     }
 }
 
+/// Re-read the base hash source after the repair loop and rebuild the one
+/// marker whose bytes come from it.
+///
+/// The plan half renders `base_res_version_hash` from the bytes that were on
+/// disk *before* the base repair ran. That repair can create or correct
+/// `StreamingAssets/res_versions_streaming`, so publishing or checking the
+/// plan-time marker would claim a revision for bytes the game no longer has —
+/// the exact case where the game wipes its Persistent state. Post and check
+/// both call this one helper, so they cannot disagree about the marker block.
+///
+/// Returns the marker block to use and whether the source is genuinely absent
+/// (C16). A marker rendered here replaces the stale one at the same, pinned
+/// position; an absent source drops it entirely, and a source first created by
+/// repair adds it back.
+pub fn refresh_markers_after_repair(
+    game_dir: &Path,
+    exe_file_name: &str,
+    state: &PersistentState,
+) -> std::result::Result<(Vec<MarkerSet>, bool), RunFailure> {
+    let source = read_base_hash_source(game_dir, exe_file_name)?;
+    let base_path = asset_rel(
+        exe_file_name,
+        BaseTree::Persistent,
+        Folder::Root,
+        "base_res_version_hash",
+    )
+    .map_err(|e| RunFailure::metadata(anyhow!("persistent plan: {e}")))?;
+    let mut markers: Vec<MarkerSet> = state
+        .markers
+        .iter()
+        .filter(|m| m.path != base_path)
+        .cloned()
+        .collect();
+    if let Some(bytes) = source.as_deref() {
+        let marker = base_res_version_hash_marker(exe_file_name, bytes)
+            .map_err(|e| RunFailure::metadata(anyhow!("persistent plan: {e}")))?;
+        // `render_markers` puts this one first; keep the same block order so a
+        // refreshed publish writes exactly the shape a clean plan would.
+        markers.insert(0, marker);
+        Ok((markers, false))
+    } else {
+        Ok((markers, true))
+    }
+}
+
 /// C14: the audio list the base tier read (`getGameConfigs.audio_pkg_scan_dir`)
 /// must name the same file the persistent tier would read. An empty config
 /// value has no path to compare and is not a disagreement.
@@ -326,6 +371,15 @@ pub fn build(
             ScopeDecision::MarkersOutOfScope(path) => {
                 return Err(RunFailure::usage(anyhow!(
                     "--with-persistent writes the marker file at '{path}', which is outside the \
+                     active path scope (--include '{}' / --exclude '{}'); include it or drop one \
+                     of the two flags",
+                    scope.describe_includes(),
+                    scope.describe_excludes(),
+                )));
+            }
+            ScopeDecision::MirrorOutOfScope(path) => {
+                return Err(RunFailure::usage(anyhow!(
+                    "--with-persistent writes the mirror file at '{path}', which is outside the \
                      active path scope (--include '{}' / --exclude '{}'); include it or drop one \
                      of the two flags",
                     scope.describe_includes(),
@@ -434,5 +488,113 @@ mod tests {
             "",
             "GenshinImpact_Data/Persistent/audio_lang_14"
         ));
+    }
+
+    fn test_state(source: Option<&[u8]>) -> PersistentState {
+        use crate::test_support::{ManifestKind, persistent_dispatch};
+
+        let dispatch = persistent_dispatch(
+            "http://127.0.0.1:1",
+            "GenshinImpact",
+            [
+                (ManifestKind::Res, "res.ndjson", b""),
+                (ManifestKind::Data, "data.ndjson", b""),
+                (ManifestKind::Silence, "silence.ndjson", b""),
+            ],
+        );
+        let markers = render_markers("GenshinImpact.exe", &dispatch, source).unwrap();
+        PersistentState {
+            dispatch,
+            plan: PersistentPlan {
+                assets: vec![],
+                mirrors: vec![],
+                marker_paths: markers.iter().map(|m| m.path.clone()).collect(),
+                expected_rels: vec![],
+                total_bytes: 0,
+            },
+            markers,
+            suppression: Suppression::Proceed,
+            status: "published",
+            base_hash_omitted: source.is_none(),
+        }
+    }
+
+    fn write_source(dir: &std::path::Path, bytes: &[u8]) {
+        std::fs::create_dir_all(dir.join("GenshinImpact_Data/StreamingAssets")).unwrap();
+        std::fs::write(
+            dir.join("GenshinImpact_Data/StreamingAssets/res_versions_streaming"),
+            bytes,
+        )
+        .unwrap();
+    }
+
+    /// The marker post publishes is hashed from the bytes on disk *after* the
+    /// repair, not from the ones the plan half read.
+    #[test]
+    fn a_repaired_source_replaces_the_stale_base_hash_marker() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_persistent", "fresh_hash");
+        let stale = b"pre repair bytes";
+        let fresh = b"post repair bytes";
+        let state = test_state(Some(stale));
+        write_source(&dir, fresh);
+
+        let (markers, omitted) =
+            refresh_markers_after_repair(&dir, "GenshinImpact.exe", &state).unwrap();
+
+        assert!(!omitted, "a source on disk is never an omission");
+        assert_eq!(markers.len(), state.markers.len());
+        assert_eq!(markers[0].path, state.markers[0].path);
+        assert_eq!(markers[0].value, girpr_digest::md5_hex(fresh));
+        assert_ne!(
+            markers[0].value,
+            girpr_digest::md5_hex(stale),
+            "the stale pre-repair hash is never published"
+        );
+        assert_eq!(
+            &markers[1..],
+            &state.markers[1..],
+            "the rest of the block is unchanged"
+        );
+    }
+
+    /// C16 on a fresh install: the plan omitted the marker because the source
+    /// was absent, but base repair created it, so post adds the marker back.
+    #[test]
+    fn a_source_created_by_the_repair_adds_the_omitted_marker() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_persistent", "created_hash");
+        let fresh = b"created by base repair";
+        let state = test_state(None);
+        write_source(&dir, fresh);
+
+        let (markers, omitted) =
+            refresh_markers_after_repair(&dir, "GenshinImpact.exe", &state).unwrap();
+
+        assert!(!omitted, "the omit status must flip back");
+        assert_eq!(markers.len(), state.markers.len() + 1);
+        assert_eq!(markers[0].value, girpr_digest::md5_hex(fresh));
+        assert_eq!(
+            &markers[1..],
+            &state.markers[..],
+            "the other markers stay put"
+        );
+    }
+
+    /// A genuinely absent source keeps C16's omission: no marker is published
+    /// or checked, even if the plan had rendered one from stale bytes.
+    #[test]
+    fn a_genuinely_absent_source_keeps_the_omission() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_persistent", "absent_hash");
+        let state = test_state(Some(b"stale bytes"));
+
+        let (markers, omitted) =
+            refresh_markers_after_repair(&dir, "GenshinImpact.exe", &state).unwrap();
+
+        assert!(omitted);
+        assert_eq!(markers.len(), state.markers.len() - 1);
+        assert!(
+            markers
+                .iter()
+                .all(|m| !m.path.contains("base_res_version_hash"))
+        );
     }
 }

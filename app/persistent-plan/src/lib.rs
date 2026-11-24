@@ -32,7 +32,7 @@ pub use digest::{
 pub use manifest::{ParseError, parse_rows};
 pub use marker::{
     ScopeDecision, base_res_version_hash_marker, first_out_of_scope_hotfix,
-    first_out_of_scope_marker, render_markers, scope_decision,
+    first_out_of_scope_marker, first_out_of_scope_mirror, render_markers, scope_decision,
 };
 pub use placement::{
     BaseTree, Folder, asset_rel, asset_urls, data_dir_name, folder_for, force_persistent_decision,

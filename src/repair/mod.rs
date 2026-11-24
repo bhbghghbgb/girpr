@@ -995,6 +995,7 @@ async fn execute_phase(
         return run_check_only(
             ctx,
             &game_dir,
+            &meta.config.exe_file_name,
             root.as_ref(),
             &plan,
             scan,
@@ -1055,11 +1056,14 @@ async fn execute_phase(
         },
     )
     .await;
-    if let Some(code) = apply_run_flags(ctx, &mut summary) {
+    // `apply_run_flags` still fills every flag and records a hard stop in
+    // `SUMMARY stopped=`, but a failed file outranks the ceiling as the exit:
+    // a damaged install is exit 3 even when a later ceiling also bound.
+    let limit = apply_run_flags(ctx, &mut summary);
+    if let Some(code) =
+        failed_file_outranks_limit(summary.files_failed.load(Ordering::Relaxed), limit)
+    {
         return Ok((summary, code));
-    }
-    if summary.files_failed.load(Ordering::Relaxed) > 0 {
-        return Ok((summary, RunExit::Write));
     }
 
     // 7. post phase, when the run actually mutates the install or lists what a
@@ -1241,6 +1245,7 @@ async fn run_purge_before(
 async fn run_check_only(
     ctx: &RunCtx,
     game_dir: &Path,
+    exe_file_name: &str,
     root: Option<&util::PathRoot>,
     plan: &Arc<RepairPlan>,
     scan: Option<Arc<ScanReport>>,
@@ -1265,7 +1270,7 @@ async fn run_check_only(
     // `persistent` is `None`, so this is a no-op and the unflagged check stays
     // byte-identical (plan, counters, exit code).
     if let Some(state) = persistent {
-        bad += phases::check::verify_persistent(game_dir, state, &summary);
+        bad += phases::check::verify_persistent(game_dir, exe_file_name, state, &summary);
     }
     // Success path only. The ticker guard is dropped when `verify_plan`
     // returns, but its aborted task may still hold the `Arc` clone until the
@@ -1308,7 +1313,7 @@ async fn run_purge_only(
         purge_keys,
         before_purge,
         meta,
-        &summary,
+        &mut summary,
         deprecated,
         persistent,
     )
@@ -1370,13 +1375,26 @@ async fn run_post(
         purge_keys,
         before_purge,
         meta,
-        &summary,
+        &mut summary,
         deprecated,
         persistent,
     )
     .await?;
     let code = finish(outcome, &mut summary);
     Ok((summary, code))
+}
+
+/// A failed file wins over a runtime ceiling as the run's exit code.
+///
+/// The ceiling is still applied and recorded in `SUMMARY stopped=` by the
+/// caller; only the exit class changes. `None` means the repair loop is clear
+/// to continue into the post-phase.
+fn failed_file_outranks_limit(files_failed: u64, limit: Option<RunExit>) -> Option<RunExit> {
+    if files_failed > 0 {
+        Some(RunExit::Write)
+    } else {
+        limit
+    }
 }
 
 /// Fill in the conditional `SUMMARY` keys, then name any runtime hard stop.
@@ -1529,8 +1547,8 @@ fn normalize_deprecated(list: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunCtx, RunExit, Summary, fetch_deprecated, finish, normalize_deprecated, note_stopped,
-        phases, prepare_install, spawn_blocking_traced,
+        RunCtx, RunExit, Summary, failed_file_outranks_limit, fetch_deprecated, finish,
+        normalize_deprecated, note_stopped, phases, prepare_install, spawn_blocking_traced,
     };
     use crate::Biz;
     use crate::hyp::HypClient;
@@ -1580,6 +1598,26 @@ mod tests {
         note_stopped(&mut summary, "--max-write-bytes");
         note_stopped(&mut summary, "--max-delete-bytes");
         assert_eq!(summary.flags.stopped, Some("--max-write-bytes"));
+    }
+
+    /// A failed file is exit 3 even when a ceiling also stopped the run; the
+    /// ceiling is still recorded in `SUMMARY` by `apply_run_flags`.
+    #[test]
+    fn a_failed_file_outranks_a_runtime_ceiling() {
+        assert_eq!(
+            failed_file_outranks_limit(1, Some(RunExit::Limit)),
+            Some(RunExit::Write)
+        );
+        assert_eq!(
+            failed_file_outranks_limit(0, Some(RunExit::Limit)),
+            Some(RunExit::Limit)
+        );
+        assert_eq!(failed_file_outranks_limit(0, None), None);
+        assert_eq!(
+            failed_file_outranks_limit(3, None),
+            Some(RunExit::Write),
+            "a failure needs no ceiling to be a write-class exit"
+        );
     }
 
     /// A clean post-phase is success; only a delete ceiling is a limit.
