@@ -1,0 +1,38 @@
+[package]
+name = "girpr-dispatch"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "Collapse dispatcher metadata unwrap, query and protobuf decode for girpr"
+
+[lib]
+name = "girpr_dispatch"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The new dependency tree this leaf isolates. An edit to repair, report or the
+# CLI leaves all of it cached; none of those crates can reach these types.
+# `rsa` needs `pkcs1v15` for both the metadata master key and the dispatcher
+# response — the default features alone do not enable decryption.
+rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+brotli = "9.0.0"
+base64 = "0.23.1"
+prost = "0.14.6"
+# The `--biz` values and the digest/hex spelling come from the existing
+# value/mechanics leaves. No `girpr-fetch`: its transport is this crate's own
+# injectable seam, and depending on it would close the graph.
+girpr-model = { path = "../../crates/model" }
+girpr-digest = { path = "../../crates/digest" }
+# JSON is the metadata/envelope format; the descriptor rows use serde's derive.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Opaque wire fields are reported at debug level, never used to place files.
+tracing = "0.1.44"
+
+[dev-dependencies]
+# Only the offline tests build PKCS#1 v1.5 ciphertext to feed the injected
+# fetcher; no shipped code depends on an RNG.
+rand = "0.10.4"
