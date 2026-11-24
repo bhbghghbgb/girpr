@@ -47,6 +47,7 @@ use girpr_audio as audio;
 pub(crate) mod diagnostics;
 mod file;
 pub(crate) mod persistent;
+pub(crate) mod persistent_exec;
 pub mod phases;
 pub mod purge;
 pub mod reuse;
@@ -1009,6 +1010,23 @@ async fn execute_phase(
         .await;
     }
 
+    // 6a. persistent full-file repair. The master flag gated this state in the
+    // plan half; `--purge-only` returned above and a read-only run only lists
+    // the work (the helper handles that branch itself). Prerequisites and hotfix
+    // bytes land here, before the base repair and the post phase.
+    if let Some(state) = persistent.as_deref() {
+        install_run_limits(ctx, &mut summary);
+        summary = persistent_exec::repair(
+            ctx,
+            &http,
+            &game_dir,
+            &meta.config.exe_file_name,
+            state,
+            summary,
+        )
+        .await;
+    }
+
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary = run_repair(
         ctx,
@@ -1283,18 +1301,24 @@ async fn run_purge_only(
     Ok((summary, code))
 }
 
+/// Install the run's live ceilings on the shared `Summary`.
+///
+/// Called once before the persistent execute path and again at the entry of the
+/// base repair loop. Setting the same values twice is harmless; doing it before
+/// the persistent path is what makes a hotfix byte subject to the very same
+/// ceiling and hard-stop marker as a base chunk.
+fn install_run_limits(ctx: &RunCtx, summary: &mut Summary) {
+    summary.set_download_limit(ctx.limits.download_bytes);
+    summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
+    summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_verified_write_limit(ctx.limits.verified_write_bytes);
+    summary.set_ram_limit(ctx.limits.ram_bytes);
+    summary.set_fail_fast(ctx.fail_fast);
+}
+
 /// Step 6: the repair loop.
 async fn run_repair(ctx: &RunCtx, mut inputs: file::RepairInputs) -> Summary {
-    inputs.summary.set_download_limit(ctx.limits.download_bytes);
-    inputs
-        .summary
-        .set_verified_download_limit(ctx.limits.verified_download_bytes);
-    inputs.summary.set_write_limit(ctx.limits.write_bytes);
-    inputs
-        .summary
-        .set_verified_write_limit(ctx.limits.verified_write_bytes);
-    inputs.summary.set_ram_limit(ctx.limits.ram_bytes);
-    inputs.summary.set_fail_fast(ctx.fail_fast);
+    install_run_limits(ctx, &mut inputs.summary);
     tracing::info!(
         mode = ctx.repair_mode.as_str(),
         ram_budget = ?ctx.ram_budget(),

@@ -468,6 +468,16 @@ fn publish_verified(
     })
 }
 
+/// Whether `target` already satisfies `row` (size + preferred digest).
+///
+/// The execute half asks this before reserving any bytes, so an intact target
+/// is a pure no-op: no download ceiling charge, no write and no HTTP request.
+/// A target that cannot be read is simply "not intact" — the download path
+/// deals with it, including the read-only/temp fallback.
+pub fn hotfix_is_intact(row: &PersistentRow, target: &Path) -> bool {
+    target.is_file() && verify_path(row, target).unwrap_or(false)
+}
+
 /// Download one full-file hotfix.
 ///
 /// Order: skip if already intact → primary, then alternate on 404 only →
@@ -484,10 +494,7 @@ pub async fn download_hotfix(request: DownloadRequest<'_>) -> Result<DownloadOut
         after_publish,
     } = request;
 
-    // A target that cannot be read (a directory, a locked file) is simply
-    // "not intact": the download path deals with it, including the temp
-    // fallback. Only a clean verification lets us skip the request.
-    if target.is_file() && verify_path(row, target).unwrap_or(false) {
+    if hotfix_is_intact(row, target) {
         return Ok(DownloadOutcome::Skipped {
             path: target.to_path_buf(),
             bytes: row.file_size,

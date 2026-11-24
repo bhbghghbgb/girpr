@@ -25,6 +25,10 @@ const DATA: &[u8] =
     include_bytes!("../tools/persistent-sophon-research/samples/fixtures/data.ndjson");
 const SILENCE: &[u8] =
     include_bytes!("../tools/persistent-sophon-research/samples/fixtures/silence.ndjson");
+const HOTFIX_A: &[u8] =
+    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/hotfix_a.blk");
+const HOTFIX_B: &[u8] =
+    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/hotfix_b.pck");
 
 /// Serve the three manifests in descriptor order. `ScriptedServer` repeats the
 /// last reply, so a retry of the last body still has the advertised digest.
@@ -56,6 +60,32 @@ fn line(s: &Summary) -> String {
 fn flagged(ctx: &mut RunCtx, info: girpr::test_support::DispatchInfo) {
     ctx.with_persistent = true;
     ctx.persistent_dispatch_override = Some(persistent_override(info));
+}
+
+/// Put the four in-scope fixture rows on disk already intact, so a scope test
+/// exercises the scope verdict rather than the download path. The excluded
+/// `Persistent/...11111111.blk` hotfix is deliberately left absent.
+fn write_intact_fixture_rows(dir: &std::path::Path) {
+    for (rel, bytes) in [
+        (
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/22222222.blk",
+            HOTFIX_B,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/33333333.blk",
+            HOTFIX_A,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/AudioAssets/English(US)/VO_TEST.pck",
+            HOTFIX_B,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/hardware_model_config.json",
+            HOTFIX_B,
+        ),
+    ] {
+        write_game_file(dir, rel, bytes);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +311,7 @@ async fn a_hotfix_path_out_of_scope_suppresses_markers() {
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let server = manifest_server(RES);
     let dir = temp_dir("persistent_hotfix_scope");
+    write_intact_fixture_rows(&dir);
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     flagged(&mut ctx, dispatch_for(&server, RES));
     ctx.path_scope = scope(
@@ -325,6 +356,7 @@ async fn scan_exclusion_is_visible_in_plan_out() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
     let server = manifest_server(RES);
     let dir = temp_dir("persistent_scan_exclusion");
+    write_intact_fixture_rows(&dir);
     let out = temp_dir("persistent_scan_exclusion_doc").join("plan.json");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     flagged(&mut ctx, dispatch_for(&server, RES));
@@ -369,4 +401,249 @@ async fn a_fresh_install_still_queries_with_the_latest_version() {
 /// version-authority assertion names the value the mock actually served.
 fn mock_latest(_mock: &MockServer) -> String {
     girpr_test_fixtures::LATEST_TAG.to_owned()
+}
+
+// ---------------------------------------------------------------------------
+// execute half
+// ---------------------------------------------------------------------------
+
+/// One manifest row naming the committed 64-byte hotfix blob. All three
+/// manifests carry the same row, so the plan dedupes it to a single asset and
+/// the tests can pin one HTTP exchange at a time.
+fn single_manifest() -> Vec<u8> {
+    format!(
+        "{{\"remoteName\":\"blocks/00/11111111.blk\",\
+         \"md5\":\"b2d3f56bc197fd985d5965079b5e7148\",\
+         \"hash\":\"f7c67301db6713f0\",\"fileSize\":64}}\n"
+    )
+    .into_bytes()
+}
+
+/// A dispatcher whose manifests come from `manifest_server` and whose four CDN
+/// prefixes all point at `hotfix_base`. The plan resolves one asset at
+/// `GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk`.
+fn single_asset_dispatch(
+    manifest_server: &ScriptedServer,
+    hotfix_base: &str,
+) -> girpr::test_support::DispatchInfo {
+    let body = single_manifest();
+    let mut info = persistent_dispatch(
+        manifest_server.base(),
+        "GenshinImpact",
+        [
+            (ManifestKind::Res, "res.ndjson", &body),
+            (ManifestKind::Data, "data.ndjson", &body),
+            (ManifestKind::Silence, "silence.ndjson", &body),
+        ],
+    );
+    info.client_game_res_url = format!("{hotfix_base}/game_res");
+    info.client_audio_assets_url = format!("{hotfix_base}/audio_assets");
+    info.client_design_data_url = format!("{hotfix_base}/design_data");
+    info.client_silence_data_url = format!("{hotfix_base}/silence_data");
+    info
+}
+
+fn manifest_server_for(body: &[u8]) -> ScriptedServer {
+    ScriptedServer::start(vec![
+        Reply::new(200, body),
+        Reply::new(200, body),
+        Reply::new(200, body),
+    ])
+}
+
+fn hotfix_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk")
+}
+
+/// A primary 404 is the only status that switches to the alternate. Both URLs
+/// name the same canned server; its first reply is the 404, its second the
+/// verified blob, so the two requests must both happen and the file must land.
+#[tokio::test]
+async fn a_hotfix_download_falls_back_to_the_alternate_on_404() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(404, ""), Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_exec_404_fallback");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(hotfix.hits(), 2, "primary then alternate, nothing else");
+    assert_eq!(std::fs::read(hotfix_path(&dir)).unwrap(), HOTFIX_A);
+    assert_eq!(summary.flags.persistent_files, Some(1));
+    assert_eq!(summary.flags.persistent_repaired, Some(1));
+    assert_eq!(summary.flags.persistent_failed, Some(0));
+    assert!(summary.download.settled() >= 64, "the hotfix bytes settled");
+    assert!(summary.write.settled() >= 64, "the hotfix bytes landed");
+    assert!(line(&summary).contains("persistent=published"));
+    // Marker and mirror publication belongs to commit 8.
+    let persistent = dir.join("GenshinImpact_Data/Persistent");
+    assert!(!persistent.join("PatchDone").exists());
+    assert!(!persistent.join("res_versions_persist").exists());
+    mock.stop();
+}
+
+/// A body that passes the size check but fails XXH64 must not fall back to the
+/// alternate: the gate is decided by the URL that delivered the bytes. The run
+/// exits 3, skips the post phase and leaves no published file.
+#[tokio::test]
+async fn a_corrupt_hotfix_fails_the_gate_and_publishes_nothing() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let corrupt = vec![0xabu8; 64];
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, &corrupt)]);
+    let dir = temp_dir("persistent_exec_corrupt");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx)
+        .await
+        .expect("a failed file is a returned exit code");
+    assert_eq!(code, RunExit::Write);
+    assert_eq!(
+        hotfix.hits(),
+        1,
+        "a digest failure never tries the alternate"
+    );
+    assert!(!hotfix_path(&dir).exists(), "nothing was published");
+    assert_eq!(summary.flags.persistent, Some("failed"));
+    assert_eq!(summary.flags.persistent_repaired, Some(0));
+    assert_eq!(summary.flags.persistent_failed, Some(1));
+    let persistent = dir.join("GenshinImpact_Data/Persistent");
+    assert!(!persistent.join("PatchDone").exists());
+    assert!(!persistent.join("res_versions_persist").exists());
+    mock.stop();
+}
+
+/// Gap rows 9-11: both trees, stale `ctable.dat`, `DXSETUP/` and the copy-back
+/// of `ctable.dat` → `ctable_streaming.dat`; plus the Collapse move of a
+/// stranded non-patch `.pck` out of `Persistent/`.
+#[tokio::test]
+async fn prerequisites_clean_stale_state_and_restore_ctable_streaming() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_exec_prereqs");
+    let data = dir.join("GenshinImpact_Data");
+    write_game_file(&dir, "GenshinImpact_Data/Persistent/ctable.dat", b"stale");
+    write_game_file(&dir, "DXSETUP/setup.exe", b"junk");
+    let source = b"launcher-ctable";
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/StreamingAssets/ctable.dat",
+        source,
+    );
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/StreamingAssets/AudioAssets/English(US)/stranded.pck",
+        b"old",
+    );
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/Persistent/AudioAssets/English(US)/stranded.pck",
+        b"stranded",
+    );
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.flags.persistent_repaired, Some(1));
+    assert!(data.join("Persistent").is_dir());
+    assert!(data.join("StreamingAssets").is_dir());
+    assert!(!data.join("Persistent/ctable.dat").exists());
+    assert!(!dir.join("DXSETUP").exists());
+    assert_eq!(
+        std::fs::read(data.join("StreamingAssets/ctable_streaming.dat")).unwrap(),
+        source
+    );
+    assert!(
+        !data
+            .join("Persistent/AudioAssets/English(US)/stranded.pck")
+            .exists()
+    );
+    assert_eq!(
+        std::fs::read(data.join("StreamingAssets/AudioAssets/English(US)/stranded.pck")).unwrap(),
+        b"stranded"
+    );
+    mock.stop();
+}
+
+/// A missing `StreamingAssets/ctable.dat` is a no-op, and an existing
+/// `ctable_streaming.dat` is never replaced by nothing.
+#[tokio::test]
+async fn a_missing_ctable_source_leaves_the_verified_target_alone() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_exec_no_ctable_source");
+    let sentinel = b"verified-sophon-file";
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/StreamingAssets/ctable_streaming.dat",
+        sentinel,
+    );
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (_, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        std::fs::read(dir.join("GenshinImpact_Data/StreamingAssets/ctable_streaming.dat")).unwrap(),
+        sentinel
+    );
+    mock.stop();
+}
+
+/// C17(b): a read-only hotfix target is cleared on that one path immediately
+/// before publish, not stripped tree-wide. The verified bytes land at the
+/// target itself, with write permission restored.
+#[tokio::test]
+async fn a_read_only_hotfix_target_is_overwritten() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_exec_read_only_target");
+    let target = hotfix_path(&dir);
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk",
+        b"wrong-bytes",
+    );
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&target, permissions).unwrap();
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(std::fs::read(&target).unwrap(), HOTFIX_A);
+    assert!(!std::fs::metadata(&target).unwrap().permissions().readonly());
+    assert_eq!(summary.flags.persistent_repaired, Some(1));
+    mock.stop();
+}
+
+/// C4: `--dry-run` and `--check-only` list the persistent work but open no
+/// hotfix request and create no tree.
+#[tokio::test]
+async fn read_only_modes_list_without_a_single_hotfix_request() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("persistent_exec_readonly");
+    for (check_only, dry_run) in [(true, false), (false, true)] {
+        let manifests = manifest_server_for(&single_manifest());
+        let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+        flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+        ctx.check_only = check_only;
+        ctx.dry_run = dry_run;
+
+        let (summary, _) = run(ctx).await.expect("a read-only run completes");
+        assert_eq!(summary.flags.persistent, Some("listed"));
+        assert_eq!(summary.flags.persistent_files, Some(1));
+        assert_eq!(hotfix.hits(), 0, "no hotfix byte was requested");
+        assert!(!dir.join("GenshinImpact_Data/Persistent").exists());
+    }
+    mock.stop();
 }
