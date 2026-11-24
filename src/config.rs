@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Biz;
+use crate::repair::persistent::DispatchOverride;
 use crate::repair::scope::Limits;
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
@@ -153,6 +154,16 @@ pub struct RunCtx {
     /// count; `--jobs` is the primary spelling and `--io-threads` is a
     /// deprecated alias.
     pub jobs: usize,
+    /// `--with-persistent`: the one master switch for the dispatcher →
+    /// manifests → `Persistent/` tier. Off (the default) every persistent call
+    /// site is a no-op and the run's published bytes and exit codes stay as
+    /// before.
+    pub with_persistent: bool,
+    /// Test-only seam: a canned dispatcher result. Production never sets it;
+    /// see [`DispatchOverride`]. Hidden from the CLI on purpose — this is not
+    /// a user-facing way to bypass the real key/seed provider.
+    #[doc(hidden)]
+    pub persistent_dispatch_override: Option<DispatchOverride>,
     pub check_only: bool,
     /// `--scan`: read the whole install once, in the plan phase, so the
     /// plan's numbers are exact rather than upper bounds.

@@ -1352,6 +1352,8 @@ mod tests {
             plan: &plan,
             est_download_bytes: 0,
             purge: Some(&pp),
+            persistent_files: 0,
+            persistent_bytes: 0,
         });
         assert!(
             matches!(hits.as_slice(), [LimitHit::IncompletePurge { .. }]),

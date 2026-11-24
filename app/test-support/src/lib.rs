@@ -64,6 +64,8 @@ pub fn ctx_for_biz(
         repair_mode: RepairMode::Auto,
         repair_mode_explicit: false,
         jobs,
+        with_persistent: false,
+        persistent_dispatch_override: None,
         check_only: false,
         scan: false,
         purge_only: false,

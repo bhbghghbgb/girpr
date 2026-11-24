@@ -46,6 +46,7 @@
 use girpr_audio as audio;
 pub(crate) mod diagnostics;
 mod file;
+pub(crate) mod persistent;
 pub mod phases;
 pub mod purge;
 pub mod reuse;
@@ -65,6 +66,7 @@ use anyhow::Context;
 
 // The plan values and their pure decisions live in an acyclic leaf. This module
 // keeps only the I/O, fetch, walk and publish policies that consume them.
+use girpr_persistent_plan::ManifestInput;
 use girpr_repair_plan::{
     DownloadEstimate, LocalChunkMap, PlanSummaryValues, PurgeKeys, check_scope_selection,
 };
@@ -153,6 +155,10 @@ struct PlanPhase {
     deprecated: Arc<[String]>,
     /// The local chunk map, shared with the repair loop and the scan.
     local_map: Arc<LocalChunkMap>,
+    /// The persistent plan and its scope verdict, when the flag was passed.
+    /// The post phase reads it; this commit only lists it (commits 7/8 spend
+    /// bytes and publish the marker block from it).
+    persistent: Option<Arc<persistent::PersistentState>>,
 }
 
 /// How [`plan_phase`] ends.
@@ -217,7 +223,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // best-effort deprecated list — three independent network phases under one
     // shared client and budget.
     let http = meta.hyp.http();
-    let (per_manifest, local_map, deprecated) =
+    let (per_manifest, local_map, deprecated, persistent_fetched) =
         fetch_plan_network(ctx, &meta, &http, summary).await?;
 
     // 4. work list, purge candidates, scan, estimates, and the ceilings —
@@ -232,6 +238,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         per_manifest,
         local_map: &local_map,
         deprecated,
+        persistent_fetched,
     })
     .await?
     else {
@@ -270,6 +277,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         scan: work.scan,
         deprecated: work.deprecated,
         local_map,
+        persistent: work.persistent,
     })))
 }
 
@@ -290,6 +298,8 @@ struct PlanWork {
     /// so its per-file stat pass overlaps the scan's reads instead of following
     /// them. `None` when neither `--print-plan` nor `--plan-out` needs them.
     disk: Option<scope::report::DiskPlan>,
+    /// The persistent tier's decided work, when `--with-persistent` was passed.
+    persistent: Option<Arc<persistent::PersistentState>>,
 }
 
 /// Steps 1 + 2 of the plan half: local state and server metadata, then the
@@ -297,7 +307,15 @@ struct PlanWork {
 /// disk and what it will become before any repair starts.
 async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let timer = PhaseTimer::start("metadata");
-    let meta = metadata::fetch(ctx, game_dir).await?;
+    let mut meta = metadata::fetch(ctx, game_dir).await?;
+    // The persistent query is part of the plan half: it touches nothing. It
+    // runs for `--print-plan` and `--check-only` (both need the set to list or
+    // check), but never for `--purge-only`, which puts no bytes in place (C20).
+    // An unflagged run never constructs the provider at all.
+    if ctx.with_persistent && !ctx.purge_only {
+        let http = meta.hyp.http();
+        meta.dispatch = Some(persistent::query(ctx, &meta.latest, &http).await?);
+    }
     timer.finish();
     report::emit(
         &report::report_record(&report::ReportProvenance {
@@ -339,14 +357,18 @@ async fn fetch_plan_network(
         Vec<(String, Vec<SophonChunkFile>)>,
         Arc<LocalChunkMap>,
         Arc<[String]>,
+        Vec<ManifestInput>,
     ),
     RunFailure,
 > {
     let timer = PhaseTimer::start("manifest");
     let backoff = &ctx.backoff;
     let budget = ManifestBudget::new();
+    // The persistent branch is required, not best-effort: a failed manifest
+    // fails the run with exit 2. It is absent unless the query above ran.
+    let persistent_dispatch = meta.dispatch.as_ref();
 
-    let (per_manifest, local_map, deprecated) = tokio::try_join!(
+    let (per_manifest, local_map, deprecated, persistent_fetched) = tokio::try_join!(
         manifest::fetch_latest(
             http,
             backoff,
@@ -371,6 +393,12 @@ async fn fetch_plan_network(
             )
         },
         async { Ok::<_, RunFailure>(load_deprecated(ctx, meta).await) },
+        async {
+            match persistent_dispatch {
+                Some(dispatch) => persistent::fetch_manifests(http, backoff, dispatch).await,
+                None => Ok(Vec::new()),
+            }
+        },
     )?;
     let local_map = Arc::new(local_map);
     timer.finish();
@@ -390,7 +418,7 @@ async fn fetch_plan_network(
             "unavailable"
         });
     }
-    Ok((per_manifest, local_map, deprecated))
+    Ok((per_manifest, local_map, deprecated, persistent_fetched))
 }
 
 /// The inputs to [`build_and_assert_plan`]: the values `plan_phase` already
@@ -406,6 +434,8 @@ struct PlanInputs<'a> {
     /// The advisory list fetched alongside the manifests in step 3; passed
     /// through to the plan so step 4 only decides how it is used.
     deprecated: Arc<[String]>,
+    /// The three fetched-and-verified persistent manifests, when the query ran.
+    persistent_fetched: Vec<ManifestInput>,
 }
 
 /// Step 4: the work list, the purge candidates, the scan, the download
@@ -428,17 +458,63 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         per_manifest,
         local_map,
         deprecated,
+        persistent_fetched,
     } = inputs;
+
+    // Build the persistent plan from already-verified bytes. Its input map is
+    // the unfiltered Sophon manifest: a row that collides with a base file the
+    // scope hides is still a hotfix. No byte is spent and no file is written.
+    let persistent = match meta.dispatch.as_ref() {
+        Some(dispatch) => {
+            let base_md5 = persistent::base_md5_map(&per_manifest);
+            let source = persistent::read_base_hash_source(game_dir, &meta.config.exe_file_name)?;
+            let state = persistent::build(
+                ctx,
+                game_dir,
+                &meta.config.exe_file_name,
+                &meta.config.audio_pkg_scan_dir,
+                dispatch,
+                persistent_fetched,
+                &base_md5,
+                source.as_deref(),
+            )?;
+            Some(Arc::new(state))
+        }
+        None => None,
+    };
+    // Every key with a `*` glob needs this; the persistent paths join the
+    // expected set so a cleanup cannot delete a hotfix or a marker it was told
+    // to keep.
+    let persistent_expected: Vec<String> = persistent
+        .as_ref()
+        .map(|p| p.plan.expected_rels.iter().cloned().collect())
+        .unwrap_or_default();
+
+    // A scoped run whose *only* selected files are persistent ones is not an
+    // `--include` typo: the base plan is empty by design but there is work to
+    // do. The base rule stays untouched for unflagged runs.
+    let persistent_selected = persistent
+        .as_ref()
+        .is_some_and(|p| !p.plan.assets.is_empty());
 
     // Only a purge-enabled run can have a candidate that rescues an empty
     // selection, so only that run needs the post-walk check below. An unpurged
     // run's verdict is decidable the moment the plan exists; it is checked
     // inside `plan_work_and_purge` before the full install walk.
     let purge_wanted = ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan;
-    let (plan, purge_keys, purge_plan) =
-        plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest, purge_wanted).await?;
+    let (plan, purge_keys, purge_plan) = plan_work_and_purge(
+        ctx,
+        summary,
+        game_dir,
+        meta,
+        per_manifest,
+        purge_wanted,
+        &persistent_expected,
+        persistent_selected,
+    )
+    .await?;
 
-    if purge_wanted {
+    if purge_wanted && !persistent_selected {
         let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
         // The rule and its diagnosis live in the plan leaf; only the mapping to
         // this program's usage error stays here.
@@ -497,7 +573,30 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
     }
     summary.files_total = plan_summary.files_total;
     summary.flags.limited = plan_summary.limited;
-    if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
+    if ctx.with_persistent {
+        let (files, status, omitted) = match persistent.as_deref() {
+            Some(p) => (p.plan.assets.len() as u64, p.status, p.base_hash_omitted),
+            None => (0, "skipped", false),
+        };
+        summary.flags.persistent = Some(status);
+        summary.flags.persistent_files = Some(files);
+        summary.flags.persistent_repaired = Some(0);
+        summary.flags.persistent_failed = Some(0);
+        if omitted {
+            summary.flags.persistent_base_hash = Some("omitted");
+        }
+    }
+    let (persistent_files, persistent_bytes) = persistent
+        .as_deref()
+        .map_or((0, 0), |p| (p.plan.assets.len() as u64, p.plan.total_bytes));
+    if !within_limits(
+        ctx,
+        &plan,
+        purge_plan.as_ref(),
+        estimate.bytes,
+        persistent_files,
+        persistent_bytes,
+    ) {
         // A refusal never publishes a plan; do not leave the speculative disk
         // pass running on the pool after we return.
         if let Some(handle) = &disk_handle {
@@ -526,6 +625,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         scan,
         estimate,
         disk,
+        persistent,
     }))
 }
 
@@ -542,6 +642,8 @@ async fn plan_work_and_purge(
     meta: &Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     purge_wanted: bool,
+    persistent_expected: &[String],
+    persistent_selected: bool,
 ) -> Result<(Arc<RepairPlan>, Option<Arc<PurgeKeys>>, Option<PurgePlan>), RunFailure> {
     let scope = &ctx.path_scope;
     let timer = PhaseTimer::start("plan");
@@ -556,7 +658,10 @@ async fn plan_work_and_purge(
     // exact "matched no file in the live manifest" wording an unpurged run has
     // always produced; the alternative wording belongs to purge-enabled runs,
     // whose post-walk check stays in `build_and_assert_plan`.
-    if !purge_wanted && let Err(e) = check_scope_selection(scope, &plan, 0, None) {
+    if !purge_wanted
+        && !persistent_selected
+        && let Err(e) = check_scope_selection(scope, &plan, 0, None)
+    {
         return Err(RunFailure::usage(anyhow::anyhow!("{}", e.message())));
     }
 
@@ -599,12 +704,14 @@ async fn plan_work_and_purge(
         let keys_plan = Arc::clone(&plan);
         let blacklist = meta.blacklist.clone();
         let purge_scope = ctx.path_scope.clone();
+        let persistent_expected = persistent_expected.to_vec();
         // Raw `spawn_blocking`: the walk emits only best-effort diagnostics
         // (a path it could not read, a candidate it could not stat), which
         // nothing asserts through a scoped subscriber. A test that needed them
         // would use `spawn_blocking_traced`.
         let (keys, plan) = tokio::task::spawn_blocking(move || {
-            let keys = PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
+            let mut keys = PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
+            keys.extend_expected(persistent_expected.iter().map(String::as_str));
             let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
             (keys, plan)
         })
@@ -743,11 +850,15 @@ fn within_limits(
     plan: &Arc<RepairPlan>,
     purge_plan: Option<&PurgePlan>,
     est_download_bytes: u64,
+    persistent_files: u64,
+    persistent_bytes: u64,
 ) -> bool {
     let hits = ctx.limits.check_preflight(scope::Preflight {
         plan,
         est_download_bytes,
         purge: purge_plan.filter(|_| !ctx.check_only),
+        persistent_files,
+        persistent_bytes,
     });
     if hits.is_empty() {
         return true;
@@ -778,6 +889,18 @@ async fn publish_plan(ctx: &RunCtx, work: &PlanWork) -> Result<(), RunFailure> {
     // Publishing only costs anything when it produces a plan; an ordinary run's
     // call is a no-op and must not add a zero-duration line.
     let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
+    let persistent_totals =
+        work.persistent
+            .as_deref()
+            .map(|p| scope::report::PersistentPlanTotals {
+                files: p.plan.assets.len() as u64,
+                bytes: p.plan.total_bytes,
+                scan_excludes_persistent: ctx.scan,
+                status: p.status,
+                assets: p.plan.assets.iter().map(|a| a.rel.clone()).collect(),
+                markers: p.plan.marker_paths.clone(),
+                mirrors: p.plan.mirrors.iter().map(|(rel, _)| rel.clone()).collect(),
+            });
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
             plan,
@@ -786,6 +909,7 @@ async fn publish_plan(ctx: &RunCtx, work: &PlanWork) -> Result<(), RunFailure> {
             ctx.path_scope.is_active(),
             disk.expect("the print-plan branch asks for it"),
             scan.map(|s| s.bytes),
+            persistent_totals.clone(),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
@@ -803,6 +927,18 @@ async fn publish_plan(ctx: &RunCtx, work: &PlanWork) -> Result<(), RunFailure> {
             est_download_by_file,
             disk.expect("the plan-out branch asks for it"),
         );
+        let doc = match persistent_totals {
+            Some(p) => doc.with_persistent(scope::report::PersistentDocument {
+                files: p.files,
+                bytes: p.bytes,
+                scan_excludes_persistent: p.scan_excludes_persistent,
+                scope: p.status,
+                assets: p.assets,
+                markers: p.markers,
+                mirrors: p.mirrors,
+            }),
+            None => doc,
+        };
         doc.write_to(Path::new(out))
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
     }
@@ -834,6 +970,7 @@ async fn execute_phase(
         scan,
         deprecated,
         local_map,
+        persistent,
     } = phase;
     let readonly = ctx.readonly();
 
@@ -851,6 +988,9 @@ async fn execute_phase(
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
+        if ctx.with_persistent {
+            summary.flags.persistent = Some("listed");
+        }
         return run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await;
     }
 
@@ -863,6 +1003,7 @@ async fn execute_phase(
             purge_plan.as_deref(),
             &meta,
             &deprecated,
+            persistent.as_deref(),
             summary,
         )
         .await;
@@ -906,6 +1047,7 @@ async fn execute_phase(
             purge_plan.as_deref(),
             &meta,
             &deprecated,
+            persistent.as_deref(),
             summary,
         )
         .await;
@@ -1118,9 +1260,13 @@ async fn run_purge_only(
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &Arc<[String]>,
+    persistent: Option<&persistent::PersistentState>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
     summary.flags.config_bumped_zero = true;
+    if ctx.with_persistent {
+        summary.flags.persistent = Some("skipped");
+    }
     tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
     let outcome = phases::post::run(
         ctx,
@@ -1130,6 +1276,7 @@ async fn run_purge_only(
         meta,
         &summary,
         deprecated,
+        persistent,
     )
     .await?;
     let code = finish(outcome, &mut summary);
@@ -1171,8 +1318,12 @@ async fn run_post(
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &Arc<[String]>,
+    persistent: Option<&persistent::PersistentState>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
+    if ctx.with_persistent && ctx.dry_run {
+        summary.flags.persistent = Some("listed");
+    }
     let outcome = phases::post::run(
         ctx,
         game_dir,
@@ -1181,6 +1332,7 @@ async fn run_post(
         meta,
         &summary,
         deprecated,
+        persistent,
     )
     .await?;
     let code = finish(outcome, &mut summary);
@@ -1226,6 +1378,12 @@ fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<RunExit> {
     // The peak staged payload, when a RAM budget was asked for.
     if ctx.limits.ram_bytes.is_some() {
         summary.flags.ram_bytes = Some(summary.ram_bytes.load(Ordering::Relaxed));
+    }
+    // A failed persistent file behaves like any other failed file: no marker
+    // block is published and the run exits 3. The execute half fills
+    // `persistent_repaired`/`persistent_failed` when it starts downloading.
+    if ctx.with_persistent && summary.files_failed.load(Ordering::Relaxed) > 0 {
+        summary.flags.persistent = Some("failed");
     }
     // A runtime hard stop is the one place the run writes *some* of what it was
     // asked to do and then stops. It leaves the work it had done in place —
@@ -1494,6 +1652,8 @@ mod tests {
             repair_mode: RepairMode::Auto,
             repair_mode_explicit: false,
             jobs: 1,
+            with_persistent: false,
+            persistent_dispatch_override: None,
             check_only: false,
             scan: false,
             purge_only: false,

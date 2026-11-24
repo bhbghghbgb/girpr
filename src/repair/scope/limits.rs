@@ -41,6 +41,12 @@ pub struct Preflight<'a> {
     /// `None` means "nothing is a delete candidate", which any delete ceiling
     /// trivially satisfies.
     pub purge: Option<&'a PurgePlan>,
+    /// Persistent asset count, after the path scope. Zero on an unflagged run,
+    /// which is why no existing ceiling verdict changes.
+    pub persistent_files: u64,
+    /// Full persistent file sizes, folded into the download ceiling exactly
+    /// like base bytes (C11/B7). Zero on an unflagged run.
+    pub persistent_bytes: u64,
 }
 
 /// The manually requested ceilings. `None` = not requested, which is what keeps
@@ -114,6 +120,27 @@ impl Limits {
                     what: "--max-download-bytes",
                     key: "plan_download_bytes",
                     actual,
+                    limit,
+                });
+            }
+            // Persistent bytes are full-file sizes known from the manifest,
+            // so this refusal is exact: a `--max-download-bytes 0` run under
+            // the flag cannot spend a hotfix byte.
+            if pf.persistent_bytes > limit {
+                hits.push(LimitHit::Exceeded {
+                    what: "--max-download-bytes",
+                    key: "persistent_bytes",
+                    actual: pf.persistent_bytes,
+                    limit,
+                });
+            }
+        }
+        if let Some(limit) = self.files {
+            if pf.persistent_files > limit {
+                hits.push(LimitHit::Exceeded {
+                    what: "--max-files",
+                    key: "persistent_files",
+                    actual: pf.persistent_files,
                     limit,
                 });
             }
@@ -262,6 +289,8 @@ mod tests {
             plan,
             est_download_bytes: 0,
             purge: None,
+            persistent_files: 0,
+            persistent_bytes: 0,
         }
     }
 
@@ -270,6 +299,8 @@ mod tests {
             plan,
             est_download_bytes: est,
             purge: Some(purge),
+            persistent_files: 0,
+            persistent_bytes: 0,
         }
     }
 
@@ -477,6 +508,48 @@ mod tests {
             ..Default::default()
         };
         assert!(ceiling.check_preflight(pf(&p)).is_empty());
+    }
+
+    /// Persistent bytes and files are counted by the same two ceilings. The
+    /// extra figures are zero for a legacy caller, so the old verdicts above
+    /// are unchanged; under the flag a zero download ceiling refuses exactly.
+    #[test]
+    fn persistent_files_and_bytes_are_counted_by_the_existing_ceilings() {
+        let p = plan(1);
+        let mut base_pf = pf(&p);
+        base_pf.persistent_files = 2;
+        base_pf.persistent_bytes = 64;
+
+        let zero = Limits {
+            files: Some(0),
+            download_bytes: Some(0),
+            ..Default::default()
+        };
+        let hits = zero.check_preflight(base_pf);
+        let keys: Vec<&str> = hits
+            .iter()
+            .map(|h| match h {
+                LimitHit::Exceeded { key, .. } => *key,
+                LimitHit::IncompletePurge { .. } => "purge",
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["plan_files", "persistent_bytes", "persistent_files"]
+        );
+
+        let enough = Limits {
+            files: Some(3),
+            download_bytes: Some(64),
+            ..Default::default()
+        };
+        let mut boundary = pf(&p);
+        boundary.persistent_files = 2;
+        boundary.persistent_bytes = 64;
+        assert!(
+            enough.check_preflight(boundary).is_empty(),
+            "the boundary passes"
+        );
     }
 
     #[test]

@@ -779,6 +779,7 @@ fn help_text_lists_every_documented_flag() {
         "--max-verified-write-bytes",
         "--max-ram-bytes",
         "--repair-mode",
+        "--with-persistent",
         "--scan",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
@@ -842,6 +843,78 @@ fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
     assert!(
         !stderr.contains("failed to start runtime"),
         "the flag must be refused before the runtime is built:\n{stderr}"
+    );
+}
+
+/// `--with-persistent` is a boolean, defaults off, and has its own help entry
+/// that says read-only modes only list the tier.
+#[test]
+fn with_persistent_is_an_opt_in_flag_with_its_own_help_entry() {
+    let off = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"])
+        .into_ctx()
+        .expect("the default is valid");
+    assert!(!off.with_persistent);
+    assert!(off.persistent_dispatch_override.is_none());
+    let on = Args::parse_from([
+        "girpr",
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--with-persistent",
+    ])
+    .into_ctx()
+    .expect("the flag is valid");
+    assert!(on.with_persistent);
+    assert!(on.persistent_dispatch_override.is_none());
+
+    let entry = help_entry(real_help(), "--with-persistent");
+    for needle in ["Opt-in", "Read-only modes", "--purge-only"] {
+        assert!(entry.contains(needle), "{needle} missing from: {entry}");
+    }
+}
+
+/// The flagged key vectors extend, never replace, the unflagged goldens.
+#[test]
+fn persistent_key_vectors_only_append_to_the_unflagged_tails() {
+    assert_eq!(
+        &SUMMARY_CONDITIONAL_KEYS[..16],
+        &[
+            "limited",
+            "scoped",
+            "config_bumped",
+            "plan_files",
+            "plan_download_bytes",
+            "download_bytes_spent",
+            "write_bytes",
+            "write_bytes_spent",
+            "repair_mode",
+            "inplace",
+            "temp",
+            "kept_bytes",
+            "ram_bytes",
+            "damaged_chunks",
+            "stopped",
+            "local_manifest",
+        ]
+    );
+    assert_eq!(
+        &SUMMARY_CONDITIONAL_KEYS[16..],
+        &[
+            "persistent",
+            "persistent_files",
+            "persistent_repaired",
+            "persistent_failed",
+            "persistent_base_hash",
+        ]
+    );
+    assert_eq!(
+        PLAN_PERSISTENT_KEYS,
+        &[
+            "persistent_files",
+            "persistent_bytes",
+            "scan_excludes_persistent"
+        ]
     );
 }
 
@@ -1413,6 +1486,15 @@ const PLAN_KEYS: &[&str] = &[
     "scoped",
 ];
 
+/// The flag-only `PLAN` keys, appended after [`PLAN_KEYS`]. `scan_bytes` keeps
+/// its own conditional slot before `purge_files`, so the persistent tail is
+/// still the last three keys of a flagged line.
+const PLAN_PERSISTENT_KEYS: &[&str] = &[
+    "persistent_files",
+    "persistent_bytes",
+    "scan_excludes_persistent",
+];
+
 /// The keys `PROGRESS` carries, in order. A short run may emit none.
 const PROGRESS_KEYS: &[&str] = &[
     "done",
@@ -1453,6 +1535,12 @@ const SUMMARY_CONDITIONAL_KEYS: &[&str] = &[
     "damaged_chunks",
     "stopped",
     "local_manifest",
+    // `--with-persistent` appends these next to the last pre-existing key.
+    "persistent",
+    "persistent_files",
+    "persistent_repaired",
+    "persistent_failed",
+    "persistent_base_hash",
 ];
 
 /// One run's data plane, already reduced to what the contract is about.

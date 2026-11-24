@@ -16,6 +16,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Context, Result};
+use girpr_dispatch::DispatchInfo;
 use tokio::task::JoinError;
 
 #[cfg(test)]
@@ -47,6 +48,9 @@ pub struct Meta {
     pub blacklist: HashSet<String>,
     /// Effective audio selection, canonical codes; empty = game-only.
     pub audio: HashSet<String>,
+    /// The dispatcher result, present only for a flagged, non-purge-only run.
+    /// Read-only: no file or mirror has been written when this is set.
+    pub dispatch: Option<DispatchInfo>,
 }
 
 /// Build the API client, honoring the offline/test endpoint overrides
@@ -489,6 +493,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         ignore,
         blacklist,
         audio,
+        dispatch: None,
     })
 }
 
@@ -517,6 +522,8 @@ mod tests {
             repair_mode: RepairMode::Auto,
             repair_mode_explicit: false,
             jobs: 1,
+            with_persistent: false,
+            persistent_dispatch_override: None,
             check_only: false,
             scan: false,
             purge_only: false,

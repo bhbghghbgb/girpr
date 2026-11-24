@@ -310,6 +310,19 @@ pub struct SummaryFlags {
     /// purge walk, so they were deliberately left in place. A count of paths,
     /// not bytes. Emitted only when non-zero.
     pub purge_hidden: Option<u64>,
+    /// `--with-persistent`: what the persistent tier did. One of
+    /// `published` · `suppressed` · `listed` · `skipped` · `failed`.
+    /// Absent on an unflagged run, like every key below.
+    pub persistent: Option<&'static str>,
+    /// Planned persistent assets, after the path scope was applied.
+    pub persistent_files: Option<u64>,
+    /// Persistent assets whose digest gate passed this run.
+    pub persistent_repaired: Option<u64>,
+    /// Persistent assets that failed this run.
+    pub persistent_failed: Option<u64>,
+    /// `omitted` only when `res_versions_streaming` was absent, so no
+    /// `base_res_version_hash` marker could be rendered (C16).
+    pub persistent_base_hash: Option<&'static str>,
 }
 
 /// One conditional `SUMMARY` entry.
@@ -424,6 +437,24 @@ pub(crate) fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     // key a reader needs in order to trust the two byte counts above it.
     if let Some(s) = f.local_manifest {
         out.word("local_manifest", s);
+    }
+    // The persistent group is appended next to the last pre-existing key, so
+    // an unflagged run's tail ends exactly where it always did. Every member
+    // is `None` unless `--with-persistent` was passed.
+    if let Some(s) = f.persistent {
+        out.word("persistent", s);
+    }
+    if let Some(n) = f.persistent_files {
+        out.num("persistent_files", n);
+    }
+    if let Some(n) = f.persistent_repaired {
+        out.num("persistent_repaired", n);
+    }
+    if let Some(n) = f.persistent_failed {
+        out.num("persistent_failed", n);
+    }
+    if let Some(s) = f.persistent_base_hash {
+        out.word("persistent_base_hash", s);
     }
     out.0
 }

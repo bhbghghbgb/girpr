@@ -60,6 +60,7 @@ pub async fn run(
     meta: &Meta,
     summary: &Summary,
     deprecated: &Arc<[String]>,
+    persistent: Option<&crate::repair::persistent::PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let timer = crate::phase::PhaseTimer::start("post");
     match run_inner(
@@ -70,6 +71,7 @@ pub async fn run(
         meta,
         summary,
         deprecated,
+        persistent,
     )
     .await
     {
@@ -92,8 +94,24 @@ async fn run_inner(
     meta: &Meta,
     summary: &Summary,
     deprecated: &Arc<[String]>,
+    persistent: Option<&crate::repair::persistent::PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
+    // The marker block and the three mirrors are published last, after every
+    // file has passed its gate (commit 8). This commit only carries the
+    // decision: a scope-suppressed run must never claim a partial revision,
+    // and a read-only mode must list rather than write.
+    if let Some(p) = persistent {
+        match p.suppression {
+            crate::repair::persistent::Suppression::Suppressed => tracing::warn!(
+                "persistent markers and mirrors suppressed: a hotfix path is outside the path scope"
+            ),
+            crate::repair::persistent::Suppression::Proceed if dry => {
+                tracing::info!("dry run: would write persistent markers and mirrors");
+            }
+            crate::repair::persistent::Suppression::Proceed => {}
+        }
+    }
     // The deprecated list can be long and every entry is a stat plus a delete:
     // that is blocking filesystem work, not a task the async worker should sit
     // through. The audio move below and the cleanup pass use the same discipline.
@@ -1511,6 +1529,8 @@ mod tests {
             repair_mode: girpr_repair_policy::RepairMode::Auto,
             repair_mode_explicit: false,
             jobs: 1,
+            with_persistent: false,
+            persistent_dispatch_override: None,
             check_only: false,
             scan: false,
             purge_only: false,

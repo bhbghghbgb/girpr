@@ -178,6 +178,10 @@ girpr-lock = { path = "app/lock" }
 # depends on the crate directly; the attempt loop and the test HTTP seam kept
 # with it stay local to the fetch side.
 girpr-fetch = { path = "app/fetch" }
+# The dispatcher query and the persistent plan values. Both are acyclic leaves:
+# no socket, no file write and no exit-code policy lives in either one.
+girpr-dispatch = { path = "app/dispatch" }
+girpr-persistent-plan = { path = "app/persistent-plan" }
 # The low-level path/atomic, hash/scan and ini mechanics. They live in narrow
 # leaf crates so an edit to one leaves the others (and the consumers that use
 # only those others) cached; this binary depends on each one directly. The
