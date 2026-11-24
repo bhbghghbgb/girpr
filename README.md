@@ -151,7 +151,13 @@ flowchart TD
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
-  byte-identical to one that never passes them.
+  byte-identical to one that never passes them. That promise is about **flags**,
+  not about installs whose contents changed: verification-state files
+  (`Persistent/*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`,
+  `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*` and the
+  root `pkg_version`) are now kept for every run, so an install that already
+  has them reports a one-time **lower `deleted_extra_bytes`** the first time it
+  is purged after this fix (C12/B5). No new flag is involved.
   The byte counts come in **pairs** when their ceiling is active:
   `download_bytes` (the bytes of the files that were actually repaired) beside
   `download_bytes_spent` (the bytes that crossed the wire), and `write_bytes`
@@ -284,10 +290,14 @@ flowchart TD
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + the legacy in-install
-  `girpr.lock` + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version`
-  patterns;
-  **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
-  `ScreenShot/`). The whole plan is built before the first delete.
+  `girpr.lock` + the root `pkg_version` + the cleaned blacklist +
+  `audio_lang_*`/`Audio_*_pkg_version` patterns + the verification-state markers
+  `*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`,
+  `base_res_version_hash`, `cache_versions_*`, `ctable*`, all kept for every
+  run;
+  **everything not kept by rules 0-5 purges**, incl. temps, exe, logs,
+  `ScreenShot/`, `*versions_remote*` and `VideoAssets/*.tmp`). The whole plan is
+  built before the first delete.
   The `--plan-out` document is an ordinary unexpected file if it is written
   inside the install: the `--purge-after`/`--purge-only` re-plan runs after the
   document is written and deletes it. (`--purge-before` acts on the plan built
@@ -877,6 +887,7 @@ from and cannot inherit a corrupt prefix; the temp mode keeps the completed `*_t
 and continues it.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
-SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,
+SDK/WPF/plugin zips — game launches without them), plus the verification-state
+markers and root `pkg_version` kept for every run. Chunk-repair only: no hdiff,
 no 7z legacy path, no predownload, no speed limiter. Reruns are idempotent
 (intact skipped, partial files finished by verification, final MD5 re-verified).

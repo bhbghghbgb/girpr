@@ -106,6 +106,13 @@ where
 /// SDK/WPF/plugin zips (game launches without them; see README v1 limits).
 /// Do not "fix" the missing union without reading the v1-limits section.
 ///
+/// The verification-state markers and the root `pkg_version` are kept for
+/// **all** runs (rules 2 and 5 in [`classify_purge_path_visible`]): leaving an
+/// install's existing verification state deletable by a default run was a
+/// correctness bug, independent of the persistent-update feature. The
+/// dispatcher's *hotfix files* are still not part of this expected set; an
+/// opted-in run adds them to the repair plan.
+///
 /// Temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff` /
 /// `*deletefiles*`) are NOT skipped — they are not in the live manifest, so they
 /// purge here like any other orphan, into the single `deleted_extra_bytes`
@@ -415,45 +422,50 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
     }
 }
 
-/// Metadata files the files-cleanup must keep.
+/// Root-level files the files-cleanup must keep.
 ///
-/// `config.ini` and the legacy in-install lock. `config.ini` lives inside
-/// `game_dir` but NEVER appears in Sophon chunk manifests, and the tool
-/// rewrites it after patching — purging it would break the version
-/// bookkeeping. The lock is the other root-level file that is not in the
-/// manifest: older runs wrote `girpr.lock` there, and a leftover is preserved
-/// rather than deleted behind the user's back. The run's own lock lives
-/// outside the install ([`girpr_lock`]), so a live run never depends
-/// on this rule; it exists only for the legacy file.
+/// `config.ini` lives inside `game_dir` but NEVER appears in Sophon chunk
+/// manifests, and the tool rewrites it after patching — purging it would break
+/// the version bookkeeping. The lock is another root-level file that is not in
+/// the manifest: older runs wrote `girpr.lock` there, and a leftover is
+/// preserved rather than deleted behind the user's back. The run's own lock
+/// lives outside the install ([`girpr_lock`]), so a live run never depends on
+/// this rule; it exists only for the legacy file.
 ///
-/// Everything else in this set's sense (exe, res-category / audio-scan
-/// bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT kept:
-/// Collapse's `GenshinInstall.GetUnusedFileInfoList` protects only
-/// `FilesCleanupIgnoreList` (empty for GI) plus the
-/// `Audio_*_pkg_version` regexes, and this tool maximizes free space — if the
-/// user wants anything else kept, that needs an explicit `--keep` flag
-/// (not implemented in v1).
+/// `pkg_version` is the HoYoPlay launcher's verification list. It is a
+/// Sophon-tracked base file today, but an install restored by other means may
+/// carry one that is not in the current plan; deleting it invites a
+/// launcher-side re-check (docs/08 §4.3, C2). It is kept for **all** runs, not
+/// only persistent ones.
+///
+/// The rest of the verification state (`*_persist`, `*_revision`, the marker
+/// names, `cache_versions_*`, `ctable*`, `audio_lang_*`,
+/// `Audio_*_pkg_version`) is matched by filename in rule 5 of
+/// [`classify_purge_path_visible`], not here, because its parent directory
+/// varies by channel and exe stem. Everything else (exe, res-category /
+/// audio-scan bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT
+/// kept: Collapse's `GenshinInstall.GetUnusedFileInfoList` protects only
+/// `FilesCleanupIgnoreList` (empty for GI) plus the `Audio_*_pkg_version`
+/// regexes, and this tool maximizes free space — if the user wants anything
+/// else kept, that needs an explicit `--keep` flag (not implemented in v1).
 ///
 /// Blacklisted paths are a **separate** keep input to [`plan_purge`] (rule 3),
 /// not part of this set: they come from the launcher's `blacklist_dir`, while
-/// these two are metadata keeps the cleanup recognizes. The doc for [`keep_set`]
+/// these are metadata keeps the cleanup recognizes. The doc for [`keep_set`]
 /// is not the whole expected set; [`classify_purge_path`] is.
 ///
 /// NOTE: the game flags unknown executables inside the game folder, so the
 /// tool binary itself must never live there; the exe needs no keep rule.
 ///
-/// `audio_lang_*` / `Audio_*_pkg_version` are matched by filename pattern in
-/// [`classify_purge_path`], not here, because their location varies by channel.
-///
 /// All entries are `/`-separated rel paths (same normalization as
 /// `girpr_repair_plan::build_plan` and the purge walk). The set is fixed,
 /// so it is built once and shared rather than allocated per call.
 ///
-/// The match is against the **whole rel path**, so both rules are root-only:
-/// `config.ini` and `girpr.lock` are kept at the game dir's root, while
-/// `sub/config.ini` and `sub/girpr.lock` are ordinary orphans and are purged.
-/// That is deliberate — the legacy lock and the version file only ever lived
-/// at the root — and is pinned by `the_legacy_lock_keep_rule_is_root_only`.
+/// The match is against the **whole rel path**, so these rules are root-only:
+/// `config.ini`, `girpr.lock` and `pkg_version` are kept at the game dir's
+/// root, while `sub/pkg_version` and `sub/config.ini` are ordinary orphans
+/// and are purged. That is deliberate — these files only ever lived at the
+/// root — and is pinned by `the_root_keep_rules_are_root_only`.
 pub fn keep_set() -> &'static HashSet<String> {
     static KEEP: OnceLock<HashSet<String>> = OnceLock::new();
     KEEP.get_or_init(|| {
@@ -464,6 +476,9 @@ pub fn keep_set() -> &'static HashSet<String> {
             // sweep: this run's lock is outside the install, so the keep rule
             // preserves the legacy file without carrying its exclusion.
             girpr_lock::LOCK_FILE.to_string(),
+            // The launcher's verification list. Kept at the root only: a
+            // nested file with the same name is not that list (docs/08 C2).
+            "pkg_version".to_string(),
         ])
     })
 }
@@ -517,6 +532,13 @@ pub fn classify_purge_path(
 /// 4. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
 ///    `Audio_*_pkg_version`, `GenshinInstall.cs:232-241`). v1 matches broadly
 ///    by pattern rather than per-`audio_lang_14`-line exact regexes.
+/// 5. Verification-state markers and Sophon bookkeeping (`*_persist`,
+///    `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`,
+///    `base_res_version_hash`, `cache_versions_*`, `ctable*`). Matched by
+///    filename because their parent dir varies by channel and exe stem.
+///    `*versions_remote*` and `VideoAssets/*.tmp` are explicitly NOT kept:
+///    they are stale game-generated download state (docs/08 §4.3,
+///    GenshinSlimmer issue 19).
 ///
 ///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
 ///    `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
@@ -554,7 +576,13 @@ pub fn classify_purge_path_visible(
         return PurgeVerdict::Keep;
     }
     // 4. Collapse audio pkg-version parity → keep.
-    if is_audio_version_file(file_name(rel)) {
+    let name = file_name(rel);
+    if is_audio_version_file(name) {
+        return PurgeVerdict::Keep;
+    }
+    // 5. Verification state → keep. Never gated on a flag: an install's
+    // existing markers must survive a plain `--purge-after`/`--purge-only`.
+    if is_verification_state_file(name) {
         return PurgeVerdict::Keep;
     }
     PurgeVerdict::Purge
@@ -567,6 +595,43 @@ fn is_audio_version_file(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     lower.starts_with("audio_lang_")
         || (lower.starts_with("audio_") && lower.ends_with("_pkg_version"))
+}
+
+/// Verification-state markers and Sophon bookkeeping that the game reads.
+///
+/// Matched on the file name, not the full rel path: `<exe>_Data/Persistent/`
+/// moves with the game's exe stem, and the same `*_revision` / `*_persist`
+/// names occur in both the base and hotfix trees. Without this rule a marker
+/// absent from the live Sophon manifest is deleted by `--purge-after` /
+/// `--purge-only`, and the game re-verifies at next launch (docs/08 §4.3,
+/// C1/C12/B5).
+///
+/// `*versions_remote*` and `*.tmp` are rejected first: they are stale
+/// game-generated download state and must stay purge candidates even when
+/// their name contains an otherwise protected token (for example
+/// `cache_versions_remote`).
+fn is_verification_state_file(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.contains("versions_remote") || lower.ends_with(".tmp") {
+        return false;
+    }
+    // The three dispatcher mirrors (`res_versions_persist`,
+    // `data_versions_persist`, `silence_data_versions_persist`) plus every
+    // future `*_persist` marker.
+    if lower.ends_with("_persist") {
+        return true;
+    }
+    // `res_revision_eternal` carries the token mid-name, so `contains`.
+    if lower.contains("_revision") {
+        return true;
+    }
+    if matches!(
+        lower.as_str(),
+        "channelname" | "scriptversion" | "patchdone" | "base_res_version_hash"
+    ) {
+        return true;
+    }
+    lower.starts_with("cache_versions") || lower.starts_with("ctable")
 }
 
 fn file_name(rel: &str) -> &str {
@@ -925,9 +990,9 @@ mod tests {
     }
 
     /// One folded [`PurgeKeys`] classifies every keep rule: expected manifest
-    /// files (including a directory descendant), the two owned metadata files,
-    /// a blacklisted path, the audio bookkeeping, a hidden path, and the temps
-    /// that still purge.
+    /// files (including a directory descendant), the root metadata keeps, a
+    /// blacklisted path, the audio bookkeeping, the verification markers, a
+    /// hidden path, and the stale download state that still purges.
     ///
     /// Rows are grouped by the rule they pin. Several were consolidated here
     /// from earlier single-purpose classifier tests, keeping their original
@@ -977,6 +1042,133 @@ mod tests {
             ("patch.deletefiles.txt", &open, PurgeVerdict::Purge),
             // Legacy lock kept; a slash-path orphan still purges (ex-early lock test).
             ("stray/orphan.dat", &open, PurgeVerdict::Purge),
+            // Rule 2: the launcher's verification list, root-only.
+            ("pkg_version", &open, PurgeVerdict::Keep),
+            ("mods/pkg_version", &open, PurgeVerdict::Purge),
+            // Rule 5: the three dispatcher mirrors and every *_persist marker.
+            (
+                "GenshinImpact_Data/Persistent/res_versions_persist",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/data_versions_persist",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/silence_data_versions_persist",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/audio_versions_persist",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            // Rule 5: the revision block, including HoYo's "eternal" twin.
+            (
+                "GenshinImpact_Data/Persistent/res_revision",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/res_revision_eternal",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/data_revision",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/silence_revision",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/audio_revision",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            // Rule 5: plain-text marker names (case-insensitive like rule 4).
+            (
+                "GenshinImpact_Data/Persistent/ChannelName",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/ScriptVersion",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/PatchDone",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/base_res_version_hash",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "YuanShen_Data/Persistent/channelname",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/audio_lang_14",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            // Rule 5: cache and ctable families.
+            (
+                "GenshinImpact_Data/Persistent/cache_versions_streaming",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/cache_versions",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/StreamingAssets/ctable.dat",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            (
+                "GenshinImpact_Data/StreamingAssets/ctable_streaming.dat",
+                &open,
+                PurgeVerdict::Keep,
+            ),
+            // Negative: game-generated partial-download state stays purgeable
+            // even when its name contains a protected token (docs/08 §4.3).
+            (
+                "GenshinImpact_Data/Persistent/res_versions_remote",
+                &open,
+                PurgeVerdict::Purge,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/data_versions_remote_12",
+                &open,
+                PurgeVerdict::Purge,
+            ),
+            (
+                "GenshinImpact_Data/Persistent/cache_versions_remote",
+                &open,
+                PurgeVerdict::Purge,
+            ),
+            ("VideoAssets/movie.tmp", &open, PurgeVerdict::Purge),
+            (
+                "VideoAssets/cache_versions_streaming.tmp",
+                &open,
+                PurgeVerdict::Purge,
+            ),
+            // An unrelated file with none of these names still purges.
+            ("VideoAssets/unrelated-19.bin", &open, PurgeVerdict::Purge),
         ] {
             assert_eq!(
                 classify_purge_path_visible(
@@ -1219,26 +1411,28 @@ mod tests {
     }
 
     #[test]
-    fn the_keep_set_is_config_and_the_lock() {
+    fn the_keep_set_is_config_the_lock_and_root_pkg_version() {
         // The legacy lock file lives at the game dir's root and is not in the
         // manifest: the cleanup must not eat a leftover. This run's own lock is
-        // outside the install.
+        // outside the install. `pkg_version` is the launcher's verification
+        // list and is kept for every run, not only persistent ones.
         let keep = keep_set();
         assert!(keep.contains("config.ini"));
         assert!(keep.contains(girpr_lock::LOCK_FILE));
-        assert_eq!(keep.len(), 2);
+        assert!(keep.contains("pkg_version"));
+        assert_eq!(keep.len(), 3);
     }
 
     /// The metadata keeps are keyed by the full rel path, so they match only at
-    /// the game dir's root. A lock- or config-shaped file in a subdirectory is
-    /// not the legacy root file and is an ordinary delete candidate. Pinning
-    /// this keeps a future "helpful" widened match from silently sparing an
-    /// install's worth of nested files.
+    /// the game dir's root. A lock-, config- or pkg_version-shaped file in a
+    /// subdirectory is not the root file and is an ordinary delete candidate.
+    /// Pinning this keeps a future "helpful" widened match from silently
+    /// sparing an install's worth of nested files.
     #[test]
-    fn the_legacy_lock_keep_rule_is_root_only() {
+    fn the_root_keep_rules_are_root_only() {
         let plan = plan_of("game.dat");
         let keys = keys_for(&plan, &no_blacklist());
-        for rel in ["config.ini", girpr_lock::LOCK_FILE] {
+        for rel in ["config.ini", girpr_lock::LOCK_FILE, "pkg_version"] {
             assert_eq!(
                 classify_purge_path_visible(
                     rel,
