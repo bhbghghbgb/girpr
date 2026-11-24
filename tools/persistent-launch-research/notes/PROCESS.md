@@ -15,7 +15,7 @@ summaries from them at any time, run `python scripts/make_short.py`.
 
 ## Environment / constraints
 
-- Working tree: `E:\hoccode\hocrust\girpr`. Context docs: `docs/08`, `docs/09`.
+- Working tree: `E:\hoccode\hocrust\girpr`. Context docs: docs/01 §6, docs/03 §7.
 - Fresh game: `F:\Genshin Impact game` (torrent copy, 7.2.0, English VO, no
   `Persistent/`, no `config.ini`, 8068 files / 155,182,786,241 bytes).
 - Synced reference: `E:\Volume 1\gem\power\Genshin Impact game` (full
@@ -93,7 +93,7 @@ and downloads ~1.08 GiB of hotfixes, then writes: `base_res_version_hash` (MD5
 of `StreamingAssets/res_versions_streaming`), the three `*_versions_persist`
 manifest mirrors, `res_revision` + `res_revision_eternal`, `data_revision`,
 `silence_revision`, `audio_revision`, `PatchDone`, `ChannelName`, `ScriptVersion`.
-Those are exactly the block `docs/09` plans to write. `DownloadPref`
+Those are exactly the block docs/03 §7 specifies. `DownloadPref`
 (game-written download-progress JSON), `CodeSwitch.config`, `DownloadError.log`,
 `test_file`, `ctable.dat`, `audio_lang_14`, `text_lang`, SDK/web caches,
 `base_revision`, `StreamingAssets/ctable.dat`, root `config.ini`, BeyondAssets
@@ -124,7 +124,7 @@ load-bearing "skip verification" marker. The revision files and the res/data
 mirrors are self-healing *when the base hash and hotfix bytes are intact*, so
 girpr's priority is: never delete/omit `base_res_version_hash` (keep-set, C1/C2)
 and write it correctly (MD5 of `StreamingAssets/res_versions_streaming`).
-Writing the whole `docs/09` block is still correct and idempotent — it avoids
+Writing the whole docs/03 §7 block is still correct and idempotent — it avoids
 the extra dispatcher round trip / "freeze" seen in B, keeps the manifest mirrors
 available for future revisions, and matches what the game itself writes — but
 only the base hash is strictly required for the immediate skip.

@@ -467,4 +467,4 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 - 7z/legacy package path, predownload, SDK/WPF/plugin zips, quota dialogs, hardlinks, speed limiter —
   launcher conveniences; game launches without them. Add `--with-sdk/--with-wpf` only if a channel's
   launch check proves otherwise. Dispatcher persistent files and `ctable.dat` are no longer on this
-  list: they ship behind the `--with-persistent` opt-in tier (docs/01 §6).
+  list: they ship behind the `--with-persistent` opt-in tier (docs/01 §6; implementation design in docs/03 §7).

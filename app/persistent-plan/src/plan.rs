@@ -18,7 +18,7 @@ use crate::{PlanError, Result};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestInput {
     pub descriptor: ManifestDescriptor,
-    /// Raw bytes, to be mirrored verbatim by a later commit.
+    /// Raw bytes, mirrored verbatim by the post phase.
     pub raw: Vec<u8>,
     pub rows: Vec<PersistentRow>,
 }

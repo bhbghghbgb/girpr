@@ -1,5 +1,5 @@
 //! Pure placement: suffix → folder, the force-persistent rule, cleaned rels and
-//! CDN URLs. A port of Collapse `Fetch.Persistent.cs` (docs/09 §4.2).
+//! CDN URLs. A port of Collapse `Fetch.Persistent.cs` (docs/03 §7.4.2).
 //!
 //! The suffix tests are case-insensitive. `Contains("blocks")` is deliberate —
 //! a different mapper in the same file uses `StartsWith`; this is not it.

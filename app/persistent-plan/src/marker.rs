@@ -1,7 +1,7 @@
-//! Marker bytes and the C7 scope predicates (docs/09 §4.3, §5.1.4).
+//! Marker bytes and the C7 scope predicates (docs/03 §7.4.3, §7.5.1 item 4).
 //!
 //! Every value is plain text with **no trailing newline**. The whole block is
-//! written last, after a successful execute pass, by a later commit; this
+//! written last, after a successful execute pass, by the post phase; this
 //! module only decides the paths and the bytes. `base_res_version_hash` has an
 //! explicit omit branch: when its source is absent, no marker is produced and
 //! therefore no path is expected or published.

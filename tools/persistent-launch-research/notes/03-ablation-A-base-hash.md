@@ -45,6 +45,6 @@ Small files from this state are preserved under `snapshots/F-ablation-A/`.
 that deletes or fails to write it forces the game to wipe its entire hotfix
 database, re-fetch the server manifests into `*_versions_remote`, and re-download
 ~1 GB of hotfixes. This is the single highest-priority file for the purge
-keep-set (C1/C2 in `docs/08`) and for the marker write (C19 in `docs/09`).
+keep-set (C1/C2 in docs/01 §6) and for the marker write (C19 in docs/03 §7).
 
 State restored from the E: backup before any further ablation.

@@ -37,7 +37,7 @@ the scripts in this directory to refresh the snapshot if revisions change.
 
 ## Implications for girpr
 
-1. **docs/08 design stands.** Dispatcher query → persistent NDJSON manifests →
+1. **The design in docs/01 §6 stands.** Dispatcher query → persistent NDJSON manifests →
    full-file HTTP (primary + alt URL) → MD5 re-verify → markers last. No Sophon
    chunk-fetch path is needed for Persistent.
 2. Do not "optimise" a dispatcher row into Sophon just because a same-path base
@@ -51,4 +51,4 @@ the scripts in this directory to refresh the snapshot if revisions change.
    (`isPatch`, `localName`, `category`), and keep the post-download MD5 gate —
    Collapse's HTTP path has none.
 5. Marker writes, purge keep-set extension, read-only stripping and `--check-only`
-   / `--dry-run` behaviour from docs/08 §§4.2–4.4 are unchanged.
+   / `--dry-run` behaviour from docs/01 §§6.4.2–6.4.4 are unchanged.

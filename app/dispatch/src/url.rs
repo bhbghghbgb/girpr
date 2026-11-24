@@ -10,7 +10,7 @@
 use crate::{DispatchError, Result};
 use girpr_model::Region;
 
-/// The global template from `docs/09` §11 and `metadata_summary.json`. The CN
+/// The global template from docs/03 §7.11 and `metadata_summary.json`. The CN
 /// and Bilibili templates are recorded in full as well; all three are used by
 /// the offline tests as the fail-closed defaults when a template is missing.
 pub const DEFAULT_URL_TEMPLATES: [(Region, &str); 3] = [

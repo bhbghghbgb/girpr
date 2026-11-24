@@ -208,7 +208,7 @@ fn target_of_checked(game_dir: &Path, asset: &PersistentAsset) -> anyhow::Result
 }
 
 // ---------------------------------------------------------------------------
-// Cheap prerequisites (docs/09 §5.2.1, gap rows 9-11)
+// Cheap prerequisites (docs/03 §7.5.2 item 1, gap rows 9-11)
 // ---------------------------------------------------------------------------
 
 /// Create both base trees, drop stale/duplicate state and restore the

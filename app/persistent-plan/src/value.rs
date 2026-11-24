@@ -1,5 +1,5 @@
 //! The value types of a persistent plan. No behaviour beyond the spellings
-//! the other modules need; `docs/09` §4.1 pins the shapes.
+//! the other modules need; docs/03 §7.4.1 pins the shapes.
 
 use girpr_dispatch::ManifestKind;
 
@@ -47,7 +47,7 @@ impl Folder {
 /// One recognised NDJSON line of a persistent manifest.
 ///
 /// `isPatch`, `category` and `localName` are deliberately absent. The server
-/// does send them, but Collapse discards them and so do we (docs/08 §4.5).
+/// does send them, but Collapse discards them and so do we (docs/01 §6.4.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistentRow {
     pub remote_name: String,

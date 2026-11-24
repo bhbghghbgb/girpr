@@ -815,3 +815,40 @@ Touch points outside the scope directory:
   that will be written more than once.
 - **Making any of this default.** Every option here produces an install that is
   not a working install. Defaults stay as they are.
+
+---
+
+## 9. Persistent tier
+
+The shipped `--with-persistent` tier
+([`docs/03`](03-repair-rust-implementation-plan.md) §7) adds persistent assets to
+the same pipeline; the rules above apply to them unchanged.
+
+- **Path scope (§2.1, A1).** A filtered-out persistent path is treated as
+  nonexistent on both sides: it is dropped from `PersistentPlan` and from the
+  purge keep-set, so `--purge-*` cannot delete it. Dispatcher hotfix paths join
+  the expected set alongside the base plan's `expected_rels()`. A marker file
+  outside an active scope is a usage error (exit `1`); a hotfix path outside the
+  scope still repairs the in-scope files, but the whole marker block and all
+  three mirrors are suppressed and the run reports `persistent=suppressed` — a
+  partial revision must not claim a complete one. Neither guard applies without
+  the flag. A scoped or `--purge-only` run still leaves `config.ini` unbumped
+  (`config_bumped=0`, §2.1 / E2).
+- **Ceilings (§2.2, B1/B2/B3/B5).** Persistent bytes join the pre-flight totals
+  and the live/verified counters, so `--max-files`, `--max-download-bytes`,
+  `--max-write-bytes` and the two `--max-verified-*` flags refuse or hard-stop
+  on persistent work exactly as they do on base work. `--scan` still reads only
+  base files: each persistent file is already read in full by its own digest
+  gate and its size comes from the manifest row.
+- **Read-only modes (§4.1, C1).** `--dry-run`, `--check-only` and `--print-plan`
+  list persistent work but publish no mirror or marker. `PLAN` gains flag-only
+  `persistent_files=` / `persistent_bytes=` and `--plan-out` gains a
+  `persistent` section.
+
+The `SUMMARY` additions follow §6's discipline: `persistent=` (published /
+suppressed / listed / skipped / failed), `persistent_files=`,
+`persistent_repaired=`, `persistent_failed=` and `persistent_base_hash=omitted`
+are emitted **only** under the flag, so an unflagged line stays byte-identical.
+The one run-wide exception is the keep-set fix (C1/C2/C12 in docs/01 §6.5):
+installs that already carry markers see a one-time lower `deleted_extra_bytes`
+on purge, flag or no flag.

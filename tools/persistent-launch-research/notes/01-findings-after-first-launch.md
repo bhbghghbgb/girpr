@@ -93,7 +93,7 @@ matches our observed 2632-file check and the byte-identical mirrors.
 
 ## Implication for girpr
 
-The docs/08 and docs/09 marker block is confirmed by the real game:
+The marker block in docs/01 §6 / docs/03 §7 is confirmed by the real game:
 `base_res_version_hash` + the three `*_versions_persist` mirrors + the
 revision block are what the game itself writes and reads. `DownloadPref`,
 `CodeSwitch.config`, `DownloadError.log`, `test_file`, `ctable.dat`, caches,

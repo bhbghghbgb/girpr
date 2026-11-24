@@ -5,7 +5,7 @@ are committed. Everything under `generated/` is regenerated and gitignored.
 
 ## Environment / constraints (inherited from the prior research)
 
-* Working tree `E:\hoccode\hocrust\girpr`; context `docs/01-03`, `docs/08`,
+* Working tree `E:\hoccode\hocrust\girpr`; context `docs/01-03` (persistent findings in `docs/01` §6),
   `tools/persistent-{launch,sophon}-research/`.
 * `F:\Genshin Impact game` = torrent copy (8,068 files / 144.53 GiB), now with a
   full synced `Persistent/` (393 files) and no `config.ini`; all base files

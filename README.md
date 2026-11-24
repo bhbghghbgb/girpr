@@ -399,7 +399,7 @@ cargo build --release
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (no second copy: 0 extra disk when the target is already full size, its growth when it is truncated, and a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
-| `--with-persistent` | off | Opt in to the dispatcher + `Persistent/` tier: query the dispatcher, mirror the three persistent manifests, download hotfix full files over HTTP and publish the marker block, then bump `config.ini` last. Without it no dispatcher/persistent request is made and `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the work without writing markers; `--purge-only` does no persistent work. See the contract below and `docs/01` §6 |
+| `--with-persistent` | off | Opt in to the dispatcher + `Persistent/` tier: query the dispatcher, mirror the three persistent manifests, download hotfix full files over HTTP and publish the marker block, then bump `config.ini` last. Without it no dispatcher/persistent request is made and `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the work without writing markers; `--purge-only` does no persistent work. See the contract below; findings in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6, design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7 |
 | `--check-only` | off | Verify size+MD5; writes nothing. Under `--with-persistent` it also checks persistent files and the marker block (C5). A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Cap each file at a single attempt and abort the run on the first failed file; no further files are started and in-flight files are dropped. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once) |
@@ -435,8 +435,8 @@ bytes — they cannot be bypassed by the new download path (C11/B7). Separately,
 the run-wide keep-set fix for the markers and root `pkg_version` causes a
 **one-time lower `deleted_extra_bytes`** the first time an install that already
 has them is purged, with or without the flag (C12/B5). Findings, URLs, CDN shapes
-and the decision tables are in [`docs/01`](docs/01-repair-findings-and-verdict.md)
-§6.
+and the decision tables are in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6;
+the implementation design is in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7.
 
 **Manual verification (operator step).** This repository has **no real-install
 test**. With a real install, run `--with-persistent`, copy the game directory to

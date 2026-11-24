@@ -54,7 +54,7 @@ Not touched on the second launch: `res_revision`, `res_revision_eternal`,
 `data_revision`, `audio_revision`, `PatchDone`, `res_versions_persist`,
 `data_versions_persist`, `ctable.dat`, `audio_lang_14`, `text_lang`, and every
 hotfix file. Consequence: the game rewrites a *subset* of the marker block on a
-clean launch; writing the whole block (as `docs/09` C19 specifies) is harmless
+clean launch; writing the whole block (as docs/03 §7 C19 specifies) is harmless
 and idempotent, and the untouched files show the tool does not need to emulate
 the game's selective rewrite logic.
 

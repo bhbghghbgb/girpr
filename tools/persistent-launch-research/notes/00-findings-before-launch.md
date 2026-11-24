@@ -103,7 +103,7 @@ stay under `StreamingAssets/` (they are in the torrent).
   `silence_revision` (and harmless Collapse-parity `audio_revision`,
   `PatchDone`, `ChannelName`, `ScriptVersion`, `base_revision`).
 - `DownloadPref` is written by the game itself on every launch, so a repair
-  tool need not synthesize it (docs/08 and docs/09 already say skip it).
+  tool need not synthesize it (docs/01 §6 and docs/03 §7 already say skip it).
 - `ctable.dat` in `Persistent/` and `StreamingAssets/` are copies of
   `ctable_streaming.dat`; a repair tool only needs to keep/produce the
   `ctable_streaming.dat` source.

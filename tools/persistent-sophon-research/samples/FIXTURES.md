@@ -2,7 +2,7 @@
 
 Small, fully synthetic stand-ins for the live dispatcher, the three persistent
 manifests and a couple of full-file hotfix blobs. They are the source for the
-mock routes added in commits 4–9 of `docs/09`. **No production key, ciphertext,
+mock routes added in commits 4–9 recorded in docs/03 §7.8. **No production key, ciphertext,
 manifest or game byte is used here.**
 
 Regenerate (byte-for-byte deterministic after the first run) with:

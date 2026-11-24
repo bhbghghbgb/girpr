@@ -1,6 +1,6 @@
 # Persistent / hotfix launch research (real-install experiment)
 
-Goal (see `docs/08` and `docs/09`): determine empirically, on real game copies,
+Goal (see docs/01 §6 and docs/03 §7): determine empirically, on real game copies,
 
 1. what the game needs to launch / to skip verification;
 2. what the game writes when it downloads hotfixes, and each file's purpose;
@@ -62,7 +62,7 @@ See `notes/00-findings-before-launch.md`. Highlights:
   ...`, `Load/Save DownloadPref`, `Wrote 0/3 persistent code switches`,
   `OnConnectRegionDispatch`, `File num to verify = 4/2632`, `CheckAllFinish`.
 - `DownloadPref` is a **game-written** download-state blob (its JSON is printed
-  in `output_log.txt`); not purely launcher metadata as `docs/08` assumed.
+  in `output_log.txt`); not purely launcher metadata as docs/01 §6 assumed.
 - The game writes only `Persistent/ctable.dat` (28 MB, byte-identical to
   `StreamingAssets/ctable_streaming.dat`, MD5 `cd5f73407c6c4733f3c86a145e9f94c0`).
   E:'s extra `StreamingAssets/ctable.dat` is a launcher artifact.

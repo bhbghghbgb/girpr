@@ -12,8 +12,8 @@ in-game verifier (`base_res_version_hash` = MD5 of
 question names is a normal Sophon-tracked base file, byte-identical to the
 torrent copy. A Sophon repair restores them, so girpr needs **no new fetch path**
 for them. The only thing a Sophon-only install lacks for *not re-verifying* is the
-`Persistent/` marker block — already the subject of the planned opt-in Persistent
-feature (`docs/08`/`docs/09`), not a Sophon gap.
+`Persistent/` marker block — already the subject of the shipped opt-in Persistent
+feature (docs/01 §6 / docs/03 §7), not a Sophon gap.
 
 ---
 
@@ -26,7 +26,7 @@ feature (`docs/08`/`docs/09`), not a Sophon gap.
 | Live Sophon file list | `generated/sophon_files_720.tsv` (3,511 rows) | **no** (`.gitignore`) | re-downloaded manifests; full dumps are deliberately not committed |
 | Set comparison + MD5 check | `generated/compare_summary.json` | **no** | regenerate with `scripts/compare_sets.py` |
 | Torrent/base copy inventory | `../persistent-launch-research/snapshots/F-fresh/F-snapshot.jsonl` | **no** (already gitignored upstream) | fresh F: copy == torrent path set (proved in prior research) |
-| Prior findings | `../persistent-launch-research/notes/*.md`, `../persistent-sophon-research/{README,FINDINGS}.md`, `docs/08` | **yes** | authoritative for launch behaviour and dispatcher-vs-Sophon byte layout |
+| Prior findings | `../persistent-launch-research/notes/*.md`, `../persistent-sophon-research/{README,FINDINGS}.md`, docs/01 §6 | **yes** | authoritative for launch behaviour and dispatcher-vs-Sophon byte layout |
 
 Nothing was written into `reference-projects/`. No game bytes were downloaded
 (manifests only, a few MB). No F: game file was modified.
@@ -93,7 +93,7 @@ Every one of the 5,094 torrent-only paths is either
 
 So the Sophon-tracked set is byte-for-byte (by path and size) the **entire known
 runnable torrent game minus the BeyondAssets UGC editor**. The editor is
-explicitly out of scope in `docs/08`, and the E: synced reference install — which
+explicitly out of scope in docs/01 §6, and the E: synced reference install — which
 launched successfully in the prior research — has no `BeyondAssets/` at all.
 **A Sophon-only copy is therefore runnable.** (This is set-equivalence + E:
 empirical parity, not a fresh launch of a hardlinked copy in this research; see
@@ -139,8 +139,7 @@ that is exactly what `base_res_version_hash` is defined against.
 
 `reference-projects/Starward/src` contains **zero** occurrences of `Persistent`,
 `res_versions*`, `data_versions*`, `PatchDone`, `ScriptVersion`, `ChannelName`,
-`hotfix`, `ctable` or `base_res_version_hash` (case-insensitive grep). `docs/08`
-§2.5 is confirmed. Concrete writes/requires:
+`hotfix`, `ctable` or `base_res_version_hash` (case-insensitive grep). docs/01 §6.2.5 is confirmed. Concrete writes/requires:
 
 * **`config.ini`** — `GameInstallService.cs:788-850` (`SetGameConfigIniAsync`):
   writes `[General]` with `game_version` (latest, or local for predownload),
@@ -195,7 +194,7 @@ selection + optional SDK/WPF + cleanup**. No `Persistent/` verification state.
    already protects them.
 2. **`base_res_version_hash` is computable from any Sophon-repaired install.**
    girpr must keep writing it (MD5 of `StreamingAssets/res_versions_streaming`,
-   `docs/09`) and must never let the purge delete it. C16's "omit if source missing"
+   docs/03 §7) and must never let the purge delete it. C16's "omit if source missing"
    case is unreachable on a normal Sophon install.
 3. **Launchability of a Sophon-only copy is fine.** It is the torrent game minus
    the BeyondAssets UGC editor; E: (no BeyondAssets) is a proven launchable
@@ -204,21 +203,21 @@ selection + optional SDK/WPF + cleanup**. No `Persistent/` verification state.
 4. **"Does not re-verify" is the remaining gap, and it is already scoped.** With no
    `Persistent/` the game does a one-time 2,632-file check + ~1.08 GiB dispatcher
    hotfix download. That is fixed by the opt-in dispatcher/Persistent support in
-   `docs/08`/`09` (full-file HTTP hotfixes + `*_persist` mirrors + revision markers +
+   docs/01 §6 / docs/03 §7 (full-file HTTP hotfixes + `*_persist` mirrors + revision markers +
    `base_res_version_hash` last), *not* by any extra Sophon work. Per
-   `docs/08 §4.5` those hotfix bytes have no Sophon path.
+   docs/01 §6.4.5 those hotfix bytes have no Sophon path.
 5. **Net change to girpr: none for this question.** Keep the current Sophon repair,
-   the existing `config.ini` bump, and the planned Persistent feature. No special
+   the existing `config.ini` bump, and the shipped Persistent tier. No special
    handling for the `*streaming` files, no `pkg_version` synthesis, no fetch of
    `svc_catalog`/`ctable_streaming.dat` outside the Sophon plan.
-6. **One plan-time fix, not a new workstream.** `docs/09 §5.2.1` copies
+6. **One plan-time fix, not a new workstream.** docs/03 §7.5.2 item 1 copies
    `StreamingAssets/ctable.dat` → `ctable_streaming.dat` as a Collapse-parity
    prerequisite, but neither the Sophon manifest nor the F: torrent copy contains
    `StreamingAssets/ctable.dat` (it is an E:-only launcher artifact; prior research
    `notes/00`/`notes/01`). On a Sophon-only install that source is absent while the
-   target already ships byte-identical in Sophon. The step must therefore be a
+   target already ships byte-identical in Sophon. The step is therefore a
    conditional no-op on a missing source and must never overwrite an intact target.
-   `docs/08 §2.3/§4.4` and `docs/09 §1.3/§5.2.1/§11` were updated accordingly.
+   docs/01 §6.2.3/§6.4.4 and docs/03 §7.1.3/§7.5.2/§7.11 were updated accordingly.
 
 ### Caveats
 

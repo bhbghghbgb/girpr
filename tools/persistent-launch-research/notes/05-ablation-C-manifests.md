@@ -27,7 +27,7 @@ With `base_res_version_hash`, the revision files and the hotfix bytes intact,
 the game skips verification **without** `res_versions_persist` and
 `data_versions_persist`. Those mirrors are therefore not the immediate
 "skip verification" switch; they are the asset database used when revisions change
-or a new hotfix arrives. `docs/09`'s decision to write them (C3/C19) remains the
+or a new hotfix arrives. The decision to write them (C3/C19 in docs/03 §7) remains the
 safe behaviour — the game regenerates `silence_*` on every launch, and having the
 res/data mirrors present avoids relying on a dispatcher round trip — but the
 ablation shows the *load-bearing* file is unambiguously

@@ -235,8 +235,8 @@ Base/InstallManagerBase*.cs},Helper/Metadata/PresetConfig.cs}`. Libs: `Google.Pr
 
 Recorded originally as a standalone research report, before this feature existed.
 Its findings and decisions are now the basis of the shipped `--with-persistent`
-opt-in tier (`README.md` documents the flag; `docs/09` holds its plan); the
-repair-only default is unchanged. The evidence is kept here in full — marker
+opt-in tier (`README.md` documents the flag; docs/03 §7 holds the implementation
+design); the repair-only default is unchanged. The evidence is kept here in full — marker
 names, URLs, CDN shapes and the decision tables — so the flag's contract can be
 audited. The decision tables record the state at research time and their chosen
 answers; those answers are the ones the shipped tier implements.
@@ -391,8 +391,8 @@ or `audio_versions*` variants that appear in the game's string table, even thoug
 GenshinSlimmer does maintain `silence_data_versions_persist` (and discovers every
 `*versions*persist*` / `audio_versions*` manifest), and
 GI-Live-Hotfix-Downloader writes it from
-`client_silence/General/AssetBundles/data_versions`. `docs/09` therefore mirrors
-the silence manifest too; B6 is extended accordingly. `audio_versions*` stays
+`client_silence/General/AssetBundles/data_versions`. The shipped tier (docs/03
+§7) therefore mirrors the silence manifest too; B6 is extended accordingly. `audio_versions*` stays
 out of scope.
 
 ### 6.2.3 Other files in the same family
@@ -872,7 +872,7 @@ to implementation/planning.
 | B3 | **Dispatcher failure while opted in.** Collapse warns and continues; its default is not an opt-in request. | (a) fail (exit `2`); (b) degrade to base-only repair and report a `persistent=unavailable` flag; (c) try again on the next run only. | **(a)** — a user who explicitly asked for a persistent update should not receive `exit 0` for a run that skipped it. Best-effort behaviour stays for runs without the flag (where the dispatcher is never queried). | **(a)** — chosen. |
 | B4 | **Channel coverage for the first release.** The live probe (§6.4.5) covered `hk4e_global` only; CN/Bili dispatcher fields are unverified. | (a) global only, with a clear refusal for the other two `--biz` values while the flag is on; (b) all three at launch; (c) global + CN only. | **(a)** — ship the verified path behind the flag and add channels when each has a captured dispatcher response and manifest pair; research cannot certify the unprobed regions. | Try **(b)** — all three at launch; research further during implementation/planning, falling back to **(a)** — global only — if CN/Bili cannot be verified. |
 | B5 | **Keep-set fix vs. the unflagged `SUMMARY` contract (C12).** The scope question in C7 is now settled (allow scoped runs; refuse only when a marker file is out of scope, and suppress markers when a dispatcher hotfix path is); what remains is whether widening the purge expected set with the markers and root `pkg_version` (C1/C2) may change `deleted_extra_bytes` for runs that pass no new flag. | (a) ship the keep-set fix independently of `--with-persistent` and document the change; (b) gate the keep-set fix behind the flag, accepting that unflagged runs can delete existing markers; (c) add a separate keep-only flag. | **(a)** — a deliberate safety fix is worth a one-time change to a deletion total; (b) leaves a destructive hole in the default path. | **(a)** — chosen. |
-| B6 | **How far beyond Collapse to go (§6.4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. | **(a)** — chosen; extended in `docs/09` to also **maintain `silence_data_versions_persist`** (GenshinSlimmer / GI-Live-Hotfix-Downloader), while keeping `audio_versions*` and the deletions out of scope. |
+| B6 | **How far beyond Collapse to go (§6.4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. | **(a)** — chosen; extended in docs/03 §7 to also **maintain `silence_data_versions_persist`** (GenshinSlimmer / GI-Live-Hotfix-Downloader), while keeping `audio_versions*` and the deletions out of scope. |
 | B7 | **Ceiling contract (C11).** Folding persistent bytes into the existing ceilings changes what those flags mean for opted-in runs. | (a) fold them in and document the broader meaning; (b) add dedicated persistent ceilings so the existing ones keep their exact definition; (c) leave persistent bytes unbounded. | **(a)** — enforceable ceilings are the point of the tier; (b) is defensible if a caller needs to budget the two paths separately, but doubles the flag surface. (c) is not acceptable. | **(a)** — chosen. |
 | B8 | **Legal/ToS posture.** Querying `query_cur_region` directly and shipping/deriving its RSA key is a product risk that source inspection cannot answer. | (a) acceptable, same as Collapse and the community tools; (b) acceptable only with user-supplied keys; (c) not acceptable — drop live dispatch and support captured bundles only. | **(a)** is this report's technical recommendation; the final call belongs to the project owner and is recorded here rather than assumed. | **(a)** — chosen. |
 | B9 | **Which version is authoritative for the dispatcher query and the markers.** Collapse queries `query_cur_region` with the *locally installed* version (`GameVersion.VersionString`) and writes that value into `ScriptVersion`. girpr repairs an arbitrary older install to `meta.latest`: the local version describes the *pre-repair* state, and a fresh install has no local version at all. The version in the query selects the revision set the dispatcher returns (§6.3 Step 3), so this choice decides both which hotfix bytes are fetched and which revision numbers are published. | (a) `meta.latest` is authoritative: query with it; if the response's own version field (probe `game_version_from_props`) disagrees, exit `2` rather than publish a revision the install does not have; (b) local version authoritative (Collapse parity): query with `meta.local_version`, write `ScriptVersion` from the response and still bump `config.ini` to latest — two version claims in one install, and no query at all on a fresh install; (c) dispatcher authoritative: install its hotfix set and bump `config.ini` to its version. | **(a)** — the bytes girpr puts in place are the latest base build, so only its revision set can describe the finished install; (b) can fetch stale hotfixes and make the game re-verify, which is this feature's failure case, and cannot start from a fresh install. Requires that the versioned key/seed from B2(a) cover `meta.latest`, and that the version disagreement be reported as a metadata failure rather than silently reconciled. | **(a)** — chosen. |
@@ -882,8 +882,8 @@ to implementation/planning.
 ## 6.6. Recommended next steps (at research time)
 
 Recorded when the research was written; steps 1-4 now describe the shipped opt-in
-tier (`docs/09` holds the plan). Step 5 is an **operator step**, not a repo test:
-see `README.md`'s "Manual verification" note. The original list follows:
+tier (docs/03 §7 holds the implementation design). Step 5 is an **operator
+step**, not a repo test: see `README.md`'s "Manual verification" note. The original list follows:
 
 1. Decide the dispatcher strategy (port the Collapse decoder vs. a minimal
    maintained key/seed table) and add it behind a dedicated flag so the existing
@@ -925,8 +925,8 @@ git submodule add https://github.com/GesthosNetwork/GI-Live-Hotfix-Downloader.gi
   dispatch and shows the revision format (`1284249_ba7ad33643` — number + hash)
   with separate `res` / `silence` / `data` revisions, i.e. the same triple Collapse
   writes as separate scalar files. It also mirrors `silence_data_versions_persist`
-  (and `data_versions_medium_persist`), which is why `docs/09` maintains the
-   silence mirror. It is a second, independent implementation of
+  (and `data_versions_medium_persist`), which is why the shipped tier (docs/03
+  §7) maintains the silence mirror. It is a second, independent implementation of
   the download half.
 
 Why `GenshinSlimmer` is worth keeping locally:

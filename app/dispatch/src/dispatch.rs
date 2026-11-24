@@ -3,7 +3,8 @@
 //! One call takes a biz and the version from `metadata.rs` (`meta.latest`, not
 //! a pre-repair local version), plus the two transport seams. It returns the
 //! typed value the later phases consume. There is no HTTP client here, no
-//! manifest fetch and no file or marker write: those belong to later commits.
+//! manifest fetch and no file or marker write: those belong to the fetch and
+//! repair phases.
 
 use crate::crypto::decode_base64;
 use crate::metadata::load_dispatch_keys_with_pin;
@@ -61,7 +62,7 @@ impl ManifestKind {
 }
 
 /// One mirrored manifest: its fetch URL and the MD5/size gate from the
-/// descriptor NDJSON, exactly as published in `docs/09` §4.1.
+/// descriptor NDJSON, exactly as published in docs/03 §7.4.1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestDescriptor {
     pub kind: ManifestKind,

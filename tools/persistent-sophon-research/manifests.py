@@ -6,7 +6,7 @@ only small samples (never the full blob) to ``samples/``.
 
 All three manifests are fetched: res, data and silence. The live 2026-11-23
 probe fetched only res+data; the silence descriptor (proto root 3 -> 20) is
-captured here as required by docs/09 §2.1 step 3.
+captured here as required by docs/03 §7.2 step 3.
 """
 from __future__ import annotations
 

@@ -51,7 +51,7 @@ response is nevertheless unmistakably Bilibili: `properties_2 = 22102` (CN =
 22101), `cnqd01-ugc-{download,upload,picture-download}` and
 `ugc-api-qd(-static).mihoyo.com` URLs, and a `special_region=true` customer
 service URL (field 10/44), while CN uses `cngf01-*` / `ugc-api.mihoyo.com`.
-The codename check in `docs/09` §4.4 must therefore accept `hk4e_cn` for
+The codename check in docs/03 §7.4.4 must therefore accept `hk4e_cn` for
 `--biz hk4e_bilibili`; use `properties_2` or the host for the strict channel
 assertion. Codename behaviour is a decoder concern; B4's acceptance criteria
 do not include it.
@@ -94,7 +94,7 @@ Full URLs are recorded verbatim in `samples/{,hk4e_cn.,hk4e_bilibili.}full_manif
 Recognised keys: `remoteName`, `md5`, `hash` (XXH64 hex), `fileSize` on every
 row; extra tolerated keys `category` (496 res rows), `isPatch` (10 res + 1 data
 row), `localName` (2 res rows). Row counts: 2631 res + 533 data + 4 silence =
-**3168 rows per biz** (the silence count is new; docs/09's "3,164" covered only
+**3168 rows per biz** (the silence count is new; the earlier count in docs/03 §7 ("3,164") covered only
 res+data). All three biz serve byte-identical manifests at this revision.
 
 ## Samples committed for the offline tests

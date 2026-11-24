@@ -26,7 +26,7 @@ closed the game.
 
 The revision pair is **self-healing**: with `base_res_version_hash` and the
 asset database intact, the game re-queries the dispatcher, rewrites the revision
-files and still skips verification. This does not contradict `docs/09` (writing
+files and still skips verification. This does not contradict docs/03 §7 (writing
 them is still correct and avoids the freeze / extra network round trip), but it
 shows they are *not* the master switch. The master switch is
 `base_res_version_hash` (ablation A). `res_revision_eternal` is regenerated

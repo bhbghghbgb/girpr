@@ -1,6 +1,6 @@
 //! Persistent manifests and full-file hotfix downloads.
 //!
-//! Two additions, deliberately without product wiring (docs/09 commit 5):
+//! Two additions, deliberately without product wiring (docs/03 §7.8, commit 5):
 //!
 //! - the three descriptors from [`DispatchInfo`] are fetched through the
 //!   shared reqwest client and retry policy, verified against their descriptor
@@ -415,7 +415,7 @@ fn clear_readonly(path: &Path) {
 
 /// Could this target be opened for writing? A directory or a locked file
 /// answers no; that is when the verified temp sibling becomes the deliverable
-/// rather than an error (docs/09 §5.2.4 step 3).
+/// rather than an error (docs/03 §7.5.2 item 4).
 fn can_open_for_write(path: &Path) -> bool {
     std::fs::OpenOptions::new().write(true).open(path).is_ok()
 }
