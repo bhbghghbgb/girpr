@@ -1,0 +1,28 @@
+[package]
+name = "girpr-persistent-plan"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "Persistent-directory plan values and pure decisions for girpr"
+
+[lib]
+name = "girpr_persistent_plan"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The dispatcher's value types are the only product dependency: `source` is a
+# `ManifestKind` and the URL/marker inputs come from `DispatchInfo`. No fetch
+# edge — this crate never opens a socket or a file.
+girpr-dispatch = { path = "../dispatch" }
+# Digest spelling (MD5 and XXH64) and the path mechanics (clean rel spelling
+# and the case-folded identity key) are the two leaves this crate is allowed
+# to depend on. Everything else here is a pure decision over values.
+girpr-digest = { path = "../../crates/digest" }
+girpr-util-path = { path = "../util-path" }
+# NDJSON is the manifest wire shape; serde's unknown-key tolerance is what
+# makes `isPatch`/`category`/`localName` parsed-but-ignored rather than fatal.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

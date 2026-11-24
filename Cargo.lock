@@ -940,16 +940,20 @@ dependencies = [
  "futures-util",
  "girpr-chunk-identity",
  "girpr-digest",
+ "girpr-dispatch",
  "girpr-loopback-mock",
  "girpr-model",
+ "girpr-persistent-plan",
  "girpr-proto",
  "girpr-retry",
+ "girpr-tempdir",
  "girpr-util-hash",
  "girpr-util-path",
  "prost",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "zstd",
@@ -1016,6 +1020,17 @@ name = "girpr-path-shape"
 version = "0.1.0"
 dependencies = [
  "girpr-fs-names",
+]
+
+[[package]]
+name = "girpr-persistent-plan"
+version = "0.1.0"
+dependencies = [
+ "girpr-digest",
+ "girpr-dispatch",
+ "girpr-util-path",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
