@@ -860,7 +860,8 @@ a `persistent/` directory (raw manifests + a handful of full-file blobs). The
 writers go through `emit::write_bytes`/`write_doc` so `MANIFEST.json →
 files[]` and `verify/checksums.json` pick them up automatically
 (`tools/capture/src/emit/{mod,tree,index}.rs`); the captured-body arrays in
-`tools/capture/src/hyp/mod.rs` (`ValidatedCapture::bodies()`) and the records in
+`tools/capture/src/hyp/mod.rs` (`Captured::bodies()` / `Captured::all_bodies()`)
+and the records in
 `tools/capture/src/verify/{checks,list}.rs` keep `gircap verify` and
 `gircap list` honest. A `persistent` matrix class in
 `tools/capture/src/select/classes.rs` (`Class::ALL`, `REQUIRED_ORDER`, `id()`
@@ -896,7 +897,7 @@ at C8; C6–C8 landed together before any release.
 | 7 | `feat(persistent): repair persistent files in the execute half` | `src/repair/mod.rs`, new persistent repair module, mock routes, tests | download/fallback/gate/prereq/read-only cases; failure → 3 skips post |
 | 8 | `feat(persistent): publish markers last and check them` | `src/repair/phases/post.rs`, `src/repair/phases/check.rs`, tests | marker byte pins (incl. `res_revision_eternal`), three-mirror publish (res/data/silence), C19/C20/C16/C5 cases, `config.ini` ordering |
 | 9 | `test(capture): extend gircap bundle and bridge for persistent` | `tools/capture/`, `app/test-fixtures/`, `tests/artifact_bridge.rs`, `docs/06` note | `gircap verify`; bridge cases green against a captured bundle |
-| 10 | `docs(persistent): update README and research status; record real-install verification` | `README.md`, docs/01 §6 | doc review; recorded manual verification result |
+| 10 | `docs(persistent): fold research into docs/01 and document the flag` (c6e8e763); `docs(persistent): fold the plan into docs/03 and retire the two separate follow-up docs` (8934ffac) | `README.md`, docs/01 §6, docs/03 §7 | doc review; real-install launch remains an operator step |
 
 Where a commit's tests need a fixture the earlier fixture commit did not
 provide, add that fixture in the same commit as its consumer (the bridge's

@@ -745,6 +745,23 @@ fn fetch_url_names(chunk_id: &str, url: Option<&str>) -> bool {
         .is_some_and(|last| last.starts_with(chunk_id))
 }
 
+/// Read the optional dispatch record, reporting why P1 cannot hold rather than
+/// returning early: P2 is an independent assertion and still needs its row.
+fn read_dispatch_record(
+    path: &Path,
+) -> Result<crate::persistent::DispatchRecord, (String, String)> {
+    let raw = std::fs::read(path).map_err(|e| ("readable".into(), e.to_string()))?;
+    let record: crate::persistent::DispatchRecord =
+        serde_json::from_slice(&raw).map_err(|e| ("parseable".into(), e.to_string()))?;
+    if record.schema_version != crate::SCHEMA_VERSION {
+        return Err((
+            format!("schema {}", crate::SCHEMA_VERSION),
+            format!("schema {}", record.schema_version),
+        ));
+    }
+    Ok(record)
+}
+
 /// A13, re-read from disk.
 ///
 /// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the
@@ -764,55 +781,66 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
 
     let record_path = root.join("dispatch").join("record.json");
     if record_path.is_file() {
-        let raw = match std::fs::read(&record_path) {
-            Ok(b) => b,
-            Err(e) => {
-                return vec![Assertion::fail(
-                    "P1",
-                    P1,
-                    "dispatch/record.json",
-                    "readable",
-                    &e.to_string(),
-                )];
-            }
-        };
-        let record: crate::persistent::DispatchRecord = match serde_json::from_slice(&raw) {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![Assertion::fail(
-                    "P1",
-                    P1,
-                    "dispatch/record.json",
-                    "parseable",
-                    &e.to_string(),
-                )];
-            }
-        };
-        if record.schema_version != crate::SCHEMA_VERSION {
-            return vec![Assertion::fail(
+        match read_dispatch_record(&record_path) {
+            Err((expected, actual)) => rows.push(Assertion::fail(
                 "P1",
                 P1,
                 "dispatch/record.json",
-                &format!("schema {}", crate::SCHEMA_VERSION),
-                &format!("schema {}", record.schema_version),
-            )];
+                &expected,
+                &actual,
+            )),
+            Ok(record) => {
+                // The envelope is a path from a fixture someone may have edited.
+                // Refuse `..`, absolute, backslash and drive paths before the
+                // join, exactly as the replay server does.
+                if let Some(problem) = crate::paths::relative_path_problem(&record.envelope) {
+                    rows.push(Assertion::fail(
+                        "P1",
+                        P1,
+                        "dispatch/record.json",
+                        "a bundle-relative envelope path",
+                        &problem,
+                    ));
+                } else {
+                    let envelope = root.join(&record.envelope);
+                    let mut problems = Vec::new();
+                    let actual = match std::fs::read(&envelope) {
+                        Ok(b) => {
+                            if b.len() as u64 != record.ciphertext_bytes {
+                                problems.push(format!(
+                                    "ciphertext_bytes {} != envelope length {}",
+                                    record.ciphertext_bytes,
+                                    b.len()
+                                ));
+                            }
+                            format!("{} {}", hash::md5_hex(&b), hash::sha256_hex(&b))
+                        }
+                        Err(e) => {
+                            problems.push(format!("envelope unreadable: {e}"));
+                            format!("unreadable: {e}")
+                        }
+                    };
+                    let expected = format!("{} {}", record.envelope_md5, record.envelope_sha256);
+                    let listed = manifest
+                        .files
+                        .iter()
+                        .find(|f| f.path == record.envelope)
+                        .map(|f| f.md5.as_str())
+                        .unwrap_or("<not listed in MANIFEST.json>");
+                    if listed != record.envelope_md5 {
+                        problems.push(format!("envelope md5 listed as {listed}"));
+                    }
+                    rows.push(if actual == expected && problems.is_empty() {
+                        Assertion::pass("P1", P1, &record.envelope, &expected)
+                    } else {
+                        if actual != expected {
+                            problems.push(format!("digests {actual} instead of {expected}"));
+                        }
+                        Assertion::fail("P1", P1, &record.envelope, &expected, &problems.join("; "))
+                    });
+                }
+            }
         }
-        let envelope = root.join(&record.envelope);
-        let actual = std::fs::read(&envelope)
-            .map(|b| format!("{} {}", hash::md5_hex(&b), hash::sha256_hex(&b)))
-            .unwrap_or_else(|e| format!("unreadable: {e}"));
-        let expected = format!("{} {}", record.envelope_md5, record.envelope_sha256);
-        let listed = manifest
-            .files
-            .iter()
-            .find(|f| f.path == record.envelope)
-            .map(|f| f.md5.as_str())
-            .unwrap_or("<not listed in MANIFEST.json>");
-        rows.push(if actual == expected && listed == record.envelope_md5 {
-            Assertion::pass("P1", P1, &record.envelope, &expected)
-        } else {
-            Assertion::fail("P1", P1, &record.envelope, &expected, &actual)
-        });
     }
 
     let index_path = root.join("persistent").join("index.json");
@@ -1053,5 +1081,217 @@ mod tests {
         for _ in 0..8 {
             assert_eq!(check_blobs(&root, &index, ceiling), first);
         }
+    }
+
+    fn read_manifest(root: &Path) -> Manifest {
+        let raw = std::fs::read(root.join("MANIFEST.json")).expect("read MANIFEST.json");
+        serde_json::from_slice(&raw).expect("parse MANIFEST.json")
+    }
+
+    /// A record whose envelope digests match, for the cases where the guard is
+    /// the *only* thing standing between a bad path and a green P1 row.
+    fn valid_record(envelope: &str, body: &[u8]) -> crate::persistent::DispatchRecord {
+        use crate::persistent::{Decoded, Descriptor};
+
+        let (bytes, md5, sha256) = crate::persistent::digest(body);
+        let envelope_md5 = md5.clone();
+        let envelope_sha256 = sha256.clone();
+        let descriptor = |kind: &str, name: &str| Descriptor {
+            kind: kind.into(),
+            remote_name: name.into(),
+            url: format!("http://127.0.0.1:1/{name}"),
+            md5: md5.clone(),
+            file_size: bytes,
+        };
+        crate::persistent::DispatchRecord {
+            schema_version: crate::SCHEMA_VERSION,
+            version: "9.9".into(),
+            query_version: "OSRELWin9.9.0".into(),
+            key_fingerprint: "test-fingerprint".into(),
+            seed: "test-seed".into(),
+            envelope: envelope.into(),
+            envelope_md5,
+            envelope_sha256,
+            ciphertext_bytes: bytes,
+            decoded: Decoded {
+                game_version: "9.9".into(),
+                channel_name: "OSRELWin".into(),
+                codename: "hk4e_global".into(),
+                res_revision: 1,
+                data_revision: 2,
+                silence_revision: 3,
+                audio_revision: 4,
+                res_hash: "aa".into(),
+                data_hash: "bb".into(),
+                silence_hash: "cc".into(),
+                audio_hash: "dd".into(),
+                repo_res_version_url: "http://127.0.0.1:1/res".into(),
+                repo_design_data_url: "http://127.0.0.1:1/data".into(),
+                base_revision: "1 aa".into(),
+                descriptors: [
+                    descriptor("res", "res_versions_external"),
+                    descriptor("data", "data_versions"),
+                    descriptor("silence_data", "silence_data_versions"),
+                ],
+            },
+        }
+    }
+
+    fn write_dispatch(
+        root: &Path,
+        manifest: &mut Manifest,
+        record: &crate::persistent::DispatchRecord,
+        body: &[u8],
+    ) {
+        write_dispatch_raw(
+            root,
+            &serde_json::to_vec_pretty(record).expect("serialize record"),
+        );
+        let full = root.join(&record.envelope);
+        std::fs::create_dir_all(full.parent().expect("has a parent")).expect("envelope dir");
+        std::fs::write(&full, body).expect("write envelope");
+        manifest.files.push(crate::emit::index::FileEntry {
+            path: record.envelope.clone(),
+            bytes: body.len() as u64,
+            md5: record.envelope_md5.clone(),
+            sha256: record.envelope_sha256.clone(),
+            encoding: hash::Encoding::Identity,
+        });
+    }
+
+    fn write_dispatch_raw(root: &Path, raw: &[u8]) {
+        std::fs::create_dir_all(root.join("dispatch")).expect("dispatch dir");
+        std::fs::write(root.join("dispatch/record.json"), raw).expect("write record");
+    }
+
+    /// Make P2 green so the test says something about its *presence*, not about
+    /// a second failure masking the first.
+    fn write_persistent_index(root: &Path, manifest: &mut Manifest) {
+        use crate::persistent::{ManifestFile, PersistentIndex};
+
+        std::fs::create_dir_all(root.join("persistent")).expect("persistent dir");
+        let mut files = Vec::new();
+        for (kind, name) in [
+            ("res", "res_versions_persist"),
+            ("data", "data_versions_persist"),
+            ("silence_data", "silence_data_versions_persist"),
+        ] {
+            let body = format!("{kind} manifest bytes\n").into_bytes();
+            let path = format!("persistent/{name}");
+            std::fs::write(root.join(&path), &body).expect("write manifest body");
+            let md5 = hash::md5_hex(&body);
+            manifest.files.push(crate::emit::index::FileEntry {
+                path: path.clone(),
+                bytes: body.len() as u64,
+                md5: md5.clone(),
+                sha256: hash::sha256_hex(&body),
+                encoding: hash::Encoding::Identity,
+            });
+            files.push(ManifestFile {
+                kind: kind.into(),
+                path,
+                bytes: body.len() as u64,
+                md5,
+            });
+        }
+        let index = PersistentIndex {
+            schema_version: crate::SCHEMA_VERSION,
+            manifests: files.try_into().expect("three manifests"),
+            blobs: Vec::new(),
+        };
+        std::fs::write(
+            root.join("persistent/index.json"),
+            serde_json::to_vec_pretty(&index).expect("serialize index"),
+        )
+        .expect("write index");
+    }
+
+    /// A bad `dispatch/record.json` used to `return` a single P1 row, hiding
+    /// the independent P2 verdict. Both rows must always be present.
+    #[test]
+    fn malformed_dispatch_record_still_reports_both_persistent_rows() {
+        let body = b"envelope bytes";
+        let mut wrong_schema = serde_json::to_value(valid_record("dispatch/response.json", body))
+            .expect("serialize record");
+        wrong_schema["schema_version"] = serde_json::json!(crate::SCHEMA_VERSION + 1);
+        let bad_raws: Vec<Vec<u8>> = vec![
+            b"{".to_vec(),
+            serde_json::to_vec(&wrong_schema).expect("serialize bad schema"),
+        ];
+
+        for raw in bad_raws {
+            let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-p2-malformed");
+            let mut manifest = read_manifest(&root);
+            write_persistent_index(&root, &mut manifest);
+            write_dispatch_raw(&root, &raw);
+
+            let rows = check_persistent_records(&root, &manifest);
+            assert_eq!(
+                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                ["P1", "P2"],
+                "a broken P1 document must not suppress the P2 row"
+            );
+            assert!(!rows[0].ok && rows[1].ok, "P1 red, P2 green: {rows:?}");
+        }
+    }
+
+    /// Every digest matches and the file exists — but *outside* the bundle.
+    /// The shared containment guard, not a digest, is what makes this red.
+    #[test]
+    fn traversal_envelope_is_refused() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-traversal");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(&root, &mut manifest);
+        let body = b"escaped envelope bytes";
+        write_dispatch(
+            &root,
+            &mut manifest,
+            &valid_record("../escape.bin", body),
+            body,
+        );
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["P1", "P2"],
+            "the guard must not suppress the P2 row: {rows:?}"
+        );
+        assert!(!rows[0].ok, "an escaping envelope cannot pass P1: {rows:?}");
+        assert!(rows[1].ok, "P2 is independent: {rows:?}");
+        assert!(
+            rows[0].actual.contains("escapes the bundle root"),
+            "the refusal should name the path problem: {:?}",
+            rows[0].actual
+        );
+    }
+
+    /// A record can re-checksum its edited bytes; the byte-count claim is the
+    /// part that catches a body that was swapped for one of a different size.
+    #[test]
+    fn ciphertext_bytes_must_match_the_envelope_length() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-ciphertext");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(&root, &mut manifest);
+        let body = b"envelope bytes";
+        let mut record = valid_record("dispatch/response.json", body);
+        record.ciphertext_bytes += 1;
+        write_dispatch(&root, &mut manifest, &record, body);
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["P1", "P2"],
+            "the byte-count failure must not suppress P2: {rows:?}"
+        );
+        assert!(
+            !rows[0].ok,
+            "a wrong ciphertext_bytes cannot pass P1: {rows:?}"
+        );
+        assert!(rows[1].ok, "P2 is independent: {rows:?}");
+        assert!(
+            rows[0].actual.contains("ciphertext_bytes"),
+            "the failure should name the mismatched claim: {:?}",
+            rows[0].actual
+        );
     }
 }

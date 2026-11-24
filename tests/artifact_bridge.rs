@@ -256,7 +256,9 @@ fn patchmaps(bundle: &Bundle) -> Patchmaps {
 
 /// `gircap verify --artifact <dir>`, exit `0`. **The precondition** of every
 /// run (`docs/06` §3): it makes a failing check rule the bundle out as the
-/// cause instead of leaving it as the first suspect.
+/// cause instead of leaving it as the first suspect. The persistent case calls
+/// it once more afterwards, so read-only replay is checked as a postcondition
+/// too (`docs/03` §7.7).
 ///
 /// Deliberately **not** re-implemented here — `gircap` owns that verdict, and
 /// a second implementation would be a second thing to be wrong. When `gircap`
@@ -286,14 +288,11 @@ async fn assert_bundle_verifies(bundle: &Bundle) {
     assert_eq!(
         code,
         0,
-        "`gircap verify` must pass before the bridge runs anything against this bundle.\n\
+        "`gircap verify` must pass around every bridge run against this bundle.\n\
          stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    println!(
-        "precondition: gircap verify {} -> exit 0",
-        bundle.root.display()
-    );
+    println!("gircap verify {} -> exit 0", bundle.root.display());
 }
 
 fn girpr_exe_dir() -> PathBuf {
@@ -1079,6 +1078,11 @@ async fn drive_persistent(handle: &SuiteRun) {
             .join("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk");
         assert!(!ro_hotfix.exists(), "a read-only run downloads no hotfix");
     }
+
+    // Replay must not mutate the bundle: docs/03 §7.7 promises `gircap verify`
+    // still passes after the run. Same check as the precondition, now as a
+    // postcondition, so a writer that reaches back into the fixture is caught.
+    assert_bundle_verifies(bundle).await;
 
     println!(
         "bridge persistent: replayed {} manifests, {} blobs and all 9 markers",
