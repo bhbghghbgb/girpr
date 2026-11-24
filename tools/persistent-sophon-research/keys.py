@@ -45,8 +45,22 @@ def rsa_from_xml(xml: str) -> RSA.RsaKey:
     return RSA.construct((n, e, d))
 
 
-def dispatcher_key() -> RSA.RsaKey:
-    return rsa_from_xml((HERE / "dispatch_rsa.xml").read_text(encoding="utf-8"))
+def dispatcher_key_path(biz: str = "hk4e_global") -> Path:
+    """Where an unwrapped per-biz dispatcher key is cached (gitignored ``raw/``)."""
+    return HERE / "raw" / "dispatcher_keys" / f"{biz}.xml"
+
+
+def dispatcher_key(biz: str = "hk4e_global") -> RSA.RsaKey:
+    """Load the per-biz dispatcher key unwrapped by ``fetch_metadata.py``.
+
+    Global also has the public GenshinSlimmer copy checked in, used as a
+    fallback when metadata has not been fetched yet. CN/Bili keys only exist
+    in the gitignored ``raw/`` cache.
+    """
+    p = dispatcher_key_path(biz)
+    if not p.exists() and biz == "hk4e_global":
+        p = HERE / "dispatch_rsa.xml"
+    return rsa_from_xml(p.read_text(encoding="utf-8"))
 
 
 def is_magic(raw: bytes) -> bool:

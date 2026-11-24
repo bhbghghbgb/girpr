@@ -1,22 +1,35 @@
 """Query the LIVE Genshin dispatcher (``query_cur_region``) and decode it.
 
-Reuses seed/URL template from ``samples/metadata_summary.json`` (produced by
-``fetch_metadata.py``) and the public RSA key in ``dispatch_rsa.xml``.
+Reuses the per-biz URL template, seed and RSA key unwrapped from Collapse's
+release metadata (``fetch_metadata.py``). The subdomain/channel tuple is pinned
+by evidence, not inferred:
 
-Produces in ``samples/``:
+* the per-biz ``GameDispatchURL`` in the metadata pins the CN/Bili host,
+  ``lang``, ``time``, channel params and ``key_id`` outright;
+* Collapse ``PresetConfig.cs:815-823`` maps (SubChannelID, ChannelID) to region
+  id 4/5, and ``DispatchHelper.cs:173-194`` maps 4 -> ``cngfdispatch``,
+  5 -> ``cnqddispatch``; ``DispatchHelper.cs:43-46`` selects ``CNRELWin`` for
+  region >= 4 (``OSRELWin`` otherwise);
+* GenshinSlimmer.ps1:927 uses the same CN host list for ``CN*`` channels.
+
+Produces in ``samples/`` (global keeps the historical file names):
   * ``dispatch_summary.json`` — HTTP facts, field numbers/values (all fields,
     including ones the local .proto omits), derived CDN URLs, manifest stats.
   * ``dispatch_fields.txt`` — full generic protobuf field dump (root + nested).
   * ``res_versions_external.head.ndjson`` / ``data_versions.head.ndjson`` /
-    ``silence_versions.head.ndjson`` — first 40 lines only (NOT full blobs).
+    ``silence_data_versions.head.ndjson`` — first 40 lines only (NOT full blobs).
   * ``persistent_paths.sample.txt`` — first 300 ``remoteName`` values with
     their md5/hash, for cross-matching against Sophon manifests.
+
+For non-global biz the same files are written with a ``<biz>.`` prefix so the
+global probe samples are never overwritten by a re-run.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,18 +54,39 @@ DEFAULT_URL_TEMPLATE = (
     "&lang=1&platform=3&binary=1&time=260&channel_id=1&sub_channel_id=1"
     "&account_type=1&dispatchSeed={2}&key_id=5"
 )
-HOSTS = ["osusadispatch", "oseurodispatch", "osasiadispatch"]
-VERSIONS = ["OSRELWin7.2.0"]
+# Channel prefix: Collapse DispatchHelper.cs:43-46 (CNRELWin from region id 4).
+BIZ_CHANNEL = {
+    "hk4e_global": "OSRELWin",
+    "hk4e_cn": "CNRELWin",
+    "hk4e_bilibili": "CNRELWin",
+}
+# Ordered host lists: pinned metadata host first, then Collapse's region table /
+# GenshinSlimmer CN fallback. Global's first entry is the live-probe pinned host.
+BIZ_HOSTS = {
+    "hk4e_global": ["osusadispatch", "oseurodispatch", "osasiadispatch"],
+    "hk4e_cn": ["cngfdispatch", "cnqddispatch"],
+    "hk4e_bilibili": ["cnqddispatch", "cngfdispatch"],
+}
+DEFAULT_VERSION_NUMBER = "7.2.0"  # from the pinned global probe
 
 
-def load_metadata() -> tuple[str, str]:
+def load_metadata(biz: str) -> tuple[str, str]:
     p = SAMPLES / "metadata_summary.json"
     if p.exists():
-        fields = json.loads(p.read_text(encoding="utf-8"))["fields"]
-        return fields.get("GameDispatchURL", DEFAULT_URL_TEMPLATE), fields.get(
-            "ProtoDispatchKey", "018bc9560abc707f"
+        obj = json.loads(p.read_text(encoding="utf-8"))
+        per_biz = obj.get("biz", {}).get(biz, {})
+        fields = per_biz.get("fields") or obj.get("fields", {})
+        return (
+            fields.get("GameDispatchURL", DEFAULT_URL_TEMPLATE),
+            fields.get("ProtoDispatchKey", "018bc9560abc707f"),
         )
     return DEFAULT_URL_TEMPLATE, "018bc9560abc707f"
+
+
+def build_url(tmpl: str, subdomain: str, ver: str, seed: str) -> str:
+    url = tmpl.format(subdomain, ver, seed)
+    # CN/Bili templates pin the host outright; substitute it for the fallback sweep.
+    return re.sub(r"(?<=https://)[^/?]+", f"{subdomain}.yuanshen.com", url, count=1)
 
 
 def decrypt_content(content_b64: str, key) -> bytes:
@@ -69,7 +103,7 @@ def decrypt_content(content_b64: str, key) -> bytes:
     return bytes(out)
 
 
-def parse_manifest(text: str | None, name: str) -> dict:
+def parse_manifest(text: str | None, name: str, prefix: str = "") -> dict:
     if not text:
         return {"present": False, "lines": 0, "sample": []}
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -90,7 +124,9 @@ def parse_manifest(text: str | None, name: str) -> dict:
             )
         else:
             sample.append({"raw": str(obj)[:300]})
-    (SAMPLES / f"{name}.head.ndjson").write_text("\n".join(lines[:40]) + "\n", encoding="utf-8")
+    (SAMPLES / f"{prefix}{name}.head.ndjson").write_text(
+        "\n".join(lines[:40]) + "\n", encoding="utf-8"
+    )
     return {
         "present": True,
         "lines": len(lines),
@@ -110,52 +146,61 @@ def _keys(line: str) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default=None, help="e.g. OSRELWin7.2.0")
-    ap.add_argument("--host", default=None, help="e.g. osusadispatch")
+    ap.add_argument("--biz", default="hk4e_global", choices=sorted(BIZ_CHANNEL))
+    ap.add_argument("--version", default=None, help="full version, e.g. CNRELWin7.2.0")
+    ap.add_argument("--host", default=None, help="e.g. cngfdispatch")
     ap.add_argument("--seed", default=None)
     args = ap.parse_args()
 
-    tmpl, seed = load_metadata()
+    biz = args.biz
+    prefix = "" if biz == "hk4e_global" else f"{biz}."
+    channel = BIZ_CHANNEL[biz]
+    tmpl, seed = load_metadata(biz)
     seed = args.seed or seed
-    versions = [args.version] if args.version else VERSIONS
-    hosts = [args.host] if args.host else HOSTS
-    key = dispatcher_key()
+    ver = args.version or f"{channel}{DEFAULT_VERSION_NUMBER}"
+    hosts = [args.host] if args.host else BIZ_HOSTS[biz]
+    key = dispatcher_key(biz)
 
     resp_data = None
     used = {}
     s = make_session()
-    for ver in versions:
-        for host in hosts:
-            url = tmpl.format(host, ver, seed)
-            try:
-                r = get(s, url, timeout=15)
-            except Exception as e:
-                print(f"[query] {host} {ver}: transport error {e}")
-                continue
-            ctype = r.headers.get("content-type")
-            print(f"[query] {host} {ver}: HTTP {r.status_code} {ctype} {len(r.content)}B")
-            if r.status_code != 200:
-                continue
-            try:
-                j = r.json()
-            except Exception:
-                print(f"         non-JSON body: {r.text[:200]!r}")
-                continue
-            if set(j.keys()) != {"content", "sign"} or not j.get("content"):
-                print(f"         unexpected JSON keys {sorted(j.keys())}")
-                continue
-            enc = base64.b64decode(j["content"] + "=" * (-len(j["content"]) % 4))
-            if len(enc) < 512 or len(enc) % 256:
-                print(f"         unusable ciphertext ({len(enc)}B) — stale seed?")
-                continue
-            resp_data = (r, j, url)
-            used = {"host": host, "version": ver, "seed": seed, "url": url}
-            break
-        if resp_data:
-            break
+    for host in hosts:
+        url = build_url(tmpl, host, ver, seed)
+        try:
+            r = get(s, url, timeout=15)
+        except Exception as e:
+            print(f"[query] {biz} {host} {ver}: transport error {e}")
+            continue
+        ctype = r.headers.get("content-type")
+        print(f"[query] {biz} {host} {ver}: HTTP {r.status_code} {ctype} {len(r.content)}B")
+        if r.status_code != 200:
+            continue
+        try:
+            j = r.json()
+        except Exception:
+            print(f"         non-JSON body: {r.text[:200]!r}")
+            continue
+        if set(j.keys()) != {"content", "sign"} or not j.get("content"):
+            print(f"         unexpected JSON keys {sorted(j.keys())}")
+            continue
+        enc = base64.b64decode(j["content"] + "=" * (-len(j["content"]) % 4))
+        if len(enc) < 512 or len(enc) % 256:
+            print(f"         unusable ciphertext ({len(enc)}B) — stale seed/version/key?")
+            continue
+        resp_data = (r, j, url)
+        used = {
+            "biz": biz,
+            "host": host,
+            "version": ver,
+            "seed": seed,
+            "channel": channel,
+            "url": url,
+            "key_sha256": sha256_hex(key.export_key("DER")),
+        }
+        break
 
     if resp_data is None:
-        print("No usable dispatcher response. See README troubleshooting.")
+        print(f"No usable dispatcher response for {biz}. See README troubleshooting.")
         return 2
     r, j, url = resp_data
     print(f"[decrypt] {len(base64.b64decode(j['content']))}B ciphertext")
@@ -170,7 +215,7 @@ def main() -> int:
     rv_buf = first(props, 22)
     rv = parse_fields(rv_buf) if rv_buf else {}
     dump += ["=== FIELD 22 RepoResVersionProperties (all fields) ===", dump_fields(rv), ""]
-    (SAMPLES / "dispatch_fields.txt").write_text("\n".join(dump), encoding="utf-8")
+    (SAMPLES / f"{prefix}dispatch_fields.txt").write_text("\n".join(dump), encoding="utf-8")
 
     def pstr(fields, n):
         return as_str(first(fields, n))
@@ -188,9 +233,9 @@ def main() -> int:
     res_base = pstr(props, 8)
     data_base = pstr(props, 9)
 
-    res_manifest = parse_manifest(pstr(rv, 3), "res_versions_external")
-    data_manifest = parse_manifest(pstr(props, 19), "data_versions")
-    sil_manifest = parse_manifest(pstr(props, 20), "silence_data_versions")
+    res_manifest = parse_manifest(pstr(rv, 3), "res_versions_external", prefix)
+    data_manifest = parse_manifest(pstr(props, 19), "data_versions", prefix)
+    sil_manifest = parse_manifest(pstr(props, 20), "silence_data_versions", prefix)
 
     derived = {}
     if res_base and res_num and res_hash:
@@ -202,6 +247,11 @@ def main() -> int:
         base = f"{data_base.rstrip('/')}/output_{data_num}_{data_hash}/client/General"
         derived["client_design_data_url"] = base
         derived["data_versions_url"] = f"{base}/AssetBundles/data_versions"
+    if data_base and sil_num and sil_hash:
+        derived["silence_data_versions_url"] = (
+            f"{data_base.rstrip('/')}/output_{sil_num}_{sil_hash}"
+            "/client_silence/General/AssetBundles/data_versions"
+        )
 
     # Save a trim set of hotfix-looking remoteNames for cross-matching later.
     persistent_paths = []
@@ -209,7 +259,7 @@ def main() -> int:
         for entry in manifest.get("sample", []):
             if "remoteName" in entry:
                 persistent_paths.append(entry)
-    (SAMPLES / "persistent_paths.sample.txt").write_text(
+    (SAMPLES / f"{prefix}persistent_paths.sample.txt").write_text(
         "\n".join(
             f"{e.get('remoteName')}\t{e.get('md5')}\t{e.get('hash')}" for e in persistent_paths
         ),
@@ -233,11 +283,22 @@ def main() -> int:
             "root_field_numbers": sorted(root),
             "properties_field_numbers": sorted(props),
             "resver_field_numbers": sorted(rv),
-            "root_unknown_11_12": [first(root, 11).hex()[:200] if first(root, 11) else None,
-                                   first(root, 12).hex()[:200] if first(root, 12) else None],
-            "properties_38_47": {str(n): (as_str(first(props, n)) or
-                                          (first(props, n).hex()[:200] if isinstance(first(props, n), bytes) else first(props, n)))
-                                 for n in range(38, 48) if n in props},
+            "root_unknown_11_12": [
+                first(root, 11).hex()[:200] if first(root, 11) else None,
+                first(root, 12).hex()[:200] if first(root, 12) else None,
+            ],
+            "properties_38_47": {
+                str(n): (
+                    as_str(first(props, n))
+                    or (
+                        first(props, n).hex()[:200]
+                        if isinstance(first(props, n), bytes)
+                        else first(props, n)
+                    )
+                )
+                for n in range(38, 48)
+                if n in props
+            },
         },
         "values": {
             "res_revision": res_num,
@@ -249,7 +310,9 @@ def main() -> int:
             "repo_res_version_url": res_base,
             "repo_design_data_url": data_base,
             "game_version_from_props": pstr(props, 12),
+            "res_version_field_6": pstr(rv, 6),
             "server_name": pstr(props, 7),
+            "codename": pstr(props, 36),
         },
         "derived_urls": derived,
         "manifests": {
@@ -258,10 +321,10 @@ def main() -> int:
             "silence_data_versions": sil_manifest,
         },
     }
-    p = save_json("dispatch_summary.json", summary)
+    p = save_json(f"{prefix}dispatch_summary.json", summary)
     print(f"[saved ] {p}")
-    print(json.dumps(summary["values"], indent=2))
-    print(json.dumps(derived, indent=2))
+    print(json.dumps(summary["values"], indent=2, ensure_ascii=True))
+    print(json.dumps(derived, indent=2, ensure_ascii=True))
     print(json.dumps({k: v["lines"] for k, v in summary["manifests"].items()}, indent=2))
     return 0
 

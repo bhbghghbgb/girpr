@@ -1,0 +1,200 @@
+{
+  "queried_at_utc": "2026-11-24T10:42:40.865445+00:00",
+  "used": {
+    "biz": "hk4e_bilibili",
+    "host": "cnqddispatch",
+    "version": "CNRELWin7.2.0",
+    "seed": "e17f04ce947d859a",
+    "channel": "CNRELWin",
+    "url": "https://cnqddispatch.yuanshen.com/query_cur_region?version=CNRELWin7.2.0&lang=2&platform=3&binary=1&time=561&channel_id=14&sub_channel_id=0&account_type=0&dispatchSeed=e17f04ce947d859a&key_id=4",
+    "key_sha256": "e27f729e1944a7550b51d27b3c3bf4b680209cb982413d3245d56df2ae7f0602"
+  },
+  "http": {
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "response_bytes": 8221,
+    "content_b64_bytes": 7852,
+    "sign_b64_bytes": 344,
+    "json_keys": [
+      "content",
+      "sign"
+    ]
+  },
+  "protobuf": {
+    "plaintext_bytes": 5627,
+    "plaintext_sha256": "a0ed224c3b7b023bda9eb3a682126769fc0df7e1893013cc38291f87002782a0",
+    "root_field_numbers": [
+      3,
+      11,
+      12,
+      14
+    ],
+    "properties_field_numbers": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      9,
+      10,
+      12,
+      14,
+      16,
+      18,
+      19,
+      20,
+      22,
+      24,
+      26,
+      27,
+      32,
+      33,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "resver_field_numbers": [
+      1,
+      3,
+      4,
+      5,
+      6
+    ],
+    "root_unknown_11_12": [
+      "4563326210000000057d09255f4e96440a1b8b280d29ab370008000016463623da8843672df443ba6b057315b7bff47e97db8fe5f013e91ed7ed1a823c51d4dcb0f1221afaa19272ea9209de8897b9f3a61347ee83157be52ae0023bab3af503db358f29",
+      "71af19c0659477e5a7a00a4e655b3b046449380baff2c023e5fb66d11bcbcdf7dde2ba3c09710720247a504f777de57bc7be5d5a35c5b006d6c403c53effea9ced47c8fbb1419843515b31fe468b81b20b73ce30bfe5520c4b1e3d89acc12c2bccf5e98f"
+    ],
+    "properties_38_47": {
+      "38": "https://cnqd01-ugc-download.yuanshen.com",
+      "39": "https://cnqd01-ugc-upload.yuanshen.com",
+      "40": "https://cnqd01-picture-download.yuanshen.com/",
+      "41": "https://act.mihoyo.com/ugc/prod",
+      "42": "https://ugc-api-qd.mihoyo.com",
+      "43": "https://ugc-api-qd-static.mihoyo.com",
+      "44": "https://webstatic.mihoyo.com/csc-custom-channel-fe/index.html?sign_type=2&auth_appid=csc&authkey_ver=1&page_id=41&special_region=true&win_direction=portrait#/questionList",
+      "45": "https://webstatic.mihoyo.com/csc-service-center-fe/index.html?is_ugc=1&sign_type=2&auth_appid=csc&authkey_ver=1&win_direction=portrait&login_type=account&page_id=45&goToHall=true",
+      "46": "https://act.mihoyo.com/ys/ugc_community/paimon-landing/index.html#/",
+      "47": "https://webstatic.mihoyo.com/ys/event/blue-post/index.html?gamewebview=1&page_sn=f79c1d05bc834176&mode=fullscreen&game_biz=hk4e_cn&sign_type=2&auth_appid=bluepost&authkey_ver=1&utm_source=game&utm_medium=ys&utm_campaign=hot"
+    }
+  },
+  "values": {
+    "res_revision": 49530578,
+    "res_hash": "62f1ec6cdb",
+    "data_revision": 49419538,
+    "data_hash": "604495f667",
+    "silence_revision": 49291486,
+    "silence_hash": "c25ba650a6",
+    "repo_res_version_url": "https://autopatchcn.yuanshen.com/client_game_res/7.2_live",
+    "repo_design_data_url": "https://autopatchcn.yuanshen.com/client_design_data/7.2_live",
+    "game_version_from_props": "7.2_live",
+    "res_version_field_6": "7.2_live",
+    "server_name": "CN",
+    "codename": "hk4e_cn"
+  },
+  "derived_urls": {
+    "client_game_res_url": "https://autopatchcn.yuanshen.com/client_game_res/7.2_live/output_49530578_62f1ec6cdb/client",
+    "res_versions_external_url": "https://autopatchcn.yuanshen.com/client_game_res/7.2_live/output_49530578_62f1ec6cdb/client/StandaloneWindows64/res_versions_external",
+    "base_revision_url": "https://autopatchcn.yuanshen.com/client_game_res/7.2_live/output_49530578_62f1ec6cdb/client/StandaloneWindows64/base_revision",
+    "client_design_data_url": "https://autopatchcn.yuanshen.com/client_design_data/7.2_live/output_49419538_604495f667/client/General",
+    "data_versions_url": "https://autopatchcn.yuanshen.com/client_design_data/7.2_live/output_49419538_604495f667/client/General/AssetBundles/data_versions",
+    "silence_data_versions_url": "https://autopatchcn.yuanshen.com/client_design_data/7.2_live/output_49291486_c25ba650a6/client_silence/General/AssetBundles/data_versions"
+  },
+  "manifests": {
+    "res_versions_external": {
+      "present": true,
+      "lines": 5,
+      "sample": [
+        {
+          "remoteName": "res_versions_external",
+          "md5": "9a1b5efc2e2b11475e74c88789d0f339",
+          "hash": "139b5535cfbb5087",
+          "fileSize": 370958
+        },
+        {
+          "remoteName": "res_versions_medium",
+          "md5": "b3a7ae8c4786acc780b9516964f56b71",
+          "hash": "e12d6db940998f48",
+          "fileSize": 207396
+        },
+        {
+          "remoteName": "res_versions_streaming",
+          "md5": "2751169240a2a88d189dbf6b8394a639",
+          "hash": "873509ef2f239940",
+          "fileSize": 183364
+        },
+        {
+          "remoteName": "base_revision",
+          "md5": "403247d78dc495d3bf57c7133d01978a",
+          "hash": "cb86f266266031bf",
+          "fileSize": 19
+        },
+        {
+          "remoteName": "patch_node_versions",
+          "md5": "4d9d8bd4ea394255cc01a9ee9b386773",
+          "hash": "4ed96969300e5caf",
+          "fileSize": 7390
+        }
+      ],
+      "sha256_of_full_text": "ffba349a3056cda73aacb7dfb78673eea92b9148b6b43e3a103883ed14b6146f",
+      "keys_seen": [
+        "fileSize",
+        "hash",
+        "md5",
+        "remoteName"
+      ]
+    },
+    "data_versions": {
+      "present": true,
+      "lines": 2,
+      "sample": [
+        {
+          "remoteName": "data_versions",
+          "md5": "09f2c36615dc806f67f55e3d2c8a0c8d",
+          "hash": "a5c0e5e8d7899cd3",
+          "fileSize": 71416
+        },
+        {
+          "remoteName": "data_versions_medium",
+          "md5": "1590ca382a5c7afd5b0f4f27f415d421",
+          "hash": "9b22eed549c60727",
+          "fileSize": 7002
+        }
+      ],
+      "sha256_of_full_text": "1d8c2902d34d280794b0e5cdc1e3fb9a64d2519aceb6c85cba00303d28392f87",
+      "keys_seen": [
+        "fileSize",
+        "hash",
+        "md5",
+        "remoteName"
+      ]
+    },
+    "silence_data_versions": {
+      "present": true,
+      "lines": 1,
+      "sample": [
+        {
+          "remoteName": "data_versions",
+          "md5": "2bcf33810856cb0820725300ff2d8666",
+          "hash": "b9a1f309167a81ed",
+          "fileSize": 523
+        }
+      ],
+      "sha256_of_full_text": "784802e23f27bb13c89793e805ac4328401def756dbb99c89b475be1a7a2cf40",
+      "keys_seen": [
+        "fileSize",
+        "hash",
+        "md5",
+        "remoteName"
+      ]
+    }
+  }
+}

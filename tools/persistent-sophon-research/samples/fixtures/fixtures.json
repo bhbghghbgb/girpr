@@ -1,0 +1,66 @@
+{
+  "description": "Synthetic, test-only fixtures. No production keys or endpoints.",
+  "seed": "0011223344556677",
+  "channel": "OSRELWin",
+  "query_version": "OSRELWin9.9.0",
+  "codename": "hk4e_global",
+  "test_key": {
+    "file": "test_key.pem",
+    "bits": 2048,
+    "sha256_public_der": "e0fcb3321f5dfd7a6e5d208699782e44c40da897b6ee6813c3d81ff8bae303c0"
+  },
+  "dispatch_response": {
+    "file": "dispatch_response.json",
+    "json_keys": [
+      "content",
+      "sign"
+    ],
+    "ciphertext_bytes": 768,
+    "rsa_blocks": 3,
+    "plaintext_bytes": 633,
+    "plaintext_sha256": "67e5716939f845156f87815b6a3a0880f4e8823b460037405840d2e8a01e9431"
+  },
+  "revisions": {
+    "res": [
+      99000001,
+      "aabbccddeeff"
+    ],
+    "data": [
+      99000002,
+      "112233445566"
+    ],
+    "silence": [
+      99000003,
+      "ffeeddccbbaa"
+    ]
+  },
+  "manifests": {
+    "res": {
+      "file": "res.ndjson",
+      "bytes": 279,
+      "md5": "ce5fe1b283fa2b97929eabb86452429f"
+    },
+    "data": {
+      "file": "data.ndjson",
+      "bytes": 275,
+      "md5": "bbc05fb62bbde346e56368bf77b122d3"
+    },
+    "silence": {
+      "file": "silence.ndjson",
+      "bytes": 122,
+      "md5": "d8d8b615534bc1c66c7bb042d1b4603c"
+    }
+  },
+  "hotfix_blobs": {
+    "hotfix_a.blk": {
+      "file": "hotfix_a.blk",
+      "bytes": 64,
+      "md5": "b2d3f56bc197fd985d5965079b5e7148"
+    },
+    "hotfix_b.pck": {
+      "file": "hotfix_b.pck",
+      "bytes": 48,
+      "md5": "5117f4269ca5456f8dd0e47ddd3e0832"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# The captured and synthetic samples are byte-pinned: fixtures.json and the
+# summary JSON files record MD5s/sha256s of these exact bytes. Never let Git
+# rewrite their line endings (core.autocrlf is true on the dev machines).
+samples/** -text
