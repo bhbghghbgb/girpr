@@ -464,6 +464,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 
 - hdiff/patch-diff updates (faster downloads, needs intact source + `ldiff/` space) — add as
   `--update-fast` later; repair remains the fallback.
-- 7z/legacy package path, predownload, SDK/WPF/plugin zips, dispatcher persistent files,
-  `ctable.dat`, quota dialogs, hardlinks, speed limiter — launcher conveniences; game launches
-  without them. Add `--with-sdk/--with-wpf` only if a channel's launch check proves otherwise.
+- 7z/legacy package path, predownload, SDK/WPF/plugin zips, quota dialogs, hardlinks, speed limiter —
+  launcher conveniences; game launches without them. Add `--with-sdk/--with-wpf` only if a channel's
+  launch check proves otherwise. Dispatcher persistent files and `ctable.dat` are no longer on this
+  list: they ship behind the `--with-persistent` opt-in tier (docs/01 §6).

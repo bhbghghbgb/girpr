@@ -181,8 +181,10 @@ one was asked for.
 
 ## 6. v1 limits (documented, not bugs)
 
-Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, no dispatcher
-persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` reuse dir not retained.
+Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, inside-`game_dir`
+manifest cache never written, `chunk/` reuse dir not retained. Dispatcher/persistent revisions are no
+longer a v1 limit: the persistent tier now ships as the `--with-persistent` opt-in, described in
+docs/01 §6.
 
 **The two write modes, and what each one is for:**
 
