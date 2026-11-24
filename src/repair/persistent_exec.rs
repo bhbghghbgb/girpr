@@ -17,7 +17,7 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context, anyhow};
 use futures_util::stream::{StreamExt, iter};
 use girpr_fetch::persistent::{
-    DownloadOutcome, DownloadRequest, download_hotfix, hotfix_is_intact,
+    DownloadOutcome, DownloadRequest, WriteCeilingStopped, download_hotfix, hotfix_is_intact,
 };
 use girpr_persistent_plan::{PersistentAsset, PersistentRow, data_dir_name};
 use girpr_util_path::atomic::write_atomic;
@@ -96,16 +96,20 @@ enum AssetOutcome {
     Stopped,
 }
 
-/// One asset: skip when intact, reserve, download, gate, publish and charge.
+/// One asset: skip when intact, reserve download bytes, then download, gate
+/// and charge write bytes **before** the publish.
 ///
 /// A ceiling stop does **not** add a file failure: `stopped=` is the run's
 /// reason (exit 5), exactly as it is for a base file that hit a live ceiling.
+/// The shared summary is held by `Arc` because the pre-publish charge callback
+/// must own its meters: with `--jobs N`, N files can be in flight at once, and
+/// the write ceiling has to bound all of them at the moment bytes land.
 async fn download_one(
     backoff: &crate::retry::BackoffPolicy,
     http: &Client,
     game_dir: &Path,
     asset: &PersistentAsset,
-    summary: &Summary,
+    summary: &Arc<Summary>,
 ) -> AssetOutcome {
     if summary.stopped_by() != StoppedBy::None || summary.aborted() {
         return AssetOutcome::Stopped;
@@ -141,7 +145,30 @@ async fn download_one(
         return AssetOutcome::Stopped;
     }
 
-    let request = DownloadRequest::new(
+    // Charge the write meters inside the downloader, before it publishes.
+    // Charging after `download_hotfix` returns would let `--jobs N` land N
+    // files before the first reservation — `--max-write-bytes 0` still wrote
+    // one. Both meters are charged here, with separate checks, so a refused
+    // live reservation no longer skips the settled one.
+    let rel = asset.rel.clone();
+    let shared = Arc::clone(summary);
+    let charge_writes: Arc<dyn Fn(u64) -> bool + Send + Sync> = Arc::new(move |bytes: u64| {
+        if !shared.reserve_write_bytes(bytes) {
+            shared.stop(StoppedBy::Write);
+            tracing::error!(path = %rel, "--max-write-bytes stopped persistent repair");
+            return false;
+        }
+        if !shared.note_write_bytes(bytes) {
+            shared.stop(StoppedBy::VerifiedWrite);
+            tracing::error!(
+                path = %rel,
+                "--max-verified-write-bytes stopped persistent repair"
+            );
+            return false;
+        }
+        true
+    });
+    let mut request = DownloadRequest::new(
         http,
         backoff,
         &asset.primary_url,
@@ -149,17 +176,13 @@ async fn download_one(
         &row,
         &target,
     );
+    request.before_publish = Some(charge_writes);
     match download_hotfix(request).await {
         Ok(outcome) => {
             let bytes = outcome.bytes();
             if outcome.wrote() {
                 if !summary.settle_download_bytes(bytes) {
                     summary.stop(StoppedBy::VerifiedDownload);
-                }
-                if !summary.reserve_write_bytes(bytes) {
-                    summary.stop(StoppedBy::Write);
-                } else if !summary.note_write_bytes(bytes) {
-                    summary.stop(StoppedBy::VerifiedWrite);
                 }
                 summary.files_repaired.fetch_add(1, Ordering::Relaxed);
                 if let DownloadOutcome::TempFallback { path, .. } = outcome {
@@ -175,6 +198,11 @@ async fn download_one(
                 summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                 AssetOutcome::Skipped
             }
+        }
+        Err(e) if e.downcast_ref::<WriteCeilingStopped>().is_some() => {
+            // The charge callback already tripped the matching hard-stop
+            // marker. No bytes were published, so this is not a failed file.
+            AssetOutcome::Stopped
         }
         Err(e) => {
             tracing::error!(
@@ -446,8 +474,9 @@ mod tests {
         let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
         let dir = TempDir::new("girpr_persistent_exec", "ceiling");
         let a = asset(&server);
-        let mut summary = Summary::default();
-        summary.set_download_limit(Some(0));
+        let mut plain = Summary::default();
+        plain.set_download_limit(Some(0));
+        let summary = Arc::new(plain);
 
         let outcome = download_one(
             &BackoffPolicy::none(),
@@ -472,7 +501,7 @@ mod tests {
         let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
         let dir = TempDir::new("girpr_persistent_exec", "meters");
         let a = asset(&server);
-        let summary = Summary::default();
+        let summary = Arc::new(Summary::default());
 
         let outcome = download_one(
             &BackoffPolicy::none(),
@@ -487,6 +516,96 @@ mod tests {
         assert_eq!(server.hits(), 1);
         assert_eq!(summary.download.live(), 64);
         assert_eq!(summary.download.settled(), 64);
+        assert_eq!(summary.write.live(), 64);
+        assert_eq!(summary.write.settled(), 64);
+        assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 1);
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+    }
+
+    /// The write ceiling is charged inside the downloader, before publish: a
+    /// zero budget stops with exit 5's marker and leaves no hotfix on disk.
+    #[tokio::test]
+    async fn a_zero_write_ceiling_stops_before_the_hotfix_is_published() {
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_persistent_exec", "write_ceiling");
+        let a = asset(&server);
+        let mut plain = Summary::default();
+        plain.set_write_limit(Some(0));
+        let summary = Arc::new(plain);
+
+        let outcome = download_one(
+            &BackoffPolicy::none(),
+            &Client::new(),
+            dir.as_ref(),
+            &a,
+            &summary,
+        )
+        .await;
+
+        assert_eq!(outcome, AssetOutcome::Stopped);
+        assert_eq!(summary.stopped_by(), StoppedBy::Write);
+        assert_eq!(summary.write.live(), 0, "a refused charge adds nothing");
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            0,
+            "a stop, not a failure"
+        );
+        assert!(
+            !target_of_checked(dir.as_ref(), &a).unwrap().exists(),
+            "no bytes were published"
+        );
+    }
+
+    /// The settled variant uses the same pre-publish seam and the same typed
+    /// stop, but names the other ceiling in `stopped=`.
+    #[tokio::test]
+    async fn a_zero_verified_write_ceiling_stops_before_the_hotfix_is_published() {
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_persistent_exec", "verified_write_ceiling");
+        let a = asset(&server);
+        let mut plain = Summary::default();
+        plain.set_verified_write_limit(Some(0));
+        let summary = Arc::new(plain);
+
+        let outcome = download_one(
+            &BackoffPolicy::none(),
+            &Client::new(),
+            dir.as_ref(),
+            &a,
+            &summary,
+        )
+        .await;
+
+        assert_eq!(outcome, AssetOutcome::Stopped);
+        assert_eq!(summary.stopped_by(), StoppedBy::VerifiedWrite);
+        // `settle` counts what was charged even when it crossed the ceiling,
+        // so the meter still reports 64 — but no bytes were published.
+        assert_eq!(summary.write.settled(), 64);
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+        assert!(!target_of_checked(dir.as_ref(), &a).unwrap().exists());
+    }
+
+    /// At the boundary the charge succeeds exactly once and the file lands.
+    #[tokio::test]
+    async fn a_write_ceiling_at_the_boundary_charges_once() {
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_persistent_exec", "write_boundary");
+        let a = asset(&server);
+        let mut plain = Summary::default();
+        plain.set_write_limit(Some(64));
+        let summary = Arc::new(plain);
+
+        let outcome = download_one(
+            &BackoffPolicy::none(),
+            &Client::new(),
+            dir.as_ref(),
+            &a,
+            &summary,
+        )
+        .await;
+
+        assert_eq!(outcome, AssetOutcome::Repaired);
+        assert_eq!(summary.stopped_by(), StoppedBy::None);
         assert_eq!(summary.write.live(), 64);
         assert_eq!(summary.write.settled(), 64);
         assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 1);

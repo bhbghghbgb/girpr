@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::common::{
     LATEST_TAG, LOCAL_TAG, MockOpts, MockServer, build_fixture, build_fixture_spec, ctx_for,
@@ -350,6 +351,43 @@ async fn persistent_bytes_are_counted_by_the_download_ceiling() {
     mock.stop();
 }
 
+/// C11/B7: `--max-files` joins the filtered base plan and the persistent plan.
+/// Both halves fit under 5 on their own (2 base, 5 persistent is equal, not
+/// over); the joined 7 does not. The separate checks let this run through.
+#[tokio::test]
+async fn max_files_joins_base_and_persistent_files() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let server = manifest_server(RES);
+    let dir = temp_dir("persistent_joined_files_ceiling");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, dispatch_for(&server, RES));
+    ctx.limits.files = Some(5); // 2 base + 5 persistent = 7
+
+    let (result, logs) = logs_of(run(ctx)).await;
+    let (summary, code) = result.expect("a refusal is a returned exit code");
+    assert_eq!(code, RunExit::Limit);
+    assert!(summary.flags.limited);
+    assert_eq!(
+        summary.files_total, 2,
+        "the base plan is still reported on its own"
+    );
+    assert_eq!(summary.flags.persistent_files, Some(5));
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
+    assert!(
+        logs.contains("plan_files=7 limit=5"),
+        "one summed hit names the joined figure: {logs}"
+    );
+    assert!(
+        !dir.join("GenshinImpact_Data/Persistent/PatchDone").exists(),
+        "nothing was published"
+    );
+    mock.stop();
+}
+
 /// C13: `--scan` reads only base files. The plan-out section says so instead
 /// of leaving the exclusion implicit.
 #[tokio::test]
@@ -493,6 +531,107 @@ async fn a_hotfix_download_falls_back_to_the_alternate_on_404() {
             "{mirror} is the raw verified manifest"
         );
     }
+    mock.stop();
+}
+
+/// B3: the write ceiling is charged before the downloader publishes, so a zero
+/// budget leaves no hotfix behind and the run stops with exit 5 rather than
+/// counting a failed file (which would exit 3).
+#[tokio::test]
+async fn a_zero_write_ceiling_publishes_no_persistent_file() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_write_ceiling_zero");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.limits.write_bytes = Some(0);
+
+    let (summary, code) = run(ctx).await.expect("a ceiling is an exit code");
+    assert_eq!(code, RunExit::Limit, "a runtime hard stop is exit 5");
+    assert_eq!(summary.flags.stopped.as_deref(), Some("--max-write-bytes"));
+    assert_eq!(summary.flags.persistent_repaired, Some(0));
+    assert_eq!(
+        summary.flags.persistent_failed,
+        Some(0),
+        "a stop, not a failure"
+    );
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "a failed file would outrank the ceiling"
+    );
+    assert!(
+        !hotfix_path(&dir).exists(),
+        "no hotfix bytes were published"
+    );
+    assert!(
+        !dir.join("GenshinImpact_Data/Persistent/PatchDone").exists(),
+        "no marker block was published either"
+    );
+    mock.stop();
+}
+
+/// The settled write ceiling uses the same pre-publish seam and names its own
+/// flag in `stopped=`; it too publishes nothing.
+#[tokio::test]
+async fn a_zero_verified_write_ceiling_publishes_no_persistent_file() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_verified_write_ceiling_zero");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.limits.verified_write_bytes = Some(0);
+
+    let (summary, code) = run(ctx).await.expect("a ceiling is an exit code");
+    assert_eq!(code, RunExit::Limit);
+    assert_eq!(
+        summary.flags.stopped.as_deref(),
+        Some("--max-verified-write-bytes")
+    );
+    assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+    assert!(
+        !hotfix_path(&dir).exists(),
+        "no hotfix bytes were published"
+    );
+    mock.stop();
+}
+
+/// At the boundary the bytes are charged exactly once and the hotfix lands.
+#[tokio::test]
+async fn a_write_ceiling_at_the_boundary_charges_the_hotfix_once() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let manifests = manifest_server_for(&single_manifest());
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_write_ceiling_boundary");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.limits.write_bytes = Some(64);
+
+    let (summary, code) = run(ctx).await.expect("the boundary passes");
+    assert_eq!(code, RunExit::Success);
+    assert!(summary.flags.stopped.is_none());
+    assert_eq!(summary.flags.persistent_repaired, Some(1));
+    assert_eq!(summary.write.settled(), 64);
+    assert_eq!(summary.write.live(), 64);
+    assert_eq!(
+        std::fs::read(hotfix_path(&dir)).unwrap(),
+        HOTFIX_A,
+        "the charged bytes are the published ones"
+    );
     mock.stop();
 }
 

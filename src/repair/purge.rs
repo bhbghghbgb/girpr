@@ -591,8 +591,16 @@ pub fn classify_purge_path_visible(
 /// Collapse `GenshinInstall.cs:232-241` parity: `audio_lang_14` (any
 /// `audio_lang_*`) plus `Audio_<lang>_pkg_version` (matched case-insensitively
 /// — on disk it is `Audio_English_pkg_version`, i.e. capital A).
+///
+/// The rejection from [`is_verification_state_file`] is repeated here because
+/// this rule runs first: `VideoAssets/*.tmp` and `*versions_remote*` are stale
+/// game-generated download state and must stay purge candidates even when an
+/// audio-style name would otherwise keep them (docs/01 §6.4.3).
 fn is_audio_version_file(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
+    if lower.contains("versions_remote") || lower.ends_with(".tmp") {
+        return false;
+    }
     lower.starts_with("audio_lang_")
         || (lower.starts_with("audio_") && lower.ends_with("_pkg_version"))
 }
@@ -1164,6 +1172,14 @@ mod tests {
             ("VideoAssets/movie.tmp", &open, PurgeVerdict::Purge),
             (
                 "VideoAssets/cache_versions_streaming.tmp",
+                &open,
+                PurgeVerdict::Purge,
+            ),
+            // Rule 4's audio-style names are no exception to the rejection:
+            // an audio_lang temp or a versions_remote sibling stays purgeable.
+            ("VideoAssets/audio_lang_14.tmp", &open, PurgeVerdict::Purge),
+            (
+                "VideoAssets/audio_lang_14_versions_remote",
                 &open,
                 PurgeVerdict::Purge,
             ),

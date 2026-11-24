@@ -203,6 +203,12 @@ pub struct DownloadRequest<'a> {
     /// Cleaned rel path resolved under the game directory by the caller.
     pub target: &'a Path,
     pub attempts: u32,
+    /// Write-charging seam: runs inside `publish_verified` immediately before
+    /// any publish (the atomic write, or the temp-sibling `keep()` when the
+    /// target cannot be opened). Returning `false` aborts with the typed
+    /// [`WriteCeilingStopped`] signal. Production charges its write meters
+    /// here so a ceiling cannot be crossed by a file that has already landed.
+    pub before_publish: Option<Arc<dyn Fn(u64) -> bool + Send + Sync>>,
     /// Test seam: runs after the atomic publish, before the mandatory re-read.
     /// Production leaves this `None`.
     pub after_publish: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
@@ -225,6 +231,7 @@ impl<'a> DownloadRequest<'a> {
             row,
             target,
             attempts: ATTEMPTS,
+            before_publish: None,
             after_publish: None,
         }
     }
@@ -285,6 +292,23 @@ impl fmt::Display for NotFound {
 }
 
 impl std::error::Error for NotFound {}
+
+/// Typed stop signal from a caller's `before_publish` charge.
+///
+/// A write ceiling refusing the bytes is not a failed download: the caller has
+/// already tripped its hard-stop marker, and the execute half downcasts this
+/// error so the file is not counted as failed (which would change the exit
+/// code) and no bytes are published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteCeilingStopped;
+
+impl fmt::Display for WriteCeilingStopped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("write ceiling stopped the hotfix before publish")
+    }
+}
+
+impl std::error::Error for WriteCeilingStopped {}
 
 /// A verified body in its temp sibling, with the observation from the stream.
 struct FetchedTemp {
@@ -420,22 +444,32 @@ fn can_open_for_write(path: &Path) -> bool {
     std::fs::OpenOptions::new().write(true).open(path).is_ok()
 }
 
-/// Publish a verified temp file and re-read the result. The caller's hook,
-/// when present, runs between publish and re-read so a test can corrupt the
-/// published bytes and prove the second gate catches them.
+/// Publish a verified temp file and re-read the result. The caller's charge,
+/// when present, runs before either publish route; its `after_publish` hook
+/// runs between publish and re-read so a test can corrupt the published bytes
+/// and prove the second gate catches them.
 fn publish_verified(
     row: &PersistentRow,
     target: &Path,
     fetched: FetchedTemp,
+    before_publish: Option<Arc<dyn Fn(u64) -> bool + Send + Sync>>,
     after_publish: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
 ) -> Result<DownloadOutcome> {
     let bytes = fetched.digest.size;
+    let mut temp = fetched.file;
+    // Charge before the bytes land: in the normal path this is immediately
+    // before `write_atomic_with`, and in the temp fallback it is before
+    // `keep()` publishes at the sibling. A refusal leaves nothing published.
+    if let Some(charge) = before_publish {
+        if !charge(bytes) {
+            return Err(anyhow::Error::new(WriteCeilingStopped));
+        }
+    }
     if target.exists() {
         clear_readonly(target);
     }
     if target.exists() && !can_open_for_write(target) {
-        let (kept, path) = fetched
-            .file
+        let (kept, path) = temp
             .keep()
             .context("keep verified hotfix at its temp path")?;
         drop(kept);
@@ -445,7 +479,6 @@ fn publish_verified(
         return Ok(DownloadOutcome::TempFallback { path, bytes });
     }
 
-    let mut temp = fetched.file;
     write_atomic_with(target, false, |writer| {
         let file = temp.as_file_mut();
         file.seek(SeekFrom::Start(0))?;
@@ -491,6 +524,7 @@ pub async fn download_hotfix(request: DownloadRequest<'_>) -> Result<DownloadOut
         row,
         target,
         attempts,
+        before_publish,
         after_publish,
     } = request;
 
@@ -516,7 +550,13 @@ pub async fn download_hotfix(request: DownloadRequest<'_>) -> Result<DownloadOut
         }
         match fetch_to_temp(client, backoff, url, row, parent, attempts).await {
             Ok(fetched) => {
-                return publish_verified(row, target, fetched, after_publish.clone());
+                return publish_verified(
+                    row,
+                    target,
+                    fetched,
+                    before_publish.clone(),
+                    after_publish.clone(),
+                );
             }
             Err(e) if e.downcast_ref::<NotFound>().is_some() => {
                 tracing::debug!(url, "primary hotfix 404; trying the alternate only");
@@ -659,6 +699,68 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, DownloadOutcome::Skipped { .. }));
         assert_eq!(server.hits(), 1);
+    }
+
+    /// The charging seam runs once with the verified size, before publish.
+    #[tokio::test]
+    async fn an_accepted_pre_publish_charge_runs_once_with_the_verified_size() {
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_test_fetch", "charge_once");
+        let path = target(&dir);
+        let http = client();
+        let row = fixture_row();
+        let primary = format!("{}/primary/a.blk", server.base());
+        let alternate = format!("{}/alternate/a.blk", server.base());
+        let backoff = BackoffPolicy::none();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let calls_charge = Arc::clone(&calls);
+        let seen_charge = Arc::clone(&seen);
+        let mut request = DownloadRequest::new(&http, &backoff, &primary, &alternate, &row, &path);
+        request.before_publish = Some(Arc::new(move |bytes: u64| {
+            calls_charge.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            seen_charge.store(bytes, std::sync::atomic::Ordering::SeqCst);
+            true
+        }));
+        let outcome = download_hotfix(request).await.unwrap();
+        assert_eq!(outcome, DownloadOutcome::Written { path, bytes: 64 });
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 64);
+    }
+
+    /// A refusal is the typed stop signal, not a download error: nothing is
+    /// published, not even a temp sibling.
+    #[tokio::test]
+    async fn a_refused_pre_publish_charge_stops_before_the_atomic_write() {
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_test_fetch", "write_ceiling");
+        let path = target(&dir);
+        let http = client();
+        let row = fixture_row();
+        let primary = format!("{}/primary/a.blk", server.base());
+        let alternate = format!("{}/alternate/a.blk", server.base());
+        let backoff = BackoffPolicy::none();
+        let seen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seen_charge = Arc::clone(&seen);
+        let mut request = DownloadRequest::new(&http, &backoff, &primary, &alternate, &row, &path);
+        request.before_publish = Some(Arc::new(move |bytes: u64| {
+            seen_charge.store(bytes, std::sync::atomic::Ordering::SeqCst);
+            false
+        }));
+        let err = download_hotfix(request).await.unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<WriteCeilingStopped>(),
+            Some(&WriteCeilingStopped),
+            "a ceiling refusal is typed, not a generic download failure"
+        );
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 64);
+        assert!(!path.exists(), "a refused charge publishes nothing");
+        let sibling_dir = dir.join("GenshinImpact_Data/Persistent/blocks/00");
+        assert_eq!(
+            std::fs::read_dir(&sibling_dir).unwrap().count(),
+            0,
+            "not even a temp sibling is kept"
+        );
     }
 
     #[tokio::test]

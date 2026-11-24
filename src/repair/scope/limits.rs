@@ -41,11 +41,12 @@ pub struct Preflight<'a> {
     /// `None` means "nothing is a delete candidate", which any delete ceiling
     /// trivially satisfies.
     pub purge: Option<&'a PurgePlan>,
-    /// Persistent asset count, after the path scope. Zero on an unflagged run,
-    /// which is why no existing ceiling verdict changes.
+    /// Persistent asset count, after the path scope. Joined to the filtered
+    /// plan's count for `--max-files` (C11/B7). Zero on an unflagged run, which
+    /// is why no existing ceiling verdict changes.
     pub persistent_files: u64,
-    /// Full persistent file sizes, folded into the download ceiling exactly
-    /// like base bytes (C11/B7). Zero on an unflagged run.
+    /// Full persistent file sizes, joined to the filtered plan's download
+    /// estimate for `--max-download-bytes` (C11/B7). Zero on an unflagged run.
     pub persistent_bytes: u64,
 }
 
@@ -100,10 +101,15 @@ impl Limits {
     /// Checked against the **filtered** plan, never the raw one: `--max-files N`
     /// must mean "the files the scope selected", so filtering first is what
     /// makes the flag usable at all instead of refusing on every real install.
+    /// The persistent figures are joined to that same filtered set: a ceiling
+    /// bounds the work a run will do, and the persistent half is work. Neither
+    /// half may be checked alone, or 8 base + 5 persistent files slip through
+    /// `--max-files 10` (and 80 + 40 bytes through `--max-download-bytes 100`).
+    /// One summed hit per ceiling, not one per addend.
     pub fn check_preflight(&self, pf: Preflight<'_>) -> Vec<LimitHit> {
         let mut hits = Vec::new();
         if let Some(limit) = self.files {
-            let actual = pf.plan.len() as u64;
+            let actual = (pf.plan.len() as u64).saturating_add(pf.persistent_files);
             if actual > limit {
                 hits.push(LimitHit::Exceeded {
                     what: "--max-files",
@@ -114,33 +120,15 @@ impl Limits {
             }
         }
         if let Some(limit) = self.download_bytes {
-            let actual = pf.est_download_bytes;
+            // Persistent bytes are full-file sizes known from the manifest, so
+            // the joined figure is exact: a `--max-download-bytes 0` run under
+            // the flag cannot spend a base or a hotfix byte.
+            let actual = pf.est_download_bytes.saturating_add(pf.persistent_bytes);
             if actual > limit {
                 hits.push(LimitHit::Exceeded {
                     what: "--max-download-bytes",
                     key: "plan_download_bytes",
                     actual,
-                    limit,
-                });
-            }
-            // Persistent bytes are full-file sizes known from the manifest,
-            // so this refusal is exact: a `--max-download-bytes 0` run under
-            // the flag cannot spend a hotfix byte.
-            if pf.persistent_bytes > limit {
-                hits.push(LimitHit::Exceeded {
-                    what: "--max-download-bytes",
-                    key: "persistent_bytes",
-                    actual: pf.persistent_bytes,
-                    limit,
-                });
-            }
-        }
-        if let Some(limit) = self.files {
-            if pf.persistent_files > limit {
-                hits.push(LimitHit::Exceeded {
-                    what: "--max-files",
-                    key: "persistent_files",
-                    actual: pf.persistent_files,
                     limit,
                 });
             }
@@ -510,11 +498,12 @@ mod tests {
         assert!(ceiling.check_preflight(pf(&p)).is_empty());
     }
 
-    /// Persistent bytes and files are counted by the same two ceilings. The
-    /// extra figures are zero for a legacy caller, so the old verdicts above
-    /// are unchanged; under the flag a zero download ceiling refuses exactly.
+    /// Persistent bytes and files join the same two ceilings. The extra
+    /// figures are zero for a legacy caller, so the old verdicts above are
+    /// unchanged; under the flag each hit names the joined figure, never an
+    /// addend on its own.
     #[test]
-    fn persistent_files_and_bytes_are_counted_by_the_existing_ceilings() {
+    fn persistent_files_and_bytes_join_the_existing_ceilings() {
         let p = plan(1);
         let mut base_pf = pf(&p);
         base_pf.persistent_files = 2;
@@ -526,17 +515,25 @@ mod tests {
             ..Default::default()
         };
         let hits = zero.check_preflight(base_pf);
-        let keys: Vec<&str> = hits
+        let keys_and_actuals: Vec<(&str, u64)> = hits
             .iter()
             .map(|h| match h {
-                LimitHit::Exceeded { key, .. } => *key,
-                LimitHit::IncompletePurge { .. } => "purge",
+                LimitHit::Exceeded { key, actual, .. } => (*key, *actual),
+                LimitHit::IncompletePurge { .. } => ("purge", 0),
             })
             .collect();
         assert_eq!(
-            keys,
-            vec!["plan_files", "persistent_bytes", "persistent_files"]
+            keys_and_actuals,
+            vec![("plan_files", 3), ("plan_download_bytes", 64)],
+            "one summed hit per ceiling, with the joined figure"
         );
+        for (hit, what) in hits.iter().zip(["--max-files", "--max-download-bytes"]) {
+            assert!(
+                matches!(hit, LimitHit::Exceeded { .. }),
+                "no addend keeps its own key: {hit:?}"
+            );
+            assert!(hit.describe().contains(what), "{hit}");
+        }
 
         let enough = Limits {
             files: Some(3),
@@ -548,7 +545,56 @@ mod tests {
         boundary.persistent_bytes = 64;
         assert!(
             enough.check_preflight(boundary).is_empty(),
-            "the boundary passes"
+            "the joined boundary passes"
+        );
+    }
+
+    /// C11/B7: neither addend crosses a ceiling on its own — only their sum
+    /// does. These are the two shapes the old independent checks let through.
+    #[test]
+    fn a_ceiling_refuses_when_base_and_persistent_totals_join_past_it() {
+        let p = plan(8);
+        let files = Limits {
+            files: Some(10),
+            ..Default::default()
+        };
+        assert!(
+            files.check_preflight(pf(&p)).is_empty(),
+            "8 base files alone fit under 10"
+        );
+        let mut scoped = pf(&p);
+        scoped.persistent_files = 5;
+        assert_eq!(
+            files.check_preflight(scoped),
+            vec![LimitHit::Exceeded {
+                what: "--max-files",
+                key: "plan_files",
+                actual: 13,
+                limit: 10,
+            }],
+            "8 + 5 files must be refused, with the summed figure"
+        );
+
+        let bytes = Limits {
+            download_bytes: Some(100),
+            ..Default::default()
+        };
+        assert!(
+            bytes.check_preflight(pf_full(&p, 80, &purge(0))).is_empty(),
+            "80 base bytes alone fit under 100"
+        );
+        let no_purge = purge(0);
+        let mut scoped = pf_full(&p, 80, &no_purge);
+        scoped.persistent_bytes = 40;
+        assert_eq!(
+            bytes.check_preflight(scoped),
+            vec![LimitHit::Exceeded {
+                what: "--max-download-bytes",
+                key: "plan_download_bytes",
+                actual: 120,
+                limit: 100,
+            }],
+            "80 + 40 bytes must be refused, with the summed figure"
         );
     }
 
