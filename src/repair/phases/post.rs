@@ -32,6 +32,7 @@ use crate::util::path::{
 };
 
 use super::metadata::Meta;
+use crate::repair::persistent::{PersistentState, Suppression};
 use crate::repair::purge;
 use crate::repair::spawn_blocking_traced;
 use girpr_repair_plan::{PathScope, PurgeKeys, PurgePlan};
@@ -97,21 +98,6 @@ async fn run_inner(
     persistent: Option<&crate::repair::persistent::PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
-    // The marker block and the three mirrors are published last, after every
-    // file has passed its gate (commit 8). This commit only carries the
-    // decision: a scope-suppressed run must never claim a partial revision,
-    // and a read-only mode must list rather than write.
-    if let Some(p) = persistent {
-        match p.suppression {
-            crate::repair::persistent::Suppression::Suppressed => tracing::warn!(
-                "persistent markers and mirrors suppressed: a hotfix path is outside the path scope"
-            ),
-            crate::repair::persistent::Suppression::Proceed if dry => {
-                tracing::info!("dry run: would write persistent markers and mirrors");
-            }
-            crate::repair::persistent::Suppression::Proceed => {}
-        }
-    }
     // The deprecated list can be long and every entry is a stat plus a delete:
     // that is blocking filesystem work, not a task the async worker should sit
     // through. The audio move below and the cleanup pass use the same discipline.
@@ -134,6 +120,12 @@ async fn run_inner(
     {
         return Ok(outcome);
     }
+    // C9: the persistent state is published here — after every repair and
+    // cleanup step, and before the `config.ini` bump below. A delete ceiling
+    // returned above, so it publishes nothing. A failed marker or mirror is a
+    // write failure, which skips the bump: the version must never advance over
+    // an incomplete verification block.
+    publish_persistent(ctx, game_dir, persistent, dry)?;
     // `config.ini` is bumped last so the on-disk version only
     // advances once the bytes are in place. A dry run never put any bytes in
     // place, so it stops here: the mode lists what the phase would do and must
@@ -166,6 +158,79 @@ async fn run_inner(
         .context("write config.ini")
         .map_err(RunFailure::write)?;
     Ok(PostOutcome::Ok)
+}
+
+/// Publish the persistent verification state: mirrors first, then the full
+/// marker block, so the revision claim is the last persistent bytes written.
+///
+/// The gates are the ones the plan half decided (C4, C7(f), C20). A read-only
+/// run lists one line per file and touches nothing; a suppressed scope withholds
+/// the whole block; `--purge-only` has no state, but the guard here keeps the
+/// invariant local: no bytes in place means no revision claim. Every write is
+/// fatal on failure (`RunFailure::write`), unlike the best-effort housekeeping
+/// above — a partial marker block is worse than a stale one.
+fn publish_persistent(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    persistent: Option<&PersistentState>,
+    dry: bool,
+) -> Result<(), RunFailure> {
+    let Some(state) = persistent else {
+        return Ok(());
+    };
+    if ctx.purge_only {
+        tracing::warn!(
+            "--purge-only: no bytes were put in place; persistent state is not published"
+        );
+        return Ok(());
+    }
+    match state.suppression {
+        Suppression::Suppressed => tracing::warn!(
+            "persistent markers and mirrors suppressed: a hotfix path is outside the path scope"
+        ),
+        Suppression::Proceed if dry => {
+            for marker in &state.markers {
+                tracing::info!("dry run: would write marker {}", marker.path);
+            }
+            for (rel, _) in &state.plan.mirrors {
+                tracing::info!("dry run: would write mirror {rel}");
+            }
+        }
+        Suppression::Proceed => {
+            // C19: the full block is written on every clean run, even when no
+            // persistent file needed repair this time. The bytes come from the
+            // plan: mirror values are the verified raw manifests, marker values
+            // are already rendered without a trailing newline.
+            for (rel, bytes) in &state.plan.mirrors {
+                publish_bytes(game_dir, rel, bytes, "mirror")?;
+            }
+            for marker in &state.markers {
+                publish_bytes(game_dir, &marker.path, marker.value.as_bytes(), "marker")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write one persistent file atomically under `game_dir`.
+///
+/// `rel` is server/dispatcher-derived data, so it is resolved through the same
+/// containment gate as every other install path. The parent is created here
+/// rather than assumed from the execute phase: the publish is the last act and
+/// must stand on its own. A refused path or a failed temp publish is a write
+/// failure, which aborts the block and skips the version bump.
+fn publish_bytes(game_dir: &Path, rel: &str, bytes: &[u8], kind: &str) -> Result<(), RunFailure> {
+    let target = util::contained_join(game_dir, rel)
+        .with_context(|| format!("resolve persistent {kind} {rel}"))
+        .map_err(RunFailure::write)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))
+            .map_err(RunFailure::write)?;
+    }
+    util::atomic::write_atomic(&target, bytes, false)
+        .with_context(|| format!("publish persistent {kind} {rel}"))
+        .map_err(RunFailure::write)
 }
 
 /// The post-repair files-cleanup, when `--purge-after` or `--purge-only`

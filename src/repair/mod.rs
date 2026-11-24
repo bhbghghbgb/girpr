@@ -992,7 +992,16 @@ async fn execute_phase(
         if ctx.with_persistent {
             summary.flags.persistent = Some("listed");
         }
-        return run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await;
+        return run_check_only(
+            ctx,
+            &game_dir,
+            root.as_ref(),
+            &plan,
+            scan,
+            persistent.as_deref(),
+            summary,
+        )
+        .await;
     }
 
     // 5.6 purge-only: every phase but the repair loop.
@@ -1235,13 +1244,14 @@ async fn run_check_only(
     root: Option<&util::PathRoot>,
     plan: &Arc<RepairPlan>,
     scan: Option<Arc<ScanReport>>,
+    persistent: Option<&persistent::PersistentState>,
     summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
     // The execute-phase root was built after `create_dir_all` and the second
     // canonicalize, so it is the current form for these files; no per-file
     // re-resolution is needed.
     let summary = Arc::new(summary);
-    let bad = phases::check::verify_plan(
+    let mut bad = phases::check::verify_plan(
         game_dir,
         root,
         Arc::clone(plan),
@@ -1251,6 +1261,12 @@ async fn run_check_only(
         ctx.jobs,
     )
     .await?;
+    // C5: with the flag, the persistent tier is part of "intact". Without it
+    // `persistent` is `None`, so this is a no-op and the unflagged check stays
+    // byte-identical (plan, counters, exit code).
+    if let Some(state) = persistent {
+        bad += phases::check::verify_persistent(game_dir, state, &summary);
+    }
     // Success path only. The ticker guard is dropped when `verify_plan`
     // returns, but its aborted task may still hold the `Arc` clone until the
     // runtime polls the drop; `try_unwrap` then fails and `snapshot` reads the

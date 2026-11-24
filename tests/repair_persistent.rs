@@ -5,11 +5,12 @@
 //! origin. No case opens a production URL and no case writes a marker, a
 //! mirror or a hotfix file.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::common::{
-    MockOpts, MockServer, build_fixture, build_fixture_spec, ctx_for, run, scope, temp_dir,
-    write_game_file,
+    LATEST_TAG, LOCAL_TAG, MockOpts, MockServer, build_fixture, build_fixture_spec, ctx_for,
+    logs_of, md5hex, run, scope, temp_dir, write_game_file,
 };
 use girpr_loopback_mock::{Reply, ScriptedServer};
 
@@ -477,10 +478,21 @@ async fn a_hotfix_download_falls_back_to_the_alternate_on_404() {
     assert!(summary.download.settled() >= 64, "the hotfix bytes settled");
     assert!(summary.write.settled() >= 64, "the hotfix bytes landed");
     assert!(line(&summary).contains("persistent=published"));
-    // Marker and mirror publication belongs to commit 8.
+    // C19: a clean run publishes the whole block and all three mirrors, even
+    // though the hotfix needed a download (the alternate delivered it here).
     let persistent = dir.join("GenshinImpact_Data/Persistent");
-    assert!(!persistent.join("PatchDone").exists());
-    assert!(!persistent.join("res_versions_persist").exists());
+    assert!(persistent.join("PatchDone").is_file());
+    for mirror in [
+        "res_versions_persist",
+        "data_versions_persist",
+        "silence_data_versions_persist",
+    ] {
+        assert_eq!(
+            std::fs::read(persistent.join(mirror)).unwrap(),
+            single_manifest(),
+            "{mirror} is the raw verified manifest"
+        );
+    }
     mock.stop();
 }
 
@@ -645,5 +657,347 @@ async fn read_only_modes_list_without_a_single_hotfix_request() {
         assert_eq!(hotfix.hits(), 0, "no hotfix byte was requested");
         assert!(!dir.join("GenshinImpact_Data/Persistent").exists());
     }
+    mock.stop();
+}
+
+// ---------------------------------------------------------------------------
+// post phase: publish the full state last, then bump the version (C9)
+// ---------------------------------------------------------------------------
+
+fn persistent_file(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("GenshinImpact_Data/Persistent/{name}"))
+}
+
+/// A flagged run whose single hotfix is already intact: the post phase must
+/// publish the whole block (C19) without spending a download byte.
+async fn publish_clean(
+    dir: &Path,
+    mock: &MockServer,
+    manifests: &ScriptedServer,
+    hotfix: &ScriptedServer,
+) -> (Summary, RunExit) {
+    write_game_file(dir, &hotfix_rel(), HOTFIX_A);
+    let mut ctx = ctx_for(dir.to_path_buf(), mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(manifests, hotfix.base()));
+    run(ctx).await.expect("the clean flagged run succeeds")
+}
+
+fn hotfix_rel() -> String {
+    "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk".to_owned()
+}
+
+/// Every marker path and byte, including the `res_revision_eternal` twin and
+/// `PatchDone = audio_revision`, with no trailing newline. All three mirrors
+/// carry the raw manifest bytes, and the version bump still happens last.
+#[tokio::test]
+async fn markers_and_all_three_mirrors_are_published_byte_exact() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_post_bytes");
+    let source = b"res_versions_streaming bytes";
+    write_game_file(
+        &dir,
+        "GenshinImpact_Data/StreamingAssets/res_versions_streaming",
+        source,
+    );
+    std::fs::write(
+        dir.join("config.ini"),
+        format!("[General]\ngame_version={LOCAL_TAG}\n"),
+    )
+    .unwrap();
+
+    let (summary, code) = publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.flags.persistent, Some("published"));
+    assert_eq!(summary.flags.persistent_repaired, Some(0));
+    assert_eq!(summary.flags.persistent_failed, Some(0));
+    assert_eq!(summary.flags.persistent_base_hash, None);
+    assert_eq!(
+        hotfix.hits(),
+        0,
+        "nothing needed repair, yet all bytes published"
+    );
+
+    for (name, value) in [
+        ("base_res_version_hash", md5hex(source)),
+        ("res_revision", "49530578".to_owned()),
+        ("res_revision_eternal", "49530578".to_owned()),
+        ("data_revision", "49419538".to_owned()),
+        ("silence_revision", "49291486".to_owned()),
+        ("audio_revision", "49008628".to_owned()),
+        ("PatchDone", "49008628".to_owned()),
+        ("ChannelName", "OSRELWin".to_owned()),
+        ("ScriptVersion", "7.2_live".to_owned()),
+    ] {
+        assert_eq!(
+            std::fs::read(persistent_file(&dir, name)).unwrap(),
+            value.as_bytes(),
+            "{name} is the exact plain-text value with no trailing newline"
+        );
+    }
+    // The two twins are written from one dispatcher value, never each other's
+    // stale copy, and the base hash is the MD5 of the local source.
+    assert_eq!(
+        std::fs::read(persistent_file(&dir, "res_revision_eternal")).unwrap(),
+        std::fs::read(persistent_file(&dir, "res_revision")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(persistent_file(&dir, "PatchDone")).unwrap(),
+        std::fs::read(persistent_file(&dir, "audio_revision")).unwrap()
+    );
+
+    for name in [
+        "res_versions_persist",
+        "data_versions_persist",
+        "silence_data_versions_persist",
+    ] {
+        assert_eq!(
+            std::fs::read(persistent_file(&dir, name)).unwrap(),
+            body,
+            "the {name} mirror is the raw verified manifest"
+        );
+    }
+
+    // Markers are before the bump: the bump still ran on a clean publish.
+    let cfg = std::fs::read_to_string(dir.join("config.ini")).unwrap();
+    assert!(cfg.contains(&format!("game_version={LATEST_TAG}")), "{cfg}");
+    mock.stop();
+}
+
+/// C16: the absent streaming source leaves exactly one marker out, and the
+/// omission is visible in `SUMMARY` rather than failing the run.
+#[tokio::test]
+async fn a_missing_base_hash_source_omits_only_that_marker() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_post_omit_hash");
+
+    let (summary, code) = publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.flags.persistent, Some("published"));
+    assert_eq!(summary.flags.persistent_base_hash, Some("omitted"));
+    assert!(
+        line(&summary).contains("persistent_base_hash=omitted"),
+        "{}",
+        line(&summary)
+    );
+    assert!(
+        !persistent_file(&dir, "base_res_version_hash").exists(),
+        "C16 omits the marker entirely"
+    );
+    for name in [
+        "res_revision",
+        "res_revision_eternal",
+        "data_revision",
+        "silence_revision",
+        "audio_revision",
+        "PatchDone",
+        "ChannelName",
+        "ScriptVersion",
+    ] {
+        assert!(
+            persistent_file(&dir, name).is_file(),
+            "{name} is still published"
+        );
+    }
+    mock.stop();
+}
+
+/// C4: a dry run logs one listing line per marker, writes no marker or mirror,
+/// and leaves the launcher version untouched.
+#[tokio::test]
+async fn a_dry_run_lists_every_marker_and_writes_nothing() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let dir = temp_dir("persistent_post_dry_run");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(
+        &mut ctx,
+        single_asset_dispatch(&manifests, "http://127.0.0.1:1"),
+    );
+    ctx.dry_run = true;
+
+    let (result, logs) = logs_of(run(ctx)).await;
+    let (summary, code) = result.expect("a dry run completes");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.flags.persistent, Some("listed"));
+
+    let listed: Vec<&str> = logs
+        .lines()
+        .filter(|l| l.contains("would write marker"))
+        .collect();
+    assert_eq!(
+        listed.len(),
+        8,
+        "one line per marker, none per mirror: {logs}"
+    );
+    for name in [
+        "res_revision",
+        "res_revision_eternal",
+        "data_revision",
+        "silence_revision",
+        "audio_revision",
+        "PatchDone",
+        "ChannelName",
+        "ScriptVersion",
+    ] {
+        assert!(
+            listed
+                .iter()
+                .any(|l| l.contains(&format!("/Persistent/{name}"))),
+            "{name} was not listed: {logs}"
+        );
+    }
+    assert!(!dir.join("GenshinImpact_Data/Persistent").exists());
+    assert!(!dir.join("config.ini").exists());
+    mock.stop();
+}
+
+/// C20: a cleanup-only run puts no bytes in place, so it publishes no state.
+#[tokio::test]
+async fn purge_only_publishes_no_markers_or_mirrors() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("persistent_post_purge_only");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.with_persistent = true;
+    ctx.purge_only = true;
+    ctx.persistent_dispatch_override = Some(DispatchOverride::new(|_, _| {
+        panic!("--purge-only must not query the dispatcher")
+    }));
+
+    let (summary, code) = run(ctx).await.expect("the cleanup still runs");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.flags.persistent, Some("skipped"));
+    assert!(
+        !dir.join("GenshinImpact_Data/Persistent").exists(),
+        "no revision claim without bytes in place"
+    );
+    assert!(!dir.join("config.ini").exists());
+    mock.stop();
+}
+
+/// A refused marker publish is a write failure (exit 3) that skips the version
+/// bump: the config file is absent even though mirrors were written first.
+#[tokio::test]
+async fn a_failed_marker_publish_exits_three_without_bumping_the_version() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_post_publish_failure");
+    write_game_file(&dir, &hotfix_rel(), HOTFIX_A);
+    // The first marker is the write that fails; a directory cannot be
+    // atomically replaced by a file.
+    std::fs::create_dir_all(persistent_file(&dir, "res_revision")).unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    let err = run(ctx).await.expect_err("the marker publish is fatal");
+    assert_eq!(err.exit_code, RunExit::Write);
+    assert!(
+        !dir.join("config.ini").exists(),
+        "a failed marker publish must skip the config.ini bump"
+    );
+    assert_eq!(
+        std::fs::read(persistent_file(&dir, "res_versions_persist")).unwrap(),
+        body,
+        "mirrors are written before the marker block"
+    );
+    assert!(
+        !persistent_file(&dir, "PatchDone").exists(),
+        "the marker block stops at the first failed write"
+    );
+    mock.stop();
+}
+
+/// C5: with the flag, a clean check of a published install exits 0 and still
+/// reports `persistent=listed`.
+#[tokio::test]
+async fn a_persistent_check_of_an_intact_install_succeeds() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_check_clean");
+    let (_, code) = publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    assert_eq!(code, RunExit::Success);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.check_only = true;
+    let (summary, code) = run(ctx).await.expect("the check completes");
+    assert_eq!(code, RunExit::Success, "the published install is intact");
+    assert_eq!(summary.flags.persistent, Some("listed"));
+    mock.stop();
+}
+
+/// C5(a): a damaged persistent file is damage, even though it is not part of
+/// the Sophon plan.
+#[tokio::test]
+async fn a_damaged_persistent_file_makes_check_only_exit_four() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_check_file_damage");
+    publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    std::fs::write(hotfix_path(&dir), vec![0xabu8; 64]).unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.check_only = true;
+    let (summary, code) = run(ctx).await.expect("the check completes");
+    assert_eq!(code, RunExit::CheckFailed);
+    assert_eq!(summary.flags.persistent, Some("listed"));
+    mock.stop();
+}
+
+/// C5(b): a replaced mirror is damage, even with every hotfix byte intact.
+#[tokio::test]
+async fn a_damaged_mirror_makes_check_only_exit_four() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_check_mirror_damage");
+    publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    std::fs::write(
+        persistent_file(&dir, "res_versions_persist"),
+        b"not the manifest",
+    )
+    .unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.check_only = true;
+    let (summary, code) = run(ctx).await.expect("the check completes");
+    assert_eq!(code, RunExit::CheckFailed);
+    assert_eq!(summary.flags.persistent, Some("listed"));
+    mock.stop();
+}
+
+/// C5(c): a wrong marker value is damage, including a missing newline or an
+/// old revision left behind by a previous run.
+#[tokio::test]
+async fn a_damaged_marker_makes_check_only_exit_four() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let body = single_manifest();
+    let manifests = manifest_server_for(&body);
+    let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+    let dir = temp_dir("persistent_check_marker_damage");
+    publish_clean(&dir, &mock, &manifests, &hotfix).await;
+    std::fs::write(persistent_file(&dir, "PatchDone"), "49008628\n").unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
+    ctx.check_only = true;
+    let (summary, code) = run(ctx).await.expect("the check completes");
+    assert_eq!(code, RunExit::CheckFailed);
+    assert_eq!(summary.flags.persistent, Some("listed"));
     mock.stop();
 }
