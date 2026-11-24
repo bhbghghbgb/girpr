@@ -764,6 +764,47 @@ impl CacheDb {
         tbl.len().context("count cache entries")
     }
 
+    /// Every cached path with its record, one at a time, in one read transaction.
+    ///
+    /// The streaming counterpart of [`load_all`](Self::load_all): the same rows
+    /// from the same snapshot, decoded one at a time and borrowed for the length
+    /// of the call, so a caller that writes each row onward — an NDJSON export,
+    /// for one — never holds a map of the whole cache. A caller that wants to
+    /// *keep* the rows wants `load_all`; this one deliberately hands out no
+    /// owned values.
+    ///
+    /// A missing table is an empty walk, as it is for the other read methods.
+    /// Rows are visited in redb's order, which is not a contract a caller may
+    /// rely on; membership and each row's contents are.
+    pub fn visit_entries(&self, mut f: impl FnMut(&str, &FileRec) -> Result<()>) -> Result<()> {
+        let txn = self.begin_entries_read()?;
+        let tbl = match txn.open_table(ENTRIES) {
+            Ok(t) => t,
+            Err(e) if is_table_missing(&e) => return Ok(()),
+            Err(e) => bail!("open entries table: {e:#}"),
+        };
+        for kv in tbl.iter().context("iterate cache")? {
+            let (k, v) = kv.context("read cache entry")?;
+            let rec = decode_rec(v.value())?;
+            f(k.value(), &rec)?;
+        }
+        Ok(())
+    }
+
+    /// The `meta` row, decoded.
+    ///
+    /// The row's bytes are this crate's wire format, so a caller that observes
+    /// a cache as a file cannot read the case mode it was written under without
+    /// reaching into that format. This is the narrow public seam for it: one
+    /// read transaction over the `meta` table, no entries read and no write.
+    /// A cache with no `meta` row is an error, not a default — a read-only
+    /// observer cannot invent the mode a real run recorded.
+    pub fn meta(&self) -> Result<Meta> {
+        let txn = self.db.begin_read().context("begin read (meta)")?;
+        let raw = read_meta_bytes(&txn)?.context("cache has no meta row")?;
+        decode_meta(&raw).context("parse cache meta (corrupt?)")
+    }
+
     /// Every cached path, with its record.
     pub fn load_all(&self) -> Result<HashMap<String, FileRec>> {
         let txn = self.begin_entries_read()?;
@@ -1042,6 +1083,58 @@ mod tests {
 
         c.remove("a.txt").unwrap();
         assert_eq!(c.entry_count().unwrap(), 2);
+    }
+
+    /// `visit_entries` hands over exactly what `load_all` holds: the same keys
+    /// with the same decoded rows, and one read transaction whatever the count.
+    /// Both row shapes are in the fixture so a walk that skipped or mangled one
+    /// of them cannot pass.
+    #[test]
+    fn visit_entries_answers_exactly_what_load_all_holds() {
+        let db = redb_builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let bare = CacheDb::open_writable_locked(db, None);
+        let mut none = Vec::new();
+        bare.visit_entries(|k, _| {
+            none.push(k.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(none.is_empty(), "a missing table is an empty walk");
+
+        let c = CacheDb::open_temp(true).unwrap();
+        c.put("a.txt", &file_rec()).unwrap();
+        c.put("sub/b.bin", &file_rec()).unwrap();
+        c.put("a_dir", &FileRec::dir()).unwrap();
+
+        let before = c.entries_read_count();
+        let mut seen: HashMap<String, FileRec> = HashMap::new();
+        c.visit_entries(|k, rec| {
+            seen.insert(k.to_string(), rec.clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(c.entries_read_count() - before, 1);
+        assert_eq!(seen, c.load_all().unwrap());
+        assert_eq!(seen.len(), 3);
+    }
+
+    /// `meta` reports the row the open wrote, in either case mode, and a cache
+    /// with no `meta` row is an error rather than an invented default.
+    #[test]
+    fn meta_reports_the_row_the_open_wrote() {
+        for case_sensitive in [true, false] {
+            let c = CacheDb::open_temp(case_sensitive).unwrap();
+            let meta = c.meta().unwrap();
+            assert_eq!(meta.version, CACHE_VERSION);
+            assert_eq!(meta.case_sensitive, case_sensitive);
+        }
+        let db = redb_builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let bare = CacheDb::open_writable_locked(db, None);
+        assert!(bare.meta().is_err(), "no row means no default mode");
     }
 
     /// `get_many` answers exactly what a loop of `get` answers: the same row

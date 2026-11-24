@@ -1073,6 +1073,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "girsync-cache-json"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "girpr-cli",
+ "girpr-digest",
+ "girpr-tempdir",
+ "girsync-cache",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "girsync-leaves"
 version = "0.1.0"
 dependencies = [

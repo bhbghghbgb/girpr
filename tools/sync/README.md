@@ -41,7 +41,8 @@ module tree holds only in a test build (`#[cfg(test)]`).
 | `commands/sync/plan/` | `mod.rs` (the facade), `build.rs` (`Plan` + `build_plan`, pure), `link.rs` (link storage and the on-disk spellings), `safety.rs` (the plan-time guards), `records.rs` (the summary and the dry-run records); `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
 | `src/commands/sync/plan/tests.rs` | the plan module's own cases: the plan-time guards, the link storage they spare, and the on-disk spellings they name |
 | `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
-| `tools/sync/cache/` | the redb cache, its wire codec and the digest vocabulary the codec stores: `schema` (`Meta`/`FileRec`), `wire` (the `postcard` byte codec), `db/` (`CacheDb`, `Handle`, backend), `write` (`CacheWrite`, `CommitLimits`), `open` (`open_db`, backups/snapshots), `backup`, `lock`, `hash`, `helpers`. `src/lib.rs` aliases the crate as `cache`, so no public path moves. |
+| `tools/sync/cache/` | the redb cache, its wire codec and the digest vocabulary the codec stores: `schema` (`Meta`/`FileRec`), `wire` (the `postcard` byte codec), `db/` (`CacheDb`, `Handle`, backend), `write` (`CacheWrite`, `CommitLimits`), `open` (`open_db`, backups/snapshots), `backup`, `lock`, `hash`, `helpers`. `src/lib.rs` aliases the crate as `cache`, so no public path moves. `CacheDb::visit_entries` and `CacheDb::meta` are the streaming reads the NDJSON converter uses. |
+| `tools/sync/cache-json/` | the standalone `cache-json` converter: NDJSON export/import of a current-schema cache, reading and writing through `girsync-cache` without opening redb itself. It has no dependency on girsync's lib facade, so a command edit leaves it cached. |
 | `tools/sync/leaves/` | the acyclic leaves this lib depends on directly: `rw/` (`mod.rs` = `RwRuntime`, `limits.rs` = the flag shape, `gate.rs` = the counters and src-then-dst ordering, `fixtures.rs` = test limiters), `filter.rs` (include/exclude rules over `girpr-filter`), `link.rs` (link classification and removal) and `hardlink.rs` (link count and identity from `girpr-fs-identity`). `src/lib.rs` re-exports them under their old module names, so no public path moves. |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
@@ -113,6 +114,18 @@ sled2redb`. Its command is `sled2redb <SLED_DIR> <REDB_PATH>` with `--force` and
 error exits `3`, and there is no `--version`. The full behaviour and rationale
 live in [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
+### NDJSON cache export/import
+
+A second standalone tool, `cache-json` in `tools/sync/cache-json`, converts a
+current-schema redb cache to newline-delimited JSON and back:
+`cache-json to-json <CACHE> [NDJSON]` (default `-` is stdout) and
+`cache-json from-json <NDJSON|-> <CACHE> [--force]`. The stream is a meta line
+followed by one line per row, so it can be parsed incrementally; digests are
+hex under their verbatim algorithm names. Import publishes the new cache in one
+rename and refuses a foreign schema version. Build and test it with
+`cargo build -p girsync-cache-json` and
+`cargo nextest run -p girsync-cache-json`; the format and failure rules are in
+[`tools/sync/cache-json/README.md`](cache-json/README.md).
 
 `--no-backup` and `--backup-retain N` are on every subcommand too — see
 [Backups and failures](#backups-and-failures).
