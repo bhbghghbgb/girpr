@@ -1,0 +1,111 @@
+{
+  "schema_version": 3,
+  "shapes": [
+    {
+      "id": "blob_missing",
+      "family": "blob",
+      "request": "a manifest id under the new build's prefix that the build does not have",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000",
+      "status": 404,
+      "content_type": "application/xml",
+      "retcode": null,
+      "error": true,
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>/cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000</Key><RequestId>5C0BD9A0C3E0E0A2</RequestId><HostId>cdn-mock</HostId></Error>",
+      "volatile_fields": [
+        "RequestId",
+        "HostId",
+        "Key",
+        "body length (follows Key)"
+      ],
+      "retryable": false
+    },
+    {
+      "id": "chunk_missing",
+      "family": "blob",
+      "request": "a chunk id under the new build's prefix that the build does not have",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000",
+      "status": 404,
+      "content_type": "application/xml",
+      "retcode": null,
+      "error": true,
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>/cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000</Key><RequestId>5C0BD9A0C3E0E0A2</RequestId><HostId>cdn-mock</HostId></Error>",
+      "volatile_fields": [
+        "RequestId",
+        "HostId",
+        "Key",
+        "body length (follows Key)"
+      ],
+      "retryable": false
+    },
+    {
+      "id": "blob_wrong_build",
+      "family": "blob",
+      "request": "a chunk id that exists, requested under the *other* build's prefix",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982",
+      "status": 404,
+      "content_type": "application/xml",
+      "retcode": null,
+      "error": true,
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>/cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982</Key><RequestId>5C0BD9A0C3E0E0A2</RequestId><HostId>cdn-mock</HostId></Error>",
+      "volatile_fields": [
+        "RequestId",
+        "HostId",
+        "Key",
+        "body length (follows Key)"
+      ],
+      "retryable": false
+    },
+    {
+      "id": "getbuild_unknown_tag",
+      "family": "json",
+      "request": "getBuild for a tag the API does not serve",
+      "url": "http://127.0.0.1:50000/sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=null",
+      "status": 200,
+      "content_type": "application/json",
+      "retcode": -202,
+      "error": true,
+      "body": "{\"data\":null,\"message\":\"not found\",\"retcode\":-202}",
+      "volatile_fields": [],
+      "retryable": false
+    },
+    {
+      "id": "getbuild_bad_package",
+      "family": "json",
+      "request": "getBuild with a package_id the API does not know",
+      "url": "http://127.0.0.1:50000/sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword",
+      "status": 200,
+      "content_type": "application/json",
+      "retcode": -201,
+      "error": true,
+      "body": "{\"data\":null,\"message\":\"invalid params\",\"retcode\":-201}",
+      "volatile_fields": [],
+      "retryable": false
+    },
+    {
+      "id": "getgameconfigs_bad_game_id",
+      "family": "json",
+      "request": "getGameConfigs with a game_ids[] the API does not know",
+      "url": "http://127.0.0.1:50000/hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined",
+      "status": 200,
+      "content_type": "application/json",
+      "retcode": -1001,
+      "error": true,
+      "body": "{\"data\":null,\"message\":\"invalid params\",\"retcode\":-1001}",
+      "volatile_fields": [],
+      "retryable": false
+    },
+    {
+      "id": "getgamebranches_bad_game_id",
+      "family": "json",
+      "request": "getGameBranches with a game_ids[] the API does not know — measured to answer retcode 0 with an empty game_branches, which is a success",
+      "url": "http://127.0.0.1:50000/hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined",
+      "status": 200,
+      "content_type": "application/json",
+      "retcode": 0,
+      "error": false,
+      "body": "{\"data\":{\"game_branches\":[]},\"message\":\"OK\",\"retcode\":0}",
+      "volatile_fields": [],
+      "retryable": false
+    }
+  ]
+}

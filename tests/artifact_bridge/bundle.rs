@@ -287,3 +287,141 @@ fn str_field(v: &Value, path: &Path) -> String {
         .unwrap_or_else(|| panic!("{} is missing a string field", path.display()))
         .to_string()
 }
+
+// ---------------------------------------------------------------------------
+// the optional persistent records
+// ---------------------------------------------------------------------------
+
+/// The persistent records a bundle carries. Old bundles have neither; the
+/// bridge's persistent case stands down loudly if the named bundle has no
+/// records rather than pretending it checked them.
+#[derive(Clone, Debug)]
+pub struct PersistentRecords {
+    pub dispatch: Value,
+    pub index: Value,
+}
+
+impl PersistentRecords {
+    pub fn read(root: &Path) -> Option<Self> {
+        let d = root.join("dispatch").join("record.json");
+        let i = root.join("persistent").join("index.json");
+        if !d.is_file() || !i.is_file() {
+            return None;
+        }
+        Some(Self {
+            dispatch: read_json(&d),
+            index: read_json(&i),
+        })
+    }
+
+    /// A mirror's raw bytes, by kind (`res`, `data`, `silence_data`).
+    pub fn manifest(&self, root: &Path, kind: &str) -> Vec<u8> {
+        let path = self.index["manifests"]
+            .as_array()
+            .expect("persistent/index.json manifests[]")
+            .iter()
+            .find(|f| f["kind"].as_str() == Some(kind))
+            .and_then(|f| f["path"].as_str())
+            .unwrap_or_else(|| panic!("no {kind} manifest in persistent/index.json"));
+        std::fs::read(root.join(path)).unwrap_or_else(|e| panic!("read {path}: {e}"))
+    }
+
+    /// A full-file blob's expected bytes, by the basename of its `remoteName`.
+    pub fn blob(&self, root: &Path, name: &str) -> Vec<u8> {
+        let path = self.index["blobs"]
+            .as_array()
+            .expect("persistent/index.json blobs[]")
+            .iter()
+            .find(|f| {
+                f["remote_name"]
+                    .as_str()
+                    .is_some_and(|r| r.rsplit('/').next() == Some(name))
+            })
+            .and_then(|f| f["path"].as_str())
+            .unwrap_or_else(|| panic!("no {name} blob in persistent/index.json"));
+        std::fs::read(root.join(path)).unwrap_or_else(|e| panic!("read {path}: {e}"))
+    }
+}
+
+/// The `DispatchInfo` the replayed record describes.
+///
+/// The record is the rewritten copy from [`server::Bridge`], so the CDN
+/// prefixes name this process's listeners; the descriptors' paths are exactly
+/// the ones the dispatcher published. Nothing here invents a revision or a
+/// digest: every value is read from the record.
+pub fn dispatch_info(record: &Value) -> girpr::test_support::DispatchInfo {
+    use girpr::test_support::{ManifestDescriptor, ManifestKind};
+
+    let d = &record["decoded"];
+    let s = |key: &str| -> String {
+        d[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("dispatch record has no decoded.{key}"))
+            .to_string()
+    };
+    let n = |key: &str| -> u64 { d[key].as_u64().unwrap_or(0) };
+    let repo_res = s("repo_res_version_url");
+    let repo_data = s("repo_design_data_url");
+    let res_rev = n("res_revision");
+    let data_rev = n("data_revision");
+    let sil_rev = n("silence_revision");
+    let audio_rev = n("audio_revision");
+    let res_hash = s("res_hash");
+    let data_hash = s("data_hash");
+    let sil_hash = s("silence_hash");
+    let audio_hash = s("audio_hash");
+
+    let kinds = ["res", "data", "silence_data"];
+    let descriptors = record["decoded"]["descriptors"]
+        .as_array()
+        .expect("dispatch record descriptors[]")
+        .iter()
+        .zip(kinds)
+        .map(|(desc, kind)| {
+            let kind = match kind {
+                "res" => ManifestKind::Res,
+                "data" => ManifestKind::Data,
+                _ => ManifestKind::Silence,
+            };
+            ManifestDescriptor {
+                kind,
+                url: desc["url"].as_str().expect("descriptor url").to_string(),
+                expected_md5: desc["md5"].as_str().expect("descriptor md5").to_string(),
+                expected_size: desc["file_size"].as_u64().unwrap_or(0),
+                mirror_rel: format!(
+                    "GenshinImpact_Data/Persistent/{}_versions_persist",
+                    kind.as_str()
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+    let [res, data, silence]: [ManifestDescriptor; 3] =
+        descriptors.try_into().expect("three mirrored manifests");
+
+    let client_game_res_url = format!("{repo_res}/output_{res_rev}_{res_hash}/client");
+    let client_design_data_url =
+        format!("{repo_data}/output_{data_rev}_{data_hash}/client/General");
+    let client_silence_data_url =
+        format!("{repo_data}/output_{sil_rev}_{sil_hash}/client_silence/General");
+    let client_audio_assets_url = format!("{repo_res}/output_{audio_rev}_{audio_hash}/client");
+
+    girpr::test_support::DispatchInfo {
+        game_version: s("game_version"),
+        channel_name: s("channel_name"),
+        server_name: "TEST".to_string(),
+        codename: s("codename"),
+        res_revision: res_rev,
+        data_revision: data_rev,
+        silence_revision: sil_rev,
+        audio_revision: audio_rev,
+        res_hash,
+        data_hash,
+        silence_hash: sil_hash,
+        audio_hash,
+        client_game_res_url,
+        client_design_data_url,
+        client_silence_data_url,
+        client_audio_assets_url,
+        manifest_digests: [res, data, silence],
+    }
+}

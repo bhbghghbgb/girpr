@@ -1,4 +1,8 @@
 //! Per-blob and per-patchmap re-verification checks: A6, A7, A8, A11, A18 and A20.
+//!
+//! `P1`/`P2` below are the optional persistent records' own checks. They are
+//! absent for a bundle written before the records existed, and byte-exact for
+//! one that carries them.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -746,6 +750,156 @@ fn fetch_url_names(chunk_id: &str, url: Option<&str>) -> bool {
 /// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the
 /// capture also calls — one spelling of the read → parse → compare, so
 /// `verify`'s rows cannot disagree with the capture's recorded ones.
+/// P1 and P2: the optional persistent records, **verified byte-exactly when
+/// present and skipped when absent**.
+///
+/// A16 already re-hashes every file in `checksums.json`, including these; these
+/// rows check the *records' own claims* about those files — the envelope's
+/// fingerprint and the manifests'/blobs' digests — so a record that was edited
+/// to name different bytes cannot pass just because its edit was re-checksummed.
+pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
+    const P1: &str = "the dispatch record's digests match its byte-exact envelope";
+    const P2: &str = "the persistent index's digests match its raw manifests and blobs";
+    let mut rows = Vec::new();
+
+    let record_path = root.join("dispatch").join("record.json");
+    if record_path.is_file() {
+        let raw = match std::fs::read(&record_path) {
+            Ok(b) => b,
+            Err(e) => {
+                return vec![Assertion::fail(
+                    "P1",
+                    P1,
+                    "dispatch/record.json",
+                    "readable",
+                    &e.to_string(),
+                )];
+            }
+        };
+        let record: crate::persistent::DispatchRecord = match serde_json::from_slice(&raw) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![Assertion::fail(
+                    "P1",
+                    P1,
+                    "dispatch/record.json",
+                    "parseable",
+                    &e.to_string(),
+                )];
+            }
+        };
+        if record.schema_version != crate::SCHEMA_VERSION {
+            return vec![Assertion::fail(
+                "P1",
+                P1,
+                "dispatch/record.json",
+                &format!("schema {}", crate::SCHEMA_VERSION),
+                &format!("schema {}", record.schema_version),
+            )];
+        }
+        let envelope = root.join(&record.envelope);
+        let actual = std::fs::read(&envelope)
+            .map(|b| format!("{} {}", hash::md5_hex(&b), hash::sha256_hex(&b)))
+            .unwrap_or_else(|e| format!("unreadable: {e}"));
+        let expected = format!("{} {}", record.envelope_md5, record.envelope_sha256);
+        let listed = manifest
+            .files
+            .iter()
+            .find(|f| f.path == record.envelope)
+            .map(|f| f.md5.as_str())
+            .unwrap_or("<not listed in MANIFEST.json>");
+        rows.push(if actual == expected && listed == record.envelope_md5 {
+            Assertion::pass("P1", P1, &record.envelope, &expected)
+        } else {
+            Assertion::fail("P1", P1, &record.envelope, &expected, &actual)
+        });
+    }
+
+    let index_path = root.join("persistent").join("index.json");
+    if index_path.is_file() {
+        let raw = match std::fs::read(&index_path) {
+            Ok(b) => b,
+            Err(e) => {
+                rows.push(Assertion::fail(
+                    "P2",
+                    P2,
+                    "persistent/index.json",
+                    "readable",
+                    &e.to_string(),
+                ));
+                return rows;
+            }
+        };
+        let index: crate::persistent::PersistentIndex = match serde_json::from_slice(&raw) {
+            Ok(i) => i,
+            Err(e) => {
+                rows.push(Assertion::fail(
+                    "P2",
+                    P2,
+                    "persistent/index.json",
+                    "parseable",
+                    &e.to_string(),
+                ));
+                return rows;
+            }
+        };
+        let mut problems = Vec::new();
+        if index.schema_version != crate::SCHEMA_VERSION {
+            problems.push(format!(
+                "schema {} instead of {}",
+                index.schema_version,
+                crate::SCHEMA_VERSION
+            ));
+        }
+        let mut files: Vec<(&String, u64, &String)> = index
+            .manifests
+            .iter()
+            .map(|f| (&f.path, f.bytes, &f.md5))
+            .collect();
+        files.extend(index.blobs.iter().map(|f| (&f.path, f.bytes, &f.md5)));
+        for (path, bytes, md5) in files {
+            match std::fs::read(root.join(path)) {
+                Ok(body) => {
+                    if body.len() as u64 != bytes || hash::md5_hex(&body) != *md5 {
+                        problems.push(format!("{path} does not match its recorded size/md5"));
+                    }
+                }
+                Err(e) => problems.push(format!("{path}: {e}")),
+            }
+            if !manifest
+                .files
+                .iter()
+                .any(|f| f.path == *path && f.md5 == *md5)
+            {
+                problems.push(format!(
+                    "{path} is not listed with that md5 in MANIFEST.json"
+                ));
+            }
+        }
+        rows.push(if problems.is_empty() {
+            Assertion::pass(
+                "P2",
+                P2,
+                "persistent/index.json",
+                &format!(
+                    "{} manifests, {} blobs",
+                    index.manifests.len(),
+                    index.blobs.len()
+                ),
+            )
+        } else {
+            Assertion::fail(
+                "P2",
+                P2,
+                "persistent/index.json",
+                "every recorded digest matches",
+                &problems.join("; "),
+            )
+        });
+    }
+    rows
+}
+
 pub fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
     vec![crate::emit::selfcheck::check_config_ini(
         root,

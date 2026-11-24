@@ -412,10 +412,15 @@ pub struct Rejection {
 
 impl Selection {
     /// The unmet classes, in matrix order.
+    ///
+    /// `persistent` is a record class, not a patch shape: no manifest path can
+    /// answer it, so it is never *unmet* by a content selection. Its matrix row
+    /// says whether the records were captured; `--require-class` for it cannot
+    /// be satisfied by admitting a game file.
     pub fn unmet(&self) -> Vec<Class> {
         self.matrix
             .iter()
-            .filter(|r| r.unsatisfied())
+            .filter(|r| r.unsatisfied() && r.class != Class::Persistent)
             .map(|r| r.class)
             .collect()
     }

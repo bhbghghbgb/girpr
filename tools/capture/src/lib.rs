@@ -68,6 +68,7 @@ pub mod logging;
 pub mod manifest;
 pub mod pathmap;
 pub mod paths;
+pub mod persistent;
 pub mod rejections;
 pub mod report;
 pub mod run;

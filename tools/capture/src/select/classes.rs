@@ -111,6 +111,11 @@ pub enum Class {
     Added,
     /// Only in the old manifest: not planned; a `--purge-after` target.
     Removed,
+    /// The persistent tier: a dispatcher envelope, three raw manifests and a
+    /// handful of full-file blobs. Not a patch shape — no `Shape` matches it —
+    /// so it can never steal a file from one of the six content classes. It is
+    /// in the matrix so a bundle can say whether it carries the records.
+    Persistent,
 }
 
 /// Whether a shape is *partially* reusable: some chunks survive and some do not.
@@ -139,13 +144,14 @@ impl Class {
     /// adjacent because a file that reuses *and* moves is the `reuse_moved`
     /// one, and the cheap shapes come first so a small budget buys the
     /// boundaries before the expensive ones.
-    pub const ALL: [Class; 6] = [
+    pub const ALL: [Class; 7] = [
         Class::Identical,
         Class::NoReuse,
         Class::ReuseInPlace,
         Class::ReuseMoved,
         Class::Added,
         Class::Removed,
+        Class::Persistent,
     ];
 
     /// The order admission walks them in.
@@ -154,7 +160,19 @@ impl Class {
     /// had drifted into the same contents; the day they stop agreeing, a class
     /// added to one and not the other becomes either invisible to `parse` or
     /// invisible to admission, and neither failure names the other list.
-    pub const REQUIRED_ORDER: [Class; 6] = Class::ALL;
+    pub const REQUIRED_ORDER: [Class; 7] = Class::ALL;
+
+    /// The six **content** classes, which are the only ones a manifest path can
+    /// satisfy. `persistent` is a record class, not a patch shape, so a capture
+    /// of ordinary game files never admits it.
+    pub const PATCH_SHAPES: [Class; 6] = [
+        Class::Identical,
+        Class::NoReuse,
+        Class::ReuseInPlace,
+        Class::ReuseMoved,
+        Class::Added,
+        Class::Removed,
+    ];
 
     /// The wire spelling, and the directory name a capture is filed under.
     pub const fn id(self) -> &'static str {
@@ -165,6 +183,7 @@ impl Class {
             Class::ReuseMoved => "reuse_moved",
             Class::Added => "added",
             Class::Removed => "removed",
+            Class::Persistent => "persistent",
         }
     }
 
@@ -187,6 +206,9 @@ impl Class {
             }
             Class::Added => "the file is created: absent locally, fetched whole",
             Class::Removed => "not planned; a --purge-after target",
+            Class::Persistent => {
+                "the dispatcher envelope, three mirrored manifests and full-file blobs"
+            }
         }
     }
 
@@ -254,6 +276,9 @@ impl Class {
             }
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
+            // A record class has no patch shape. It is filled by the
+            // persistent capture path, never by scoring a manifest path.
+            Class::Persistent => false,
         }
     }
 

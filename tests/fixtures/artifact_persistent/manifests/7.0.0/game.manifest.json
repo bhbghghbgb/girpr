@@ -1,0 +1,217 @@
+{
+  "schema_version": 3,
+  "tag": "7.0.0",
+  "build_id": "sMOCKold00",
+  "matching_field": "game",
+  "entries": [
+    {
+      "file": "GenshinImpact_Data/Resources/browser_assets",
+      "chunks": [
+        {
+          "id": "64f0d1a901e6f8d6_38bb755ad8fe8d9615e121b298fb885f",
+          "uncompressed_md5": "38bb755ad8fe8d9615e121b298fb885f",
+          "offset": 0,
+          "compressed_size": 522,
+          "uncompressed_size": 512,
+          "unknown_field6": 0,
+          "compressed_md5": "a1454c5f95ade23f3d728664c0f3be37"
+        },
+        {
+          "id": "1c06a7f12290e026_8c8895d78716cfdb84575f85201b4bd8",
+          "uncompressed_md5": "8c8895d78716cfdb84575f85201b4bd8",
+          "offset": 512,
+          "compressed_size": 522,
+          "uncompressed_size": 512,
+          "unknown_field6": 0,
+          "compressed_md5": "6b250b4edc026934ca13c95463c64ada"
+        }
+      ],
+      "is_folder": false,
+      "size": 1024,
+      "md5": "fa86b24a0c7c47068795303f5f3032c9"
+    },
+    {
+      "file": "GenshinImpact_Data/StreamingAssets/blocks/old.blk",
+      "chunks": [
+        {
+          "id": "d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36",
+          "uncompressed_md5": "f639a004b4ab92e314c88a73b9c0aa36",
+          "offset": 0,
+          "compressed_size": 32778,
+          "uncompressed_size": 32768,
+          "unknown_field6": 0,
+          "compressed_md5": "2424757b69fd986445017a848febf95a"
+        }
+      ],
+      "is_folder": false,
+      "size": 32768,
+      "md5": "f639a004b4ab92e314c88a73b9c0aa36"
+    },
+    {
+      "file": "GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
+      "chunks": [
+        {
+          "id": "a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf",
+          "uncompressed_md5": "3b5a7d035458664fcdd3e13fb1b193cf",
+          "offset": 0,
+          "compressed_size": 522,
+          "uncompressed_size": 512,
+          "unknown_field6": 0,
+          "compressed_md5": "82e866d363ee9be575b095bc049d6a6e"
+        },
+        {
+          "id": "4411d85567f739ce_6940ec80459b4352adaffa992aacdab3",
+          "uncompressed_md5": "6940ec80459b4352adaffa992aacdab3",
+          "offset": 512,
+          "compressed_size": 522,
+          "uncompressed_size": 512,
+          "unknown_field6": 0,
+          "compressed_md5": "6c4c03e8dbdc28ad93e541bf218e4049"
+        }
+      ],
+      "is_folder": false,
+      "size": 1024,
+      "md5": "bdd568a83cedef916f4a919dd8c658bc"
+    },
+    {
+      "file": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+      "chunks": [
+        {
+          "id": "dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636",
+          "uncompressed_md5": "9c389ad675e81e5be30dc2aea4770636",
+          "offset": 0,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "d8dff7190618f519f2352a50833ca992"
+        },
+        {
+          "id": "69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea",
+          "uncompressed_md5": "12283b0a8bbcfc40b5e00175c1d7dfea",
+          "offset": 1024,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "792d5e2389cbfaab81a8c59fa7e2d46c"
+        },
+        {
+          "id": "dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa",
+          "uncompressed_md5": "558db22ff96610039fa29418b658bbaa",
+          "offset": 2048,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "f29e495bde9002998474a046eedf40d5"
+        }
+      ],
+      "is_folder": false,
+      "size": 3072,
+      "md5": "e37a03773df13c4371aa0596f7ff8334"
+    },
+    {
+      "file": "GenshinImpact_Data/StreamingAssets/blocks/eager.blk",
+      "chunks": [
+        {
+          "id": "982f9a91afccd519_f2b42080304278b2760f7954a2659275",
+          "uncompressed_md5": "f2b42080304278b2760f7954a2659275",
+          "offset": 0,
+          "compressed_size": 2058,
+          "uncompressed_size": 2048,
+          "unknown_field6": 0,
+          "compressed_md5": "e07389241023919d99289bb2401789a0"
+        },
+        {
+          "id": "bd9b67a9dc35093c_e2a2e62035e8cff44c8346b4583fba39",
+          "uncompressed_md5": "e2a2e62035e8cff44c8346b4583fba39",
+          "offset": 2048,
+          "compressed_size": 2058,
+          "uncompressed_size": 2048,
+          "unknown_field6": 0,
+          "compressed_md5": "8785f3552fc765420c8b24f9c2c407ab"
+        },
+        {
+          "id": "81cb3c6b453257d4_b9d4f8d6da7e69a1de630211b23c5ebd",
+          "uncompressed_md5": "b9d4f8d6da7e69a1de630211b23c5ebd",
+          "offset": 4096,
+          "compressed_size": 2058,
+          "uncompressed_size": 2048,
+          "unknown_field6": 0,
+          "compressed_md5": "543ba8f41167ba6e66bf22511185aa82"
+        },
+        {
+          "id": "24e99fcb0359f3fb_3d0838c26d10d17bd1714fae25fac45c",
+          "uncompressed_md5": "3d0838c26d10d17bd1714fae25fac45c",
+          "offset": 6144,
+          "compressed_size": 2058,
+          "uncompressed_size": 2048,
+          "unknown_field6": 0,
+          "compressed_md5": "4629d7619dcadf5cf2e850c44ce05d07"
+        }
+      ],
+      "is_folder": false,
+      "size": 8192,
+      "md5": "819370f3d0e6498cec874cb2c8b536d5"
+    },
+    {
+      "file": "GenshinImpact_Data/StreamingAssets/blocks/deferred.blk",
+      "chunks": [
+        {
+          "id": "4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6",
+          "uncompressed_md5": "bce567638abdc69b80c7bde1f50677f6",
+          "offset": 0,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "94d1743716181566def134cc3fcf2217"
+        },
+        {
+          "id": "7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389",
+          "uncompressed_md5": "36bed2b08e4df3d4ba63710fcc4e7389",
+          "offset": 1024,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "7b93edd8c763f8cc51c9557b6ce13f83"
+        },
+        {
+          "id": "734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c",
+          "uncompressed_md5": "759d96ceaf6d243146547304a953ad3c",
+          "offset": 2048,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "1437d5bd2c3a991d214e7a1696b4483c"
+        }
+      ],
+      "is_folder": false,
+      "size": 3072,
+      "md5": "a79833e4672b6bc2e7da9cd63576f7a7"
+    },
+    {
+      "file": "GenshinImpact_Data/StreamingAssets/blocks/grow.blk",
+      "chunks": [
+        {
+          "id": "6789fad3caf3fb1a_ee0ef7aefe4efdab5c25aa0f3894cb34",
+          "uncompressed_md5": "ee0ef7aefe4efdab5c25aa0f3894cb34",
+          "offset": 0,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "4e24971a7924cfc0f247048827bf0120"
+        },
+        {
+          "id": "c13c9adf4fc994be_a4a093e638464814ba68155fb8bc4862",
+          "uncompressed_md5": "a4a093e638464814ba68155fb8bc4862",
+          "offset": 1024,
+          "compressed_size": 1034,
+          "uncompressed_size": 1024,
+          "unknown_field6": 0,
+          "compressed_md5": "54f62ccdaf74025045dbeba5c7180c47"
+        }
+      ],
+      "is_folder": false,
+      "size": 2048,
+      "md5": "67c2ea95dcfc66da14b07384e7884384"
+    }
+  ]
+}

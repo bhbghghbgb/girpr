@@ -1,0 +1,76 @@
+{
+  "schema_version": 3,
+  "tag": "7.1.0",
+  "build_id": "sMOCKnew00",
+  "matching_field": "game",
+  "category_id": "10016",
+  "category_name": "game",
+  "manifest": {
+    "id": "manifest_3fc907e1b5db4352_587c0563531ae5d2fc485ac89e3bfb36",
+    "checksum": "587c0563531ae5d2fc485ac89e3bfb36",
+    "compressed_size": "1255",
+    "uncompressed_size": "2689"
+  },
+  "declared": {
+    "stats": {
+      "compressed_size": "16800",
+      "uncompressed_size": "16640",
+      "file_count": "7",
+      "chunk_count": "16"
+    },
+    "deduplicated_stats": null,
+    "chunk_download": {
+      "encryption": 0,
+      "password": "",
+      "compression": 1,
+      "url_prefix": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk",
+      "url_suffix": ""
+    },
+    "manifest_download": {
+      "encryption": 0,
+      "password": "",
+      "compression": 1,
+      "url_prefix": "http://127.0.0.1:50000/cdn/sMOCKnew00/manifest",
+      "url_suffix": ""
+    }
+  },
+  "id_parts": {
+    "prefix_16hex": "manifest_3fc907e1b5db4352",
+    "prefix_semantics": "opaque",
+    "suffix_32hex": "587c0563531ae5d2fc485ac89e3bfb36",
+    "suffix_equals_checksum": true
+  },
+  "stored": {
+    "path": "manifests/7.1.0/game.manifest.zst",
+    "bytes": 1255,
+    "container": "zstd",
+    "md5_compressed": "499c6d74106702e871a1f8954c2bf372",
+    "sha256_compressed": "5c14b1ea6e2473773cd5e8e27693d6e2c3faf577d58d87009fb593f48f1ca55b",
+    "md5_decompressed": "587c0563531ae5d2fc485ac89e3bfb36",
+    "bytes_decompressed": 2689,
+    "encoding": "identity"
+  },
+  "verified": {
+    "decompressed_md5_matches_checksum": true,
+    "checksum_matches_id_suffix": true,
+    "id_prefix_verified": false
+  },
+  "decoded": {
+    "entries": 7,
+    "files": 7,
+    "folders": 0,
+    "total_chunks": 16,
+    "max_chunk_compressed_bytes": 2058,
+    "total_file_bytes": 16640,
+    "structure": {
+      "duplicate_paths": 0,
+      "empty_paths": 0,
+      "backslash_paths": 0,
+      "non_ascii_paths": 0,
+      "unsorted_chunk_offsets": 0,
+      "non_gapless_files": 0,
+      "size_mismatch_files": 0
+    }
+  },
+  "full_decode_written": true
+}

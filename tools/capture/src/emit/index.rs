@@ -1807,10 +1807,17 @@ mod tests {
 
     #[test]
     fn a17_accepts_a_complete_matrix() {
-        // The positive half: a matrix with exactly the six required classes, each
-        // once, is what every real capture writes.
+        // The positive half: every known class, each once. `persistent` is
+        // optional, so the six patch shapes alone are also complete.
         let (ok, detail) = manifest_with(&complete_rows()).a17();
         assert!(ok, "{detail}");
+        assert!(detail.contains("7 classes"), "{detail}");
+        let old: Vec<(&str, &str)> = complete_rows()
+            .into_iter()
+            .filter(|(c, _)| *c != "persistent")
+            .collect();
+        let (ok, detail) = manifest_with(&old).a17();
+        assert!(ok, "a pre-persistent bundle stays complete: {detail}");
         assert!(detail.contains("6 classes"), "{detail}");
     }
 
@@ -1840,7 +1847,7 @@ mod tests {
         assert!(!ok, "an unknown class must not pass A17");
         assert!(detail.contains("bogus"), "{detail}");
         assert!(
-            detail.contains("required classes"),
+            detail.contains("known classes"),
             "the detail names the valid set: {detail}"
         );
     }
@@ -2177,7 +2184,11 @@ impl Manifest {
     /// matrix is a *claim* the bundle makes about itself; `verify` is where a
     /// claim is checked, and `Bundle::open` stays a structural reader.
     pub fn a17(&self) -> (bool, String) {
-        let required = crate::select::Class::ALL;
+        // `persistent` is an optional, additive record class: a bundle written
+        // before it existed has a complete matrix without it. Every other row
+        // is still required, and any row that *is* present must be a real class
+        // in an acceptable state.
+        let required = crate::select::Class::PATCH_SHAPES;
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {
             if !matches!(
@@ -2192,13 +2203,16 @@ impl Manifest {
                     ),
                 );
             }
-            if !required.iter().any(|c| c.id() == row.class) {
+            if !crate::select::Class::ALL
+                .iter()
+                .any(|c| c.id() == row.class)
+            {
                 return (
                     false,
                     format!(
-                        "{} is not one of the required classes ({})",
+                        "{} is not one of the known classes ({})",
                         row.class,
-                        required.map(|c| c.id()).join(", ")
+                        crate::select::Class::ALL.map(|c| c.id()).join(", ")
                     ),
                 );
             }

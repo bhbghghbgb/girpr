@@ -1,0 +1,25 @@
+{
+  "data": {
+    "game": {
+      "biz": "hk4e_global",
+      "id": "gopR6Cufr3"
+    },
+    "launch_configs": [
+      {
+        "audio_pkg_res_dir": "GenshinImpact_Data/StreamingAssets/Audio",
+        "audio_pkg_scan_dir": "GenshinImpact_Data/Persistent/audio_lang_14",
+        "default_download_mode": "DOWNLOAD_MODE_CHUNK",
+        "enable_audio_pkg_mgmt": true,
+        "enable_ldiff": true,
+        "exe_file_name": "GenshinImpact.exe",
+        "game": {
+          "biz": "hk4e_global",
+          "id": "gopR6Cufr3"
+        },
+        "installation_dir": "Genshin Impact"
+      }
+    ]
+  },
+  "message": "OK",
+  "retcode": 0
+}

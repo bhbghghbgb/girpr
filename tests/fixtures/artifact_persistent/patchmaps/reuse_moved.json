@@ -1,0 +1,75 @@
+{
+  "schema_version": 3,
+  "capture_id": "reuse_moved",
+  "path": "GenshinImpact_Data/StreamingAssets/blocks/deferred.blk",
+  "matching_field": "game",
+  "classes": [
+    "reuse_moved"
+  ],
+  "old": {
+    "tag": "7.0.0",
+    "size": 3072,
+    "md5": "a79833e4672b6bc2e7da9cd63576f7a7",
+    "nchunks": 3
+  },
+  "new": {
+    "tag": "7.1.0",
+    "size": 2048,
+    "md5": "0dbf396d4149eb063fd573d856176fca",
+    "nchunks": 2
+  },
+  "plan": [
+    {
+      "i": 0,
+      "decision": "REUSE",
+      "target_range": {
+        "start": 0,
+        "end": 1024
+      },
+      "source_range": {
+        "start": 2048,
+        "end": 3072,
+        "file_tag": "7.0.0"
+      },
+      "chunk_id": "734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c",
+      "url": null,
+      "compressed_size": 1034,
+      "uncompressed_size": 1024,
+      "uncompressed_md5": "759d96ceaf6d243146547304a953ad3c",
+      "note": "moved: 2048 in the old file, 0 in the new one"
+    },
+    {
+      "i": 1,
+      "decision": "FETCH",
+      "target_range": {
+        "start": 1024,
+        "end": 2048
+      },
+      "source_range": null,
+      "chunk_id": "8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde",
+      "compressed_size": 1034,
+      "uncompressed_size": 1024,
+      "uncompressed_md5": "c67e30034329d2ba4419ca814f691bde",
+      "note": null
+    }
+  ],
+  "totals": {
+    "chunks": 2,
+    "reuse": 1,
+    "fetch": 1,
+    "moved": 1,
+    "download_bytes": 1034,
+    "materialize_old_bytes": 3072,
+    "materialize_new_bytes": 2048
+  },
+  "expectations": {
+    "result_path": "expected/GenshinImpact_Data/StreamingAssets/blocks/deferred.blk",
+    "result_md5": "0dbf396d4149eb063fd573d856176fca",
+    "absent_after": false,
+    "download_bytes": 1034,
+    "must_not_fetch": [
+      "734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c"
+    ]
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "schema_version": 3,
+  "capture_id": "reuse_in_place",
+  "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+  "matching_field": "game",
+  "classes": [
+    "reuse_in_place"
+  ],
+  "old": {
+    "tag": "7.0.0",
+    "size": 3072,
+    "md5": "e37a03773df13c4371aa0596f7ff8334",
+    "nchunks": 3
+  },
+  "new": {
+    "tag": "7.1.0",
+    "size": 3072,
+    "md5": "03d7505c743de591c93dacedcad9ad75",
+    "nchunks": 3
+  },
+  "plan": [
+    {
+      "i": 0,
+      "decision": "FETCH",
+      "target_range": {
+        "start": 0,
+        "end": 1024
+      },
+      "source_range": null,
+      "chunk_id": "059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e",
+      "compressed_size": 1034,
+      "uncompressed_size": 1024,
+      "uncompressed_md5": "90d769cb1f8fb7037073188f9399952e",
+      "note": null
+    },
+    {
+      "i": 1,
+      "decision": "REUSE",
+      "target_range": {
+        "start": 1024,
+        "end": 2048
+      },
+      "source_range": {
+        "start": 1024,
+        "end": 2048,
+        "file_tag": "7.0.0"
+      },
+      "chunk_id": "69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea",
+      "url": null,
+      "compressed_size": 1034,
+      "uncompressed_size": 1024,
+      "uncompressed_md5": "12283b0a8bbcfc40b5e00175c1d7dfea",
+      "note": "byte-identical to the old chunk at the same offset"
+    },
+    {
+      "i": 2,
+      "decision": "REUSE",
+      "target_range": {
+        "start": 2048,
+        "end": 3072
+      },
+      "source_range": {
+        "start": 2048,
+        "end": 3072,
+        "file_tag": "7.0.0"
+      },
+      "chunk_id": "dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa",
+      "url": null,
+      "compressed_size": 1034,
+      "uncompressed_size": 1024,
+      "uncompressed_md5": "558db22ff96610039fa29418b658bbaa",
+      "note": "byte-identical to the old chunk at the same offset"
+    }
+  ],
+  "totals": {
+    "chunks": 3,
+    "reuse": 2,
+    "fetch": 1,
+    "moved": 0,
+    "download_bytes": 1034,
+    "materialize_old_bytes": 3072,
+    "materialize_new_bytes": 3072
+  },
+  "expectations": {
+    "result_path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
+    "result_md5": "03d7505c743de591c93dacedcad9ad75",
+    "absent_after": false,
+    "download_bytes": 1034,
+    "must_not_fetch": [
+      "69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea",
+      "dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa"
+    ]
+  }
+}

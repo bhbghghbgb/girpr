@@ -1,0 +1,76 @@
+{
+  "schema_version": 3,
+  "tag": "7.0.0",
+  "build_id": "sMOCKold00",
+  "matching_field": "en-us",
+  "category_id": "10018",
+  "category_name": "en-us",
+  "manifest": {
+    "id": "manifest_f56ab1254eaa50c8_fb1081bacc72b97fe030dcbe3c413f12",
+    "checksum": "fb1081bacc72b97fe030dcbe3c413f12",
+    "compressed_size": "252",
+    "uncompressed_size": "353"
+  },
+  "declared": {
+    "stats": {
+      "compressed_size": "532",
+      "uncompressed_size": "512",
+      "file_count": "1",
+      "chunk_count": "2"
+    },
+    "deduplicated_stats": null,
+    "chunk_download": {
+      "encryption": 0,
+      "password": "",
+      "compression": 1,
+      "url_prefix": "http://127.0.0.1:50000/cdn/sMOCKold00/chunk",
+      "url_suffix": ""
+    },
+    "manifest_download": {
+      "encryption": 0,
+      "password": "",
+      "compression": 1,
+      "url_prefix": "http://127.0.0.1:50000/cdn/sMOCKold00/manifest",
+      "url_suffix": ""
+    }
+  },
+  "id_parts": {
+    "prefix_16hex": "manifest_f56ab1254eaa50c8",
+    "prefix_semantics": "opaque",
+    "suffix_32hex": "fb1081bacc72b97fe030dcbe3c413f12",
+    "suffix_equals_checksum": true
+  },
+  "stored": {
+    "path": "manifests/7.0.0/en-us.manifest.zst",
+    "bytes": 252,
+    "container": "zstd",
+    "md5_compressed": "7411899a59285a29f8fab96d7ed4f383",
+    "sha256_compressed": "f504c41404d34be7687ba84438274b831086ed7399ac5da903879254802d0c0b",
+    "md5_decompressed": "fb1081bacc72b97fe030dcbe3c413f12",
+    "bytes_decompressed": 353,
+    "encoding": "identity"
+  },
+  "verified": {
+    "decompressed_md5_matches_checksum": true,
+    "checksum_matches_id_suffix": true,
+    "id_prefix_verified": false
+  },
+  "decoded": {
+    "entries": 1,
+    "files": 1,
+    "folders": 0,
+    "total_chunks": 2,
+    "max_chunk_compressed_bytes": 266,
+    "total_file_bytes": 512,
+    "structure": {
+      "duplicate_paths": 0,
+      "empty_paths": 0,
+      "backslash_paths": 0,
+      "non_ascii_paths": 0,
+      "unsorted_chunk_offsets": 0,
+      "non_gapless_files": 0,
+      "size_mismatch_files": 0
+    }
+  },
+  "full_decode_written": true
+}

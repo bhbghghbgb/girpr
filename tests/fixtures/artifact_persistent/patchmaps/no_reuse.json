@@ -1,0 +1,69 @@
+{
+  "schema_version": 3,
+  "capture_id": "no_reuse",
+  "path": "GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
+  "matching_field": "game",
+  "classes": [
+    "no_reuse"
+  ],
+  "old": {
+    "tag": "7.0.0",
+    "size": 1024,
+    "md5": "bdd568a83cedef916f4a919dd8c658bc",
+    "nchunks": 2
+  },
+  "new": {
+    "tag": "7.1.0",
+    "size": 1024,
+    "md5": "2848c892586f2d5e682a621d25bb5ada",
+    "nchunks": 2
+  },
+  "plan": [
+    {
+      "i": 0,
+      "decision": "FETCH",
+      "target_range": {
+        "start": 0,
+        "end": 512
+      },
+      "source_range": null,
+      "chunk_id": "6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469",
+      "compressed_size": 522,
+      "uncompressed_size": 512,
+      "uncompressed_md5": "1fbd0959e726da54e75cd528a6c15469",
+      "note": null
+    },
+    {
+      "i": 1,
+      "decision": "FETCH",
+      "target_range": {
+        "start": 512,
+        "end": 1024
+      },
+      "source_range": null,
+      "chunk_id": "78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73",
+      "url": "http://127.0.0.1:50000/cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73",
+      "compressed_size": 522,
+      "uncompressed_size": 512,
+      "uncompressed_md5": "4a84467752ea9c122de6b7288b0f7e73",
+      "note": null
+    }
+  ],
+  "totals": {
+    "chunks": 2,
+    "reuse": 0,
+    "fetch": 2,
+    "moved": 0,
+    "download_bytes": 1044,
+    "materialize_old_bytes": 1024,
+    "materialize_new_bytes": 1024
+  },
+  "expectations": {
+    "result_path": "expected/GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
+    "result_md5": "2848c892586f2d5e682a621d25bb5ada",
+    "absent_after": false,
+    "download_bytes": 1044,
+    "must_not_fetch": []
+  }
+}

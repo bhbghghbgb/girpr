@@ -1,0 +1,80 @@
+{
+  "schema_version": 3,
+  "capture_id": "identical",
+  "path": "GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all",
+  "matching_field": "en-us",
+  "classes": [
+    "identical"
+  ],
+  "old": {
+    "tag": "7.0.0",
+    "size": 512,
+    "md5": "250718a93eb6cc1fbe3a1aa2f7384368",
+    "nchunks": 2
+  },
+  "new": {
+    "tag": "7.1.0",
+    "size": 512,
+    "md5": "250718a93eb6cc1fbe3a1aa2f7384368",
+    "nchunks": 2
+  },
+  "plan": [
+    {
+      "i": 0,
+      "decision": "REUSE",
+      "target_range": {
+        "start": 0,
+        "end": 256
+      },
+      "source_range": {
+        "start": 0,
+        "end": 256,
+        "file_tag": "7.0.0"
+      },
+      "chunk_id": "91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4",
+      "url": null,
+      "compressed_size": 266,
+      "uncompressed_size": 256,
+      "uncompressed_md5": "8b31ee982e6de0878e3b4515b4a09ad4",
+      "note": "byte-identical to the old chunk at the same offset"
+    },
+    {
+      "i": 1,
+      "decision": "REUSE",
+      "target_range": {
+        "start": 256,
+        "end": 512
+      },
+      "source_range": {
+        "start": 256,
+        "end": 512,
+        "file_tag": "7.0.0"
+      },
+      "chunk_id": "5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b",
+      "url": null,
+      "compressed_size": 266,
+      "uncompressed_size": 256,
+      "uncompressed_md5": "ee3f3f3e27aa76ff65c4c3a1c1aa1d7b",
+      "note": "byte-identical to the old chunk at the same offset"
+    }
+  ],
+  "totals": {
+    "chunks": 2,
+    "reuse": 2,
+    "fetch": 0,
+    "moved": 0,
+    "download_bytes": 0,
+    "materialize_old_bytes": 512,
+    "materialize_new_bytes": 512
+  },
+  "expectations": {
+    "result_path": "expected/GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all",
+    "result_md5": "250718a93eb6cc1fbe3a1aa2f7384368",
+    "absent_after": false,
+    "download_bytes": 0,
+    "must_not_fetch": [
+      "91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4",
+      "5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b"
+    ]
+  }
+}

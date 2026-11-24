@@ -724,8 +724,8 @@ fn a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent()
     assert_eq!(unavailable, Class::ALL.len() - 2);
     assert_eq!(
         s.unmet().len(),
-        Class::ALL.len(),
-        "nothing in this fixture is satisfied"
+        Class::PATCH_SHAPES.len(),
+        "nothing in this fixture is satisfied (persistent is a record class)"
     );
     assert!(s.admitted.is_empty());
     assert_eq!(s.bytes_admitted, 0);

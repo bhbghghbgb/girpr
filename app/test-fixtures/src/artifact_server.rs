@@ -90,6 +90,12 @@ pub enum HitKind {
     Manifest,
     /// A chunk blob.
     Chunk,
+    /// The dispatcher's `query_cur_region` envelope.
+    Dispatch,
+    /// One of the three raw persistent manifests.
+    PersistentManifest,
+    /// A full-file persistent blob (or the `base_revision` body).
+    Hotfix,
 }
 
 impl HitKind {
@@ -99,6 +105,9 @@ impl HitKind {
             HitKind::Build => "build",
             HitKind::Manifest => "manifest",
             HitKind::Chunk => "chunk",
+            HitKind::Dispatch => "dispatch",
+            HitKind::PersistentManifest => "persistent_manifest",
+            HitKind::Hotfix => "hotfix",
         }
     }
 }
@@ -152,6 +161,10 @@ pub struct Bundle {
     pub new_tag: String,
     pub old_build: String,
     pub new_build: String,
+    /// `dispatch/record.json`, when the bundle carries the optional record.
+    pub dispatch_record: Option<Value>,
+    /// `persistent/index.json`, when the bundle carries the optional records.
+    pub persistent_index: Option<Value>,
 }
 
 impl Bundle {
@@ -167,6 +180,12 @@ impl Bundle {
         let old_build = str_field(&versions["old"]["build_id"], &manifest_path);
         let new_build = str_field(&versions["new"]["build_id"], &manifest_path);
         let biz = str_field(&manifest["biz"]["id"], &manifest_path);
+        let dispatch_path = root.join("dispatch").join("record.json");
+        let dispatch_record = dispatch_path.is_file().then(|| read_json(&dispatch_path));
+        let persistent_path = root.join("persistent").join("index.json");
+        let persistent_index = persistent_path
+            .is_file()
+            .then(|| read_json(&persistent_path));
 
         Self {
             root,
@@ -175,6 +194,8 @@ impl Bundle {
             new_tag,
             old_build,
             new_build,
+            dispatch_record,
+            persistent_index,
         }
     }
 
@@ -213,6 +234,111 @@ impl Bundle {
             .join(format!("{id}.zst"));
         p.is_file().then_some(p)
     }
+
+    /// The optional dispatcher record, read from the bundle (never written).
+    pub fn dispatch_record(&self) -> Option<&Value> {
+        self.dispatch_record.as_ref()
+    }
+
+    /// The byte-exact dispatcher envelope named by the record.
+    pub fn dispatch_envelope(&self) -> Vec<u8> {
+        let rel = self
+            .dispatch_record
+            .as_ref()
+            .and_then(|r| r["envelope"].as_str())
+            .unwrap_or("dispatch/response.json");
+        assert!(safe_rel(rel), "a record cannot name {rel:?}");
+        std::fs::read(self.root.join(rel))
+            .unwrap_or_else(|e| panic!("read {rel} in {}: {e}", self.root.display()))
+    }
+
+    /// `"<revision> <hash>"` from the record, served by the hotfix listener.
+    pub fn base_revision(&self) -> Option<Vec<u8>> {
+        self.dispatch_record
+            .as_ref()?
+            .get("decoded")?
+            .get("base_revision")?
+            .as_str()
+            .map(|s| s.as_bytes().to_vec())
+    }
+
+    /// The optional persistent index, read from the bundle.
+    pub fn persistent_index(&self) -> Option<&Value> {
+        self.persistent_index.as_ref()
+    }
+
+    /// A raw manifest's bytes, found by the dispatcher path.
+    ///
+    /// The data and silence manifests are both named `data_versions` on the
+    /// CDN; their path (`client/General` vs `client_silence/General`) is what
+    /// distinguishes them, exactly as it does in the decoder.
+    pub fn persistent_manifest_for_path(&self, path: &str) -> Option<Vec<u8>> {
+        let kind = if path.contains("/client_silence/") {
+            "silence_data"
+        } else if path.contains("/client/General/") {
+            "data"
+        } else {
+            "res"
+        };
+        let rel = self
+            .persistent_index
+            .as_ref()?
+            .get("manifests")?
+            .as_array()?
+            .iter()
+            .find(|f| f["kind"].as_str() == Some(kind))?["path"]
+            .as_str()?;
+        assert!(safe_rel(rel), "an index cannot name {rel:?}");
+        std::fs::read(self.root.join(rel)).ok()
+    }
+
+    /// A raw manifest's bytes, found by the last path segment of its URL.
+    pub fn persistent_manifest(&self, name: &str) -> Option<Vec<u8>> {
+        let path = self
+            .persistent_index
+            .as_ref()?
+            .get("manifests")?
+            .as_array()?
+            .iter()
+            .find(|f| {
+                f["path"].as_str().is_some_and(|p| {
+                    p.rsplit('/').next() == Some(name)
+                        || p.rsplit('/').next() == Some(&format!("{name}.ndjson"))
+                })
+            })?["path"]
+            .as_str()?;
+        assert!(safe_rel(path), "an index cannot name {path:?}");
+        std::fs::read(self.root.join(path)).ok()
+    }
+
+    /// A full-file blob's bytes, found by the basename of its `remoteName`.
+    pub fn persistent_blob(&self, name: &str) -> Option<Vec<u8>> {
+        let path = self
+            .persistent_index
+            .as_ref()?
+            .get("blobs")?
+            .as_array()?
+            .iter()
+            .find(|f| {
+                f["remote_name"]
+                    .as_str()
+                    .is_some_and(|r| r.rsplit('/').next() == Some(name))
+            })?["path"]
+            .as_str()?;
+        assert!(safe_rel(path), "an index cannot name {path:?}");
+        std::fs::read(self.root.join(path)).ok()
+    }
+}
+
+/// A record-supplied relative path must stay inside the bundle. The record is a
+/// fixture someone may have edited, so a `..` or an absolute path never reaches
+/// a filesystem join.
+fn safe_rel(rel: &str) -> bool {
+    !rel.is_empty()
+        && !rel.contains("..")
+        && !rel.contains('\\')
+        && !rel.starts_with('/')
+        && !rel.contains(':')
 }
 
 fn read_json(path: &Path) -> Value {
@@ -239,6 +365,12 @@ pub struct Origins {
     /// the `url_prefix` `girpr` will build manifest and chunk URLs from.
     pub manifest_origin: String,
     pub chunk_origin: String,
+    /// The dispatcher envelope's own listener.
+    pub dispatch_origin: String,
+    /// The three persistent manifests' listener.
+    pub persistent_origin: String,
+    /// Full-file blobs and `base_revision`.
+    pub hotfix_origin: String,
 }
 
 /// One manifest id, and where the archive behind it lives.
@@ -274,6 +406,9 @@ struct Served {
     bundle: Bundle,
     /// Rewritten `getBuild` bodies, keyed by the tag they answer for.
     builds: HashMap<String, Vec<u8>>,
+    /// The dispatcher record with its CDN prefixes rewritten at bind time. The
+    /// bundle's copy is never touched (`docs/06` §4.1).
+    dispatch_record: Option<Value>,
     /// Manifest declarations keyed by `(build_id, id)`. Two builds may declare
     /// the same id; keying by id alone would let the second overwrite the
     /// first's tag, field and archive.
@@ -322,6 +457,15 @@ impl Bridge {
         let chunk = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind chunk listener");
+        let dispatch = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind dispatcher listener");
+        let persistent = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind persistent-manifest listener");
+        let hotfix = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind hotfix listener");
 
         let origin = |l: &tokio::net::TcpListener| {
             format!(
@@ -329,13 +473,23 @@ impl Bridge {
                 l.local_addr().expect("local addr").port()
             )
         };
-        let served = Arc::new(Served::load(bundle, &origin(&manifest), &origin(&chunk)));
+        let served = Arc::new(Served::load(
+            bundle,
+            &origin(&manifest),
+            &origin(&chunk),
+            &origin(&dispatch),
+            &origin(&persistent),
+            &origin(&hotfix),
+        ));
 
         let origins = Origins {
             hyp_base: format!("{}/hyp/hyp-connect/api", origin(&hyp)),
             sophon_base: format!("{}/downloader/sophon_chunk/api", origin(&build)),
             manifest_origin: origin(&manifest),
             chunk_origin: origin(&chunk),
+            dispatch_origin: origin(&dispatch),
+            persistent_origin: origin(&persistent),
+            hotfix_origin: origin(&hotfix),
         };
 
         let mut handles = Vec::new();
@@ -344,6 +498,9 @@ impl Bridge {
             (build, Route::Build),
             (manifest, Route::Manifest),
             (chunk, Route::Chunk),
+            (dispatch, Route::Dispatch),
+            (persistent, Route::PersistentManifest),
+            (hotfix, Route::Hotfix),
         ] {
             let served = served.clone();
             handles.push(tokio::spawn(async move {
@@ -452,6 +609,17 @@ impl Bridge {
         self.served.builds.get(tag).cloned()
     }
 
+    /// The dispatcher record with its CDN origins swapped for the listeners.
+    /// This is the in-memory copy: the bundle on disk is untouched.
+    pub fn served_dispatch_record(&self) -> Option<Value> {
+        self.served.dispatch_record.clone()
+    }
+
+    /// The persistent index, as the bundle recorded it.
+    pub fn persistent_index(&self) -> Option<Value> {
+        self.served.bundle.persistent_index.clone()
+    }
+
     /// Where a manifest id declared by `build_id` resolves:
     /// `(tag, field, declaring build_id)`, and whether the bundle actually
     /// carries that field's archive.
@@ -513,7 +681,43 @@ impl Drop for Bridge {
 /// `Served::load` needs the manifest and chunk origins, which only exist after
 /// the listeners bind — hence the split from `Bridge::start`.
 impl Served {
-    fn load(bundle: Bundle, manifest_origin: &str, chunk_origin: &str) -> Self {
+    fn load(
+        bundle: Bundle,
+        manifest_origin: &str,
+        chunk_origin: &str,
+        dispatch_origin: &str,
+        persistent_origin: &str,
+        hotfix_origin: &str,
+    ) -> Self {
+        // The dispatch record's URLs are rewritten the same way `getBuild`'s
+        // prefixes are: only scheme and authority change, so the paths the
+        // decoder built stay exactly the ones the bundle recorded. The bundle
+        // is read-only — these ports are known only now, at bind time.
+        let mut dispatch_record = bundle.dispatch_record.clone();
+        if let Some(record) = dispatch_record.as_mut()
+            && let Some(decoded) = record.get_mut("decoded")
+        {
+            for field in ["repo_res_version_url", "repo_design_data_url"] {
+                if let Some(url) = decoded[field].as_str() {
+                    let rewritten = swap_authority(url, hotfix_origin)
+                        .unwrap_or_else(|e| panic!("rewrite dispatch {field}: {e}"));
+                    decoded[field] = Value::String(rewritten);
+                }
+            }
+            if let Some(descriptors) = decoded.get_mut("descriptors").and_then(Value::as_array_mut)
+            {
+                for d in descriptors.iter_mut() {
+                    if let Some(url) = d["url"].as_str() {
+                        let rewritten = swap_authority(url, persistent_origin)
+                            .unwrap_or_else(|e| panic!("rewrite dispatch descriptor url: {e}"));
+                        d["url"] = Value::String(rewritten);
+                    }
+                }
+            }
+        }
+        // The envelope listener needs no rewrite (it is reached by a fixed URL
+        // the replay driver builds from `origins.dispatch_origin`).
+        let _ = dispatch_origin;
         let mut builds = HashMap::new();
         let mut manifest_index: HashMap<(String, String), ManifestEntry> = HashMap::new();
 
@@ -618,6 +822,7 @@ impl Served {
             shapes_synthesized: shapes.is_none(),
             shapes,
             builds,
+            dispatch_record,
             manifest_index,
             bundle,
             log: Mutex::new(Vec::new()),
@@ -688,6 +893,40 @@ impl Served {
         }
         match self.bundle.chunk_blob(&id) {
             Some(blob) => Response::chunk(std::fs::read(blob).expect("read chunk blob")),
+            None => self.error_shape("chunk_missing", path),
+        }
+    }
+
+    /// The dispatcher envelope: the byte-exact response body from the bundle.
+    fn dispatch_response(&self) -> Response {
+        Response::ok_json(self.bundle.dispatch_envelope())
+    }
+
+    /// A raw persistent manifest, named by the last path segment.
+    fn persistent_response(&self, path: &str) -> Response {
+        if last_segment(path).is_none() {
+            return self.error_shape("blob_missing", path);
+        }
+        match self.bundle.persistent_manifest_for_path(path) {
+            Some(bytes) => Response::octet_stream(Arc::new(bytes)),
+            None => self.error_shape("blob_missing", path),
+        }
+    }
+
+    /// `base_revision` is a text body; every other request names a full-file
+    /// blob by the basename of its dispatcher `remoteName`.
+    fn hotfix_response(&self, path: &str) -> Response {
+        let Some(name) = last_segment(path) else {
+            return self.error_shape("chunk_missing", path);
+        };
+        if name == "base_revision" {
+            if let Some(bytes) = self.bundle.base_revision() {
+                return Response::text(200, bytes);
+            }
+            return Response::text(404, b"no base_revision".to_vec());
+        }
+        match self.bundle.persistent_blob(&name) {
+            Some(bytes) => Response::octet_stream(Arc::new(bytes)),
             None => self.error_shape("chunk_missing", path),
         }
     }
@@ -799,6 +1038,15 @@ fn swap_authority(prefix: &str, origin: &str) -> Result<String, String> {
     Ok(format!("{origin}{path}"))
 }
 
+/// The last path segment, ignoring a trailing slash and any query.
+fn last_segment(path: &str) -> Option<String> {
+    path.trim_start_matches('/')
+        .split('/')
+        .rev()
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// The last two path segments: `([build_id], [id])`.
 ///
 /// Every blob route is `<prefix>/<build_id>/<id>` and the route is
@@ -877,6 +1125,9 @@ enum Route {
     Build,
     Manifest,
     Chunk,
+    Dispatch,
+    PersistentManifest,
+    Hotfix,
 }
 
 struct Response {
@@ -981,6 +1232,33 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
                 });
             }
             served.chunk_response(&path)
+        }
+        Route::Dispatch => {
+            let id = last_segment(&path).unwrap_or_default();
+            served.record(Hit {
+                kind: HitKind::Dispatch,
+                id,
+                build: None,
+            });
+            served.dispatch_response()
+        }
+        Route::PersistentManifest => {
+            let id = last_segment(&path).unwrap_or_default();
+            served.record(Hit {
+                kind: HitKind::PersistentManifest,
+                id,
+                build: None,
+            });
+            served.persistent_response(&path)
+        }
+        Route::Hotfix => {
+            let id = last_segment(&path).unwrap_or_default();
+            served.record(Hit {
+                kind: HitKind::Hotfix,
+                id,
+                build: None,
+            });
+            served.hotfix_response(&path)
         }
     };
 

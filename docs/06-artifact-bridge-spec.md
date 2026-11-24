@@ -265,6 +265,9 @@ and shared by the cases (§6.2).
 | `GET <sophon>/getBuild[?tag=]` | `api/getBuild.<tag>.json`, or `api/error_shapes.json` | **yes** |
 | `GET <manifest-prefix>/<manifest-id>` | `manifests/<tag>/<field>.manifest.zst` | origin only |
 | `GET <chunk-prefix>/<chunk-id>` | `chunks/blobs/<chunk-id>.zst` | origin only |
+| `GET <dispatch>/query_cur_region` | `dispatch/response.json` | listener origin only |
+| `GET <persistent-prefix>/…/<manifest>` | `persistent/<manifest>.ndjson` | origin only |
+| `GET <hotfix-prefix>/…/<file>` | `persistent/blobs/…/<file>` or `base_revision` | origin only |
 
 ### 4.1 Change the scheme and authority; keep the path
 
@@ -718,7 +721,35 @@ the bridge actually reads.
 
 ---
 
-## 10. Non-goals
+## 10. The persistent extension
+
+The `dispatch/` and `persistent/` records are an **additive extension of schema
+3** (`tools/capture/docs/01-artifact-schema.md` §18): bundles written before
+them still verify, and a bundle that carries them has every byte checked by
+`files[]`/`checksums.json` plus the two `verify`-only rows `P1`/`P2`. There is no
+schema bump, so the existing ~120 MB real fixture is untouched. `gircap list`
+reports the three new counts on each `BUNDLE` record, and `select::Class` gained
+a `persistent` matrix class that no manifest path can satisfy.
+
+The replay server binds three more listeners for these routes. At bind time it
+reads `dispatch/record.json` and rewrites the recorded `repo_*_url` and each
+descriptor URL's **scheme and authority** with `swap_authority`, exactly as the
+`getBuild` prefixes are rewritten; the rewrite lives only in memory, so the
+bundle still passes `gircap verify` afterwards. The data and silence manifests
+are both named `data_versions` on the CDN, so the path (`client/General` vs
+`client_silence/General`) is what selects the right raw body.
+
+The bridge case runs in-process with the bundle's dispatcher record supplying
+a `DispatchOverride`: the binary's real provider needs Collapse's release
+metadata, which an offline fixture must not fetch. Everything else is the real
+repair pipeline and the real listeners. It asserts two replayed hotfix files,
+all three mirrors and the whole marker block, and checks that `--dry-run` and
+`--purge-only` publish none of them. The fixture is a small synthetic bundle
+built from the committed test-only material under
+`tools/persistent-sophon-research/samples/fixtures/`, following §1.2's
+synthetic-bundle precedent; its generator is an ignored `gircap` test.
+
+## 11. Non-goals
 
 - **Capturing.** `gircap capture` does that, with the network, deliberately.
 - **Re-verifying the bundle.** `gircap verify` and `gircap materialize` own that

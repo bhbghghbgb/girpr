@@ -1,0 +1,55 @@
+{
+  "schema_version": 3,
+  "manifests": [
+    {
+      "kind": "res",
+      "path": "persistent/res_versions_external.ndjson",
+      "bytes": 279,
+      "md5": "ce5fe1b283fa2b97929eabb86452429f"
+    },
+    {
+      "kind": "data",
+      "path": "persistent/data_versions.ndjson",
+      "bytes": 275,
+      "md5": "bbc05fb62bbde346e56368bf77b122d3"
+    },
+    {
+      "kind": "silence_data",
+      "path": "persistent/silence_data_versions.ndjson",
+      "bytes": 122,
+      "md5": "d8d8b615534bc1c66c7bb042d1b4603c"
+    }
+  ],
+  "blobs": [
+    {
+      "remote_name": "blocks/00/11111111.blk",
+      "path": "persistent/blobs/blocks/00/11111111.blk",
+      "bytes": 64,
+      "md5": "b2d3f56bc197fd985d5965079b5e7148"
+    },
+    {
+      "remote_name": "blocks/00/22222222.blk",
+      "path": "persistent/blobs/blocks/00/22222222.blk",
+      "bytes": 48,
+      "md5": "5117f4269ca5456f8dd0e47ddd3e0832"
+    },
+    {
+      "remote_name": "blocks/00/33333333.blk",
+      "path": "persistent/blobs/blocks/00/33333333.blk",
+      "bytes": 64,
+      "md5": "b2d3f56bc197fd985d5965079b5e7148"
+    },
+    {
+      "remote_name": "English(US)/VO_TEST.pck",
+      "path": "persistent/blobs/English(US)/VO_TEST.pck",
+      "bytes": 48,
+      "md5": "5117f4269ca5456f8dd0e47ddd3e0832"
+    },
+    {
+      "remote_name": "hardware_model_config.json",
+      "path": "persistent/blobs/hardware_model_config.json",
+      "bytes": 48,
+      "md5": "5117f4269ca5456f8dd0e47ddd3e0832"
+    }
+  ]
+}

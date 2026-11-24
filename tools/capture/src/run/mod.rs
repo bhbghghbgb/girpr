@@ -905,6 +905,9 @@ pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failur
             .set("blobs", f.blobs as u64)
             .set("selfcheck", f.selfcheck.as_str())
             .set("complete", f.complete)
+            .set("dispatch_record", f.dispatch_record)
+            .set("persistent_manifests", f.persistent_manifests as u64)
+            .set("persistent_blobs", f.persistent_blobs as u64)
             .emit(output);
     }
     for u in &index.unreadable {

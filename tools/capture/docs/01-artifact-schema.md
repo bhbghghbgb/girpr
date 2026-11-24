@@ -13,6 +13,15 @@ other work depends on, so a field that some bundles carry and others do not is a
 trap for whoever reads it next. Where a field is genuinely optional within a
 document, it is marked below and is optional *everywhere*.
 
+**The one exception is the persistent extension (§18).** `dispatch/` and
+`persistent/` are **optional, additive records within schema 3**: a bundle from
+before they existed verifies unchanged, and a bundle that carries them has every
+byte checked by the same inventory as everything else. The schema version is
+**not** bumped — there is no change to any required document's layout, so
+migrating the existing ~120 MB real fixture would buy nothing. The extension was
+added for the offline bridge fixture; `gircap verify` must stay green on both an
+old bundle and a new one.
+
 **Compression rule.** A document is gzipped (`*.json.gz`) only when its
 uncompressed body exceeds `--gzip-threshold` (default 1 MiB). The decision is
 recorded in `MANIFEST.json → files[].encoding`, so a reader never has to guess.
@@ -55,6 +64,15 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── paths.tsv                             # field \t path \t state \t old_size \t new_size \t reused \t moved \t patch_bytes \t total_cost
 │   ├── candidates.json
 │   └── reuse_pool.json
+├── dispatch/                                 # optional; §18
+│   ├── response.json                          # dispatcher envelope, byte-exact
+│   └── record.json                            # key fingerprint, seed, version, decoded facts
+├── persistent/                               # optional; §18
+│   ├── res_versions_external.ndjson           # raw manifest bytes
+│   ├── data_versions.ndjson
+│   ├── silence_data_versions.ndjson
+│   ├── blobs/<remoteName>                     # full-file blobs, raw bytes
+│   └── index.json                             # digests and sizes of the above
 ├── game/                                     # ★ the fixture
 │   ├── config.ini
 │   ├── GenshinImpact_Data/Persistent/audio_lang_14
@@ -1212,6 +1230,85 @@ been handed a `verify` report, not a capture's own account of itself.
 
 A rendering of `MANIFEST.json` and `selfcheck.json`: versions, the matrix table
 with paths and sizes, the totals, any failed assertion, and how to re-verify.
-It is generated from the **final** `selfcheck.json` — after the A16 row is
-recorded — so its counts agree with the document it renders, and it carries no
+It is generated from the **final** `selfcheck.json` - after the A16 row is
+recorded - so its counts agree with the document it renders, and it carries no
 facts of its own. It is safe to delete.
+
+---
+
+## 18. `dispatch/` and `persistent/` — the optional records
+
+Added for the persistent-tier bridge fixture. **A bundle need not have these
+directories**; the six required matrix classes and every required document are
+unchanged. `gircap verify` re-derives two extra rows when they are present and
+emits no row at all when they are absent:
+
+- `P1` — the dispatch record's MD5/SHA-256 match its byte-exact envelope, and
+  the envelope is listed in `MANIFEST.json → files[]` with that MD5;
+- `P2` — every manifest and blob in `persistent/index.json` has the recorded
+  size and MD5 on disk and is listed in `files[]`.
+
+Both are `verify`-only ids, like `A18`/`A20`: they are not written into
+`selfcheck.json`. `gircap list` reports `dispatch_record`,
+`persistent_manifests` and `persistent_blobs` on each `BUNDLE` record, zero/
+false for an older bundle.
+
+Every file below is written through `emit::write_bytes` / `emit::write_doc`, so
+`MANIFEST.json → files[]` and `verify/checksums.json` pick them up without a
+second inventory. The replay server reads them **read-only** and rewrites their
+CDN origins in memory at bind time; it never changes the bundle.
+
+### `dispatch/record.json`
+
+```jsonc
+{ "schema_version": 3,
+  "version": "9.9.0",                         // meta.latest used in the query
+  "query_version": "OSRELWin9.9.0",
+  "key_fingerprint": "<sha256 of public key DER, never a private key>",
+  "seed": "0011223344556677",
+  "envelope": "dispatch/response.json",        // byte-exact, content+sign JSON
+  "envelope_md5": "…", "envelope_sha256": "…",
+  "ciphertext_bytes": 768,
+  "decoded": {
+    "game_version": "9.9_live", "channel_name": "OSRELWin", "codename": "hk4e_global",
+    "res_revision": <n>, "data_revision": <n>, "silence_revision": <n>,
+    "audio_revision": <n>,
+    "res_hash": "…", "data_hash": "…", "silence_hash": "…", "audio_hash": "…",
+    "repo_res_version_url": "https://…", "repo_design_data_url": "https://…",
+    "base_revision": "<revision> <hash>",
+    "descriptors": [
+      { "kind": "res|data|silence_data", "remote_name": "…",
+        "url": "https://…", "md5": "…", "file_size": <bytes> } // ×3
+    ]
+  }
+}
+```
+
+The descriptor URLs are recorded **as served**; a consumer that replays them
+swaps only their scheme and authority, keeping the path. The decoded values are
+stored beside the ciphertext so a replay never has to guess a revision or a
+CDN path from base64. `key_fingerprint` is a public-key digest: no private key
+is ever committed.
+
+### `persistent/index.json`
+
+```jsonc
+{ "schema_version": 3,
+  "manifests": [
+    { "kind": "res|data|silence_data", "path": "persistent/<name>.ndjson",
+      "bytes": <bytes>, "md5": "…" } // ×3
+  ],
+  "blobs": [
+    { "remote_name": "blocks/00/11111111.blk",
+      "path": "persistent/blobs/blocks/00/11111111.blk",
+      "bytes": <bytes>, "md5": "…" }
+  ]
+}
+```
+
+The three manifests and every blob are the **raw** bytes: `girpr` verifies each
+MD5/size gate against these numbers and mirrors the manifests verbatim. The
+bridge fixture uses the small synthetic material under
+`tools/persistent-sophon-research/samples/fixtures/` (a test-only RSA key, an
+encrypted dispatch envelope, three tiny NDJSON manifests and two full-file
+blobs), never production keys or captured manifests.

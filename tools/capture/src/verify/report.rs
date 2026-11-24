@@ -33,7 +33,7 @@ pub const REDERIVED: [&str; 7] = ["A16", "A6", "A11", "A7", "A8", "A13", "A17"];
 /// nothing to agree with for these. Putting them in `REDERIVED` would have the
 /// summary claim a cross-check that cannot exist, and would drag them into a
 /// comparison against a row that was never emitted.
-pub const DERIVED_UNRECORDED: [&str; 2] = ["A18", "A20"];
+pub const DERIVED_UNRECORDED: [&str; 4] = ["A18", "A20", "P1", "P2"];
 
 /// Everything `verify` looks at, in the order the summary prints it.
 pub fn derived_ids() -> Vec<&'static str> {
@@ -231,6 +231,12 @@ pub fn reverify(bundle: Bundle) -> Report {
 
     // 4. The two claims that are about documents rather than blobs.
     rows.extend(super::checks::check_config_ini(&root, &bundle.manifest));
+    // The optional persistent records are byte-exact when present and simply
+    // absent from the rows when the bundle predates them.
+    rows.extend(super::checks::check_persistent_records(
+        &root,
+        &bundle.manifest,
+    ));
     let (a17_ok, a17_detail) = bundle.manifest.a17();
     rows.push(if a17_ok {
         Assertion::pass("A17", wording("A17"), "MANIFEST.json matrix", &a17_detail)

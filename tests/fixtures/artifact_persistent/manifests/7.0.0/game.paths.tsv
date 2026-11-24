@@ -1,0 +1,8 @@
+path	size	md5	nchunks	is_folder
+GenshinImpact_Data/Plugins/HoYoChannel.dll	3072	e37a03773df13c4371aa0596f7ff8334	3	false
+GenshinImpact_Data/Resources/browser_assets	1024	fa86b24a0c7c47068795303f5f3032c9	2	false
+GenshinImpact_Data/StreamingAssets/blocks/deferred.blk	3072	a79833e4672b6bc2e7da9cd63576f7a7	3	false
+GenshinImpact_Data/StreamingAssets/blocks/eager.blk	8192	819370f3d0e6498cec874cb2c8b536d5	4	false
+GenshinImpact_Data/StreamingAssets/blocks/grow.blk	2048	67c2ea95dcfc66da14b07384e7884384	2	false
+GenshinImpact_Data/StreamingAssets/blocks/old.blk	32768	f639a004b4ab92e314c88a73b9c0aa36	1	false
+GenshinImpact_Data/StreamingAssets/blocks/zero.blk	1024	bdd568a83cedef916f4a919dd8c658bc	2	false
