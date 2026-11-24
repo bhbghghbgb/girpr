@@ -68,6 +68,17 @@ of scope (B6); only the extra *keep* patterns are adopted. The
 GenshinSlimmer and GI-Live-Hotfix-Downloader (`docs/08` §2.2). Resumable `Range`
 downloads are an optional later improvement, not part of this plan.
 
+A follow-up live check (`tools/sophon-minimal-research/`) closes the
+launchability question for the base half: the 7.2.0 Sophon set with one voice
+language selected (2,974 files) is exactly the known-runnable torrent copy minus
+the out-of-scope `BeyondAssets/` UGC editor, and **all** the `*_streaming` /
+`*_revision` / `svc_catalog` / `ctable_streaming.dat` / root `pkg_version` files
+are byte-identical Sophon-tracked base files. No extra fetch path is needed for
+them, and `base_res_version_hash` is always recomputable from the Sophon-restored
+`res_versions_streaming` (MD5 `f5ceb98f…`). The only non-Sophon state a
+Sophon-only install lacks is the `Persistent/` marker block this plan adds; that
+is why the flag remains opt-in and the base repair stays unchanged.
+
 ---
 
 ## 2. Commit 1 — research gate: B4 channel coverage and fixture capture
@@ -455,8 +466,16 @@ Insert a new persistent repair path next to `file::repair_all` in
 1. **Directories and cheap prerequisites (gap rows 9–11).** After
    `prepare_install` but before repair: create `<exe>_Data/Persistent` and
    `<exe>_Data/StreamingAssets`; delete stale `Persistent/ctable.dat`; delete
-   `DXSETUP/` (false-positive integrity errors); copy
-   `StreamingAssets/ctable.dat` → `ctable_streaming.dat`. All under the flag,
+   `DXSETUP/` (false-positive integrity errors). Then copy
+   `StreamingAssets/ctable.dat` → `ctable_streaming.dat` **only if the source
+   exists and the target is missing or differs**: on a torrent/Sophon-only
+   install there is no `StreamingAssets/ctable.dat` (it is a launcher artifact
+   present on E: but not on F:), while `ctable_streaming.dat` already ships in
+   the Sophon base manifest and is MD5-verified by the base repair
+   (`cd5f73407c6c4733f3c86a145e9f94c0`, live 7.2.0). Treat a missing source as
+   a no-op, never as an error, and never overwrite an intact target with a stale
+   source (prior research `notes/00` and `notes/01`: the repair tool only needs
+   to keep/produce the `ctable_streaming.dat` source). All under the flag,
    never in read-only modes. The exe stem comes from
    `meta.config.exe_file_name`, not a hardcoded string.
 2. **Move non-patch `.pck`/`.usm`/`.cuepoint` from `Persistent/` back to
@@ -791,7 +810,9 @@ Marker block: base_res_version_hash, res_revision, res_revision_eternal,
   is checked alongside res_revision (GenshinSlimmer issue #19); PatchDone has no
   known reader; DownloadPref is launcher metadata.
 Prerequisites: create Persistent + StreamingAssets; delete Persistent/ctable.dat;
-  delete DXSETUP/; copy StreamingAssets/ctable.dat → ctable_streaming.dat
+  delete DXSETUP/; copy StreamingAssets/ctable.dat → ctable_streaming.dat only
+  if the source exists and the target differs; a missing source is a no-op on
+  Sophon/torrent installs (the target itself is a verified Sophon file)
 ```
 
 The biggest dataset to pin in tests is the live probe's shape: 3,164 rows

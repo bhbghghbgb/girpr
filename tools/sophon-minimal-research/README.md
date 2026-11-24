@@ -211,6 +211,14 @@ selection + optional SDK/WPF + cleanup**. No `Persistent/` verification state.
    the existing `config.ini` bump, and the planned Persistent feature. No special
    handling for the `*streaming` files, no `pkg_version` synthesis, no fetch of
    `svc_catalog`/`ctable_streaming.dat` outside the Sophon plan.
+6. **One plan-time fix, not a new workstream.** `docs/09 §5.2.1` copies
+   `StreamingAssets/ctable.dat` → `ctable_streaming.dat` as a Collapse-parity
+   prerequisite, but neither the Sophon manifest nor the F: torrent copy contains
+   `StreamingAssets/ctable.dat` (it is an E:-only launcher artifact; prior research
+   `notes/00`/`notes/01`). On a Sophon-only install that source is absent while the
+   target already ships byte-identical in Sophon. The step must therefore be a
+   conditional no-op on a missing source and must never overwrite an intact target.
+   `docs/08 §2.3/§4.4` and `docs/09 §1.3/§5.2.1/§11` were updated accordingly.
 
 ### Caveats
 

@@ -167,6 +167,17 @@ out of scope.
   `Starward`'s repair path: it can repair an older install to a newer version
   without writing or updating `pkg_version` at all, and the game still launches.
   No in-game step depends on the root file.
+  **Live 7.2.0 refinement** (`tools/sophon-minimal-research`): the global Sophon
+  `game` manifest still ships a root `pkg_version` (and all four
+  `Audio_*_pkg_version` files) as ordinary tracked files, byte-identical to the
+  torrent copy — HoYo removed the *scattered zips*, not the single root list.
+  Starward's "repair without writing `pkg_version`" therefore works because the
+  Sophon repair restores that file; girpr needs no synthesis (C2's keep rule is
+  still required for the purge, §4.3). The same live check shows every
+  `*_streaming` / `*_revision` / `svc_catalog` / `ctable_streaming.dat` input in
+  §1 is a byte-identical Sophon base file, so `base_res_version_hash` is always
+  recomputable after a Sophon repair; a Sophon-only install is the torrent game
+  minus the `BeyondAssets/` UGC editor and is runnable.
 * `audio_lang_14` in `Persistent/` is the voice-language selection file; Collapse
   reads it to decide which audio manifests to include
   (`Fetch.cs:80-83, 106-133`) and girpr reads the equivalent path from
@@ -480,7 +491,11 @@ of the keep-set must not accidentally protect them.
 * `base_res_version_hash` is only written when
   `StreamingAssets/res_versions_streaming` exists — on an install missing that
   file, Collapse simply omits the marker. Decide explicitly how girpr handles
-  that case.
+  that case. The C16(a) omit branch is effectively unreachable on a
+  Sophon-repaired install: `res_versions_streaming` is itself a tracked base
+  file (live 7.2.0 MD5 `f5ceb98fd93b8c69603d7b5600d11a08`, byte-identical to
+  the torrent), so keep the branch for malformed inputs but do not expect it in
+  normal operation.
 * The dispatcher query is cached for five minutes (`GenshinRepair.cs:154-164`),
   so a repair started inside that window can write slightly stale revisions.
   girpr's single-shot run does not need the cache.
