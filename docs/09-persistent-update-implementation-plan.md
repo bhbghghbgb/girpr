@@ -42,8 +42,9 @@ state are present and consistent (`docs/08` §1):
 
 - the *base* marker `Persistent/base_res_version_hash` = lowercase-hex MD5 of
   `StreamingAssets/res_versions_streaming`;
-- the *hotfix* database mirrors `Persistent/res_versions_persist` and
-  `Persistent/data_versions_persist`, byte-for-byte from the dispatcher;
+- the *hotfix* database mirrors `Persistent/res_versions_persist`,
+  `Persistent/data_versions_persist` and `Persistent/silence_data_versions_persist`,
+  byte-for-byte from the dispatcher;
 - the *revision block* (`res_revision`, `res_revision_eternal`, `data_revision`,
   `silence_revision`, `audio_revision`, `ChannelName`, `ScriptVersion`,
   `PatchDone`) matching the dispatcher's current numbers.
@@ -60,11 +61,12 @@ No Sophon path for hotfix bytes: the live probe (`docs/08` §4.5,
 of the 15 advertised chunk manifests or 5 patch manifests, and the dispatcher
 CDN answers full-file GETs with the manifest MD5 and supports `Range`. The
 existing chunk writer is **not** extended; persistent files use a new
-full-file HTTP path (C10). `DownloadPref`, `silence_data_versions_persist`,
-`audio_versions*`, `*versions_remote*` deletions, `VideoAssets/*.tmp`
-deletions and SDK/WPF/plugin extraction are out of scope (B6); only the extra
-*keep* patterns are adopted. Resumable `Range` downloads are an optional later
-improvement, not part of this plan.
+full-file HTTP path (C10). `DownloadPref`, `audio_versions*`, `*versions_remote*`
+deletions, `VideoAssets/*.tmp` deletions and SDK/WPF/plugin extraction are out
+of scope (B6); only the extra *keep* patterns are adopted. The
+`silence_data_versions_persist` mirror **is** in scope, following
+GenshinSlimmer and GI-Live-Hotfix-Downloader (`docs/08` §2.2). Resumable `Range`
+downloads are an optional later improvement, not part of this plan.
 
 ---
 
@@ -92,7 +94,7 @@ global-only if CN/Bili cannot be verified". The gate decides which answer ships.
    ≥ 4. Determine which subdomain/channel each of `hk4e_cn` and
    `hk4e_bilibili` actually uses; do not infer from the HYP channel tuple.
 3. For each biz, dump all protobuf fields generically (as the global probe
-   already does) and fetch both persistent manifests, checking their MD5 and
+   already does) and fetch all three persistent manifests, checking their MD5 and
    size against the dispatcher's own description.
 4. Commit the **trimmed** samples the tests need: `dispatch_summary.json`,
    `dispatch_fields.txt`, `res_versions_external.full.head.ndjson`,
@@ -107,7 +109,7 @@ global-only if CN/Bili cannot be verified". The gate decides which answer ships.
 
 A biz is **verified** when its ciphertext decrypts with the unwrapped key, the
 protobuf carries the four revision fields plus both repo URLs and a version
-field equal to the `meta.latest` used in the query, both manifests MD5-match,
+field equal to the `meta.latest` used in the query, all three manifests MD5-match,
 and the NDJSON schema is the same set of recognised keys (extra keys such as
 `isPatch`, `category`, `localName` are tolerated).
 
@@ -136,7 +138,7 @@ docs — no product code.
 
 | crate/module | addition |
 |---|---|
-| `app/fetch/src/persistent.rs` | fetch + MD5-verify + NDJSON-parse both manifests into `PersistentRow`s; full-file HTTP download (primary → alternate on 404), temp file, digest gate, atomic publish |
+| `app/fetch/src/persistent.rs` | fetch + MD5-verify + NDJSON-parse all three manifests into `PersistentRow`s; full-file HTTP download (primary → alternate on 404), temp file, digest gate, atomic publish |
 | `app/repair-plan/` | carry a sibling `PersistentPlan` alongside `RepairPlan`; add persistent bytes to `DownloadEstimate`/`PlanSummaryValues`; feed dispatcher paths into `PurgeKeys` |
 | `crates/model/src/region.rs` | const per-biz dispatcher subdomain list and channel prefix (`Region::dispatch_subdomains()`, channel accessor), with the existing constant-pinning tests extended. Values only: URL/request building stays in `girpr_dispatch` (the leaf's "values, not behaviour" rule) |
 | `src/repair/phases/metadata.rs` | `Meta` gains `dispatch: Option<DispatchInfo>`; `meta.latest` is only known after `metadata.rs:307`, so the query runs at that point or in `fetch_and_report` |
@@ -212,16 +214,17 @@ struct DispatchInfo {
     res_hash: String, data_hash: String,
     silence_hash: String, audio_hash: String, // audio from base_revision GET
     client_game_res_url: String, client_design_data_url: String,
+    client_silence_data_url: String,
     client_audio_assets_url: String,
-    manifest_digests: [ManifestDescriptor; 2],
+    manifest_digests: [ManifestDescriptor; 3],
 }
 
 struct ManifestDescriptor {          // one per mirrored manifest
-    kind: Res | Data,
+    kind: Res | Data | Silence,
     url: String,
     expected_md5: String,            // from the descriptor NDJSON, not hardcoded
     expected_size: u64,
-    mirror_rel: String,              // <exe>_Data/Persistent/{res,data}_versions_persist
+    mirror_rel: String,              // <exe>_Data/Persistent/{res,data,silence_data}_versions_persist
 }
 
 struct PersistentRow {               // one NDJSON line
@@ -237,7 +240,7 @@ struct PersistentAsset {
     placement: Persistent | StreamingAssets,
     size: u64, md5: String, hash: Option<u64>,
     primary_url: String, alternate_url: String,
-    source: Res | Data,
+    source: Res | Data | Silence,
 }
 
 struct PersistentPlan {
@@ -290,10 +293,13 @@ even though no Sophon entry names them. Server-sent `isPatch` is parsed and
 |---|---|---|
 | `res_versions_external` | `audio-assets/StandaloneWindows64`, `game-res/StandaloneWindows64` | `game-res/StandaloneWindows64`, `audio-assets/StandaloneWindows64` |
 | `data_versions` | `design-data/…`, `design-data/…` | `design-data/…`, `design-data/…` |
+| `data_versions` (silence) | `silence-data/…/AssetBundles`, `silence-data/…/AssetBundles` | `silence-data/…/AssetBundles`, `silence-data/…/AssetBundles` |
 
-where the three prefixes are `client_audio_assets_url`,
-`client_game_res_url` and `client_design_data_url` from `DispatchInfo`, and
-the final URL is `{prefix}/{folder}/{remoteName}`. The alternate URL is
+where the four prefixes are `client_audio_assets_url`, `client_game_res_url`,
+`client_design_data_url` and `client_silence_data_url` from `DispatchInfo`, and
+the final URL is `{prefix}/{folder}/{remoteName}`. Silence rows carry the same
+`*.blk` / `svc_catalog` placement rule; the CDN prefix differs only in
+`client_silence/General` instead of `client/General`. The alternate URL is
 required (research §4.5); every download attempts primary then alternate on a
 404 only, never on a digest failure.
 
@@ -320,7 +326,22 @@ All values are plain text with **no trailing newline**, published with
 | `ScriptVersion` | `game_version` (= `meta.latest`, B9) |
 
 `DownloadPref` is not reproducible from public data and is not a verification
-flag: skip it. The two mirror files are the raw, MD5-verified manifest bytes.
+flag: skip it. The three mirror files are the raw, MD5-verified manifest bytes.
+
+**Confidence tiers — why every line stays in the block.** The game's own string
+table names `res_revision`, `data_revision`, `silence_revision`, `ChannelName`,
+`ScriptVersion`, `base_res_version_hash`, the `*_versions_persist` manifests and
+the `*versions_remote*` / `cache_versions*` families; a startup `CreateFileW` log
+shows it opens `base_res_version_hash`, and the game log
+`IsBaseResVersionHashChanged => … / Package has changed!!!!! Clear state files in
+persist dir!!!!!` proves a mismatch **wipes** the Persistent state. GenshinSlimmer
+issue #19 shows the client checks `res_revision_eternal` *alongside* `res_revision`,
+so writing both from one dispatcher value is load-bearing, not redundant, even
+though the older string-table dump does not name the "eternal" twin.
+`audio_revision` and `PatchDone` are Collapse parity with no documented reader;
+`DownloadPref` is launcher metadata. None of those three is treated as a
+verification flag, but writing the two harmless revision files is pinned by the
+byte tests.
 
 ### 4.4 Version authority (B9(a))
 
@@ -360,8 +381,11 @@ All sites below are in the current `src/repair/mod.rs` pipeline:
    URLs + digest check on the key blob; B2(b) embedded versioned table only as
    an explicit, non-user-facing fallback), choose the subdomain (§5.5), build
    the URL with `meta.latest` (B9), decrypt, decode, and check the version and
-   codename fields. Then derive the three CDN prefixes:
+   codename fields. Then derive the four CDN prefixes:
    `{resBase}/output_{resNum}_{resHash}/client`,
+   `{silenceBase}/output_{silNum}_{silHash}/client_silence/General` (the
+   dispatcher's `ClientDesignDataSilURL`, built as
+   `{RepoDesignDataURL}/output_{RepoDesignDataSilenceNumber}_{RepoDesignDataSilenceHash}/client_silence/General`),
    `{dataBase}/output_{dataNum}_{dataHash}/client/General`, and — after a
    second GET of `{gameResPrefix}/StandaloneWindows64/base_revision` whose
    body is `"<revision> <hash>"` — `{resBase}/output_{audioRev}_{audioHash}/client`.
@@ -371,9 +395,9 @@ All sites below are in the current `src/repair/mod.rs` pipeline:
    nothing (Collapse's 5-minute cache is not needed for a single-shot run).
 
 2. **Persistent manifests, in `fetch_plan_network`** (same `with_persistent &&
-   !purge_only` gate). The dispatcher's embedded descriptor NDJSON (root `3` → `22` → `3` and root `3` → `19`)
+   !purge_only` gate). The dispatcher's embedded descriptor NDJSON (root `3` → `22` → `3`, root `3` → `19` and root `3` → `20`)
    supplies each full manifest's `remoteName`, `md5` and `fileSize`; derive the
-   two URLs from those names, not from hardcoded paths. Fetch both
+   three URLs from those names, not from hardcoded paths. Fetch all three
    concurrently with the existing manifest/reuse/deprecated trio under the
    same client and `ManifestBudget`, but as a **required** branch: a failed
    manifest is exit `2`, not a degraded report. Verify each body's MD5 and
@@ -381,9 +405,12 @@ All sites below are in the current `src/repair/mod.rs` pipeline:
    this for 3,164 rows); parse NDJSON skipping blank lines and tolerating
    `isPatch`/`category`/`localName` keys (the research notes a blank line
    aborts Collapse's parser). Keep the raw bytes in memory only (C3: the plan
-   half stays read-only). The silence descriptor (root `3` → `20`) is parsed
-   for field-shape validation only — `silence_data_versions_persist` is not
-   written (B6).
+   half stays read-only). The silence descriptor (root `3` → `20`) is a
+   **required third branch**, not a shape check: fetch its full manifest from
+   `{silenceBase}/…/client_silence/General/AssetBundles/data_versions`, verify
+   MD5 + size against the descriptor, parse it into `PersistentRow`s and mirror
+   it to `Persistent/silence_data_versions_persist` (`docs/08` §2.2). A failure
+   is exit `2`, exactly like the other two.
 
 3. **Build `PersistentPlan` in `build_and_assert_plan`.** Pure functions in
    `app/persistent-plan`: normalise rows, place them, apply the force rule
@@ -400,7 +427,7 @@ All sites below are in the current `src/repair/mod.rs` pipeline:
      flag-combination error;
    - otherwise, if any dispatcher hotfix path in the current persistent set is
      out of scope → still repair the in-scope files, but **suppress the marker
-     block and both mirrors** and report `persistent=suppressed`. The revision
+     block and all three mirrors** and report `persistent=suppressed`. The revision
      value would otherwise assert that a complete revision is installed.
      This mirrors the scoped `config.ini` rule (`config_bumped=0`).
    - Neither guard applies to unflagged runs.
@@ -470,7 +497,7 @@ In `src/repair/phases/post.rs::run_inner`, insert one step after the
    publish nothing (C4).
 4. If the C7(f) scope suppression fired, log the suppression and publish
    nothing, reporting `persistent=suppressed`.
-5. Otherwise write the **full** marker block and both mirrors atomically
+5. Otherwise write the **full** marker block and all three mirrors atomically
    (C19), after every persistent file has passed its gate. Failures are fatal
    `RunFailure::write` (exit `3`), like the `config.ini` write.
 6. Then the existing `config.ini` bump runs last (C9): markers first, version
@@ -480,7 +507,7 @@ In `src/repair/phases/post.rs::run_inner`, insert one step after the
 ### 5.4 Check-only
 
 With the flag, `phases::check::verify_plan` also verifies (a) every persistent
-file's size + digest against its manifest row, (b) both mirrors' bytes against
+file's size + digest against its manifest row, (b) all three mirrors' bytes against
 the dispatcher MD5, and (c) every marker file's presence and exact value from
 `MarkerSet`. Any mismatch is damage → exit `4`. Without the flag, check-only
 is unchanged. The help text and README must say that the flag narrows what
@@ -565,15 +592,15 @@ not own (`README.md` "For developers / AI agents"). Scratch trees go under
 | Unit — decoder | `app/dispatch/` tests | metadata blob unwrap against recorded samples; proto field decode against `samples/dispatch_fields.txt`; version-match rule; key/seed version coverage; URL/subdomain builders; per-biz channel constants |
 | Unit — pure plan | `app/persistent-plan/` tests | suffix→folder table; force-persistent MD5 diff (same/different/missing base); URL primary/alternate swap; digest preference hash-vs-md5; blank-line and extra-key tolerance; marker byte rendering (no trailing newline, `PatchDone` = audio revision, hash omission); scope suppression predicate |
 | Unit — purge | `src/repair/purge.rs` table test `cached_keys_classify_every_keep_rule` | new keep patterns for `*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*`, root `pkg_version`; negative rows proving `*versions_remote*` and `VideoAssets/*.tmp` still purge |
-| Integration | `app/test-fixtures` mock + `tests/repair_offline.rs` (pulled into the `tests/repair.rs` root) | dispatcher failure → 2; version disagreement → 2; manifest MD5 failure → 2; two-mirror publish; full hotfix download with primary 404 → alternate; corrupt body → retry/gate failure → 3 with no markers; read-only flags; `ctable`/`DXSETUP` prerequisites; read-only modes list-only; `--purge-only` skip; scoped run with marker path out of scope → 1; scoped run with hotfix path out of scope → suppressed; pre-flight and runtime ceilings including persistent bytes; check-only marker damage → 4 |
+| Integration | `app/test-fixtures` mock + `tests/repair_offline.rs` (pulled into the `tests/repair.rs` root) | dispatcher failure → 2; version disagreement → 2; manifest MD5 failure → 2; three-mirror publish (res/data/silence), including silence CDN fallback; full hotfix download with primary 404 → alternate; corrupt body → retry/gate failure → 3 with no markers; read-only flags; `ctable`/`DXSETUP` prerequisites; read-only modes list-only; `--purge-only` skip; scoped run with marker path out of scope → 1; scoped run with hotfix path out of scope → suppressed; pre-flight and runtime ceilings including persistent bytes; check-only marker damage → 4 |
 | Binary contract | `tests/cli_contract.rs` (in the `tests/contracts.rs` root) | flag parse, help text, exit codes, conditional `SUMMARY` keys absent unflagged and present in order under the flag |
-| Bridge (`#[ignore]`d) | `tests/artifact_bridge.rs` + `app/test-fixtures/src/artifact_server.rs` | a captured dispatcher response + both manifests + a few full-file blobs are replayed; assert hotfix bytes, mirror bytes and marker bytes; assert no marker writes under `--dry-run` and `--purge-only` |
+| Bridge (`#[ignore]`d) | `tests/artifact_bridge.rs` + `app/test-fixtures/src/artifact_server.rs` | a captured dispatcher response + all three manifests + a few full-file blobs are replayed; assert hotfix bytes, mirror bytes and marker bytes; assert no marker writes under `--dry-run` and `--purge-only` |
 | Manual, real install | recorded in `docs/08` §6 step 5 | update Persistent with the flag, copy the game to a second machine, launch once, confirm no verification/re-download |
 
 **Fixtures — offline mock.** The mock in `app/test-fixtures` gains a dispatcher
 route whose body is a deterministically encrypted sample (fixed test RSA key +
 seed committed as test data — never the production key), a key/seed provider
-seam so tests do not touch Collapse's release repo, two manifest routes with
+seam so tests do not touch Collapse's release repo, three manifest routes with
 known MD5s, and a hotfix CDN route that can be scripted for 404-fallback and
 corrupt-body cases. In `src/repair/phases/metadata.rs`'s own tests the new
 dispatcher route follows the existing `Reply`/`TestServer` seam
@@ -621,7 +648,7 @@ until C8; no release should be cut between C6 and C8.
 | 5 | `feat(persistent): add persistent plan values and full-file fetch` | `app/persistent-plan/`, `app/fetch/src/persistent.rs`, workspace | unit tests for every pure rule and the download gate; no product wiring |
 | 6 | `feat(persistent): wire the plan half behind --with-persistent` | `src/cli.rs`, `src/config.rs`, `app/report/`, `app/repair-plan/`, `src/repair/mod.rs`, `src/repair/phases/metadata.rs`, tests | dispatcher/manifest/plan/scope/ceiling cases; `PLAN`/`SUMMARY` keys; flag-off byte identity |
 | 7 | `feat(persistent): repair persistent files in the execute half` | `src/repair/mod.rs`, new persistent repair module, mock routes, tests | download/fallback/gate/prereq/read-only cases; failure → 3 skips post |
-| 8 | `feat(persistent): publish markers last and check them` | `src/repair/phases/post.rs`, `src/repair/phases/check.rs`, tests | marker byte pins, C19/C20/C16/C5 cases, `config.ini` ordering |
+| 8 | `feat(persistent): publish markers last and check them` | `src/repair/phases/post.rs`, `src/repair/phases/check.rs`, tests | marker byte pins (incl. `res_revision_eternal`), three-mirror publish (res/data/silence), C19/C20/C16/C5 cases, `config.ini` ordering |
 | 9 | `test(capture): extend gircap bundle and bridge for persistent` | `tools/capture/`, `app/test-fixtures/`, `tests/artifact_bridge.rs`, `docs/06` note | `gircap verify`; bridge cases green against a captured bundle |
 | 10 | `docs(persistent): update README and research status; record real-install verification` | `README.md`, `docs/08` | doc review; recorded manual verification result |
 
@@ -682,7 +709,7 @@ synthetic mini-bundle follows this rule today, `docs/06` §1.2).
 | B3 failure while opted in → 2 | (a) | §6.1 |
 | B4 all three channels, fallback global-only | (b)→(a) | §2 gate |
 | B5 ship keep-set fix independently | (a) | commit 3 |
-| B6 Collapse parity + extra keep inputs | (a) | §1.3, commit 3 |
+| B6 Collapse parity + silence mirror + extra keep inputs | (a), extended to maintain `silence_data_versions_persist` from GenshinSlimmer / GI-Live-Hotfix-Downloader | §1.3, `docs/08` §2.2, §5.1.2, commits 3/6/8 |
 | B7 fold bytes into existing ceilings | (a) | §5.1.5 |
 | B8 legal/ToS posture accepted | (a) | §1.1, §5.1.1; project-owner call already recorded |
 | B9 `meta.latest` authoritative | (a) | §4.4 |
@@ -748,8 +775,10 @@ CDN URL shapes:
   {resBase}/output_{resNum}_{resHash}/client/StandaloneWindows64/base_revision
      (body: "<revision> <hash>", split on one space)
   {dataBase}/output_{dataNum}_{dataHash}/client/General/AssetBundles/data_versions
+  {dataBase}/output_{silNum}_{silHash}/client_silence/General/AssetBundles/data_versions
   {resBase}/output_{audioRev}_{audioHash}/client/StandaloneWindows64/<folder>/<remoteName>
-Mirrors: Persistent/res_versions_persist, Persistent/data_versions_persist
+Mirrors: Persistent/res_versions_persist, Persistent/data_versions_persist,
+  Persistent/silence_data_versions_persist
 Placement: .pck → AudioAssets; contains("blocks") && .blk OR .svc_catalog →
   AssetBundles; .usm / .cuepoint → VideoAssets; else root
 Force-persistent: base-path MD5 (case-insensitive) != dispatcher md5 → Persistent
@@ -757,6 +786,10 @@ Gate: XXH64 from `hash` (8 bytes) when present, else MD5 (16 bytes); size first
 Marker block: base_res_version_hash, res_revision, res_revision_eternal,
   data_revision, silence_revision, audio_revision, ChannelName, ScriptVersion,
   PatchDone (= audio_revision); DownloadPref skipped; no trailing newline
+  Confidence: res/data/silence_revision + ChannelName + ScriptVersion +
+  base_res_version_hash + the three mirrors are game-read; res_revision_eternal
+  is checked alongside res_revision (GenshinSlimmer issue #19); PatchDone has no
+  known reader; DownloadPref is launcher metadata.
 Prerequisites: create Persistent + StreamingAssets; delete Persistent/ctable.dat;
   delete DXSETUP/; copy StreamingAssets/ctable.dat → ctable_streaming.dat
 ```
@@ -764,6 +797,8 @@ Prerequisites: create Persistent + StreamingAssets; delete Persistent/ctable.dat
 The biggest dataset to pin in tests is the live probe's shape: 3,164 rows
 (2,631 `res_versions_external` + 533 `data_versions`), 1,661 base copies that
 the MD5 rule keeps out of `Persistent/`, and 376 hotfix-only MD5s — including
-all 10 server-flagged `isPatch` rows. The trimmed samples under
-`tools/persistent-sophon-research/samples/` are the fixture source; the full
-manifests and ciphertext stay out of the tree.
+all 10 server-flagged `isPatch` rows. The live probe did **not** fetch the
+silence manifest; its descriptor (root `3` → `20`) and full NDJSON must be
+captured in the fixture commit (§2 step 3, commit 2) and its row count pinned
+there. The trimmed samples under `tools/persistent-sophon-research/samples/`
+are the fixture source; the full manifests and ciphertext stay out of the tree.

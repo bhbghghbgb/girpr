@@ -34,7 +34,7 @@ GI has two content-delivery paths that are both live:
 | Bytes on disk | Game files under `*_Data/StreamingAssets/`, audio, etc. | Full replacement files under `*_Data/Persistent/` |
 | Patch shape | Chunked, zstd-compressed, assembled at byte offsets | **Full files, plain HTTP, no patching** |
 | Version state | `config.ini` `game_version` | `Persistent/{res,data,silence,audio}_revision`, `ScriptVersion`, `ChannelName`, `PatchDone` |
-| Verification state | `pkg_version` (+ `res_versions_streaming`, `base_res_version_hash`) | `res_versions_persist` (+ `data_versions_persist`, `*_versions*persist*`) |
+| Verification state | `pkg_version` (+ `res_versions_streaming`, `base_res_version_hash`) | `res_versions_persist` (+ `data_versions_persist`, `silence_data_versions_persist`, `*_versions*persist*`) |
 
 `girpr` today implements a *repair* of the first path only (Starward-style chunk
 repair plus a Collapse-style extra-file purge). The second path is untouched, and
@@ -149,8 +149,13 @@ lines are then parsed into `PkgVersionProperties` and merged into the repair lis
 (`TryReplaceAssetToPersistent`, lines 213-237), overriding the same path from the
 Sophon base manifest. Collapse does **not** write the `silence_data_versions_persist`
 or `audio_versions*` variants that appear in the game's string table, even though
-`QueryProperty.ClientDesignDataSilURL` is available (`DispatchHelper.cs:86-87`);
-if girpr targets those, it is going beyond its reference launcher.
+`QueryProperty.ClientDesignDataSilURL` is available (`DispatchHelper.cs:86-87`).
+GenshinSlimmer does maintain `silence_data_versions_persist` (and discovers every
+`*versions*persist*` / `audio_versions*` manifest), and
+GI-Live-Hotfix-Downloader writes it from
+`client_silence/General/AssetBundles/data_versions`. `docs/09` therefore mirrors
+the silence manifest too; B6 is extended accordingly. `audio_versions*` stays
+out of scope.
 
 ### 2.3 Other files in the same family
 
@@ -158,7 +163,10 @@ if girpr targets those, it is going beyond its reference launcher.
   *fake* list rebuilt from the Sophon manifest, because HoYo removed the old
   scattered zip/`pkg_version` files in 5.6
   (`GenshinInstall.PkgVersion.cs:112-190, 192-237`). This is the **launcher's**
-  verification list, distinct from the in-game one.
+  verification list, distinct from the in-game one. The removal is confirmed by
+  `Starward`'s repair path: it can repair an older install to a newer version
+  without writing or updating `pkg_version` at all, and the game still launches.
+  No in-game step depends on the root file.
 * `audio_lang_14` in `Persistent/` is the voice-language selection file; Collapse
   reads it to decide which audio manifests to include
   (`Fetch.cs:80-83, 106-133`) and girpr reads the equivalent path from
@@ -186,6 +194,36 @@ it deliberately:
 Source: <https://github.com/dnullptr/GenshinSlimmer> (README and `GenshinSlimmer.ps1`,
 v14). This corroborates that the marker pair is (database file + revision numbers),
 and that writing them correctly is sufficient to suppress the in-game check.
+
+Two field reports and the game's own string table sharpen this:
+
+* [GenshinSlimmer issue #19](https://github.com/dnullptr/GenshinSlimmer/issues/19)
+  records that the client checks `res_revision_eternal` **alongside**
+  `res_revision` — updating only the latter does not stop the re-download
+  (PR #20 added the dual write). It also describes the failure loop in detail:
+  on a new server revision the client pulls `res_versions_remote`, writes partial
+  `Persistent/VideoAssets/*.tmp` files, and keeps treating cutscenes as full-size
+  until both are removed. Those two families are therefore **harmful stale state**,
+  not inert clutter.
+* [Collapse issue #166](https://github.com/CollapseLauncher/Collapse/issues/166)
+  quotes a real game log:
+  `IsBaseResVersionHashChanged=> baseResVersionHashInPersist = …, md5 in
+  streamingResVersion = …` followed by `Package has changed!!!!! Clear state
+  files in persist dir!!!!!`. A `CreateFileW` hook log in
+  <https://xia0ji233.github.io/2025/02/14/Game6/> shows the game itself opening
+  `Persistent/base_res_version_hash` at startup. This is direct evidence the
+  game reads the marker and **wipes** the Persistent state on mismatch.
+* The game string table at
+  <https://gist.github.com/khang06/622d020dec0484b2854ee4eef17b56c1> names
+  `res_versions_persist`, `data_versions_persist`, `silence_data_versions_persist`,
+  `res_revision`, `data_revision`, `silence_revision`, `ChannelName`,
+  `ScriptVersion`, `base_res_version_hash`, `cache_versions*`,
+  `*versions_remote*`, `ctable.dat` and `ctable_streaming.dat` in one cluster,
+  plus the game's own `md5 not matched` / `streaming md5 not matched` errors.
+  It does **not** name `PatchDone`, `DownloadPref`, `audio_revision` or the
+  "eternal" twin in that dump — treat those as lower-confidence Collapse-parity
+  entries. The "2,580" figure remains a single-source (GenshinSlimmer) claim; the
+  mechanism is corroborated, the number is not.
 
 ### 2.5 Starward writes none of them
 
@@ -427,6 +465,12 @@ state, per GenshinSlimmer). Do **not** add Sophon's `preload.verified` / `*.veri
 adding SDK/WPF/plugin files to the keep set at the same time, since widening the
 keep inputs is the natural moment to revisit the documented v1 purge scope.
 
+Keeping `*versions_remote*` and `VideoAssets/*.tmp` as **purge candidates** is
+load-bearing, not cosmetic: GenshinSlimmer issue #19 records that those leftovers
+keep telling the client the cutscenes should be full size, so a 40–50 GB
+re-download resumes even after the revisions are corrected. Any future widening
+of the keep-set must not accidentally protect them.
+
 ### 4.4 Caveats from Collapse's implementation (do not copy blindly)
 
 * `*_persist` manifests are written with `File.Create` **before** parsing, so a
@@ -506,10 +550,11 @@ the conflicts and blockers that were settled before that flag can be implemented
   column holding the final call.
 * **§5.2 blockers** — choices that reading the two launchers or the live probe
   cannot settle. The §4 prerequisites are deliberately **not** blockers: the
-  decoder, the two manifests, the full-file downloader, the marker writes, the
+  decoder, the three manifests (res, data, silence), the full-file downloader,
+  the marker writes, the
   read-flag stripping and the directory/ctable/DXSETUP work are implementation
-  tasks, not open questions. Likewise, capturing a dispatcher response and both
-  manifests into a `gircap` bundle (§6 step 2) is a prerequisite
+  tasks, not open questions. Likewise, capturing a dispatcher response and all
+  three manifests into a `gircap` bundle (§6 step 2) is a prerequisite
   for testing, not a decision.
 
 "Suggested" is the report's recommendation; the last column records the chosen
@@ -523,6 +568,13 @@ result (marker bytes, `SUMMARY`, or an exit code); none is a schema or
 implementation question. C19 resolves the remaining tension with the Collapse
 precedent in §2.1; C7's merged row records the C7(d)-vs-C8 tension and how it
 was settled.
+
+Two answers deliberately **do not** copy Collapse, and should not be "fixed" to
+match it later: C8's all-or-nothing gate (Collapse's `Repair.cs:108-111` calls
+`SavePersistentRevision` whenever the dispatcher query succeeded, even if the
+persistent-manifest parse failed or no file was broken — see also its 5-minute
+query cache at `GenshinRepair.cs:154-164`) and C19's always-rewrite. Both are
+recorded decisions in §5.1, not drift.
 
 ### 5.1 Conflicts with existing `girpr` functions and contracts
 
@@ -562,7 +614,7 @@ to implementation/planning.
 | B3 | **Dispatcher failure while opted in.** Collapse warns and continues; its default is not an opt-in request. | (a) fail (exit `2`); (b) degrade to base-only repair and report a `persistent=unavailable` flag; (c) try again on the next run only. | **(a)** — a user who explicitly asked for a persistent update should not receive `exit 0` for a run that skipped it. Best-effort behaviour stays for runs without the flag (where the dispatcher is never queried). | **(a)** — chosen. |
 | B4 | **Channel coverage for the first release.** The live probe (§4.5) covered `hk4e_global` only; CN/Bili dispatcher fields are unverified. | (a) global only, with a clear refusal for the other two `--biz` values while the flag is on; (b) all three at launch; (c) global + CN only. | **(a)** — ship the verified path behind the flag and add channels when each has a captured dispatcher response and manifest pair; research cannot certify the unprobed regions. | Try **(b)** — all three at launch; research further during implementation/planning, falling back to **(a)** — global only — if CN/Bili cannot be verified. |
 | B5 | **Keep-set fix vs. the unflagged `SUMMARY` contract (C12).** The scope question in C7 is now settled (allow scoped runs; refuse only when a marker file is out of scope, and suppress markers when a dispatcher hotfix path is); what remains is whether widening the purge expected set with the markers and root `pkg_version` (C1/C2) may change `deleted_extra_bytes` for runs that pass no new flag. | (a) ship the keep-set fix independently of `--with-persistent` and document the change; (b) gate the keep-set fix behind the flag, accepting that unflagged runs can delete existing markers; (c) add a separate keep-only flag. | **(a)** — a deliberate safety fix is worth a one-time change to a deletion total; (b) leaves a destructive hole in the default path. | **(a)** — chosen. |
-| B6 | **How far beyond Collapse to go (§4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. | **(a)** — chosen. |
+| B6 | **How far beyond Collapse to go (§4.3).** Collapse writes only `res_versions_persist`/`data_versions_persist`; GenshinSlimmer also manages `silence_data_versions_persist`, `audio_versions*`, `*versions_remote*`, `VideoAssets/*.tmp` and SDK/WPF/plugin keep files. | (a) mirror Collapse exactly, but add the extra *keep* inputs; (b) implement the full GenshinSlimmer behaviour including the deletions; (c) markers only, no other keep changes. | **(a)** — girpr is a repair tool, not a slimmer; deleting game-generated download state is out of scope, but protecting those files from the purge is cheap insurance. | **(a)** — chosen; extended in `docs/09` to also **maintain `silence_data_versions_persist`** (GenshinSlimmer / GI-Live-Hotfix-Downloader), while keeping `audio_versions*` and the deletions out of scope. |
 | B7 | **Ceiling contract (C11).** Folding persistent bytes into the existing ceilings changes what those flags mean for opted-in runs. | (a) fold them in and document the broader meaning; (b) add dedicated persistent ceilings so the existing ones keep their exact definition; (c) leave persistent bytes unbounded. | **(a)** — enforceable ceilings are the point of the tier; (b) is defensible if a caller needs to budget the two paths separately, but doubles the flag surface. (c) is not acceptable. | **(a)** — chosen. |
 | B8 | **Legal/ToS posture.** Querying `query_cur_region` directly and shipping/deriving its RSA key is a product risk that source inspection cannot answer. | (a) acceptable, same as Collapse and the community tools; (b) acceptable only with user-supplied keys; (c) not acceptable — drop live dispatch and support captured bundles only. | **(a)** is this report's technical recommendation; the final call belongs to the project owner and is recorded here rather than assumed. | **(a)** — chosen. |
 | B9 | **Which version is authoritative for the dispatcher query and the markers.** Collapse queries `query_cur_region` with the *locally installed* version (`GameVersion.VersionString`) and writes that value into `ScriptVersion`. girpr repairs an arbitrary older install to `meta.latest`: the local version describes the *pre-repair* state, and a fresh install has no local version at all. The version in the query selects the revision set the dispatcher returns (§3 Step 3), so this choice decides both which hotfix bytes are fetched and which revision numbers are published. | (a) `meta.latest` is authoritative: query with it; if the response's own version field (probe `game_version_from_props`) disagrees, exit `2` rather than publish a revision the install does not have; (b) local version authoritative (Collapse parity): query with `meta.local_version`, write `ScriptVersion` from the response and still bump `config.ini` to latest — two version claims in one install, and no query at all on a fresh install; (c) dispatcher authoritative: install its hotfix set and bump `config.ini` to its version. | **(a)** — the bytes girpr puts in place are the latest base build, so only its revision set can describe the finished install; (b) can fetch stale hotfixes and make the game re-verify, which is this feature's failure case, and cannot start from a fresh install. Requires that the versioned key/seed from B2(a) cover `meta.latest`, and that the version disagreement be reported as a metadata failure rather than silently reconciled. | **(a)** — chosen. |
@@ -577,15 +629,19 @@ to implementation/planning.
    output decisions in §5 (C7, C19, C20, B9) with that strategy — they fix which
    markers are published, in which modes, and for which version, not how the
    decoder is built.
-2. Capture a real dispatcher response + both persistent manifests into a
+2. Capture a real dispatcher response + all three persistent manifests into a
    `gircap` bundle (`docs/06`) before coding, so the protobuf fields, NDJSON
    schema (`hash` field in 7.1+) and exact marker contents can be pinned by tests.
 3. Extend the purge expected set first (§4.3), independently of the updater, so
    an install's existing markers are never deleted.
-4. Implement the four new phases of §4.2 with the marker writes last, and add
-   `--check-only`, `--dry-run` and byte-ceiling coverage for persistent files.
+4. Implement the four new phases of §4.2 with the marker writes last — including
+   the third (`silence`) manifest mirror — and add `--check-only`, `--dry-run`
+   and byte-ceiling coverage for persistent files.
 5. Verify on a real install: update Persistent with `girpr`, copy the game to a
    second machine, launch once, and confirm no verification/re-download occurs.
+   Assert `res_revision == res_revision_eternal`, that no `*versions_remote*` or
+   `VideoAssets/*.tmp` files remain, and that the `audio_versions` /
+   `silence_data_versions_persist` state is what the game expects.
 
 ## 7. Additional reference projects
 
@@ -606,7 +662,9 @@ git submodule add https://github.com/GesthosNetwork/GI-Live-Hotfix-Downloader.gi
   persistent hotfix files. It generates `GenshinImpact_Data/Persistent` from live
   dispatch and shows the revision format (`1284249_ba7ad33643` — number + hash)
   with separate `res` / `silence` / `data` revisions, i.e. the same triple Collapse
-  writes as separate scalar files. It is a second, independent implementation of
+  writes as separate scalar files. It also mirrors `silence_data_versions_persist`
+  (and `data_versions_medium_persist`), which is why `docs/09` maintains the
+   silence mirror. It is a second, independent implementation of
   the download half.
 
 Why `GenshinSlimmer` is worth keeping locally:
@@ -675,6 +733,11 @@ Web:
   MD5 in `res_versions_streaming`.
 * <https://xia0ji233.github.io/2025/02/14/Game6> — reversing report showing the
   game opening `Persistent/base_res_version_hash` at startup.
+* <https://github.com/CollapseLauncher/Collapse/issues/166> — real game log of
+  `IsBaseResVersionHashChanged` followed by `Clear state files in persist dir!!!!!`.
+* <https://github.com/dnullptr/GenshinSlimmer/issues/19> — field report that the
+  client checks `res_revision_eternal` alongside `res_revision`, and that stale
+  `res_versions_remote` + `VideoAssets/*.tmp` cause the large re-download loop.
 * <https://rentry.org/genshbackup> and related threads — community "reset
   verification state" fix (deletes `base_res_version_hash`, `cache_versions_*`,
   `ChannelName`, `res_versions_remote`, `ScriptVersion`, `VideoAssets/`).
