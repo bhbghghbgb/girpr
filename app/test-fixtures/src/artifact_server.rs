@@ -21,7 +21,7 @@
 //! | listener | request | served from |
 //! |---|---|---|
 //! | hyp | `GET <hyp>/getGameConfigs` etc. | `api/get*.json`, verbatim |
-//! | build | `GET <sophon>/getBuild[?tag=]` | `api/getBuild.<tag>.json`, **rewritten** |
+//! | build | `GET <sophon>/getBuild[?tag=]` / `POST <sophon>/getPatchBuild` | `api/getBuild.<tag>.json`, **rewritten**; empty patch build, **synthesised** |
 //! | manifest | `GET <manifest-prefix>/<manifest-id>` | `manifests/<tag>/<field>.manifest.zst` |
 //! | chunk | `GET <chunk-prefix>/<chunk-id>` | `chunks/blobs/<chunk-id>.zst` |
 //!
@@ -56,9 +56,15 @@
 //! (`chunks/index.json` records which captures referenced a blob, not which
 //! build's manifest declares it).
 //!
-//! **Nothing here invents a byte.** Every served body comes out of a file the
-//! bundle vouches for; the only synthesised content is the failure shapes, and
-//! those are replayed from `api/error_shapes.json` (`docs/06` §4.4).
+//! **Nothing here invents a byte from a capture.** Every served body comes out
+//! of a file the bundle vouches for; the only synthesised content is the
+//! failure shapes (replayed from `api/error_shapes.json`, `docs/06` §4.4) and
+//! the **empty `getPatchBuild`** answer. Captured bundles carry no patch-build
+//! body, so the bridge deliberately answers an empty one: the always-on stale
+//! sweep then contributes no delete tags and every byte-stable artifact
+//! contract (`SUMMARY`, `PLAN`, `PLAN` JSON, hit expectations) stays unchanged.
+//! The user-visible sweep contract is documented in `README.md` under the
+//! `SUMMARY` / `deleted_extra_bytes` machine contract.
 //!
 //! **What this module does not know about.** The bundle's *records* — the
 //! capture matrix and the patchmaps — are read by
@@ -879,6 +885,13 @@ enum Route {
     Chunk,
 }
 
+/// The synthetic answer for `getPatchBuild`. Captures contain no patch-build
+/// body, so none is invented *from* them: an empty wrapper is the deliberate,
+/// documented decision that keeps the artifact contracts byte-stable. The
+/// product's sweep sees no delete tags and only the legacy deprecated list.
+const EMPTY_PATCH_BUILD: &str =
+    r#"{"retcode":0,"message":"OK","data":{"build_id":"","patch_id":"","tag":"","manifests":[]}}"#;
+
 struct Response {
     status: u16,
     content_type: String,
@@ -954,13 +967,27 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
     let response = match route {
         Route::Hyp => hyp_response(&served, &path),
         Route::Build => {
-            let tag = query_value(&target, "tag");
-            served.record(Hit {
-                kind: HitKind::Build,
-                id: tag.clone().unwrap_or_else(|| "latest".to_string()),
-                build: None,
-            });
-            served.build_response(tag.as_deref())
+            // The product POSTs `getPatchBuild` to the Sophon origin during
+            // the plan phase. Route it before `getBuild`, or a getBuild body
+            // is misparsed as a patch build (or a 404 is retried). The answer
+            // is the documented empty wrapper, and the hit goes into the same
+            // request log as any other API call.
+            if path.ends_with("/getPatchBuild") {
+                served.record(Hit {
+                    kind: HitKind::Api,
+                    id: "getPatchBuild".to_string(),
+                    build: None,
+                });
+                Response::ok_json(EMPTY_PATCH_BUILD.as_bytes().to_vec())
+            } else {
+                let tag = query_value(&target, "tag");
+                served.record(Hit {
+                    kind: HitKind::Build,
+                    id: tag.clone().unwrap_or_else(|| "latest".to_string()),
+                    build: None,
+                });
+                served.build_response(tag.as_deref())
+            }
         }
         Route::Manifest => {
             if let Some((build_id, id)) = last_two(&path) {

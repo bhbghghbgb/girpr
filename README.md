@@ -158,6 +158,18 @@ flowchart TD
   root `pkg_version`) are now kept for every run, so an install that already
   has them reports a one-time **lower `deleted_extra_bytes`** the first time it
   is purged after this fix (C12/B5). No new flag is involved.
+  An **always-on stale-file sweep** now runs in the prerequisite phase: it
+  deletes the union of the `getGameDeprecatedFileConfigs` names and every
+  delete tag in the selected `getPatchBuild` patch manifests, minus any path
+  still present in the live chunk manifests. The patch-build fetch is
+  best-effort — a failed fetch only warns — and the sweep is skipped by
+  `--check-only` and `--print-plan`, listed under `--dry-run`, and also run
+  under `--purge-only`. Its bytes count into `deleted_extra_bytes` but stay
+  outside `--max-delete-bytes`. As with the C12/B5 change above, an install
+  that still has any of these files sees a **one-time lower
+  `deleted_extra_bytes`** on its first swept run. No new flag or version key is
+  promised: the artifact bridge captures deliberately serve an empty patch
+  build, so their `SUMMARY`, `PLAN` and `PLAN` JSON contracts are unchanged.
   The byte counts come in **pairs** when their ceiling is active:
   `download_bytes` (the bytes of the files that were actually repaired) beside
   `download_bytes_spent` (the bytes that crossed the wire), and `write_bytes`

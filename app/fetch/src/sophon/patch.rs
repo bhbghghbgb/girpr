@@ -6,7 +6,9 @@
 //! to key on, and the live patch build carries several tags. The settled policy
 //! is therefore to **union all tags across all selected manifests** and let the
 //! plan's live-manifest cross-check decide what is safe to delete. No version
-//! keying lives here. See `docs/08-version-upgrade-stale-sweep-findings.md`.
+//! keying lives here. The settled policy and its user-visible contract are
+//! documented in `README.md`, "For developers / AI agents — read this first",
+//! under the `SUMMARY` / `deleted_extra_bytes` machine contract.
 //!
 //! Nothing here deletes anything: this module only turns a live `getPatchBuild`
 //! answer into a deduplicated list of clean relative paths. The product session
