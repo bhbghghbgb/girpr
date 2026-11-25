@@ -51,7 +51,7 @@ app/audio/            # audio scan-file read/write + effective selection (acycli
 src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
-tests/artifact_bridge.rs  # the bundle-backed end-to-end suite (docs/06)
+tests/artifact_repair_bridge.rs  # the bundle-backed end-to-end suite (docs/06)
 tests/common/mod.rs       # thin shims over the shared test libraries below
 app/test-fixtures/     # facade-free offline mock, artifact replay server and deterministic fixtures
 app/test-support/      # facade-coupled run glue (RunCtx construction, pipeline driver)
@@ -140,7 +140,7 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
 - **Binary-level tests** (`tests/cli_contract.rs`): run the built binary
   (`CARGO_BIN_EXE_girpr`) to pin the process exit codes — every argument error is
   `1`, never clap's `2`, and `--help` is `0`. No game directory is touched.
-- **The bundle-backed suite** (`tests/artifact_bridge.rs`, [`docs/06`](06-artifact-bridge-spec.md)):
+- **The bundle-backed suite** (`tests/artifact_repair_bridge.rs`, [`docs/06`](06-artifact-bridge-spec.md)):
   `#[ignore]`d, and it drives the real binary over a captured bundle — a `--print-plan`
   pre-pass plus one real run per capture, the repair captures asking for
   `--repair-mode inplace` explicitly. It asserts the patched bytes, the exact fetched-chunk
@@ -384,7 +384,7 @@ docs — no product code.
 | `app/report/` | conditional `SummaryFlags` fields and `PLAN` totals for persistent work |
 | `src/cli.rs`, `src/config.rs` | `--with-persistent` → `RunCtx.with_persistent` |
 | `src/repair/mod.rs`, `src/repair/phases/{metadata,post}.rs`, `src/repair/file/mod.rs` | phase wiring; `src/repair/purge.rs` keep rules |
-| `app/test-fixtures/`, `tools/capture/`, `tests/artifact_bridge.rs` | mock routes, bundle records, bridge cases |
+| `app/test-fixtures/`, `tools/capture/`, `tests/artifact_repair_bridge.rs` | mock routes, bundle records, bridge cases |
 
 ### 7.3.3 Dependency direction (no cycles)
 
@@ -840,7 +840,7 @@ not own (`README.md` "For developers / AI agents"). Scratch trees go under
 | Unit — purge | `src/repair/purge.rs` table test `cached_keys_classify_every_keep_rule` | new keep patterns for `*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*`, root `pkg_version`; negative rows proving `*versions_remote*` and `VideoAssets/*.tmp` still purge |
 | Integration | `app/test-fixtures` mock + `tests/repair_offline.rs` (pulled into the `tests/repair.rs` root) | dispatcher failure → 2; version disagreement → 2; manifest MD5 failure → 2; three-mirror publish (res/data/silence), including silence CDN fallback; full hotfix download with primary 404 → alternate; corrupt body → retry/gate failure → 3 with no markers; read-only flags; `ctable`/`DXSETUP` prerequisites; read-only modes list-only; `--purge-only` skip; scoped run with marker path out of scope → 1; scoped run with hotfix path out of scope → suppressed; pre-flight and runtime ceilings including persistent bytes; check-only marker damage → 4 |
 | Binary contract | `tests/cli_contract.rs` (in the `tests/contracts.rs` root) | flag parse, help text, exit codes, conditional `SUMMARY` keys absent unflagged and present in order under the flag |
-| Bridge (`#[ignore]`d) | `tests/artifact_bridge.rs` + `app/test-fixtures/src/artifact_server.rs` | a captured dispatcher response + all three manifests + a few full-file blobs are replayed; assert hotfix bytes, mirror bytes and marker bytes; assert no marker writes under `--dry-run` and `--purge-only` |
+| Bridge (`#[ignore]`d, run by hand) | `tests/artifact_repair_bridge.rs` + `app/test-fixtures/src/artifact_server.rs` | six repair-only cross-tool cases (identical, no-reuse, reuse-in-place, reuse-moved, added, removed) against captured bundles; each asserts the patched file's bytes, the exact set of chunks fetched and the patch's byte total |
 | Manual, real install | recorded in docs/01 §6.6 step 5 | update Persistent with the flag, copy the game to a second machine, launch once, confirm no verification/re-download |
 
 **Fixtures — offline mock.** The mock in `app/test-fixtures` carries a dispatcher
@@ -852,33 +852,6 @@ corrupt-body cases. In `src/repair/phases/metadata.rs`'s own tests the
 dispatcher route follows the existing `Reply`/`TestServer` seam
 (`src/test_origin.rs`), alongside the `getGameConfigs`/`getGameBranches`/
 `getBuild` switch.
-
-**Fixtures — gircap bundle and bridge.** The bundle schema
-(`tools/capture/docs/01-artifact-schema.md`, now `schema_version: 4`) was extended
-with a `dispatch/` record (ciphertext + key fingerprint + seed + version) and
-a `persistent/` directory (raw manifests + a handful of full-file blobs). The
-writers go through `emit::write_bytes`/`write_doc` so `MANIFEST.json →
-files[]` and `verify/checksums.json` pick them up automatically
-(`tools/capture/src/emit/{mod,tree,index}.rs`); the captured-body arrays in
-`tools/capture/src/hyp/mod.rs` (`Captured::bodies()` / `Captured::all_bodies()`)
-and the records in
-`tools/capture/src/verify/{checks,list}.rs` keep `gircap verify` and
-`gircap list` honest. A `persistent` matrix class in
-`tools/capture/src/select/classes.rs` (`Class::ALL`, `REQUIRED_ORDER`, `id()`
-— all length-pinned) and three bridge cases (`persistent_res`,
-`persistent_data`, `persistent_silence`) through the existing `capture_test!`
-macro / `drive_named` in `tests/artifact_bridge.rs` with the record reader in
-`tests/artifact_bridge/bundle.rs` pin the replay.
-
-On the replay side (`app/test-fixtures/src/artifact_server.rs`) the
-`HitKind`/`Route` variants (`Dispatch`, `PersistentManifest`, `Hotfix`),
-`Bundle` accessors for the new directories and the entries in `Origins` are in
-place; the endpoints are served from `hyp_response`-style handlers and their
-origins rewritten in memory at `Bridge::start` bind time with `swap_authority`,
-exactly as Sophon prefixes are rewritten — the bundle is read-only and never
-written. The existing real fixture under `artifacts/hk4e_global/7.1.0__7.2.0/`
-was the model; the small v4 bundle is written by C4's hand-run
-`write_persistent_v4_bundle` producer, as `docs/06` §3 already requires.
 
 ---
 
@@ -897,7 +870,7 @@ at C8; C6–C8 landed together before any release.
 | 6 | `feat(persistent): wire the plan half behind --with-persistent` | `src/cli.rs`, `src/config.rs`, `app/report/`, `app/repair-plan/`, `src/repair/mod.rs`, `src/repair/phases/metadata.rs`, tests | dispatcher/manifest/plan/scope/ceiling cases; `PLAN`/`SUMMARY` keys; flag-off byte identity |
 | 7 | `feat(persistent): repair persistent files in the execute half` | `src/repair/mod.rs`, new persistent repair module, mock routes, tests | download/fallback/gate/prereq/read-only cases; failure → 3 skips post |
 | 8 | `feat(persistent): publish markers last and check them` | `src/repair/phases/post.rs`, `src/repair/phases/check.rs`, tests | marker byte pins (incl. `res_revision_eternal`), three-mirror publish (res/data/silence), C19/C20/C16/C5 cases, `config.ini` ordering |
-| 9 | `test(capture): extend gircap bundle and bridge for persistent` | `tools/capture/`, `app/test-fixtures/`, `tests/artifact_bridge.rs`, `docs/06` note | `gircap verify`; bridge cases green against a captured bundle |
+| 9 | `test(capture): extend gircap bundle and bridge for persistent` (later reverted; repair-only bridge restored) | `tools/capture/`, `app/test-fixtures/`, `tests/artifact_repair_bridge.rs`, `docs/06` note | `gircap verify`; bridge cases green against a captured bundle |
 | 10 | `docs(persistent): fold research into docs/01 and document the flag` (c6e8e763); `docs(persistent): fold the plan into docs/03 and retire the two separate follow-up docs` (8934ffac) | `README.md`, docs/01 §6, docs/03 §7 | doc review; real-install launch remains an operator step |
 
 Where a commit's tests need a fixture the earlier fixture commit did not
