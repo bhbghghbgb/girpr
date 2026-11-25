@@ -12,7 +12,6 @@ use crate::proto::{DescriptorRow, parse_base_revision, parse_descriptor, parse_d
 use crate::url::{build_dispatcher_url, query_version, validate_dispatcher_url};
 use crate::{DispatchError, Result};
 use girpr_model::Region;
-use rsa::PrivateKey;
 use serde_json::Value;
 
 /// Plain GET of a metadata or dispatcher URL. Implemented by the caller; tests
@@ -218,188 +217,6 @@ fn envelope_content(body: &[u8]) -> Result<String> {
         .ok_or_else(|| DispatchError::Proto("dispatcher envelope has no content string".into()))
 }
 
-/// The non-envelope inputs to [`decode_dispatch_response`].
-///
-/// The live provider reads all of them from the Collapse preset; a persistent
-/// record supplies its own key and context while the biz still comes from the
-/// CLI. They are values, not fetchers, which is what keeps the decoder pure.
-pub struct DispatchDecodeParams<'a> {
-    pub biz: Region,
-    /// `meta.latest` on the live path; `record.version` for a supplied record.
-    pub latest: &'a str,
-    /// Dispatcher host used by the strict channel assertion.
-    pub host: &'a str,
-    /// Prefix published in `DispatchInfo.channel_name`.
-    pub channel_prefix: &'a str,
-    /// Executable stem used in the three `Persistent/` mirror paths.
-    pub exe_stem: &'a str,
-    pub key: &'a PrivateKey,
-    pub block_bytes: usize,
-}
-
-/// Everything the envelope alone establishes, before the second GET.
-///
-/// A caller may rewrite the CDN URLs (the bridge swaps their authorities), but
-/// must compare its digest facts to these values *first*: a record alone can
-/// never invent a revision, a hash, a version or a codename.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DispatchDecoded {
-    pub game_version: String,
-    pub server_name: String,
-    pub codename: String,
-    pub res_revision: u64,
-    pub data_revision: u64,
-    pub silence_revision: u64,
-    pub res_hash: String,
-    pub data_hash: String,
-    pub silence_hash: String,
-    /// Trailing-slash-trimmed CDN bases from the protobuf.
-    pub repo_res_version_url: String,
-    pub repo_design_data_url: String,
-    pub client_game_res_url: String,
-    pub client_design_data_url: String,
-    pub client_silence_data_url: String,
-    pub base_revision_url: String,
-    pub channel_name: String,
-    pub exe_stem: String,
-    /// The `remoteName` of each descriptor, in `manifest_digests` order.
-    pub descriptor_remote_names: [String; 3],
-    pub manifest_digests: [ManifestDescriptor; 3],
-}
-
-/// Decrypt and decode one dispatcher envelope. Pure: no socket, no file, no
-/// clock and no exit-code policy — the shared tail of the live query and the
-/// record-driven offline path.
-pub fn decode_dispatch_response(
-    envelope: &[u8],
-    params: DispatchDecodeParams<'_>,
-) -> Result<DispatchDecoded> {
-    let ciphertext = decode_base64(&envelope_content(envelope)?)?;
-    let plaintext = crate::decrypt_pkcs1_blocks(params.key, &ciphertext, params.block_bytes)?;
-    let (response, _opaque) = parse_dispatch_protobuf(&plaintext)?;
-    let props = response
-        .properties
-        .ok_or_else(|| DispatchError::Proto("dispatcher response has no root tag 3".into()))?;
-    let res_ver = props.res_version_properties.as_ref().ok_or_else(|| {
-        DispatchError::Proto("dispatcher response has no properties tag 22".into())
-    })?;
-
-    check_minor_version(params.latest, &props.game_version)?;
-    if !res_ver.version.is_empty() {
-        check_minor_version(params.latest, &res_ver.version)?;
-    }
-    check_response_channel(params.biz, &props.codename, props.properties_2, params.host)?;
-
-    let repo_res_version_url = trimmed_url(&props.repo_res_version_url, "RepoResVersionURL")?;
-    let repo_design_data_url = trimmed_url(&props.repo_design_data_url, "RepoDesignDataURL")?;
-    if res_ver.res_hash.is_empty() || props.data_hash.is_empty() || props.silence_hash.is_empty() {
-        return Err(DispatchError::Proto("a revision hash is empty".into()));
-    }
-    let client_game_res_url = format!(
-        "{repo_res_version_url}/output_{}_{}/client",
-        res_ver.res_revision, res_ver.res_hash
-    );
-    let client_design_data_url = format!(
-        "{repo_design_data_url}/output_{}_{}/client/General",
-        props.data_revision, props.data_hash
-    );
-    let client_silence_data_url = format!(
-        "{repo_design_data_url}/output_{}_{}/client_silence/General",
-        props.silence_revision, props.silence_hash
-    );
-    let base_revision_url = format!("{client_game_res_url}/StandaloneWindows64/base_revision");
-
-    let res_row = parse_descriptor(&res_ver.res_descriptor)?;
-    let data_row = parse_descriptor(&props.data_descriptor)?;
-    let silence_row = parse_descriptor(&props.silence_descriptor)?;
-    let res_url = format!(
-        "{client_game_res_url}/StandaloneWindows64/{}",
-        res_row.remote_name
-    );
-    let data_url = format!(
-        "{client_design_data_url}/AssetBundles/{}",
-        data_row.remote_name
-    );
-    let silence_url = format!(
-        "{client_silence_data_url}/AssetBundles/{}",
-        silence_row.remote_name
-    );
-    let manifest_digests = [
-        descriptor(ManifestKind::Res, res_row.clone(), res_url, params.exe_stem),
-        descriptor(
-            ManifestKind::Data,
-            data_row.clone(),
-            data_url,
-            params.exe_stem,
-        ),
-        descriptor(
-            ManifestKind::Silence,
-            silence_row.clone(),
-            silence_url,
-            params.exe_stem,
-        ),
-    ];
-
-    Ok(DispatchDecoded {
-        game_version: props.game_version,
-        server_name: props.server_name,
-        codename: props.codename,
-        res_revision: res_ver.res_revision,
-        data_revision: props.data_revision,
-        silence_revision: props.silence_revision,
-        res_hash: res_ver.res_hash.clone(),
-        data_hash: props.data_hash.clone(),
-        silence_hash: props.silence_hash.clone(),
-        repo_res_version_url,
-        repo_design_data_url,
-        client_game_res_url,
-        client_design_data_url,
-        client_silence_data_url,
-        base_revision_url,
-        channel_name: params.channel_prefix.to_owned(),
-        exe_stem: params.exe_stem.to_owned(),
-        descriptor_remote_names: [
-            res_row.remote_name,
-            data_row.remote_name,
-            silence_row.remote_name,
-        ],
-        manifest_digests,
-    })
-}
-
-/// Finish a decoded response with a `"<revision> <hash>"` body. On the live
-/// path that is the second GET; a persistent record carries the same bytes in
-/// `decoded.base_revision`. Pure.
-pub fn dispatch_info_from_decoded(
-    decoded: DispatchDecoded,
-    base_revision: &str,
-) -> Result<DispatchInfo> {
-    let (audio_revision, audio_hash) = parse_base_revision(base_revision)?;
-    let client_audio_assets_url = format!(
-        "{}/output_{audio_revision}_{audio_hash}/client",
-        decoded.repo_res_version_url
-    );
-    Ok(DispatchInfo {
-        game_version: decoded.game_version,
-        channel_name: decoded.channel_name,
-        server_name: decoded.server_name,
-        codename: decoded.codename,
-        res_revision: decoded.res_revision,
-        data_revision: decoded.data_revision,
-        silence_revision: decoded.silence_revision,
-        audio_revision,
-        res_hash: decoded.res_hash,
-        data_hash: decoded.data_hash,
-        silence_hash: decoded.silence_hash,
-        audio_hash,
-        client_game_res_url: decoded.client_game_res_url,
-        client_design_data_url: decoded.client_design_data_url,
-        client_silence_data_url: decoded.client_silence_data_url,
-        client_audio_assets_url,
-        manifest_digests: decoded.manifest_digests,
-    })
-}
-
 /// Full dispatcher query: unwrap keys, build the URL, decrypt, decode, check
 /// version/channel, derive the four CDN prefixes and the three descriptors.
 pub fn query_dispatch<F, B>(
@@ -434,23 +251,88 @@ where
     let body = fetcher
         .get(&url)
         .map_err(|e| DispatchError::Transport(format!("dispatcher query: {e}")))?;
-    let decoded = decode_dispatch_response(
-        &body,
-        DispatchDecodeParams {
-            biz: params.biz,
-            latest: params.latest,
-            host: keys.host,
-            channel_prefix: keys.channel_prefix,
-            exe_stem: &keys.exe_stem,
-            key: &keys.key,
-            block_bytes: keys.block_bytes,
-        },
-    )?;
-    let revision_body = base_revision.get(&decoded.base_revision_url).map_err(|e| {
-        DispatchError::Transport(format!(
-            "base_revision GET {}: {e}",
-            decoded.base_revision_url
-        ))
+    let ciphertext = decode_base64(&envelope_content(&body)?)?;
+    let plaintext = crate::decrypt_pkcs1_blocks(&keys.key, &ciphertext, keys.block_bytes)?;
+    let (response, _opaque) = parse_dispatch_protobuf(&plaintext)?;
+    let props = response
+        .properties
+        .ok_or_else(|| DispatchError::Proto("dispatcher response has no root tag 3".into()))?;
+    let res_ver = props.res_version_properties.as_ref().ok_or_else(|| {
+        DispatchError::Proto("dispatcher response has no properties tag 22".into())
     })?;
-    dispatch_info_from_decoded(decoded, &revision_body)
+
+    check_minor_version(params.latest, &props.game_version)?;
+    if !res_ver.version.is_empty() {
+        check_minor_version(params.latest, &res_ver.version)?;
+    }
+    check_response_channel(params.biz, &props.codename, props.properties_2, keys.host)?;
+
+    let res_base = trimmed_url(&props.repo_res_version_url, "RepoResVersionURL")?;
+    let data_base = trimmed_url(&props.repo_design_data_url, "RepoDesignDataURL")?;
+    if res_ver.res_hash.is_empty() || props.data_hash.is_empty() || props.silence_hash.is_empty() {
+        return Err(DispatchError::Proto("a revision hash is empty".into()));
+    }
+    let client_game_res_url = format!(
+        "{res_base}/output_{}_{}/client",
+        res_ver.res_revision, res_ver.res_hash
+    );
+    let client_design_data_url = format!(
+        "{data_base}/output_{}_{}/client/General",
+        props.data_revision, props.data_hash
+    );
+    let client_silence_data_url = format!(
+        "{data_base}/output_{}_{}/client_silence/General",
+        props.silence_revision, props.silence_hash
+    );
+
+    let base_revision_url = format!("{client_game_res_url}/StandaloneWindows64/base_revision");
+    let revision_body = base_revision.get(&base_revision_url).map_err(|e| {
+        DispatchError::Transport(format!("base_revision GET {base_revision_url}: {e}"))
+    })?;
+    let (audio_revision, audio_hash) = parse_base_revision(&revision_body)?;
+    let client_audio_assets_url = format!("{res_base}/output_{audio_revision}_{audio_hash}/client");
+
+    let res_row = parse_descriptor(&res_ver.res_descriptor)?;
+    let data_row = parse_descriptor(&props.data_descriptor)?;
+    let silence_row = parse_descriptor(&props.silence_descriptor)?;
+    let res_prefix = format!("{client_game_res_url}/StandaloneWindows64");
+    let res_url = format!("{res_prefix}/{}", res_row.remote_name);
+    let data_url = format!(
+        "{client_design_data_url}/AssetBundles/{}",
+        data_row.remote_name
+    );
+    let silence_url = format!(
+        "{client_silence_data_url}/AssetBundles/{}",
+        silence_row.remote_name
+    );
+    let manifest_digests = [
+        descriptor(ManifestKind::Res, res_row, res_url, &keys.exe_stem),
+        descriptor(ManifestKind::Data, data_row, data_url, &keys.exe_stem),
+        descriptor(
+            ManifestKind::Silence,
+            silence_row,
+            silence_url,
+            &keys.exe_stem,
+        ),
+    ];
+
+    Ok(DispatchInfo {
+        game_version: props.game_version,
+        channel_name: keys.channel_prefix.to_owned(),
+        server_name: props.server_name,
+        codename: props.codename,
+        res_revision: res_ver.res_revision,
+        data_revision: props.data_revision,
+        silence_revision: props.silence_revision,
+        audio_revision,
+        res_hash: res_ver.res_hash.clone(),
+        data_hash: props.data_hash.clone(),
+        silence_hash: props.silence_hash.clone(),
+        audio_hash,
+        client_game_res_url,
+        client_design_data_url,
+        client_silence_data_url,
+        client_audio_assets_url,
+        manifest_digests,
+    })
 }

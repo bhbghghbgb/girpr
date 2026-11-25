@@ -35,24 +35,19 @@ mod tests;
 
 pub use crypto::{decode_base64, decrypt_pkcs1_blocks};
 pub use dispatch::{
-    BaseRevisionFetcher, BytesFetcher, DispatchDecodeParams, DispatchDecoded, DispatchInfo,
-    DispatchQuery, ManifestDescriptor, ManifestKind, check_minor_version, check_response_channel,
-    decode_dispatch_response, dispatch_info_from_decoded, minor_version, query_dispatch,
+    BaseRevisionFetcher, BytesFetcher, DispatchInfo, DispatchQuery, ManifestDescriptor,
+    ManifestKind, check_minor_version, check_response_channel, minor_version, query_dispatch,
     query_dispatch_with_master_pin,
 };
 pub use metadata::{
     DispatcherKeys, MAGIC_SIGNATURE, MASTER_KEY_BLOB_LEN, MASTER_KEY_BLOB_SHA256, METADATA_BASE,
     config_file_from_stamp, load_dispatch_keys, load_dispatch_keys_with_pin, master_key_from_json,
-    pinned_seed, private_key_block_bytes, private_key_fingerprint, private_key_from_bytes,
-    rsa_key_from_xml, unwrap_magic_blob, unwrap_metadata_field,
+    pinned_seed, rsa_key_from_xml, unwrap_magic_blob, unwrap_metadata_field,
 };
-// Named so callers of the new pure APIs can hold a key without taking an
-// explicit dependency on `rsa`.
 pub use proto::{
     DescriptorRow, GatewayProperties, OpaqueFields, RepoResVersionProperties, WireValue,
     parse_base_revision, parse_descriptor, parse_dispatch_protobuf, walk_fields,
 };
-pub use rsa::PrivateKey;
 
 pub use url::{
     DEFAULT_URL_TEMPLATES, account_type, build_dispatcher_url, channel_id, channel_prefix,

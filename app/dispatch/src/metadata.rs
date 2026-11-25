@@ -16,10 +16,7 @@ use crate::{DispatchError, Result};
 use brotli::Decompressor;
 use girpr_digest::sha256_hex;
 use girpr_model::Region;
-use rsa::{
-    BoxedUint, PrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs8::EncodePublicKey,
-    traits::PublicKeyParts,
-};
+use rsa::{BoxedUint, PrivateKey, pkcs1::DecodeRsaPrivateKey};
 use serde_json::Value;
 use std::io::Read;
 
@@ -294,46 +291,6 @@ pub fn rsa_key_from_xml(xml: &str) -> Result<PrivateKey> {
     )
     .map_err(|e| DispatchError::Metadata(format!("invalid dispatcher key: {e}")))?;
     Ok(key)
-}
-
-/// Parse a dispatcher private key supplied out of band.
-///
-/// Two spellings are accepted: a PKCS#1 `BEGIN RSA PRIVATE KEY` PEM, or a .NET
-/// `RSAKeyValue` XML document. The XML form uses exactly the same
-/// five-component `(n, e, d, p, q)` rule as [`rsa_key_from_xml`] — never a
-/// generic seven-component CRT parser, whose `InverseQ` spelling differs
-/// between .NET and other libraries. Whatever the input, no bytes of the key
-/// are logged by this crate.
-pub fn private_key_from_bytes(bytes: &[u8]) -> Result<PrivateKey> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| DispatchError::Metadata(format!("dispatch key is not UTF-8: {e}")))?;
-    let trimmed = text.trim();
-    if trimmed.starts_with("-----BEGIN RSA PRIVATE KEY-----") {
-        return PrivateKey::from_pkcs1_pem(trimmed)
-            .map_err(|e| DispatchError::Metadata(format!("bad PKCS#1 dispatch key: {e}")));
-    }
-    if trimmed.starts_with('<') {
-        return rsa_key_from_xml(trimmed);
-    }
-    Err(DispatchError::Metadata(
-        "dispatch key is neither PKCS#1 PEM nor RSAKeyValue XML".into(),
-    ))
-}
-
-/// RSA block length of a parsed key, in bytes. A dispatcher key is RSA-2048,
-/// hence 256; the caller owns the "plausible key" policy.
-pub fn private_key_block_bytes(key: &PrivateKey) -> usize {
-    key.size()
-}
-
-/// SHA-256 of the key's public DER, hex — the `key_fingerprint` recorded in a
-/// persistent dispatch record. No private bytes are involved.
-pub fn private_key_fingerprint(key: &PrivateKey) -> Result<String> {
-    let der = key
-        .to_public_key()
-        .to_public_key_der()
-        .map_err(|e| DispatchError::Crypto(format!("dispatch key public DER: {e}")))?;
-    Ok(sha256_hex(der.as_bytes()))
 }
 
 /// Versioned seed table (non-user-facing fallback / pin). Both keys recorded

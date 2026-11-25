@@ -5,15 +5,11 @@
 //! pasted as DER; no production key or ciphertext is in this crate.
 
 use crate::crypto::decode_base64;
-use crate::dispatch::{
-    BytesFetcher, DispatchDecodeParams, DispatchQuery, check_minor_version, check_response_channel,
-    decode_dispatch_response, dispatch_info_from_decoded,
-};
+use crate::dispatch::{BytesFetcher, DispatchQuery, check_minor_version, check_response_channel};
 use crate::metadata::{
     MAGIC_SIGNATURE, MASTER_KEY_BLOB_LEN, MASTER_KEY_BLOB_SHA256, config_file_from_stamp,
     load_dispatch_keys, load_dispatch_keys_with_pin, master_key_from_json, pinned_seed,
-    private_key_block_bytes, private_key_fingerprint, private_key_from_bytes, rsa_key_from_xml,
-    unwrap_magic_blob,
+    rsa_key_from_xml, unwrap_magic_blob,
 };
 use crate::proto::{WireValue, parse_descriptor, parse_dispatch_protobuf, walk_fields};
 use crate::url::{
@@ -456,112 +452,6 @@ fn committed_synthetic_dispatch_response_decrypts() {
     let props_fields = walk_fields(props_bytes).expect("walk properties");
     assert!(props_fields.iter().any(|(tag, _)| *tag == 37));
     assert!(crate::decrypt_pkcs1_blocks(&fixture_key(), &ciphertext[..255], 256).is_err());
-}
-
-/// The record-driven path needs one key parser for both out-of-band spellings,
-/// and the fingerprint it publishes must be the same for the same RSA key.
-#[test]
-fn private_keys_load_from_pem_and_xml_and_report_the_same_fingerprint() {
-    let pem = private_key_from_bytes(TEST_KEY_PEM.as_bytes()).expect("PEM key");
-    let xml = private_key_from_bytes(TEST_KEY_XML.as_bytes()).expect("XML key");
-    assert_eq!(private_key_block_bytes(&pem), 256);
-    assert_eq!(private_key_block_bytes(&xml), 256);
-    let doc: Value = serde_json::from_str(FIXTURE_DOC).expect("fixtures.json");
-    let expected = doc["test_key"]["sha256_public_der"]
-        .as_str()
-        .expect("pinned fingerprint");
-    assert_eq!(
-        private_key_fingerprint(&pem).expect("PEM fingerprint"),
-        expected
-    );
-    assert_eq!(
-        private_key_fingerprint(&xml).expect("XML fingerprint"),
-        expected
-    );
-    assert!(private_key_from_bytes(b"").is_err());
-    assert!(private_key_from_bytes(b"not a key").is_err());
-    let tampered =
-        TEST_KEY_XML.replacen("<Exponent>AQAB</Exponent>", "<Exponent>AQAD</Exponent>", 1);
-    assert!(private_key_from_bytes(tampered.as_bytes()).is_err());
-}
-
-/// The shared decoder tail is pure, and the committed envelope's digest facts
-/// survive it byte-for-byte. This is the same API the record-driven path uses.
-#[test]
-fn pure_decode_of_the_committed_envelope_matches_the_fixture_facts() {
-    fn params<'a>(key: &'a PrivateKey, latest: &'a str) -> DispatchDecodeParams<'a> {
-        DispatchDecodeParams {
-            biz: Region::Hk4eGlobal,
-            latest,
-            host: "osusadispatch",
-            channel_prefix: "OSRELWin",
-            exe_stem: "GenshinImpact",
-            key,
-            block_bytes: 256,
-        }
-    }
-
-    let key = fixture_key();
-    let decoded = decode_dispatch_response(DISPATCH_RESPONSE.as_bytes(), params(&key, "9.9.0"))
-        .expect("committed envelope");
-    let doc: Value = serde_json::from_str(FIXTURE_DOC).expect("fixtures.json");
-    assert_eq!(decoded.game_version, "9.9_live");
-    assert_eq!(decoded.codename, "hk4e_global");
-    assert_eq!(decoded.channel_name, "OSRELWin");
-    assert_eq!(decoded.exe_stem, "GenshinImpact");
-    assert_eq!(
-        (decoded.res_revision, decoded.res_hash.as_str()),
-        (9_900_000_1, "aabbccddeeff")
-    );
-    assert_eq!(
-        (decoded.data_revision, decoded.data_hash.as_str()),
-        (9_900_000_2, "112233445566")
-    );
-    assert_eq!(
-        (decoded.silence_revision, decoded.silence_hash.as_str()),
-        (9_900_000_3, "ffeeddccbbaa")
-    );
-    assert_eq!(
-        decoded.descriptor_remote_names,
-        [
-            "res_versions_external",
-            "data_versions",
-            "silence_data_versions"
-        ]
-    );
-    for (index, name) in ["res", "data", "silence"].iter().enumerate() {
-        assert_eq!(
-            decoded.manifest_digests[index].expected_md5,
-            doc["manifests"][name]["md5"].as_str().unwrap()
-        );
-        assert_eq!(
-            decoded.manifest_digests[index].expected_size,
-            doc["manifests"][name]["bytes"].as_u64().unwrap()
-        );
-    }
-    assert_eq!(
-        decoded.base_revision_url,
-        format!(
-            "{}/StandaloneWindows64/base_revision",
-            decoded.client_game_res_url
-        )
-    );
-
-    let info = dispatch_info_from_decoded(decoded, "99000000 001122334455\n").expect("info");
-    assert_eq!(
-        (info.audio_revision, info.audio_hash.as_str()),
-        (99_000_000, "001122334455")
-    );
-    assert_eq!(info.game_version, "9.9_live");
-    assert_eq!(info.channel_name, "OSRELWin");
-    assert_eq!(
-        info.manifest_digests[0].mirror_rel,
-        "GenshinImpact_Data/Persistent/res_versions_persist"
-    );
-
-    let tampered = DISPATCH_RESPONSE.replacen("tjF", "tjG", 1);
-    assert!(decode_dispatch_response(tampered.as_bytes(), params(&key, "9.9.0")).is_err());
-    assert!(decode_dispatch_response(DISPATCH_RESPONSE.as_bytes(), params(&key, "8.8.0")).is_err());
 }
 
 #[test]

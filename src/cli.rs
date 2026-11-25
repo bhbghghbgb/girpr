@@ -9,14 +9,13 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::Parser;
 use girpr_audio_language::{CaseFold, normalize_audio_token};
 use girpr_log::Level;
 
 use crate::Biz;
 use crate::config::RunCtx;
-use crate::repair::persistent::{validate_dispatch_key_file, validate_dispatch_record_file};
 use crate::repair::scope::Limits;
 use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
@@ -190,22 +189,6 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub with_persistent: bool,
 
-    /// Supply the dispatcher private key from a file instead of fetching the
-    /// Collapse master key. PKCS#1 PEM or .NET `RSAKeyValue` XML (RSA-2048).
-    /// Must be paired with `--dispatch-record` and require `--with-persistent`.
-    /// The file path and its public-key fingerprint are logged; key bytes never
-    /// are, and the key is never placed on the command line.
-    #[arg(long = "dispatch-key", value_name = "FILE")]
-    pub dispatch_key_path: Option<PathBuf>,
-
-    /// Supply a `dispatch/record.json` (and its byte-exact envelope beside it)
-    /// instead of querying the dispatcher. Must be paired with `--dispatch-key`
-    /// and require `--with-persistent`. The bridge rewrites the recorded CDN
-    /// URL authorities in a scratch copy; digest facts are re-verified against
-    /// the decrypted envelope, not trusted from this file.
-    #[arg(long = "dispatch-record", value_name = "FILE")]
-    pub dispatch_record_path: Option<PathBuf>,
-
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -341,27 +324,6 @@ impl Args {
         let (audio, _saw_none) = parse_audio_selection(&self.audio)?;
         // A bad glob is a usage error (exit 1) and says which one it was.
         let path_scope = PathScope::new(&self.include, &self.exclude)?;
-        // The two out-of-band inputs are one opt-in switch: no silent fallback
-        // to the live provider when only one of them is supplied. Everything
-        // checkable here is a usage error; a bad *fact* is a metadata failure
-        // at query time and carries the pinned prefix instead.
-        match (&self.dispatch_key_path, &self.dispatch_record_path) {
-            (None, None) => {}
-            (Some(_), None) | (None, Some(_)) => {
-                bail!("--dispatch-key and --dispatch-record must be given together")
-            }
-            (Some(key_path), Some(record_path)) => {
-                if !self.with_persistent {
-                    bail!("--dispatch-key and --dispatch-record require --with-persistent");
-                }
-                let key_bytes = std::fs::read(key_path)
-                    .with_context(|| format!("read --dispatch-key {}", key_path.display()))?;
-                validate_dispatch_key_file(&key_bytes)?;
-                let record_bytes = std::fs::read(record_path)
-                    .with_context(|| format!("read --dispatch-record {}", record_path.display()))?;
-                validate_dispatch_record_file(&record_bytes)?;
-            }
-        }
         Ok(RunCtx {
             game_dir: self.game_path,
             biz: self.biz,
@@ -388,8 +350,6 @@ impl Args {
             jobs,
             with_persistent: self.with_persistent,
             persistent_dispatch_override: None,
-            dispatch_key_path: self.dispatch_key_path,
-            dispatch_record_path: self.dispatch_record_path,
             check_only: self.check_only,
             scan: self.scan,
             purge_only: self.purge_only,

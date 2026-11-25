@@ -141,8 +141,6 @@ pub fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
 const VALUE_FLAGS: &[&str] = &[
     "--audio",
     "--biz",
-    "--dispatch-key",
-    "--dispatch-record",
     "--exclude",
     "--game-path",
     "--hyp-base",
