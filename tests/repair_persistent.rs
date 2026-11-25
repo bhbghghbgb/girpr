@@ -21,16 +21,11 @@ use girpr::test_support::{
 };
 use girpr::{Biz, RunCtx, RunExit, RunFailure, Summary};
 
-const RES: &[u8] =
-    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/res.ndjson");
-const DATA: &[u8] =
-    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/data.ndjson");
-const SILENCE: &[u8] =
-    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/silence.ndjson");
-const HOTFIX_A: &[u8] =
-    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/hotfix_a.blk");
-const HOTFIX_B: &[u8] =
-    include_bytes!("../tools/persistent-sophon-research/samples/fixtures/hotfix_b.pck");
+const RES: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/res.ndjson");
+const DATA: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/data.ndjson");
+const SILENCE: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/silence.ndjson");
+const HOTFIX_A: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/hotfix_a.blk");
+const HOTFIX_B: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/hotfix_b.pck");
 
 /// Serve the three manifests in descriptor order. `ScriptedServer` repeats the
 /// last reply, so a retry of the last body still has the advertised digest.

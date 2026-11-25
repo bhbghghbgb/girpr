@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn fixture_rows_keep_the_server_keys_out_of_the_value_types() {
         let bytes =
-            include_bytes!("../../../tools/persistent-sophon-research/samples/fixtures/res.ndjson");
+            include_bytes!("../../../tests/fixtures/persistent_inputs/samples/fixtures/res.ndjson");
         let rows = parse_rows(bytes).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows[0].hash.is_some());

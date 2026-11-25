@@ -30,34 +30,34 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Write;
 
-const SAMPLES: &str = "../../../tools/persistent-sophon-research/samples/";
-const FIXTURES: &str = "../../../tools/persistent-sophon-research/samples/fixtures/";
+const SAMPLES: &str = "../../../tests/fixtures/persistent_inputs/samples/";
+const FIXTURES: &str = "../../../tests/fixtures/persistent_inputs/samples/fixtures/";
 
 const METADATA_SUMMARY: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/metadata_summary.json");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/metadata_summary.json");
 const GLOBAL_SUMMARY: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/dispatch_summary.json");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/dispatch_summary.json");
 const CN_SUMMARY: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/hk4e_cn.dispatch_summary.json");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/hk4e_cn.dispatch_summary.json");
 const BILI_SUMMARY: &str = include_str!(
-    "../../../tools/persistent-sophon-research/samples/hk4e_bilibili.dispatch_summary.json"
+    "../../../tests/fixtures/persistent_inputs/samples/hk4e_bilibili.dispatch_summary.json"
 );
 const FIELD_DUMP: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/dispatch_fields.txt");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/dispatch_fields.txt");
 const FIXTURE_DOC: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/fixtures/fixtures.json");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/fixtures/fixtures.json");
 const TEST_KEY_PEM: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/fixtures/test_key.pem");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/fixtures/test_key.pem");
 const TEST_KEY_XML: &str = include_str!("test_key.xml");
 const DISPATCH_RESPONSE: &str = include_str!(
-    "../../../tools/persistent-sophon-research/samples/fixtures/dispatch_response.json"
+    "../../../tests/fixtures/persistent_inputs/samples/fixtures/dispatch_response.json"
 );
 const RES_NDJSON: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/fixtures/res.ndjson");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/fixtures/res.ndjson");
 const DATA_NDJSON: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/fixtures/data.ndjson");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/fixtures/data.ndjson");
 const SILENCE_NDJSON: &str =
-    include_str!("../../../tools/persistent-sophon-research/samples/fixtures/silence.ndjson");
+    include_str!("../../../tests/fixtures/persistent_inputs/samples/fixtures/silence.ndjson");
 
 // Synthetic RSA-1024 PKCS#1 DER master key (test only), generated once. It is
 // not in the release repo and is never used outside these tests.

@@ -451,7 +451,7 @@ mod tests {
     use girpr_tempdir::TempDir;
 
     const HOTFIX_A: &[u8] =
-        include_bytes!("../../tools/persistent-sophon-research/samples/fixtures/hotfix_a.blk");
+        include_bytes!("../../tests/fixtures/persistent_inputs/samples/fixtures/hotfix_a.blk");
 
     fn asset(server: &ScriptedServer) -> PersistentAsset {
         let base = server.base();

@@ -30,8 +30,9 @@ pub const MAGIC_SIGNATURE: i64 = 7310310183885631299;
 const HEADER_LEN: usize = 32;
 
 /// Pin for the *raw* `config_master.json` `Key` blob (the decoded base64
-/// bytes). From `samples/metadata_summary.json`; an upstream change must be
-/// reviewed rather than silently accepted as a new key.
+/// bytes). From `tests/fixtures/persistent_inputs/samples/metadata_summary.json`;
+/// an upstream change must be reviewed rather than silently accepted as a new
+/// key.
 pub const MASTER_KEY_BLOB_SHA256: &str =
     "d69fe7224adfb8afe1bc8b61fcc2dc1fe5e5f94628c60d26cbb07537753bde09";
 pub const MASTER_KEY_BLOB_LEN: usize = 642;

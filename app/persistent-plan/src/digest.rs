@@ -149,7 +149,7 @@ mod tests {
     use super::*;
 
     const BLOB: &[u8] =
-        include_bytes!("../../../tools/persistent-sophon-research/samples/fixtures/hotfix_a.blk");
+        include_bytes!("../../../tests/fixtures/persistent_inputs/samples/fixtures/hotfix_a.blk");
 
     fn row(hash: Option<u64>, md5: &str, size: u64) -> PersistentRow {
         PersistentRow {

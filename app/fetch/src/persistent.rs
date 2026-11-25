@@ -577,11 +577,11 @@ mod tests {
     use girpr_tempdir::TempDir;
 
     const RES: &[u8] =
-        include_bytes!("../../../tools/persistent-sophon-research/samples/fixtures/res.ndjson");
+        include_bytes!("../../../tests/fixtures/persistent_inputs/samples/fixtures/res.ndjson");
     const DATA: &[u8] =
-        include_bytes!("../../../tools/persistent-sophon-research/samples/fixtures/data.ndjson");
+        include_bytes!("../../../tests/fixtures/persistent_inputs/samples/fixtures/data.ndjson");
     const HOTFIX_A: &[u8] =
-        include_bytes!("../../../tools/persistent-sophon-research/samples/fixtures/hotfix_a.blk");
+        include_bytes!("../../../tests/fixtures/persistent_inputs/samples/fixtures/hotfix_a.blk");
 
     fn client() -> reqwest::Client {
         reqwest::Client::builder().build().unwrap()
