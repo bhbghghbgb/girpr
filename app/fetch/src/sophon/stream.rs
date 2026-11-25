@@ -27,36 +27,87 @@ pub async fn fetch_manifest(
     backoff: &BackoffPolicy,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
+    let id = meta.manifest.id.as_str();
+    fetch_verified_blob(
+        client,
+        backoff,
+        meta.manifest_download.url_prefix.as_str(),
+        id,
+        meta.manifest.checksum.as_str(),
+        meta.manifest.uncompressed_size,
+        |raw, attempt| {
+            let m = SophonChunkManifest::decode(raw).context("protobuf decode manifest")?;
+            let (files, chunks): (usize, usize) = (
+                m.chuncks.len(),
+                m.chuncks.iter().map(|f| f.chunks.len()).sum(),
+            );
+            tracing::debug!(
+                manifest = %id,
+                field = %meta.matching_field,
+                files,
+                chunks,
+                attempt,
+                "manifest parsed"
+            );
+            Ok(m.chuncks)
+        },
+    )
+    .await
+}
+
+/// Fetch one zstd manifest blob: join the id under the prefix, stream and
+/// decode it under the shared ceilings, verify the **decompressed** MD5, then
+/// parse it with the caller's decoder.
+///
+/// Both manifest families go through here so the URL policy, the size hint,
+/// the retry classification and the case-insensitive checksum match cannot
+/// drift. `parse` runs inside the attempt, so a bad protobuf is a retry just as
+/// it is on the chunk-manifest path.
+pub(crate) async fn fetch_verified_blob<T, F>(
+    client: &reqwest::Client,
+    backoff: &BackoffPolicy,
+    url_prefix: &str,
+    id: &str,
+    checksum: &str,
+    reported_size: i64,
+    parse: F,
+) -> Result<T>
+where
+    F: Fn(&[u8], u32) -> Result<T>,
+{
     // Resolve the prefix once, at the manifest boundary. The API's prefixes end
     // in the build id, not in `/`, and `Url::join` replaces a base's last path
     // segment; a trailing slash makes it append the blob below the prefix.
     // `join_blob` refuses ids that could redirect the join to another origin
     // or path and asserts the result stays under the prefix.
-    let base = url_base(&meta.manifest_download.url_prefix)?;
-    let url = join_blob(&base, &meta.manifest.id)?;
+    let base = url_base(url_prefix)?;
+    let url = join_blob(&base, id)?;
     // The reported size is a hint, not a promise, and is clamped to a modest
     // start before it can reserve anything. `Vec`'s `Write` impl grows the
     // buffer geometrically; `MAX_MANIFEST_BYTES` is the hard ceiling.
-    let hint = manifest_size_hint(meta.manifest.uncompressed_size);
+    let hint = manifest_size_hint(reported_size);
     let decoded: Vec<u8> = Vec::with_capacity(hint);
     let url = url.as_str();
+    let parse = &parse;
     retry_state(
         ATTEMPTS,
         backoff,
         decoded,
         |mut decoded, attempt| async move {
-            match try_fetch_manifest(client, url, meta, attempt, &mut decoded).await {
+            match try_fetch_verified_blob(client, url, id, checksum, attempt, &mut decoded, parse)
+                .await
+            {
                 Retry::Done(v) => RetryState::Done(v),
                 Retry::Fatal(e) => {
                     tracing::debug!(
-                        manifest = %meta.manifest.id,
+                        blob = %id,
                         attempt,
                         "manifest fetch failed, not retryable: {e:#}"
                     );
                     RetryState::Fatal(e)
                 }
                 Retry::Retry(e) => {
-                    tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
+                    tracing::debug!(blob = %id, attempt, "manifest fetch failed: {e:#}");
                     RetryState::Retry(decoded, e)
                 }
             }
@@ -94,22 +145,29 @@ const MAX_MANIFEST_COMPRESSED: u64 = 64 << 20;
 ///
 /// Clamped to [`MANIFEST_INITIAL_CAPACITY`] and never negative: a wrong number
 /// costs a reallocation, not a crash, and the real size is reached by growth.
-fn manifest_size_hint(reported: i64) -> usize {
+pub(crate) fn manifest_size_hint(reported: i64) -> usize {
     reported.clamp(0, MANIFEST_INITIAL_CAPACITY as i64) as usize
 }
 
-async fn try_fetch_manifest(
+/// One attempt at a verified manifest fetch. See [`fetch_verified_blob`] for
+/// the shared policy; the only family-specific part is `parse`.
+async fn try_fetch_verified_blob<T, F>(
     client: &reqwest::Client,
     url: &str,
-    meta: &ChunkManifestMeta,
+    id: &str,
+    checksum: &str,
     attempt: u32,
     decoded: &mut Vec<u8>,
-) -> Retry<Vec<SophonChunkFile>> {
-    tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
+    parse: F,
+) -> Retry<T>
+where
+    F: Fn(&[u8], u32) -> Result<T>,
+{
+    tracing::debug!(blob = %id, url = %url, "GET manifest");
     let resp = match client.get(url).send().await {
         Ok(r) => r,
         Err(e) => {
-            return Retry::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
+            return Retry::Retry(anyhow::anyhow!("GET manifest {}: {}", id, e));
         }
     };
     let status = resp.status();
@@ -144,28 +202,22 @@ async fn try_fetch_manifest(
             };
         }
     };
-    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = digest.compressed_bytes, "manifest downloaded");
-    tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = digest.bytes, expect_md5 = %meta.manifest.checksum, actual_md5 = %digest.md5, "manifest checksum check");
+    tracing::debug!(blob = %id, compressed_bytes = digest.compressed_bytes, "manifest downloaded");
+    tracing::debug!(blob = %id, decompressed_bytes = digest.bytes, expect_md5 = %checksum, actual_md5 = %digest.md5, "manifest checksum check");
     // A checksum mismatch is worth another try: the origin may have served a
-    // torn body, and the next attempt is a fresh one.
-    if !digest.md5.matches_hex(&meta.manifest.checksum) {
+    // torn body, and the next attempt is a fresh one. `matches_hex` is
+    // case-insensitive, as upstream's comparison is.
+    if !digest.md5.matches_hex(checksum) {
         return Retry::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
-            meta.manifest.id,
-            meta.manifest.checksum,
+            id,
+            checksum,
             digest.md5
         ));
     }
-    match SophonChunkManifest::decode(decoded.as_slice()) {
-        Ok(m) => {
-            let (files, chunks): (usize, usize) = (
-                m.chuncks.len(),
-                m.chuncks.iter().map(|f| f.chunks.len()).sum(),
-            );
-            tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, attempt, "manifest parsed");
-            Retry::Done(m.chuncks)
-        }
-        Err(e) => Retry::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
+    match parse(decoded.as_slice(), attempt) {
+        Ok(v) => Retry::Done(v),
+        Err(e) => Retry::Retry(e),
     }
 }
 
@@ -625,7 +677,7 @@ fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Retry<T> {
 /// id straight onto them would replace that last segment. Give the base a
 /// trailing slash once, here, so every `base.join(id)` appends the blob below
 /// the prefix — the same URL the old `{prefix}/{id}` join produced.
-fn url_base(prefix: &str) -> Result<reqwest::Url> {
+pub(crate) fn url_base(prefix: &str) -> Result<reqwest::Url> {
     let mut base =
         reqwest::Url::parse(prefix).with_context(|| format!("parse blob url prefix {prefix:?}"))?;
     if !base.path().ends_with('/') {
@@ -665,7 +717,7 @@ fn validate_blob_id(id: &str) -> Result<()> {
 ///
 /// The shape check rejects the obvious redirects; the two assertions are the
 /// backstop for anything `Url::join` normalises differently than expected.
-fn join_blob(base: &reqwest::Url, id: &str) -> Result<reqwest::Url> {
+pub(crate) fn join_blob(base: &reqwest::Url, id: &str) -> Result<reqwest::Url> {
     validate_blob_id(id)?;
     let url = base
         .join(id)

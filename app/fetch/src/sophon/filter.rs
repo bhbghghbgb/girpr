@@ -8,37 +8,87 @@
 //! Audio fields look like `zh-cn` (len 5 with '-') or `mini-zh-cn` (len 10 with '-').
 use std::collections::HashSet;
 
-use crate::hyp::{ChunkBuild, ChunkManifestMeta};
+use crate::hyp::{ChunkBuild, ChunkManifestMeta, PatchBuild, PatchManifestMeta};
 
-/// Filter manifests: drop res_category ignores + non-selected audio fields (Starward parity).
-pub fn select_manifests<'a>(
-    build: &'a ChunkBuild,
+/// The shared keep predicate, before selected audio is re-added.
+///
+/// Both manifest families carry the same two ignore keys (`matching_field` and
+/// `category_id`) and the same audio heuristic. Keeping the decision here is
+/// what stops the chunk and patch filters from drifting: Starward applies the
+/// same `GetAvaliable…Manifests` rule to both, including the audio re-add loop
+/// that deliberately bypasses the ignore set.
+fn keep_manifest(field: &str, category_id: &str, ignore: &HashSet<String>) -> bool {
+    if ignore.contains(field) || ignore.contains(category_id) {
+        return false;
+    }
+    // audio/mini -> re-add only if selected
+    !((field.len() == 5 || field.len() == 10) && field.contains('-'))
+}
+
+/// Run the one selection rule over either manifest family.
+///
+/// The two DTOs share no trait, so `key` projects the two fields the rule reads;
+/// the pass that re-adds selected audio is the same in both cases too.
+fn select_by<'a, T>(
+    manifests: &'a [T],
+    key: impl Fn(&'a T) -> (&'a str, &'a str),
     audio_langs: &HashSet<String>,
     ignore: &HashSet<String>,
-) -> Vec<&'a ChunkManifestMeta> {
-    let mut out: Vec<&ChunkManifestMeta> = Vec::new();
-    for m in &build.manifests {
-        if ignore.contains(&m.matching_field) || ignore.contains(&m.category_id) {
-            continue;
+) -> Vec<&'a T> {
+    let mut out: Vec<&T> = Vec::new();
+    for m in manifests {
+        let (field, category_id) = key(m);
+        if keep_manifest(field, category_id, ignore) {
+            out.push(m);
         }
-        let f = m.matching_field.as_str();
-        if (f.len() == 5 || f.len() == 10) && f.contains('-') {
-            continue; // audio/mini -> re-add only if selected
-        }
-        out.push(m);
     }
-    for m in &build.manifests {
-        if audio_langs.contains(&m.matching_field) {
+    for m in manifests {
+        let (field, _) = key(m);
+        if audio_langs.contains(field) {
             out.push(m);
         }
     }
     out
 }
 
+/// Filter chunk manifests: drop res_category ignores + non-selected audio fields (Starward parity).
+pub fn select_manifests<'a>(
+    build: &'a ChunkBuild,
+    audio_langs: &HashSet<String>,
+    ignore: &HashSet<String>,
+) -> Vec<&'a ChunkManifestMeta> {
+    select_by(
+        &build.manifests,
+        |m| (m.matching_field.as_str(), m.category_id.as_str()),
+        audio_langs,
+        ignore,
+    )
+}
+
+/// Filter patch manifests with exactly the rule [`select_manifests`] uses.
+///
+/// NOTE(starward-parity): Starward's `GetAvaliableGameSophonPatchManifests` is
+/// the same loop as its chunk-manifest counterpart, so both DTOs go through
+/// [`select_by`]. `diff_download` is never part of the selection.
+pub fn select_patch_manifests<'a>(
+    build: &'a PatchBuild,
+    audio_langs: &HashSet<String>,
+    ignore: &HashSet<String>,
+) -> Vec<&'a PatchManifestMeta> {
+    select_by(
+        &build.manifests,
+        |m| (m.matching_field.as_str(), m.category_id.as_str()),
+        audio_langs,
+        ignore,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hyp::{ChunkBuild, ChunkManifestMeta, ManifestFile, ManifestUrl};
+    use crate::hyp::{
+        ChunkBuild, ChunkManifestMeta, ManifestFile, ManifestUrl, PatchBuild, PatchManifestMeta,
+    };
     use std::collections::HashSet;
 
     fn meta(field: &str) -> ChunkManifestMeta {
@@ -48,6 +98,17 @@ mod tests {
             matching_field: field.to_string(),
             manifest: ManifestFile::default(),
             chunk_download: ManifestUrl::default(),
+            manifest_download: ManifestUrl::default(),
+        }
+    }
+
+    fn patch_meta(field: &str) -> PatchManifestMeta {
+        PatchManifestMeta {
+            category_id: field.to_string(),
+            category_name: field.to_string(),
+            matching_field: field.to_string(),
+            manifest: ManifestFile::default(),
+            diff_download: ManifestUrl::default(),
             manifest_download: ManifestUrl::default(),
         }
     }
@@ -62,6 +123,39 @@ mod tests {
         let audio: HashSet<String> = ["en-us".to_string()].into_iter().collect();
         let ignore: HashSet<String> = ["10302".to_string()].into_iter().collect();
         let sel = select_manifests(&build, &audio, &ignore);
+        let fields: Vec<_> = sel.iter().map(|m| m.matching_field.as_str()).collect();
+        assert_eq!(fields, vec!["game", "en-us"]);
+    }
+
+    /// The patch filter must mirror the chunk filter above: game + selected
+    /// audio, unselected audio dropped, ignored category dropped. This pins the
+    /// shared predicate used by the patch-delete union.
+    #[test]
+    fn patch_manifest_filter_matches_the_chunk_filter() {
+        let build = PatchBuild {
+            build_id: "b".into(),
+            patch_id: "p".into(),
+            tag: "5.0".into(),
+            manifests: vec![
+                patch_meta("game"),
+                patch_meta("en-us"),
+                patch_meta("ja-jp"),
+                patch_meta("10302"),
+            ],
+        };
+        let audio: HashSet<String> = ["en-us".to_string()].into_iter().collect();
+        let ignore: HashSet<String> = ["10302".to_string()].into_iter().collect();
+        let sel = select_patch_manifests(&build, &audio, &ignore);
+        let fields: Vec<_> = sel.iter().map(|m| m.matching_field.as_str()).collect();
+        assert_eq!(fields, vec!["game", "en-us"]);
+
+        // Same rule even when the selected audio field is also in the ignore
+        // set: the re-add loop bypasses ignores in both families (Starward parity).
+        let audio: HashSet<String> = ["en-us".to_string()].into_iter().collect();
+        let ignore: HashSet<String> = ["en-us".to_string(), "10302".to_string()]
+            .into_iter()
+            .collect();
+        let sel = select_patch_manifests(&build, &audio, &ignore);
         let fields: Vec<_> = sel.iter().map(|m| m.matching_field.as_str()).collect();
         assert_eq!(fields, vec!["game", "en-us"]);
     }
