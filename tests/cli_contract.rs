@@ -780,6 +780,8 @@ fn help_text_lists_every_documented_flag() {
         "--max-ram-bytes",
         "--repair-mode",
         "--with-persistent",
+        "--dispatch-key",
+        "--dispatch-record",
         "--scan",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
@@ -872,6 +874,117 @@ fn with_persistent_is_an_opt_in_flag_with_its_own_help_entry() {
     for needle in ["Opt-in", "Read-only modes", "--purge-only"] {
         assert!(entry.contains(needle), "{needle} missing from: {entry}");
     }
+}
+
+/// The two file-path flags are one opt-in pair and never put a secret in argv.
+#[test]
+fn dispatch_input_flags_are_absent_by_default_and_must_be_paired() {
+    let plain = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"])
+        .into_ctx()
+        .expect("the default is valid");
+    assert!(plain.dispatch_key_path.is_none());
+    assert!(plain.dispatch_record_path.is_none());
+
+    for extra in [
+        vec!["--dispatch-key", "key.pem"],
+        vec!["--dispatch-record", "record.json"],
+    ] {
+        let mut args = vec!["--game-path", ".", "--biz", "hk4e_global"];
+        args.extend(extra);
+        let err = usage_rejection(&args).expect("a half pair is a usage error");
+        assert!(err.contains("must be given together"), "{err}");
+    }
+    let err = Args::parse_from([
+        "girpr",
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--dispatch-key",
+        "key.pem",
+        "--dispatch-record",
+        "record.json",
+    ])
+    .into_ctx()
+    .expect_err("the pair needs --with-persistent");
+    assert!(
+        err.to_string().contains("require --with-persistent"),
+        "{err:#}"
+    );
+
+    let help = real_help();
+    for flag in ["--dispatch-key", "--dispatch-record"] {
+        let entry = help_entry(help, flag);
+        assert!(entry.contains("FILE"), "{flag}: {entry}");
+    }
+}
+
+/// Every bad flag input is a post-parse usage error, never clap's raw `2`.
+#[test]
+fn dispatch_input_files_are_checked_at_the_flag_boundary() {
+    let scratch = TempDir::new("girpr_cli", "dispatch_inputs");
+    let key = scratch.join("key.pem");
+    let record = scratch.join("record.json");
+    let key_s = key.to_str().expect("utf-8 scratch path");
+    let record_s = record.to_str().expect("utf-8 scratch path");
+
+    let pair = |with_persistent: bool| {
+        let mut args = vec!["--game-path", ".", "--biz", "hk4e_global"];
+        if with_persistent {
+            args.push("--with-persistent");
+        }
+        args.extend(["--dispatch-key", key_s, "--dispatch-record", record_s]);
+        args
+    };
+
+    // Neither file exists: the read failure names the flag that was given.
+    let err = usage_rejection(&pair(true)).expect("missing files are usage errors");
+    assert!(err.contains("--dispatch-key"), "{err}");
+    std::fs::write(&key, b"not a key").expect("write bad key");
+    std::fs::write(&record, b"{}").expect("write bad record");
+    let err = usage_rejection(&pair(true)).expect("a bad key is a usage error");
+    assert!(err.contains("dispatch key"), "{err}");
+
+    // A plausible PEM with a bad record: JSON/schema/seed/path are all checked
+    // here, before any run and before any runtime is built.
+    let pem = include_str!("fixtures/persistent_inputs/samples/fixtures/test_key.pem");
+    std::fs::write(&key, pem).expect("write PEM");
+    let err = usage_rejection(&pair(true)).expect("a bad record is a usage error");
+    assert!(err.contains("dispatch record"), "{err}");
+
+    let bad_seed = serde_json::json!({
+        "schema_version": 3,
+        "version": "9.9.0",
+        "query_version": "OSRELWin9.9.0",
+        "key_fingerprint": "e0fcb3321f5dfd7a6e5d208699782e44c40da897b6ee6813c3d81ff8bae303c0",
+        "seed": "not-hex",
+        "envelope": "dispatch/response.json",
+        "envelope_md5": "d81e28b2fa6e45ef58386930817d9494",
+        "envelope_sha256": "8d92c831350192f7871e9635d92b6b3d6dbebb134ba26b2ac07562a993cb3d67",
+        "ciphertext_bytes": 1406,
+        "decoded": {
+            "game_version": "9.9_live",
+            "channel_name": "OSRELWin",
+            "codename": "hk4e_global",
+            "res_revision": 99000001,
+            "data_revision": 99000002,
+            "silence_revision": 99000003,
+            "res_hash": "aabbccddeeff",
+            "data_hash": "112233445566",
+            "silence_hash": "ffeeddccbbaa",
+            "base_revision": "99000000 001122334455",
+            "descriptors": []
+        }
+    });
+    std::fs::write(&record, bad_seed.to_string()).expect("write bad seed record");
+    let err = usage_rejection(&pair(true)).expect("a bad seed is a usage error");
+    assert!(err.contains("seed"), "{err}");
+
+    // The process-level contract: exit 1 with `usage error:`, not exit 2.
+    let (code, _, stderr) = run(&pair(false));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("usage error:"), "{stderr}");
+    assert!(!stderr.contains("failed to start runtime"), "{stderr}");
 }
 
 /// The flagged key vectors extend, never replace, the unflagged goldens.

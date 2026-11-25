@@ -13,11 +13,13 @@ use crate::common::{
     LATEST_TAG, LOCAL_TAG, MockOpts, MockServer, build_fixture, build_fixture_spec, ctx_for,
     logs_of, md5hex, run, scope, temp_dir, write_game_file,
 };
+use girpr_digest::{md5_hex, sha256_hex};
 use girpr_loopback_mock::{Reply, ScriptedServer};
+use serde_json::{Value, json};
 
 use girpr::test_support::{
-    DispatchOverride, ManifestKind, failing_dispatch_override, persistent_dispatch,
-    persistent_override, summary_record,
+    DispatchOverride, ManifestDescriptor, ManifestKind, failing_dispatch_override,
+    persistent_dispatch, persistent_override, summary_record,
 };
 use girpr::{Biz, RunCtx, RunExit, RunFailure, Summary};
 
@@ -26,6 +28,9 @@ const DATA: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/
 const SILENCE: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/silence.ndjson");
 const HOTFIX_A: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/hotfix_a.blk");
 const HOTFIX_B: &[u8] = include_bytes!("fixtures/persistent_inputs/samples/fixtures/hotfix_b.pck");
+const TEST_KEY_PEM: &str = include_str!("fixtures/persistent_inputs/samples/fixtures/test_key.pem");
+const ENVELOPE: &[u8] =
+    include_bytes!("fixtures/persistent_inputs/samples/fixtures/dispatch_response.json");
 
 /// Serve the three manifests in descriptor order. `ScriptedServer` repeats the
 /// last reply, so a retry of the last body still has the advertised digest.
@@ -57,6 +62,184 @@ fn line(s: &Summary) -> String {
 fn flagged(ctx: &mut RunCtx, info: girpr::test_support::DispatchInfo) {
     ctx.with_persistent = true;
     ctx.persistent_dispatch_override = Some(persistent_override(info));
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-band key + record inputs (the path the bridge will use next).
+// ---------------------------------------------------------------------------
+
+/// Swap a recorded authority for the loopback base, leaving the path alone —
+/// exactly the rewrite the bridge applies to a scratch copy of the record.
+fn rewrite_authority(url: &str, base: &str) -> String {
+    let after_scheme = url.split_once("://").expect("absolute URL").1;
+    let path = &after_scheme[after_scheme.find('/').expect("path")..];
+    format!("{}{path}", base.trim_end_matches('/'))
+}
+
+const RES_URL: &str = "https://mock.girpr.test/client_game_res/test/output_99000001_aabbccddeeff/client/StandaloneWindows64/res_versions_external";
+const DATA_URL: &str = "https://mock.girpr.test/client_design_data/test/output_99000002_112233445566/client/General/AssetBundles/data_versions";
+const SILENCE_URL: &str = "https://mock.girpr.test/client_design_data/test/output_99000003_ffeeddccbbaa/client_silence/General/AssetBundles/silence_data_versions";
+
+/// The record that a future gircap writer will emit for the committed fixture,
+/// with its CDN authorities rewritten to `base`.
+fn record_value(base: &str) -> Value {
+    json!({
+        "schema_version": 3,
+        "version": "9.9.0",
+        "query_version": "OSRELWin9.9.0",
+        "dispatch_url": format!("{base}/query"),
+        "key_fingerprint": "e0fcb3321f5dfd7a6e5d208699782e44c40da897b6ee6813c3d81ff8bae303c0",
+        "key_file": "dispatch/key.pem",
+        "seed": "0011223344556677",
+        "envelope": "dispatch/response.json",
+        "envelope_md5": md5_hex(ENVELOPE),
+        "envelope_sha256": sha256_hex(ENVELOPE),
+        "ciphertext_bytes": ENVELOPE.len(),
+        "decoded": {
+            "game_version": "9.9_live",
+            "channel_name": "OSRELWin",
+            "codename": "hk4e_global",
+            "res_revision": 99000001u64,
+            "data_revision": 99000002u64,
+            "silence_revision": 99000003u64,
+            "res_hash": "aabbccddeeff",
+            "data_hash": "112233445566",
+            "silence_hash": "ffeeddccbbaa",
+            "base_revision": "99000000 001122334455",
+            "repo_res_version_url": rewrite_authority("https://mock.girpr.test/client_game_res/test", base),
+            "repo_design_data_url": rewrite_authority("https://mock.girpr.test/client_design_data/test", base),
+            "descriptors": [
+                {
+                    "kind": "res",
+                    "remote_name": "res_versions_external",
+                    "url": rewrite_authority(RES_URL, base),
+                    "md5": md5_hex(RES),
+                    "file_size": RES.len()
+                },
+                {
+                    "kind": "data",
+                    "remote_name": "data_versions",
+                    "url": rewrite_authority(DATA_URL, base),
+                    "md5": md5_hex(DATA),
+                    "file_size": DATA.len()
+                },
+                {
+                    "kind": "silence_data",
+                    "remote_name": "silence_data_versions",
+                    "url": rewrite_authority(SILENCE_URL, base),
+                    "md5": md5_hex(SILENCE),
+                    "file_size": SILENCE.len()
+                }
+            ]
+        }
+    })
+}
+
+/// Write a scratch bundle: `dispatch/record.json`, `dispatch/key.pem` and the
+/// byte-exact envelope the record names.
+fn write_dispatch_inputs(dir: &Path, record: &Value) -> (PathBuf, PathBuf) {
+    let dispatch = dir.join("dispatch");
+    std::fs::create_dir_all(&dispatch).expect("scratch dispatch dir");
+    let key = dispatch.join("key.pem");
+    let record_path = dispatch.join("record.json");
+    std::fs::write(&key, TEST_KEY_PEM).expect("scratch key");
+    std::fs::write(&record_path, record.to_string()).expect("scratch record");
+    std::fs::write(dispatch.join("response.json"), ENVELOPE).expect("scratch envelope");
+    (key, record_path)
+}
+
+/// The override-path equivalent of `record_value`: same facts, same URLs, so a
+/// comparison of the two runs' publications has only the input path as a
+/// variable.
+fn fixture_dispatch(server: &ScriptedServer) -> girpr::test_support::DispatchInfo {
+    let descriptor = |kind, body: &[u8], url: &str| ManifestDescriptor {
+        kind,
+        url: rewrite_authority(url, server.base()),
+        expected_md5: md5_hex(body),
+        expected_size: body.len() as u64,
+        mirror_rel: format!(
+            "{}_Data/Persistent/{}_versions_persist",
+            "GenshinImpact",
+            kind.as_str()
+        ),
+    };
+    girpr::test_support::DispatchInfo {
+        game_version: "9.9_live".into(),
+        channel_name: "OSRELWin".into(),
+        server_name: "TEST".into(),
+        codename: "hk4e_global".into(),
+        res_revision: 99_000_001,
+        data_revision: 99_000_002,
+        silence_revision: 99_000_003,
+        audio_revision: 99_000_000,
+        res_hash: "aabbccddeeff".into(),
+        data_hash: "112233445566".into(),
+        silence_hash: "ffeeddccbbaa".into(),
+        audio_hash: "001122334455".into(),
+        client_game_res_url: rewrite_authority(
+            "https://mock.girpr.test/client_game_res/test/output_99000001_aabbccddeeff/client",
+            server.base(),
+        ),
+        client_design_data_url: rewrite_authority(
+            "https://mock.girpr.test/client_design_data/test/output_99000002_112233445566/client/General",
+            server.base(),
+        ),
+        client_silence_data_url: rewrite_authority(
+            "https://mock.girpr.test/client_design_data/test/output_99000003_ffeeddccbbaa/client_silence/General",
+            server.base(),
+        ),
+        client_audio_assets_url: rewrite_authority(
+            "https://mock.girpr.test/client_game_res/test/output_99000000_001122334455/client",
+            server.base(),
+        ),
+        manifest_digests: [
+            descriptor(ManifestKind::Res, RES, RES_URL),
+            descriptor(ManifestKind::Data, DATA, DATA_URL),
+            descriptor(ManifestKind::Silence, SILENCE, SILENCE_URL),
+        ],
+    }
+}
+
+/// The marker/mirror/hotfix bytes a flagged run publishes, as one comparable
+/// snapshot. The two runs below differ only in how `DispatchInfo` was obtained.
+fn published_snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut names: Vec<String> = [
+        "base_res_version_hash",
+        "res_revision",
+        "res_revision_eternal",
+        "data_revision",
+        "silence_revision",
+        "audio_revision",
+        "PatchDone",
+        "ChannelName",
+        "ScriptVersion",
+        "res_versions_persist",
+        "data_versions_persist",
+        "silence_data_versions_persist",
+    ]
+    .iter()
+    .map(|n| format!("Persistent/{n}"))
+    .collect();
+    names.extend(
+        [
+            "StreamingAssets/AssetBundles/blocks/00/11111111.blk",
+            "StreamingAssets/AssetBundles/blocks/00/22222222.blk",
+            "StreamingAssets/AssetBundles/blocks/00/33333333.blk",
+            "StreamingAssets/AudioAssets/English(US)/VO_TEST.pck",
+            "StreamingAssets/hardware_model_config.json",
+        ]
+        .iter()
+        .map(|n| (*n).to_owned()),
+    );
+    names
+        .into_iter()
+        .map(|rel| {
+            let full = dir.join(format!("GenshinImpact_Data/{rel}"));
+            let bytes =
+                std::fs::read(&full).unwrap_or_else(|e| panic!("missing published {rel}: {e}"));
+            (rel, bytes)
+        })
+        .collect()
 }
 
 /// Put the four in-scope fixture rows on disk already intact, so a scope test
@@ -145,6 +328,156 @@ async fn a_manifest_md5_failure_exits_two() {
     let text = format!("{:?}", err.source);
     assert!(text.contains("manifest MD5 mismatch"), "{text}");
     assert!(!dir.join("GenshinImpact_Data/Persistent").exists());
+    mock.stop();
+}
+
+/// A corrupt key is a metadata failure with the pinned prefix. No manifest
+/// server is even started, so a fetch would have failed differently.
+#[tokio::test]
+async fn a_corrupt_key_exits_two_without_fetching_manifests() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("persistent_bad_key_file");
+    let inputs = temp_dir("persistent_bad_key_inputs");
+    let (key, record) = write_dispatch_inputs(&inputs, &record_value("http://127.0.0.1:1"));
+    std::fs::write(&key, b"not a key").expect("corrupt key");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.with_persistent = true;
+    ctx.dispatch_key_path = Some(key);
+    ctx.dispatch_record_path = Some(record);
+
+    let err = run(ctx).await.expect_err("the key is fatal");
+    assert_eq!(err.exit_code, RunExit::Metadata);
+    let text = format!("{err:#}");
+    assert!(text.starts_with("dispatcher query failed:"), "{text}");
+    assert!(text.contains("dispatch key"), "{text}");
+    mock.stop();
+}
+
+/// Matching the record's pinned fingerprint is the first fact check: a valid
+/// key from a different bundle cannot be substituted by editing the record.
+#[tokio::test]
+async fn a_fingerprint_mismatch_exits_two() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("persistent_fingerprint_mismatch");
+    let inputs = temp_dir("persistent_fingerprint_inputs");
+    let mut value = record_value("http://127.0.0.1:1");
+    value["key_fingerprint"] =
+        json!("0000000000000000000000000000000000000000000000000000000000000000");
+    let (key, record) = write_dispatch_inputs(&inputs, &value);
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.with_persistent = true;
+    ctx.dispatch_key_path = Some(key);
+    ctx.dispatch_record_path = Some(record);
+
+    let err = run(ctx).await.expect_err("a fingerprint mismatch is fatal");
+    assert_eq!(err.exit_code, RunExit::Metadata);
+    let text = format!("{err:#}");
+    assert!(text.starts_with("dispatcher query failed:"), "{text}");
+    assert!(text.contains("key_fingerprint"), "{text}");
+    mock.stop();
+}
+
+/// Editing only the record must not invent a revision: the decoded envelope
+/// is the authority, and disagreements are a metadata failure.
+#[tokio::test]
+async fn a_tampered_record_fact_exits_two() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("persistent_tampered_fact");
+    let inputs = temp_dir("persistent_tampered_inputs");
+    let mut value = record_value("http://127.0.0.1:1");
+    value["decoded"]["res_revision"] = json!(12345678u64);
+    let (key, record) = write_dispatch_inputs(&inputs, &value);
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.with_persistent = true;
+    ctx.dispatch_key_path = Some(key);
+    ctx.dispatch_record_path = Some(record);
+
+    let err = run(ctx).await.expect_err("a tampered fact is fatal");
+    assert_eq!(err.exit_code, RunExit::Metadata);
+    let text = format!("{err:#}");
+    assert!(text.starts_with("dispatcher query failed:"), "{text}");
+    assert!(text.contains("record facts disagree"), "{text}");
+    assert!(!dir.join("GenshinImpact_Data/Persistent").exists());
+    mock.stop();
+}
+
+/// The key+record path publishes exactly what the override path publishes:
+/// every marker, all three mirrors and the downloaded hotfix. The only
+/// difference between the two runs is how `DispatchInfo` was obtained.
+#[tokio::test]
+async fn a_key_and_record_publish_the_same_state_as_the_override() {
+    async fn run_flagged(
+        dir: &Path,
+        inputs: &Path,
+        mock: &MockServer,
+        server: &ScriptedServer,
+        from_record: bool,
+    ) -> (Summary, RunExit) {
+        write_game_file(
+            dir,
+            "GenshinImpact_Data/StreamingAssets/res_versions_streaming",
+            b"res_versions_streaming bytes",
+        );
+        std::fs::write(
+            dir.join("config.ini"),
+            format!("[General]\ngame_version={LOCAL_TAG}\n"),
+        )
+        .expect("config.ini");
+        write_intact_fixture_rows(dir);
+        let mut ctx = ctx_for(dir.to_path_buf(), mock, 1);
+        if from_record {
+            let (key, record) = write_dispatch_inputs(inputs, &record_value(server.base()));
+            ctx.with_persistent = true;
+            ctx.dispatch_key_path = Some(key);
+            ctx.dispatch_record_path = Some(record);
+        } else {
+            flagged(&mut ctx, fixture_dispatch(server));
+        }
+        run(ctx).await.expect("the flagged run succeeds")
+    }
+
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    // Manifests first, then the single hotfix row left absent above.
+    let replies = || {
+        vec![
+            Reply::new(200, RES),
+            Reply::new(200, DATA),
+            Reply::new(200, SILENCE),
+            Reply::new(200, HOTFIX_A),
+        ]
+    };
+    let override_server = ScriptedServer::start(replies());
+    let record_server = ScriptedServer::start(replies());
+    let override_dir = temp_dir("persistent_override_parity");
+    let record_dir = temp_dir("persistent_record_parity");
+    let inputs = temp_dir("persistent_record_parity_inputs");
+
+    let (override_summary, override_code) =
+        run_flagged(&override_dir, &inputs, &mock, &override_server, false).await;
+    let (record_summary, record_code) =
+        run_flagged(&record_dir, &inputs, &mock, &record_server, true).await;
+    assert_eq!(override_code, RunExit::Success);
+    assert_eq!(record_code, RunExit::Success);
+    assert_eq!(
+        record_summary.flags.persistent,
+        override_summary.flags.persistent
+    );
+    assert_eq!(
+        record_summary.flags.persistent_files,
+        override_summary.flags.persistent_files
+    );
+    assert_eq!(
+        record_summary.flags.persistent_repaired,
+        override_summary.flags.persistent_repaired
+    );
+    assert_eq!(
+        record_summary.flags.persistent_failed,
+        override_summary.flags.persistent_failed
+    );
+    assert_eq!(
+        published_snapshot(&record_dir),
+        published_snapshot(&override_dir)
+    );
     mock.stop();
 }
 

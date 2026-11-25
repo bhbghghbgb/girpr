@@ -13,12 +13,16 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Result as AnyhowResult, anyhow, bail};
+use girpr_digest::{decode_hex, md5_hex, sha256_hex};
 use girpr_dispatch::{
-    BaseRevisionFetcher, BytesFetcher, DispatchError, DispatchInfo, DispatchQuery, query_dispatch,
+    BaseRevisionFetcher, BytesFetcher, DispatchDecodeParams, DispatchDecoded, DispatchError,
+    DispatchInfo, DispatchQuery, channel_prefix, decode_dispatch_response, dispatch_host,
+    dispatch_info_from_decoded, parse_base_revision, private_key_block_bytes,
+    private_key_fingerprint, private_key_from_bytes, query_dispatch,
 };
 use girpr_fetch::persistent::{fetch_all_manifests, parse_manifest};
 use girpr_model::Region;
@@ -27,6 +31,7 @@ use girpr_persistent_plan::{
     base_res_version_hash_marker, build_plan, render_markers, scope_decision,
 };
 use reqwest::Client;
+use serde::Deserialize;
 use tokio::runtime::Handle;
 
 use super::spawn_blocking_traced;
@@ -69,6 +74,483 @@ impl fmt::Debug for DispatchOverride {
 /// version/codename disagreement, or the injected test seam).
 pub fn dispatch_failure(e: impl fmt::Display) -> RunFailure {
     RunFailure::metadata(anyhow!("dispatcher query failed: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-band dispatcher inputs: --dispatch-key + --dispatch-record.
+// ---------------------------------------------------------------------------
+
+/// The record schema version this binary accepts. The capture tool owns the
+/// writer; a different value is a usage error at the flag, never a fallback.
+pub const DISPATCH_RECORD_SCHEMA_VERSION: u64 = 3;
+const DISPATCH_KEY_BLOCK_BYTES: usize = 256;
+
+/// The bundle record whose digest facts are checked against the envelope.
+///
+/// `dispatch_url` and `key_file` are accepted for the writer's convenience but
+/// are never used to fetch or to load a key: the key always comes from
+/// `--dispatch-key`, and no Collapse metadata is fetched on this path.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DispatchRecord {
+    pub schema_version: u64,
+    pub version: String,
+    pub query_version: String,
+    #[serde(default)]
+    pub dispatch_url: Option<String>,
+    pub key_fingerprint: String,
+    #[serde(default)]
+    pub key_file: Option<String>,
+    pub seed: String,
+    pub envelope: String,
+    pub envelope_md5: String,
+    pub envelope_sha256: String,
+    /// Byte length of the byte-exact envelope body, as recorded by the writer.
+    pub ciphertext_bytes: u64,
+    pub decoded: DecodedRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DecodedRecord {
+    pub game_version: String,
+    #[serde(default)]
+    pub channel_name: Option<String>,
+    pub codename: String,
+    pub res_revision: u64,
+    pub data_revision: u64,
+    pub silence_revision: u64,
+    pub res_hash: String,
+    pub data_hash: String,
+    pub silence_hash: String,
+    pub base_revision: String,
+    /// CDN bases may be rewritten; only their paths are verified.
+    #[serde(default)]
+    pub repo_res_version_url: Option<String>,
+    #[serde(default)]
+    pub repo_design_data_url: Option<String>,
+    pub descriptors: Vec<RecordDescriptor>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecordDescriptor {
+    pub kind: String,
+    pub remote_name: String,
+    pub url: String,
+    pub md5: String,
+    pub file_size: u64,
+}
+
+fn is_hex(value: &str, bytes: usize) -> bool {
+    value.len() == bytes * 2 && decode_hex(value).is_ok()
+}
+
+/// Reject `..`, absolute paths, backslashes, drives and empty components.
+///
+/// Both the CLI and the loader call this before an envelope path is joined to
+/// anything, so a record can never name a file outside its own bundle tree.
+fn bundle_relative_problem(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("empty");
+    }
+    if path.contains('\\') {
+        return Some("backslash");
+    }
+    if path.contains(':') {
+        return Some("drive or colon");
+    }
+    if path.starts_with('/') {
+        return Some("absolute");
+    }
+    if !Path::new(path)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+    {
+        return Some("parent or current-directory component");
+    }
+    None
+}
+
+impl DispatchRecord {
+    /// Everything checkable without reading the key or the envelope. The CLI
+    /// calls this at `into_ctx` (exit 1); the loader calls it again (exit 2).
+    pub fn validate(&self) -> AnyhowResult<()> {
+        if self.schema_version != DISPATCH_RECORD_SCHEMA_VERSION {
+            bail!(
+                "dispatch record schema_version {} != {DISPATCH_RECORD_SCHEMA_VERSION}",
+                self.schema_version
+            );
+        }
+        if self.version.is_empty() || self.query_version.is_empty() {
+            bail!("dispatch record has an empty version or query_version");
+        }
+        if let Some(url) = &self.dispatch_url {
+            if url.is_empty() {
+                bail!("dispatch record dispatch_url is empty");
+            }
+        }
+        if let Some(path) = &self.key_file {
+            if let Some(problem) = bundle_relative_problem(path) {
+                bail!("dispatch record key_file path is unsafe ({problem}): {path:?}");
+            }
+        }
+        if !is_hex(&self.key_fingerprint, 32) {
+            bail!("dispatch record key_fingerprint is not 32 bytes of hex");
+        }
+        if !is_hex(&self.seed, 8) {
+            bail!("dispatch record seed is not 8 bytes of hex");
+        }
+        if let Some(problem) = bundle_relative_problem(&self.envelope) {
+            bail!(
+                "dispatch record envelope path is unsafe ({problem}): {:?}",
+                self.envelope
+            );
+        }
+        if !is_hex(&self.envelope_md5, 16) || !is_hex(&self.envelope_sha256, 32) {
+            bail!("dispatch record envelope_md5/envelope_sha256 is not hex of the right length");
+        }
+        if self.ciphertext_bytes == 0 {
+            bail!("dispatch record ciphertext_bytes is zero");
+        }
+        self.decoded.validate()
+    }
+}
+
+impl DecodedRecord {
+    fn validate(&self) -> AnyhowResult<()> {
+        if self.game_version.is_empty() || self.codename.is_empty() {
+            bail!("dispatch record decoded game_version/codename is empty");
+        }
+        for (name, hash) in [
+            ("res_hash", &self.res_hash),
+            ("data_hash", &self.data_hash),
+            ("silence_hash", &self.silence_hash),
+        ] {
+            if hash.is_empty() {
+                bail!("dispatch record decoded {name} is empty");
+            }
+        }
+        parse_base_revision(&self.base_revision)
+            .map_err(|e| anyhow!("dispatch record decoded base_revision: {e}"))?;
+        if let Some(url) = &self.repo_res_version_url {
+            if url.is_empty() {
+                bail!("dispatch record decoded repo_res_version_url is empty");
+            }
+        }
+        if let Some(url) = &self.repo_design_data_url {
+            if url.is_empty() {
+                bail!("dispatch record decoded repo_design_data_url is empty");
+            }
+        }
+        if self.descriptors.len() != 3 {
+            bail!(
+                "dispatch record decoded has {} descriptors, expected 3",
+                self.descriptors.len()
+            );
+        }
+        let mut kinds = Vec::new();
+        for row in &self.descriptors {
+            if row.remote_name.is_empty() || row.url.is_empty() {
+                bail!("dispatch record descriptor has an empty remote_name or url");
+            }
+            if !is_hex(&row.md5, 16) {
+                bail!(
+                    "dispatch record descriptor {} md5 is not 32 hex chars",
+                    row.kind
+                );
+            }
+            if row.file_size == 0 {
+                bail!("dispatch record descriptor {} file_size is zero", row.kind);
+            }
+            if !["res", "data", "silence_data"].contains(&row.kind.as_str()) {
+                bail!("dispatch record has unknown descriptor kind {:?}", row.kind);
+            }
+            kinds.push(row.kind.as_str());
+        }
+        kinds.sort_unstable();
+        if kinds != ["data", "res", "silence_data"] {
+            bail!("dispatch record descriptors must name res, data and silence_data once each");
+        }
+        Ok(())
+    }
+}
+
+/// Parse and size-check the two flag bytes without ever logging their content.
+pub fn validate_dispatch_key_file(bytes: &[u8]) -> AnyhowResult<()> {
+    let key = private_key_from_bytes(bytes).context("dispatch key")?;
+    let block = private_key_block_bytes(&key);
+    if block != DISPATCH_KEY_BLOCK_BYTES {
+        bail!(
+            "dispatch key must be RSA-2048 ({DISPATCH_KEY_BLOCK_BYTES}-byte blocks), got {block}"
+        );
+    }
+    private_key_fingerprint(&key).context("dispatch key fingerprint")?;
+    Ok(())
+}
+
+/// JSON/schema/path checks for `--dispatch-record` at the flag boundary.
+pub fn validate_dispatch_record_file(bytes: &[u8]) -> AnyhowResult<()> {
+    let record: DispatchRecord =
+        serde_json::from_slice(bytes).context("dispatch record is not JSON")?;
+    record.validate()
+}
+
+/// Mirror names come from `GameExecutableName` on the live path. A record does
+/// not carry one, so the biz decides it — never an editable record field.
+fn exe_stem_for(biz: Region) -> &'static str {
+    match biz {
+        Region::Hk4eGlobal => "GenshinImpact",
+        Region::Hk4eCn | Region::Hk4eBilibili => "YuanShen",
+    }
+}
+
+/// A record's envelope is bundle-relative. Accept both a scratch copy that
+/// keeps the `dispatch/` directory and one whose record sits at the bundle
+/// root; the path itself was already checked for traversal.
+fn resolve_envelope(record_path: &Path, envelope: &str) -> AnyhowResult<PathBuf> {
+    let parent = record_path.parent().unwrap_or_else(|| Path::new("."));
+    let beside = parent.join(envelope);
+    if beside.is_file() {
+        return Ok(beside);
+    }
+    if let Some(root) = parent.parent() {
+        let at_root = root.join(envelope);
+        if at_root.is_file() {
+            return Ok(at_root);
+        }
+    }
+    bail!("dispatch envelope {envelope:?} is missing beside the record")
+}
+
+/// Scheme-and-authority-free URL tail. The bridge may rewrite the authority;
+/// changing the *path* would name a different dispatcher fact.
+fn url_path(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    after_scheme.find('/').map_or("/", |i| &after_scheme[i..])
+}
+
+fn check_text(bad: &mut Vec<String>, name: &str, want: &str, got: &str) {
+    if want != got {
+        bad.push(format!("{name}: record {want:?} != envelope {got:?}"));
+    }
+}
+
+fn check_number(bad: &mut Vec<String>, name: &str, want: u64, got: u64) {
+    if want != got {
+        bad.push(format!("{name}: record {want} != envelope {got}"));
+    }
+}
+
+/// Prove that every digest fact the record claims came from the decrypted
+/// envelope. URLs are the one exception: their authorities may be rewritten.
+fn verify_record_facts(record: &DispatchRecord, decoded: &DispatchDecoded) -> AnyhowResult<()> {
+    let d = &record.decoded;
+    let mut bad = Vec::new();
+    check_text(
+        &mut bad,
+        "game_version",
+        &d.game_version,
+        &decoded.game_version,
+    );
+    check_text(&mut bad, "codename", &d.codename, &decoded.codename);
+    if let Some(channel) = &d.channel_name {
+        check_text(&mut bad, "channel_name", channel, &decoded.channel_name);
+    }
+    check_number(
+        &mut bad,
+        "res_revision",
+        d.res_revision,
+        decoded.res_revision,
+    );
+    check_number(
+        &mut bad,
+        "data_revision",
+        d.data_revision,
+        decoded.data_revision,
+    );
+    check_number(
+        &mut bad,
+        "silence_revision",
+        d.silence_revision,
+        decoded.silence_revision,
+    );
+    check_text(&mut bad, "res_hash", &d.res_hash, &decoded.res_hash);
+    check_text(&mut bad, "data_hash", &d.data_hash, &decoded.data_hash);
+    check_text(
+        &mut bad,
+        "silence_hash",
+        &d.silence_hash,
+        &decoded.silence_hash,
+    );
+
+    for row in &d.descriptors {
+        let index = decoded
+            .manifest_digests
+            .iter()
+            .position(|m| m.kind.as_str() == row.kind)
+            .ok_or_else(|| anyhow!("record descriptor kind {:?} is unknown", row.kind))?;
+        let actual = &decoded.manifest_digests[index];
+        check_text(&mut bad, "descriptor md5", &row.md5, &actual.expected_md5);
+        check_number(
+            &mut bad,
+            "descriptor file_size",
+            row.file_size,
+            actual.expected_size,
+        );
+        check_text(
+            &mut bad,
+            "descriptor remote_name",
+            &row.remote_name,
+            &decoded.descriptor_remote_names[index],
+        );
+        if url_path(&row.url) != url_path(&actual.url) {
+            bad.push(format!(
+                "descriptor {} URL path {:?} != envelope {:?}",
+                row.kind, row.url, actual.url
+            ));
+        }
+    }
+    for (name, want, got) in [
+        (
+            "repo_res_version_url",
+            d.repo_res_version_url.as_deref(),
+            Some(decoded.repo_res_version_url.as_str()),
+        ),
+        (
+            "repo_design_data_url",
+            d.repo_design_data_url.as_deref(),
+            Some(decoded.repo_design_data_url.as_str()),
+        ),
+    ] {
+        if let Some(want) = want {
+            let got = got.expect("decoded CDN base");
+            if url_path(want) != url_path(got) {
+                bad.push(format!("{name} path {want:?} != envelope {got:?}"));
+            }
+        }
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "record facts disagree with the decrypted envelope: {}",
+            bad.join("; ")
+        )
+    }
+}
+
+/// Apply the record's (possibly rewritten) CDN URLs *after* verification.
+fn apply_record_urls(record: &DispatchRecord, decoded: &mut DispatchDecoded) {
+    if let Some(url) = &record.decoded.repo_res_version_url {
+        let base = url.trim_end_matches('/').to_owned();
+        decoded.repo_res_version_url = base.clone();
+        decoded.client_game_res_url = format!(
+            "{base}/output_{}_{}/client",
+            decoded.res_revision, decoded.res_hash
+        );
+    }
+    if let Some(url) = &record.decoded.repo_design_data_url {
+        let base = url.trim_end_matches('/').to_owned();
+        decoded.repo_design_data_url = base.clone();
+        decoded.client_design_data_url = format!(
+            "{base}/output_{}_{}/client/General",
+            decoded.data_revision, decoded.data_hash
+        );
+        decoded.client_silence_data_url = format!(
+            "{base}/output_{}_{}/client_silence/General",
+            decoded.silence_revision, decoded.silence_hash
+        );
+    }
+    for row in &record.decoded.descriptors {
+        if let Some(index) = decoded
+            .manifest_digests
+            .iter()
+            .position(|m| m.kind.as_str() == row.kind)
+        {
+            decoded.manifest_digests[index].url = row.url.clone();
+        }
+    }
+}
+
+/// Rebuild a `DispatchInfo` entirely from the supplied key and record. No
+/// Collapse metadata, master key, seed table or dispatcher GET participates.
+fn dispatch_from_files(
+    key_path: &Path,
+    record_path: &Path,
+    biz: Region,
+) -> AnyhowResult<DispatchInfo> {
+    let key_bytes = std::fs::read(key_path)
+        .with_context(|| format!("read dispatch key {}", key_path.display()))?;
+    let key = private_key_from_bytes(&key_bytes).context("dispatch key")?;
+    let block_bytes = private_key_block_bytes(&key);
+    if block_bytes != DISPATCH_KEY_BLOCK_BYTES {
+        bail!("dispatch key is {block_bytes} bytes, expected RSA-2048");
+    }
+    // Log the path and the fingerprint only — never a byte of the key itself.
+    let fingerprint = private_key_fingerprint(&key).context("dispatch key fingerprint")?;
+    tracing::info!(
+        path = %key_path.display(),
+        fingerprint = %fingerprint,
+        "persistent dispatch key loaded"
+    );
+
+    let record_bytes = std::fs::read(record_path)
+        .with_context(|| format!("read dispatch record {}", record_path.display()))?;
+    let record: DispatchRecord =
+        serde_json::from_slice(&record_bytes).context("dispatch record is not JSON")?;
+    record.validate()?;
+    if !record.key_fingerprint.eq_ignore_ascii_case(&fingerprint) {
+        bail!(
+            "record key_fingerprint {} != key fingerprint {fingerprint}",
+            record.key_fingerprint
+        );
+    }
+    tracing::info!(
+        path = %record_path.display(),
+        version = %record.version,
+        "persistent dispatch record loaded"
+    );
+
+    let envelope_path = resolve_envelope(record_path, &record.envelope)?;
+    let envelope = std::fs::read(&envelope_path)
+        .with_context(|| format!("read dispatch envelope {}", envelope_path.display()))?;
+    if envelope.len() as u64 != record.ciphertext_bytes {
+        bail!(
+            "dispatch envelope is {} bytes, record says {}",
+            envelope.len(),
+            record.ciphertext_bytes
+        );
+    }
+    let md5 = md5_hex(&envelope);
+    if !md5.eq_ignore_ascii_case(&record.envelope_md5) {
+        bail!(
+            "dispatch envelope md5 {md5} != record {}",
+            record.envelope_md5
+        );
+    }
+    let sha256 = sha256_hex(&envelope);
+    if !sha256.eq_ignore_ascii_case(&record.envelope_sha256) {
+        bail!(
+            "dispatch envelope sha256 {sha256} != record {}",
+            record.envelope_sha256
+        );
+    }
+
+    let mut decoded = decode_dispatch_response(
+        &envelope,
+        DispatchDecodeParams {
+            biz,
+            latest: &record.version,
+            host: dispatch_host(biz),
+            channel_prefix: channel_prefix(biz),
+            exe_stem: exe_stem_for(biz),
+            key: &key,
+            block_bytes,
+        },
+    )
+    .context("decode dispatch envelope")?;
+    verify_record_facts(&record, &decoded)?;
+    apply_record_urls(&record, &mut decoded);
+    dispatch_info_from_decoded(decoded, &record.decoded.base_revision)
+        .context("dispatch base_revision")
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +608,9 @@ impl BaseRevisionFetcher for HttpTransport {
 /// Query `query_cur_region` with `meta.latest` (never the local version).
 ///
 /// The query itself is synchronous, so it runs on the blocking pool with the
-/// caller's tracing dispatcher installed. The override is checked first and is
-/// the only seam a test needs; an unflagged run never reaches this function.
+/// caller's tracing dispatcher installed. The override is checked first (the
+/// unit-test seam); the key+record pair is an override too — it fetches no
+/// Collapse metadata at all. An unflagged run never reaches this function.
 pub async fn query(
     ctx: &RunCtx,
     latest: &str,
@@ -140,6 +623,16 @@ pub async fn query(
         let query =
             spawn_blocking_traced(move || override_.query(biz, &latest).map_err(dispatch_failure))
                 .await;
+        return query.map_err(|e| dispatch_failure(anyhow!("query task failed: {e}")))?;
+    }
+    if let (Some(key_path), Some(record_path)) = (
+        ctx.dispatch_key_path.clone(),
+        ctx.dispatch_record_path.clone(),
+    ) {
+        let query = spawn_blocking_traced(move || {
+            dispatch_from_files(&key_path, &record_path, biz).map_err(dispatch_failure)
+        })
+        .await;
         return query.map_err(|e| dispatch_failure(anyhow!("query task failed: {e}")))?;
     }
     let client = http.clone();

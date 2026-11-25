@@ -927,6 +927,8 @@ fn persistent_ctx(
         jobs: 1,
         with_persistent: true,
         persistent_dispatch_override: Some(persistent_override(info)),
+        dispatch_key_path: None,
+        dispatch_record_path: None,
         check_only: false,
         scan: false,
         purge_only,

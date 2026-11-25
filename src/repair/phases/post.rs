@@ -1615,6 +1615,8 @@ mod tests {
             jobs: 1,
             with_persistent: false,
             persistent_dispatch_override: None,
+            dispatch_key_path: None,
+            dispatch_record_path: None,
             check_only: false,
             scan: false,
             purge_only: false,

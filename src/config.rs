@@ -164,6 +164,14 @@ pub struct RunCtx {
     /// a user-facing way to bypass the real key/seed provider.
     #[doc(hidden)]
     pub persistent_dispatch_override: Option<DispatchOverride>,
+    /// `--dispatch-key <FILE>`: the private key for a supplied dispatcher
+    /// record. Both flags must be present or both absent, and both require
+    /// `--with-persistent`. `None` in an unflagged run.
+    pub dispatch_key_path: Option<PathBuf>,
+    /// `--dispatch-record <FILE>`: a `dispatch/record.json` whose digest facts
+    /// are verified by decoding its envelope with `--dispatch-key`. `None` in
+    /// an unflagged run.
+    pub dispatch_record_path: Option<PathBuf>,
     pub check_only: bool,
     /// `--scan`: read the whole install once, in the plan phase, so the
     /// plan's numbers are exact rather than upper bounds.
