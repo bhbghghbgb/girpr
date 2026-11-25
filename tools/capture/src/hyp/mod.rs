@@ -101,10 +101,6 @@ pub struct Captured {
     pub build_new: CapturedBody,
     /// `api/getBuild.<old>.json`.
     pub build_old: CapturedBody,
-    /// The optional dispatcher envelope, written under `dispatch/` rather than
-    /// `api/`: it is a binary response from a different host, and the six API
-    /// bodies stay byte-identical for bundles that have no persistent record.
-    pub dispatch: Option<CapturedBody>,
     /// The resolved pair, with both build ids attached.
     pub versions: VersionPair,
 }
@@ -133,19 +129,6 @@ impl Captured {
             &self.build_new,
             &self.build_old,
         ]
-    }
-
-    /// Every captured body, including the optional dispatcher envelope.
-    ///
-    /// The six `api/` bodies are the fixed array [`Self::bodies`]; this is the
-    /// honest total for a capture that also carries a `dispatch/` record. Old
-    /// bundles have no envelope and still get exactly six.
-    pub fn all_bodies(&self) -> Vec<&CapturedBody> {
-        let mut out: Vec<&CapturedBody> = self.bodies().to_vec();
-        if let Some(d) = &self.dispatch {
-            out.push(d);
-        }
-        out
     }
 
     /// Every body, mutable, in the order they were fetched.
@@ -473,7 +456,6 @@ impl<'a> HypClient<'a> {
                 packages,
                 build_new,
                 build_old,
-                dispatch: None,
                 versions,
             },
             params,
@@ -768,7 +750,6 @@ mod tests {
                 seq: 0,
                 bytes: build_body("7.0.0", "oldBUILD").into_bytes(),
             },
-            dispatch: None,
             versions: VersionPair::select(
                 &params(),
                 NewTagSelector::BranchHead,
@@ -804,22 +785,6 @@ mod tests {
             let w: Wrapper<serde_json::Value> = b.parse().expect("re-parses");
             assert_eq!(w.retcode, 0, "{}", b.file);
         }
-    }
-
-    #[test]
-    fn the_optional_dispatch_envelope_joins_only_all_bodies() {
-        let mut c = mock_captured();
-        assert_eq!(c.bodies().len(), 6);
-        assert_eq!(c.all_bodies().len(), 6, "an old capture has no envelope");
-        c.dispatch = Some(CapturedBody {
-            endpoint: "query_cur_region",
-            file: "dispatch/response.json".into(),
-            seq: 7,
-            bytes: br#"{"content":"","sign":""}"#.to_vec(),
-        });
-        assert_eq!(c.bodies().len(), 6, "the six api bodies are unchanged");
-        assert_eq!(c.all_bodies().len(), 7);
-        assert_eq!(c.all_bodies()[6].file, "dispatch/response.json");
     }
 
     /// Byte-exact means byte-exact: the stored bytes are the response, not a

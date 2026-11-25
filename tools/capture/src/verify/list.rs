@@ -28,12 +28,6 @@ pub struct Listed {
     pub selfcheck: String,
     /// Whether the capture said it finished.
     pub complete: bool,
-    /// Whether the optional `dispatch/` record is present.
-    pub dispatch_record: bool,
-    /// Raw persistent manifests in `persistent/`, zero for an old bundle.
-    pub persistent_manifests: usize,
-    /// Full-file blobs in `persistent/`, zero for an old bundle.
-    pub persistent_blobs: usize,
 }
 
 /// What [`list`] found under a root.
@@ -266,23 +260,5 @@ fn listed_of(root: &Path, b: &Bundle) -> Listed {
             .trim_matches('"')
             .to_string(),
         complete: b.manifest.capture.complete,
-        dispatch_record: b.root.join("dispatch").join("record.json").is_file(),
-        persistent_manifests: persistent_counts(&b.root).0,
-        persistent_blobs: persistent_counts(&b.root).1,
-    }
-}
-
-/// The persistent index's own counts, read through the same type the writer
-/// used. An unreadable index is not a crash here — `verify` owns the verdict —
-/// but reporting zero would hide a record that is sitting on disk, so the file's
-/// mere presence counts as one manifest until it can be parsed.
-fn persistent_counts(root: &Path) -> (usize, usize) {
-    let path = root.join("persistent").join("index.json");
-    let Ok(raw) = std::fs::read(path) else {
-        return (0, 0);
-    };
-    match serde_json::from_slice::<crate::persistent::PersistentIndex>(&raw) {
-        Ok(i) => (i.manifests.len(), i.blobs.len()),
-        Err(_) => (1, 0),
     }
 }

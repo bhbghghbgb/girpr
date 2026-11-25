@@ -22,8 +22,8 @@ path = "src/main.rs"
 # overrides (host-dependent skips whose lines must stay visible); grouping
 # those would move their fully-qualified paths out from under pinned filters.
 [[test]]
-name = "artifact_bridge"
-path = "tests/artifact_bridge.rs"
+name = "artifact_repair_bridge"
+path = "tests/artifact_repair_bridge.rs"
 
 [[test]]
 name = "repair_post"

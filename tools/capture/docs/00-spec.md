@@ -975,7 +975,7 @@ and `SUMMARY download_bytes` can be compared against each capture's
 **`gircap` does not depend on `girpr`.** It does not invoke it, does not read
 its flags, and does not shim them; §2's independence rule holds and the grep over
 `tools/capture/src/` returns doc comments only. The end-to-end check therefore
-lives on the `girpr` side (`girpr`'s `tests/artifact_bridge.rs`), is `#[ignore]`d
+lives on the `girpr` side (`girpr`'s `tests/artifact_repair_bridge.rs`), is `#[ignore]`d
 because it needs a bundle and takes minutes, and is run by hand.
 
 ### 8.1.1 The procedure, and the numbers it must produce
@@ -1192,7 +1192,7 @@ patchmaps; `added` contributes its whole-file download cost.
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| `schema_version` | **`4`**; a bump is a deliberate decision, not a default. Version 3 made the added evidence required; version 4 requires all nine matrix rows and verifies the persistent records when present | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| `schema_version` | **`3`**; a bump is a deliberate decision, not a default, and version 3 requires the added evidence | [`01-artifact-schema.md`](01-artifact-schema.md) |
 | commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---

@@ -111,14 +111,6 @@ pub enum Class {
     Added,
     /// Only in the old manifest: not planned; a `--purge-after` target.
     Removed,
-    /// The persistent `res` record: one mirrored manifest, its full-file blobs
-    /// and the shared dispatcher envelope. Not a patch shape — no `Shape`
-    /// matches it — so it can never steal a file from a content class.
-    PersistentRes,
-    /// The persistent `data` record, cheapest-first like the other two.
-    PersistentData,
-    /// The persistent `silence_data` record, cheapest-first like the other two.
-    PersistentSilence,
 }
 
 /// Whether a shape is *partially* reusable: some chunks survive and some do not.
@@ -146,19 +138,14 @@ impl Class {
     /// The order is a decision, not an accident: the two reuse classes are
     /// adjacent because a file that reuses *and* moves is the `reuse_moved`
     /// one, and the cheap shapes come first so a small budget buys the
-    /// boundaries before the expensive ones. The three record classes come
-    /// last: they are filled by the persistent capture path, never by scoring
-    /// a manifest path.
-    pub const ALL: [Class; 9] = [
+    /// boundaries before the expensive ones.
+    pub const ALL: [Class; 6] = [
         Class::Identical,
         Class::NoReuse,
         Class::ReuseInPlace,
         Class::ReuseMoved,
         Class::Added,
         Class::Removed,
-        Class::PersistentRes,
-        Class::PersistentData,
-        Class::PersistentSilence,
     ];
 
     /// The order admission walks them in.
@@ -167,39 +154,7 @@ impl Class {
     /// had drifted into the same contents; the day they stop agreeing, a class
     /// added to one and not the other becomes either invisible to `parse` or
     /// invisible to admission, and neither failure names the other list.
-    pub const REQUIRED_ORDER: [Class; 9] = Class::ALL;
-
-    /// The six **content** classes, which are the only ones a manifest path can
-    /// satisfy. The three record classes are not patch shapes, so a capture of
-    /// ordinary game files never admits them.
-    pub const PATCH_SHAPES: [Class; 6] = [
-        Class::Identical,
-        Class::NoReuse,
-        Class::ReuseInPlace,
-        Class::ReuseMoved,
-        Class::Added,
-        Class::Removed,
-    ];
-
-    /// The three persistent **record** classes, in manifest/descriptor order:
-    /// `res`, `data`, `silence_data`. girpr always fetches all three manifests
-    /// from one aggregate dispatch record, so the producer writes one record
-    /// carrying all three descriptors, never three one-manifest records.
-    pub const PERSISTENT: [Class; 3] = [
-        Class::PersistentRes,
-        Class::PersistentData,
-        Class::PersistentSilence,
-    ];
-
-    /// Whether this class is a persistent record class rather than a patch
-    /// shape. Record classes have no [`Shape`] and are admitted by the
-    /// persistent selection, never by scoring a game-file path.
-    pub const fn is_record(self) -> bool {
-        matches!(
-            self,
-            Class::PersistentRes | Class::PersistentData | Class::PersistentSilence
-        )
-    }
+    pub const REQUIRED_ORDER: [Class; 6] = Class::ALL;
 
     /// The wire spelling, and the directory name a capture is filed under.
     pub const fn id(self) -> &'static str {
@@ -210,9 +165,6 @@ impl Class {
             Class::ReuseMoved => "reuse_moved",
             Class::Added => "added",
             Class::Removed => "removed",
-            Class::PersistentRes => "persistent_res",
-            Class::PersistentData => "persistent_data",
-            Class::PersistentSilence => "persistent_silence",
         }
     }
 
@@ -235,15 +187,6 @@ impl Class {
             }
             Class::Added => "the file is created: absent locally, fetched whole",
             Class::Removed => "not planned; a --purge-after target",
-            Class::PersistentRes => {
-                "the res mirrored manifest, cheapest res blobs and the shared dispatcher envelope"
-            }
-            Class::PersistentData => {
-                "the data mirrored manifest, cheapest data blobs and the shared dispatcher envelope"
-            }
-            Class::PersistentSilence => {
-                "the silence_data mirrored manifest, cheapest silence blobs and the shared dispatcher envelope"
-            }
         }
     }
 
@@ -311,9 +254,6 @@ impl Class {
             }
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
-            // Record classes have no patch shape. They are filled by the
-            // persistent capture path, never by scoring a manifest path.
-            Class::PersistentRes | Class::PersistentData | Class::PersistentSilence => false,
         }
     }
 
@@ -578,38 +518,5 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), Class::ALL.len());
-    }
-
-    /// The three record classes are the last entries of `ALL`, have no patch
-    /// shape and are the **only** classes `is_record` accepts. A fourth record
-    /// class would change the matrix width, so this is pinned rather than
-    /// inferred from `PATCH_SHAPES`.
-    #[test]
-    fn the_three_record_classes_are_distinct_shape_free_and_last() {
-        assert_eq!(Class::ALL.len(), 9);
-        assert_eq!(Class::PATCH_SHAPES.len(), 6);
-        assert_eq!(Class::PERSISTENT.len(), 3);
-        assert_eq!(
-            &Class::ALL[6..],
-            &Class::PERSISTENT,
-            "records come after the six patch shapes"
-        );
-        for c in Class::PERSISTENT {
-            assert!(c.is_record(), "{c}");
-            assert!(
-                !Class::PATCH_SHAPES.contains(&c),
-                "{c} is not a patch shape"
-            );
-            assert!(!c.matches(scored(true, 1, 1, 0)), "{c}");
-            assert!(!Class::all_satisfied_by(Shape::Added).contains(&c));
-            assert_eq!(Class::parse(c.id()), Ok(c));
-        }
-        for c in Class::PATCH_SHAPES {
-            assert!(!c.is_record(), "{c}");
-        }
-        assert_eq!(
-            Class::PERSISTENT.map(|c| c.id()),
-            ["persistent_res", "persistent_data", "persistent_silence"]
-        );
     }
 }

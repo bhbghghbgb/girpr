@@ -126,7 +126,6 @@ mod tests {
     fn selection_with(rows: Vec<MatrixRow>) -> Selection {
         Selection {
             admitted: Vec::new(),
-            persistent: Vec::new(),
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
             forced_unscored: Vec::new(),

@@ -2,7 +2,7 @@
 
 Byte-level layout and every field of every machine-readable file.
 
-**Every document below carries `"schema_version": 4`.** A reader should reject an
+**Every document below carries `"schema_version": 3`.** A reader should reject an
 unknown `schema_version` rather than guess. JSON is UTF-8, LF, 2-space indent,
 keys in the order written here. `*.ndjson` is newline-delimited, one object per
 line, no enclosing array, so it streams.
@@ -12,16 +12,6 @@ missing any document below. That is a deliberate choice: a bundle is a *fixture*
 other work depends on, so a field that some bundles carry and others do not is a
 trap for whoever reads it next. Where a field is genuinely optional within a
 document, it is marked below and is optional *everywhere*.
-
-**The one conditional part is the persistent records (§18).** `dispatch/` and
-`persistent/` are **required when a `persistent_*` matrix row says `captured`,
-and absent when all three rows honestly say `unavailable`**. A bundle that
-carries them has every byte checked by the same inventory as everything else,
-plus the records' own claims (key fingerprint, envelope digests and length,
-descriptor kinds, blob provenance). A capture with no dispatcher routes writes
-no records and still verifies; a capture that claims a record class without the
-records fails verification. This is the schema-4 rule; a schema-3 bundle is
-refused, and a reader must not treat its six-row matrix as complete.
 
 **Compression rule.** A document is gzipped (`*.json.gz`) only when its
 uncompressed body exceeds `--gzip-threshold` (default 1 MiB). The decision is
@@ -65,15 +55,6 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── paths.tsv                             # field \t path \t state \t old_size \t new_size \t reused \t moved \t patch_bytes \t total_cost
 │   ├── candidates.json
 │   └── reuse_pool.json
-├── dispatch/                                 # optional; §18
-│   ├── response.json                          # dispatcher envelope, byte-exact
-│   └── record.json                            # key fingerprint, seed, version, decoded facts
-├── persistent/                               # optional; §18
-│   ├── res_versions_external.ndjson           # raw manifest bytes
-│   ├── data_versions.ndjson
-│   ├── silence_data_versions.ndjson
-│   ├── blobs/<remoteName>                     # full-file blobs, raw bytes
-│   └── index.json                             # digests and sizes of the above
 ├── game/                                     # ★ the fixture
 │   ├── config.ini
 │   ├── GenshinImpact_Data/Persistent/audio_lang_14
@@ -134,7 +115,7 @@ is the completion proof.
 
 ```jsonc
 {
-  "schema_version": 4,
+  "schema_version": 3,
   "tool":   { "name": "gircap", "version": "<tool version>" },
   "capture": {
     "id": "<capture id>",
@@ -185,13 +166,12 @@ is the completion proof.
 ```
 
 `matrix[].status` ∈ `captured` | `covered_by` | `over_budget` | `unavailable`.
-A class is never simply absent: schema 4 requires **nine rows** — the six patch
-shapes and the three `persistent_*` record classes (assertion A17). All four
-states are acceptable to A17: the assertion is about the matrix being *complete*
-— every class has a row and every row says what happened to it — and
-`over_budget` ("a candidate existed and this run's budget would not pay for it")
-is a complete answer. The refusal is `--require-class`'s job. The row's optional
-keys (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
+A class is never simply absent (assertion A17). All four states are acceptable
+to A17: the assertion is about the matrix being *complete* — every class has a
+row and every row says what happened to it — and `over_budget` ("a candidate
+existed and this run's budget would not pay for it") is a complete answer. The
+refusal is `--require-class`'s job. The row's optional keys
+(`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
 **A bundle from an older schema is refused.** `gircap verify` reads
@@ -202,11 +182,10 @@ decisions; version 2's blob rows could not say why a fetch failed, whether a bod
 was partial, or why a measurement did not return. Version 3 makes those fields
 required and adds the documents that keep the rest of what a run sees: retained
 error bodies, the manifest paths and chunk ids a shape rule refused, the
-logical→on-disk mapping for device names, and the exact argv bytes. Version 4
-requires all nine matrix rows and promotes the persistent records to a verified
-part of the schema (§18). A reader that understood the current shape would ignore
-all of that and report a bundle as consistent when it is not. The refusal names
-the command that produces a current bundle.
+logical→on-disk mapping for device names, and the exact argv bytes. A reader
+that understood the current shape would ignore all of that and report a bundle
+as consistent when it is not. The refusal names the command that produces a
+current bundle.
 
 `files[]` lists every file that existed **before the close-out began** — the
 fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
@@ -328,7 +307,7 @@ or `null` when it was not kept. Per kind:
 Which tags the API actually serves, with no blob downloads.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "requested": ["<new tag>", "<old tag>", "<tag>"],
   "results": [
     { "tag": "<old tag>", "in_diff_tags": true, "http": 200, "retcode": 0,
@@ -364,7 +343,7 @@ to invent them, and its claim that "the API 404s things" would be unfounded —
 a bundle recorded only successes contains no not-found evidence at all.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "shapes": [
     { "id": "chunk_missing", "family": "blob",
       "request": "a chunk id under the new build's prefix that the build does not have",
@@ -443,7 +422,7 @@ the other half of §5a: that document records the *deliberate* negative probes,
 this one records what the origin said when it refused something the run wanted.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "budget_bytes": 8388608,                 // the run-wide retention budget
   "total_retained_bytes": <bytes>,
   "responses": [
@@ -505,7 +484,7 @@ recorded. They abort before a bundle exists and their only trace is the error
 text.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "cap_bytes": 512,                        // per-value cap this run used
   "total": <count>,
   "omitted": <count>,                      // refusals not retained (cap or duplicate key)
@@ -540,7 +519,7 @@ value is **kept** in every document — `entries[].file`, `patchmaps/*.json`'s
 escaped.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "entries": [
     { "logical": "game/GenshinImpact_Data/Resources/CON",
       "on_disk": "game/GenshinImpact_Data/Resources/%CON" }
@@ -588,7 +567,7 @@ device-named tag the API supplied is escaped instead.
 Everything known about one archive blob.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "tag": "<tag>", "build_id": "<build id>", "matching_field": "game",
   "category_id": "<id>", "category_name": "…",   // the API's own name for the category
   "manifest": { "id": "manifest_<prefix>_<suffix>",
@@ -650,7 +629,7 @@ The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
 
 ```jsonc
 {
-  "schema_version": 4, "tag": "<tag>", "build_id": "<build id>",
+  "schema_version": 3, "tag": "<tag>", "build_id": "<build id>",
   "matching_field": "game", "entries": [
     { "file": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "is_folder": false, "size": <bytes>, "md5": "<md5>",
@@ -693,7 +672,7 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 ## 9. `diff/paths.diff.json`
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "old_tag": "<old tag>", "new_tag": "<new tag>",
   "fields": ["game", "en-us"],
   "counts": { "common": <count>, "identical": <count>, "changed": <count>,
@@ -731,7 +710,7 @@ The scoring table, with a row for **every** common path, not just the winners.
 Lets a later run ask "why did it pick that?"
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
               "moved_later","moved_earlier","old_max_end","same_md5","old_bytes","new_bytes",
               "patch_bytes","total_cost","classes","rank","admission_rank"],
@@ -791,7 +770,7 @@ Quantifies same-file-only reuse. Recorded because it bounds a deliberate
 simplification in the main tool; `gircap` never acts on it.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "new_chunks_total": <count>,
   "new_chunks_md5_present_in_old_manifest": <count>,
   "files_with_a_cross_file_only_chunk": <count>,
@@ -808,7 +787,7 @@ One blob per distinct `chunk_id`, byte-exact (zstd as served), stored once even
 when several files or both builds reference it.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "blobs": [
     { "chunk_id": "<chunk id>",
       "stored_path": "chunks/blobs/<chunk id>.zst",
@@ -982,7 +961,7 @@ manifests survived but whose index is incomplete fails here, and should.
 Per target chunk: where its bytes come from.
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "capture_id": "reuse_in_place",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
@@ -1138,7 +1117,7 @@ whose two sides are deliberately byte-identical.
 ## 15. `verify/checksums.json`
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "algorithm": "sha256",
   "entries": [
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
@@ -1191,7 +1170,7 @@ The count is safe, because no file appears or disappears between the two passes.
 ## 16. `verify/selfcheck.json`
 
 ```jsonc
-{ "schema_version": 4,
+{ "schema_version": 3,
   "result": "pass",                                  // pass | fail | incomplete
   "counts": { "total": <count>, "passed": <count>, "failed": <count> },
   "assertions": [
@@ -1233,103 +1212,6 @@ been handed a `verify` report, not a capture's own account of itself.
 
 A rendering of `MANIFEST.json` and `selfcheck.json`: versions, the matrix table
 with paths and sizes, the totals, any failed assertion, and how to re-verify.
-It is generated from the **final** `selfcheck.json` - after the A16 row is
-recorded - so its counts agree with the document it renders, and it carries no
+It is generated from the **final** `selfcheck.json` — after the A16 row is
+recorded — so its counts agree with the document it renders, and it carries no
 facts of its own. It is safe to delete.
-
----
-
-## 18. `dispatch/` and `persistent/` — the conditional records
-
-Added for the persistent-tier bridge fixture. **A bundle need not have these
-directories only when all three record classes honestly say `unavailable`**
-(the capture had no dispatcher routes). If any `persistent_*` matrix row says
-`captured`, the records must be present and fully verified; a bundle with a
-record class marked captured but no records fails verification. `gircap verify`
-re-derives two extra rows whenever the records are present, emits no row when
-they are honestly absent, and emits two red rows when they are missing but
-claimed:
-
-- `P1` — the record is schema 4; every record-supplied path (`envelope`,
-  `key_file`) is bundle-relative and safe; `key_file` parses as a PKCS#1 PEM or
-  .NET `RSAKeyValue` XML private key and SHA-256 of its public DER equals
-  `key_fingerprint`; the descriptor kinds are exactly `res`, `data` and
-  `silence_data`; the envelope's MD5, SHA-256 and `ciphertext_bytes` match its
-  byte length, and its MD5 is listed in `MANIFEST.json → files[]`;
-- `P2` — the index is schema 4; all three manifest kinds are exactly `res`,
-  `data` and `silence_data`; every manifest and blob path is bundle-relative
-  and safe, has the recorded size and MD5 on disk, and is listed in `files[]`;
-  every `BlobFile.source_kind` names one of the manifests; and every record
-  class marked `captured` has at least one blob of its kind.
-
-Both are `verify`-only ids, like `A18`/`A20`: they are not written into
-`selfcheck.json`. `gircap list` reports `dispatch_record`,
-`persistent_manifests` and `persistent_blobs` on each `BUNDLE` record, zero/
-false when no records were written.
-
-Every file below is written through `emit::write_bytes` / `emit::write_doc`, so
-`MANIFEST.json → files[]` and `verify/checksums.json` pick them up without a
-second inventory. The replay server reads them **read-only** and rewrites their
-CDN origins in memory at bind time; it never changes the bundle.
-
-### `dispatch/record.json`
-
-```jsonc
-{ "schema_version": 4,
-  "version": "9.9.0",                         // meta.latest used in the query
-  "query_version": "OSRELWin9.9.0",
-  "dispatch_url": "https://…",                // as queried
-  "key_fingerprint": "<sha256 of public key DER, never a private key>",
-  "key_file": "dispatch/key.pem",              // bundle-relative; PEM or XML bytes
-  "seed": "0011223344556677",
-  "envelope": "dispatch/response.json",        // byte-exact, content+sign JSON
-  "envelope_md5": "…", "envelope_sha256": "…",
-  "ciphertext_bytes": 768,
-  "decoded": {
-    "game_version": "9.9_live", "channel_name": "OSRELWin", "codename": "hk4e_global",
-    "res_revision": <n>, "data_revision": <n>, "silence_revision": <n>,
-    "audio_revision": <n>,
-    "res_hash": "…", "data_hash": "…", "silence_hash": "…", "audio_hash": "…",
-    "repo_res_version_url": "https://…", "repo_design_data_url": "https://…",
-    "base_revision": "<revision> <hash>",
-    "descriptors": [
-      { "kind": "res|data|silence_data", "remote_name": "…",
-        "url": "https://…", "md5": "…", "file_size": <bytes> } // ×3
-    ]
-  }
-}
-```
-
-The descriptor URLs are recorded **as served**; a consumer that replays them
-swaps only their scheme and authority, keeping the path. The decoded values are
-stored beside the ciphertext so a replay never has to guess a revision or a
-CDN path from base64. `key_fingerprint` is a public-key digest: no private key
-is ever committed.
-
-### `persistent/index.json`
-
-```jsonc
-{ "schema_version": 4,
-  "manifests": [
-    { "kind": "res|data|silence_data", "path": "persistent/<name>.ndjson",
-      "bytes": <bytes>, "md5": "…" } // ×3
-  ],
-  "blobs": [
-    { "remote_name": "blocks/00/11111111.blk",
-      "source_kind": "res",                     // one of the three manifest kinds
-      "capture_id": "persistent_res",           // <class> or <class>+<n> for extras
-      "path": "persistent/blobs/blocks/00/11111111.blk",
-      "bytes": <bytes>, "md5": "…" }
-  ]
-}
-```
-
-The three manifests and every blob are the **raw** bytes: `girpr` verifies each
-MD5/size gate against these numbers and mirrors the manifests verbatim. The
-producer reads its test-only RSA key, encrypted dispatch envelope and tiny
-NDJSON manifests from `tests/fixtures/persistent_inputs/samples/fixtures/`
-(relocated from the old research tree), never production keys or captured
-manifests. Its hand-run test writes the gitignored `artifacts/persistent_v4/`
-bundle; girpr's three manual bridge cases consume that bundle by copying its
-stored key, record and envelope into a scratch `dispatch/` tree. They do the
-reader's fast v4 shape check, not a re-run of `gircap verify`.

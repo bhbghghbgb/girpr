@@ -1,6 +1,6 @@
 //! Thin shim over the library's run-lock cleanup helpers.
 //!
-//! `tests/artifact_bridge.rs` includes this file with `#[path]`; every other
+//! `tests/artifact_repair_bridge.rs` includes this file with `#[path]`; every other
 //! binary reaches it through `tests/common`, whose `mod.rs` declares it as a
 //! child module. The implementation lives in `girpr_test_fixtures` so the lock
 //! policy is written once even though several binaries need only the cleanup.

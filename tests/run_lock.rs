@@ -1,6 +1,6 @@
 //! Tests for the shared run-lock cleanup helpers.
 //!
-//! The helpers live in `tests/common/run_lock.rs`. `tests/artifact_bridge.rs`
+//! The helpers live in `tests/common/run_lock.rs`. `tests/artifact_repair_bridge.rs`
 //! includes that file directly with `#[path]` because its binary has no
 //! `common` module; this binary reaches the same helpers through the crate-root
 //! `common` module, so the file is loaded once per crate. The tests live here

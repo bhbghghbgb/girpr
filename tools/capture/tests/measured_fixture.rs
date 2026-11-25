@@ -649,16 +649,9 @@ mod m5_matrix {
             Class::ALL.len(),
             "one row per class, always"
         );
-        // Every patch shape of the frozen pair has a candidate, so every
-        // shape row is answered — `captured` or `covered_by`. The three
-        // record classes have no scored path and are honestly unavailable.
-        assert!(
-            s.matrix
-                .iter()
-                .all(|r| r.class.is_record() || r.is_satisfied()),
-            "{:?}",
-            s.matrix
-        );
+        // Every class of the frozen pair has a candidate, so every row is
+        // answered — `captured` or `covered_by`.
+        assert!(s.matrix.iter().all(|r| r.is_satisfied()), "{:?}", s.matrix);
         // And the row that *would* be unavailable says why, when the pool has
         // nothing for it.
         let bare = select::candidates(&[gircap::manifest::diff::FieldDiff {
@@ -961,15 +954,9 @@ mod m5_matrix {
             "and no capture answers two shapes"
         );
 
-        // Over budget: six patch-shape shortfalls, and every one names its
-        // cost. Record classes have no scored candidates, so a pure content
-        // selection leaves them `unavailable` and `unmet()` excludes them.
-        assert_eq!(tight.unmet().len(), Class::PATCH_SHAPES.len());
+        // Over budget: six shortfalls, and every one of them names its cost.
+        assert_eq!(tight.unmet().len(), Class::ALL.len());
         for row in &tight.matrix {
-            if row.class.is_record() {
-                assert_eq!(row.status, MatrixStatus::Unavailable, "{row:?}");
-                continue;
-            }
             assert_eq!(row.status, MatrixStatus::OverBudget, "{row:?}");
             assert!(
                 row.reason

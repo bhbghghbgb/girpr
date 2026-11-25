@@ -72,32 +72,6 @@ feature, so a normal run does not compile or link that binary:
 cargo nextest run -p gircap --features manual-tests --test bundle_shapes --run-ignored only
 ```
 
-The persistent end-to-end test (`tests/persistent_capture_e2e.rs`) is
-**always on**. One loopback mock answers the Collapse metadata, the dispatcher
-query, `base_revision`, the three mirrored manifests and the hotfix blobs from
-the read-only committed inputs under `tests/fixtures/persistent_inputs/`, and
-the real `run::capture_with_http` fetches and decodes the byte-exact dispatcher
-response itself. It uses the test-only `GIRCAP_TEST_DISPATCH_PIN=0` hook and a
-synthetic key, never a production key or endpoint.
-
-A second, `#[ignore]`d test in that file produces the small bundle the later
-manual bridge cases consume. It writes **no committed fixture**: the output is
-the gitignored directory `artifacts/persistent_v4/` itself.
-
-```powershell
-cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only `
-  -E 'test(write_persistent_v4_bundle)'
-# then, for the manual bridge cases:
-$env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
-```
-
-`dispatch/key.pem` keeps its historical `.pem` filename: the bytes are
-`RSAKeyValue` XML (as in C3), and girpr accepts either PEM or XML there. The
-producer writes schema 4 and verifies its own output in process; `gircap verify
---artifact artifacts/persistent_v4` remains available as a separate, optional
-check of the bundle. The bridge does **not** invoke it — it reads the records
-directly and does only a fast v4 shape check.
-
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
 environment variable — can reach the next one. The price is that the mock's
@@ -154,14 +128,11 @@ difference between a quick loop and a slow one.
   to. Pin both when you want a specific pair, especially when the result is going
   to be kept.
 
-**Compatibility.** Every document carries `"schema_version": 4`, and a reader
+**Compatibility.** Every document carries `"schema_version": 3`, and a reader
 should reject an unknown one rather than guess. Backwards compatibility is not a
-requirement: version 4 requires all nine matrix rows and fully verifies the
-persistent records whenever a `persistent_*` class says `captured`, while a
-capture that honestly found no dispatcher routes keeps those rows `unavailable`
-and writes no records. Version 3 made the earlier evidence fields and documents
-**required**, so a version-3 bundle is re-captured rather than read with a
-default substituted for what nobody recorded. `verify` reports what
+requirement: version 3 makes the evidence fields and documents that earlier
+versions omitted **required**, so a version-2 bundle is re-captured rather than
+read with a default substituted for what nobody recorded. `verify` reports what
 it cannot re-derive instead of refusing, so a bundle whose `selfcheck` disagrees
 is a finding rather than an unreadable tree; a bundle *missing a required
 document* is refused, because a fixture that half-answers a question is worse
@@ -205,14 +176,14 @@ so every class is funded.
 
 The end-to-end check is **automated but expensive**: the bundle is replayed over
 loopback and the real `girpr` binary is run against it, once per capture, by
-`girpr`'s `tests/artifact_bridge.rs`. It needs exactly one bundle and is
+`girpr`'s `tests/artifact_repair_bridge.rs`. It needs exactly one bundle and is
 `#[ignore]`d for cost, so it is run by hand:
 
 ```powershell
 # in the girpr package. Needs exactly one bundle and FAILS without one.
-# the persistent cases use the v4 bundle written by the producer above
-$env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
-cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
 ```
 
 The cases run in parallel — one scratch tree and one set of listeners per
@@ -234,9 +205,7 @@ The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
 the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, and the
 consumer never regenerates or repairs a bundle — it reads `patchmaps/`,
-`expected/`, `game/` and the v4 `dispatch/`+`persistent/` records. It does not
-run `gircap verify`; a fast v4 record-shape check replaces that old
-precondition.
+`expected/` and `game/`, and runs `gircap verify` as its precondition.
 
 The crate's shape, its test strategy and its risks are in `docs/02-plan.md`;
 `docs/03-design-notes.md` holds the reasoning behind the parts that look

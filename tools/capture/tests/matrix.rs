@@ -173,7 +173,7 @@ fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
         .as_array()
         .expect("a matrix")
         .clone();
-    assert_eq!(rows.len(), 9, "six patch shapes plus three record classes");
+    assert_eq!(rows.len(), 6, "one row per patch shape");
     for r in &rows {
         // An unfulfilled row must say why. A `covered_by` row says which
         // capture covers it, so it carries a reason too — it is the *captured*

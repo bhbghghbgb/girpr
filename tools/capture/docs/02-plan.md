@@ -45,7 +45,7 @@ against `game/` would build its plan from the whole live manifest and fetch the
 entire game instead of the one captured file.
 
 The end-to-end check lives on `girpr`'s side, as
-`girpr`'s `tests/artifact_bridge.rs`. It is `#[ignore]`d because it needs a
+`girpr`'s `tests/artifact_repair_bridge.rs`. It is `#[ignore]`d because it needs a
 bundle and is expensive, and it is run by hand. That is
 also the only arrangement that keeps §2 of the spec honest: `gircap` does not
 invoke `girpr`, read its flags or share its exit codes, so the grep over
@@ -246,7 +246,7 @@ log chatter mixed in.
 | `tests/bundle_shapes` | expensive whole-capture shapes (metadata-only, lying manifest, mis-served chunk); ignored and gated behind the empty `manual-tests` feature, run with `--features manual-tests --test bundle_shapes --run-ignored only` | never |
 | `tests/case_coverage` | gates `tools/case_coverage.py` against the bundle it measures | never |
 | `tests/bundle_diff` | two captures of one fixture agree, once the never-deterministic fields are normalised | never |
-| live (manual) | a capture against the real API, and `girpr`'s `artifact_bridge` against the result | yes, deliberately |
+| live (manual) | a capture against the real API, and `girpr`'s `artifact_repair_bridge` against the result | yes, deliberately |
 
 **There is no stored decoded-manifest fixture, and that is a decision, not an
 oversight.** A checked-in fixture can only ever test what it happened to contain,
@@ -337,7 +337,7 @@ nobody mistakes them for tidying.
 
 | | why |
 |---|---|
-| Renaming, renumbering or removing **A1–A23** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_bridge` and any recorded bundle refer to them. |
+| Renaming, renumbering or removing **A1–A23** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_repair_bridge` and any recorded bundle refer to them. |
 | Changing `SCHEMA_VERSION` or any document's required fields | [`01-artifact-schema.md`](01-artifact-schema.md); a reader must reject an unknown value rather than guess. |
 | Any dependency on `girpr`, or a `Command` against its binary | the independence invariant, spec §2. A grep over `tools/capture/src/` must keep returning doc comments only. |
 | Turning on `clippy::pedantic` crate-wide | clippy is clean today on the default lints, which is worth preserving. Enabling pedantic in one commit rewrites the whole crate. If wanted, adopt lint groups one at a time. |

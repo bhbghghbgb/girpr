@@ -456,7 +456,6 @@ mod tests {
                     budget_cost: 0,
                     patch_bytes: 0,
                 }],
-                persistent: Vec::new(),
                 rejected: Vec::new(),
                 forced_skipped: Vec::new(),
                 forced_unscored: Vec::new(),

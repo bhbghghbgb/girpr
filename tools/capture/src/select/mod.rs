@@ -27,7 +27,6 @@
 pub mod budget;
 pub mod classes;
 pub mod decide;
-pub mod persistent;
 pub mod require;
 
 use serde::Serialize;
@@ -38,7 +37,6 @@ use crate::manifest::diff::{FieldDiff, State, by_cost, field_rank};
 
 pub use budget::{Budget, Fate};
 pub use classes::{Class, Shape};
-pub use persistent::PersistentAdmission;
 
 /// One path the matrix could capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,15 +350,7 @@ impl MatrixRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
     /// The captures, cheapest first.
-    ///
-    /// Patch shapes only. The persistent admissions live in
-    /// [`Selection::persistent`], because `blobs::plan`, `file_pairs` and
-    /// `emit::fixture` assume every entry here names a patch-shaped manifest
-    /// path and would mis-handle a full-file blob.
     pub admitted: Vec<Admission>,
-    /// The persistent full-file admissions, cheapest first, kept separate
-    /// from [`Selection::admitted`] for the reason above.
-    pub persistent: Vec<PersistentAdmission>,
     /// Candidates that were wanted and not funded, with the cost that refused
     /// them.
     ///
@@ -422,15 +412,10 @@ pub struct Rejection {
 
 impl Selection {
     /// The unmet classes, in matrix order.
-    ///
-    /// Record classes are not patch shapes: no manifest path can answer them,
-    /// so they are never *unmet* by a content selection. Their matrix rows say
-    /// whether the records were captured; `--require-class` for one cannot be
-    /// satisfied by admitting a game file.
     pub fn unmet(&self) -> Vec<Class> {
         self.matrix
             .iter()
-            .filter(|r| r.unsatisfied() && !r.class.is_record())
+            .filter(|r| r.unsatisfied())
             .map(|r| r.class)
             .collect()
     }
@@ -936,7 +921,6 @@ pub fn select(
     let selection = Selection {
         bytes_admitted,
         admitted,
-        persistent: Vec::new(),
         rejected,
         forced_skipped,
         forced_unscored,

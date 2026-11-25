@@ -88,76 +88,6 @@ pub fn write_api(
     Ok(written)
 }
 
-/// Write the optional `dispatch/` record: the byte-exact envelope and the
-/// record that says which key, seed and version produced it.
-///
-/// The digests are computed **here**, from the bytes about to be written, rather
-/// than trusted from the caller: a record that disagrees with its own envelope
-/// would make the replay serve bytes the bundle did not vouch for. Both paths
-/// are returned so the close-out puts them in `MANIFEST.json → files[]` and
-/// `verify/checksums.json` without another list to keep in step.
-pub fn write_dispatch(
-    root: &Path,
-    record: &crate::persistent::DispatchRecord,
-    envelope: &[u8],
-) -> std::io::Result<Vec<String>> {
-    let (bytes, md5, sha256) = crate::persistent::digest(envelope);
-    let mut record = record.clone();
-    record.envelope_md5 = md5;
-    record.envelope_sha256 = sha256;
-    record.ciphertext_bytes = bytes;
-    write_bytes(root, "dispatch/response.json", envelope)?;
-    write_doc(root, "dispatch/record.json", &record)?;
-    Ok(vec![
-        "dispatch/response.json".to_string(),
-        "dispatch/record.json".to_string(),
-    ])
-}
-
-/// Write the optional `persistent/` raw manifests and full-file blobs.
-///
-/// `bodies` is `(bundle-relative path, raw bytes)`; every path must be one the
-/// index names. Digests are recomputed from those bytes for the same reason as
-/// in [`write_dispatch`], and the index is written through [`write_doc`] so it
-/// joins the same inventory.
-pub fn write_persistent(
-    root: &Path,
-    index: &crate::persistent::PersistentIndex,
-    bodies: &[(String, Vec<u8>)],
-) -> std::io::Result<Vec<String>> {
-    let mut written = Vec::with_capacity(bodies.len() + 1);
-    let mut index = index.clone();
-    let measured = |path: &str| -> std::io::Result<(u64, String)> {
-        let (n, md5, _) = bodies
-            .iter()
-            .find(|(p, _)| p == path)
-            .map(|(_, b)| crate::persistent::digest(b))
-            .ok_or_else(|| {
-                std::io::Error::other(format!(
-                    "persistent/index.json names {path}, but no body was given"
-                ))
-            })?;
-        Ok((n, md5))
-    };
-    for file in &mut index.manifests {
-        let (n, md5) = measured(&file.path)?;
-        file.bytes = n;
-        file.md5 = md5;
-    }
-    for file in &mut index.blobs {
-        let (n, md5) = measured(&file.path)?;
-        file.bytes = n;
-        file.md5 = md5;
-    }
-    for (rel, bytes) in bodies {
-        write_bytes(root, rel, bytes)?;
-        written.push(rel.clone());
-    }
-    write_doc(root, "persistent/index.json", &index)?;
-    written.push("persistent/index.json".to_string());
-    Ok(written)
-}
-
 /// Write the incidental non-2xx bodies and their index.
 ///
 /// **`api/error_bodies/<seq>.body` is byte-exact**, for the same reason the six
@@ -1062,7 +992,6 @@ mod tests {
             packages: body("getGamePackages.json", "getGamePackages"),
             build_new: body("getBuild.7.1.0.json", "getBuild"),
             build_old: body("getBuild.7.0.0.json", "getBuild"),
-            dispatch: None,
             versions,
         }
     }

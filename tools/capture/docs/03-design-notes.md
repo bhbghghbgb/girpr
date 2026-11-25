@@ -15,7 +15,7 @@ Companions: [`02-plan.md`](02-plan.md) (shape, tests, risks),
 ## 1. How this crate measures risk
 
 A bundle is a **fixture other work depends on**. Re-capturing one is expensive
-and produces a large bundle, and `girpr`'s `artifact_bridge` runs against the
+and produces a large bundle, and `girpr`'s `artifact_repair_bridge` runs against the
 copies under `artifacts/`. So the risk axis for a change here is not "might it
 break the build":
 

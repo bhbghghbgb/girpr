@@ -201,7 +201,6 @@ mod tests {
                 budget_cost: projected as u64,
                 patch_bytes: 0,
             }],
-            persistent: Vec::new(),
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
             forced_unscored: Vec::new(),
