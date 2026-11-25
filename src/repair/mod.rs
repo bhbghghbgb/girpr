@@ -17,21 +17,26 @@
 //!
 //! The run has two halves:
 //!
-//! **Plan** — metadata → `REPORT` → manifests (with the local reuse map and the
-//! server's deprecated list fetched alongside) → `girpr_repair_plan::build_plan`
-//! → the purge plan. Nothing on disk has been touched at the end of this half,
-//! so every decision the run will act on is already made and inspectable. That
-//! is what lets the scope-of-work ceilings refuse *before* any of it runs.
+//! **Plan** — metadata → `REPORT` → manifests (with the local reuse map and both
+//! stale inputs — the legacy deprecated list and the patch-build deletes —
+//! fetched alongside) → `girpr_repair_plan::build_plan` → the purge plan. The two
+//! lists are unioned and every path still present in the fetched live chunk
+//! manifests is subtracted, so the sweep target is decided here and touches
+//! nothing. That is what lets the scope-of-work ceilings refuse *before* any of
+//! it runs.
 //!
-//! **Execute** — `create_dir_all` → `--purge-before` → `--check-only` → the
-//! repair loop → the post-phase. Every write and delete lives here.
+//! **Execute** — `create_dir_all` → the stale sweep → `--purge-before` →
+//! `--check-only` → the repair loop → the post-phase. Every write and delete
+//! lives here.
 //!
 //! Phase order overall:
 //! 1. prepare `game_dir` (create when missing, unless read-only),
 //! 2. metadata, then the begin report, so a parser sees the on-disk and target
 //!    versions before anything is downloaded,
-//! 3. manifests + reuse map + deprecated list (in parallel) → work list (nothing written yet),
-//! 4. `create_dir_all` + `--purge-before` cleanup, to free room for the repair,
+//! 3. manifests + reuse map + both stale lists (in parallel) → the sweep target
+//!    (live paths subtracted) → work list (nothing written yet),
+//! 4. `create_dir_all` + stale sweep + `--purge-before` cleanup, to free room
+//!    for the repair,
 //! 5. `--check-only` returns here, before any download (exit `0` clean / `4`
 //!    damaged),
 //! 6. the repair loop; any failed file returns exit `3` and skips the
@@ -59,6 +64,7 @@ pub(crate) mod test_support;
 use girpr_repair_plan::{PurgePlan, RepairPlan};
 pub use phases::metadata::Meta;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -149,11 +155,13 @@ struct PlanPhase {
     /// The install scan, when `--scan` asked for it. Shared with the
     /// `--check-only` verifier so neither path deep-clones it.
     scan: Option<Arc<ScanReport>>,
-    /// The server's deprecated-file list (empty in read-only modes, or when the
-    /// best-effort fetch failed). Shared by `Arc` so the post-phase's blocking
+    /// The stale sweep target: the legacy deprecated list unioned with the
+    /// patch-build deletes, with every path still present in the fetched live
+    /// chunk manifests subtracted (empty in read-only modes, or when both
+    /// best-effort fetches failed). Shared by `Arc` so the sweep's blocking
     /// delete task borrows the same elements instead of cloning them for
     /// `'static`.
-    deprecated: Arc<[String]>,
+    stale: Arc<[String]>,
     /// The local chunk map, shared with the repair loop and the scan.
     local_map: Arc<LocalChunkMap>,
     /// The persistent plan and its scope verdict, when the flag was passed.
@@ -179,8 +187,8 @@ enum PlanOutcome {
 
 /// The plan half: decide everything, touch nothing.
 ///
-/// Metadata → `REPORT` → manifests → `build_plan` → the purge plan → the
-/// deprecated list → the scan → the ceilings → `--print-plan` / `--plan-out`.
+/// Metadata → `REPORT` → manifests → `build_plan` → the purge plan → the stale
+/// sweep target → the scan → the ceilings → `--print-plan` / `--plan-out`.
 /// The two early exits here (`--print-plan` success, a scope ceiling) are
 /// [`PlanOutcome::Finished`]; the run never reaches `create_dir_all`.
 ///
@@ -220,16 +228,17 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // 1 + 2 + 2.5. local state, server metadata, and the begin report.
     let meta = fetch_and_report(ctx, &game_dir).await?;
 
-    // 3. manifests (latest, per-manifest prefix kept), local chunk map and the
-    // best-effort deprecated list — three independent network phases under one
-    // shared client and budget.
+    // 3. manifests (latest, per-manifest prefix kept), local chunk map and both
+    // best-effort stale lists — four independent network phases under one
+    // shared client and budget. The sweep target is derived here, before any
+    // write, by subtracting every live chunk path from their union.
     let http = meta.hyp.http();
-    let (per_manifest, local_map, deprecated, persistent_fetched) =
+    let (per_manifest, local_map, stale, persistent_fetched) =
         fetch_plan_network(ctx, &meta, &http, summary).await?;
 
     // 4. work list, purge candidates, scan, estimates, and the ceilings —
-    // everything decided before a byte is written. The deprecated list was
-    // already fetched in step 3; only its use happens here.
+    // everything decided before a byte is written. The stale sweep target was
+    // already derived in step 3; only its use happens here.
     let Some(work) = build_and_assert_plan(PlanInputs {
         ctx,
         summary,
@@ -238,7 +247,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         meta: &meta,
         per_manifest,
         local_map: &local_map,
-        deprecated,
+        stale,
         persistent_fetched,
     })
     .await?
@@ -276,7 +285,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         purge_plan: work.purge_plan.map(Arc::new),
         purge_keys: work.purge_keys,
         scan: work.scan,
-        deprecated: work.deprecated,
+        stale: work.stale,
         local_map,
         persistent: work.persistent,
     })))
@@ -290,7 +299,7 @@ struct PlanWork {
     plan: Arc<RepairPlan>,
     purge_plan: Option<PurgePlan>,
     purge_keys: Option<Arc<PurgeKeys>>,
-    deprecated: Arc<[String]>,
+    stale: Arc<[String]>,
     scan: Option<Arc<ScanReport>>,
     /// The per-file download estimate, owned by the `girpr-repair-plan` leaf.
     /// One derivation feeds both the `PLAN` total and the `--plan-out` document.
@@ -337,17 +346,24 @@ async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFail
 }
 
 /// Step 3: the latest manifests (with each manifest's chunk URL prefix kept),
-/// the local chunk-reuse map, and the advisory deprecated-file list.
+/// the local chunk-reuse map, and the two advisory stale inputs.
 ///
-/// These are three independent network requests: none consumes another's
-/// output, and the deprecated list is best-effort. They are started together
-/// under one shared client (the manifest fetches use `http`, a clone of the
-/// metadata client's pool; the deprecated fetch uses the same pool through
+/// These are four independent network requests: none consumes another's output,
+/// and both stale lists are best-effort. They are started together under one
+/// shared client (the manifest fetches use `http`, a clone of the metadata
+/// client's pool; the two advisory fetches use the same pool through
 /// `meta.hyp`) and one shared [`ManifestBudget`], so the wall-clock is the
 /// slowest phase rather than their sum and the peak decoded-manifest memory is
 /// unchanged. `try_join!` keeps `fetch_latest`'s fatal error short-circuiting
-/// the other two; the two best-effort phases are wrapped so their success is
-/// never mistaken for a reason to fail the run.
+/// the others; the best-effort phases are wrapped so their success is never
+/// mistaken for a reason to fail the run.
+///
+/// Once the manifests are in hand the stale inputs are folded into one list:
+/// the legacy deprecated names and the patch-build deletes are unioned, and any
+/// path still present in a fetched live chunk manifest is subtracted. That
+/// cross-check uses the live manifests, not the patch manifest's own patch
+/// list, and compares exact `clean_rel`-normalised paths. Nothing here decides
+/// whether a delete happens — it only decides what the sweep may target.
 async fn fetch_plan_network(
     ctx: &RunCtx,
     meta: &Meta,
@@ -369,7 +385,7 @@ async fn fetch_plan_network(
     // fails the run with exit 2. It is absent unless the query above ran.
     let persistent_dispatch = meta.dispatch.as_ref();
 
-    let (per_manifest, local_map, deprecated, persistent_fetched) = tokio::try_join!(
+    let (per_manifest, local_map, deprecated, patch_deletes, persistent_fetched) = tokio::try_join!(
         manifest::fetch_latest(
             http,
             backoff,
@@ -395,12 +411,42 @@ async fn fetch_plan_network(
         },
         async { Ok::<_, RunFailure>(load_deprecated(ctx, meta).await) },
         async {
+            // Same gate as the legacy list: neither read-only mode reaches the
+            // sweep, so neither needs a patch-build round-trip. A failed fetch
+            // contributes no paths, exactly like `fetch_deprecated`.
+            if ctx.print_plan || ctx.check_only {
+                tracing::debug!("read-only mode: not fetching the patch-build delete list");
+                return Ok::<_, RunFailure>(Vec::new());
+            }
+            Ok::<_, RunFailure>(
+                match girpr_fetch::sophon::fetch_patch_deletes(
+                    &meta.hyp,
+                    backoff,
+                    &meta.branch,
+                    &meta.audio,
+                    &meta.ignore,
+                )
+                .await
+                {
+                    Ok(list) => list,
+                    Err(e) => {
+                        tracing::warn!("patch-build delete list unavailable: {e:#}");
+                        Vec::new()
+                    }
+                },
+            )
+        },
+        async {
             match persistent_dispatch {
                 Some(dispatch) => persistent::fetch_manifests(http, backoff, dispatch).await,
                 None => Ok(Vec::new()),
             }
         },
     )?;
+    // The live set comes from the chunk manifests that were fetched above, not
+    // from the patch manifest's own patch list. Both inputs were normalised at
+    // their fetch boundaries, so the exemption is one exact string comparison.
+    let stale = build_stale_list(deprecated, patch_deletes, &per_manifest);
     let local_map = Arc::new(local_map);
     timer.finish();
     // The local manifest loading is the one degradation that changes the
@@ -419,7 +465,7 @@ async fn fetch_plan_network(
             "unavailable"
         });
     }
-    Ok((per_manifest, local_map, deprecated, persistent_fetched))
+    Ok((per_manifest, local_map, stale, persistent_fetched))
 }
 
 /// The inputs to [`build_and_assert_plan`]: the values `plan_phase` already
@@ -432,16 +478,16 @@ struct PlanInputs<'a> {
     meta: &'a Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     local_map: &'a Arc<LocalChunkMap>,
-    /// The advisory list fetched alongside the manifests in step 3; passed
-    /// through to the plan so step 4 only decides how it is used.
-    deprecated: Arc<[String]>,
+    /// The decided sweep target fetched and folded in step 3; passed through to
+    /// the plan so step 4 only decides how it is used.
+    stale: Arc<[String]>,
     /// The three fetched-and-verified persistent manifests, when the query ran.
     persistent_fetched: Vec<ManifestInput>,
 }
 
 /// Step 4: the work list, the purge candidates, the scan, the download
-/// estimate, and the scope-of-work ceilings. The deprecated list is fetched in
-/// step 3 and only consumed here.
+/// estimate, and the scope-of-work ceilings. The stale sweep target is decided
+/// in step 3 and only carried through here.
 ///
 /// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
 /// [`PlanOutcome::Finished`] return so a helper never hands back an exit code.
@@ -458,7 +504,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         meta,
         per_manifest,
         local_map,
-        deprecated,
+        stale,
         persistent_fetched,
     } = inputs;
 
@@ -622,7 +668,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         plan,
         purge_plan,
         purge_keys,
-        deprecated,
+        stale,
         scan,
         estimate,
         disk,
@@ -749,16 +795,17 @@ async fn plan_work_and_purge(
 // mapping to this binary's usage error. Unpurged runs apply it earlier, in
 // `plan_work_and_purge`, where the verdict is already final.
 
-/// The server's deprecated-file list, fetched in step 3 alongside the manifests.
+/// The legacy deprecated-file list, fetched in step 3 alongside the manifests.
 ///
-/// Fetched in the plan rather than the post-phase: it is part of what the run
-/// will act on. Still best-effort (the list is advisory) and independent of the
-/// manifests and the reuse map, so it overlaps with both.
+/// Fetched in the plan rather than the execute sweep: it is part of what the
+/// run will act on. Still best-effort (the list is advisory) and independent of
+/// the manifests and the reuse map, so it overlaps with both.
 ///
-/// `--dry-run` needs it because the post-phase now runs in a dry run and lists
-/// the deprecated deletes it would make. `--check-only` and `--print-plan` still
-/// skip it: neither reaches the post-phase, so the request would only add a
-/// network round-trip and throw the answer away.
+/// `--dry-run` needs it because the sweep now runs in a dry run and lists the
+/// deletes it would make. `--check-only` and `--print-plan` still skip it:
+/// neither reaches the sweep, so the request would only add a network
+/// round-trip and throw the answer away. The patch-build fetch in step 3 uses
+/// exactly the same gate.
 ///
 /// Those two modes are the whole exclusion. `readonly()` is
 /// `dry_run || check_only`, so once `check_only` is excluded the remaining
@@ -771,13 +818,61 @@ async fn plan_work_and_purge(
 async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Arc<[String]> {
     let wants_deprecated = !ctx.print_plan && !ctx.check_only;
     if wants_deprecated {
-        // The fetch hands back the shared list itself, so the post-phase can
-        // share it with its blocking task for a reference bump.
+        // The fetch hands back the shared list itself, so the sweep's blocking
+        // task can borrow the same elements for a reference bump.
         fetch_deprecated(&meta.hyp).await
     } else {
         tracing::debug!("read-only mode: not fetching the deprecated-file list");
         Vec::new().into()
     }
+}
+
+/// Fold the two advisory stale inputs into the sweep's target list.
+///
+/// The legacy deprecated names and the patch-build deletes are unioned in that
+/// order, then every path still present in a fetched live chunk manifest is
+/// removed. The live set is built from the manifests themselves — not from the
+/// patch manifest's own patch list — so a path the new version still ships is
+/// never swept even if an old tag asks for its deletion.
+///
+/// Both inputs were normalised with `clean_rel` at their fetch boundaries, so
+/// the exemption is one exact string comparison and no rewrite happens here.
+/// A live path that cannot be normalised is warned about and dropped from the
+/// keep set: an escape is not a path this run could write into the install.
+/// Duplicate targets keep their first sighting, so each file is named once.
+fn build_stale_list(
+    deprecated: Arc<[String]>,
+    patch_deletes: Vec<String>,
+    per_manifest: &[(String, Vec<SophonChunkFile>)],
+) -> Arc<[String]> {
+    let mut live: HashSet<String> = HashSet::new();
+    for (_, files) in per_manifest {
+        for file in files {
+            match util::clean_rel(&file.file) {
+                Ok(rel) => {
+                    live.insert(rel);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %file.file,
+                        error = %format!("{e:#}"),
+                        "live chunk path is not a plain relative path; ignored"
+                    );
+                }
+            }
+        }
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut stale: Vec<String> = Vec::new();
+    for path in deprecated.iter().chain(patch_deletes.iter()) {
+        if live.contains(path) {
+            continue;
+        }
+        if seen.insert(path.clone()) {
+            stale.push(path.clone());
+        }
+    }
+    stale.into()
 }
 
 /// The scan, when it was asked for. It reads every planned file once and turns
@@ -952,8 +1047,10 @@ async fn publish_plan(ctx: &RunCtx, work: &PlanWork) -> Result<(), RunFailure> {
 /// The execute half: everything here may touch the disk.
 ///
 /// Entered only with a completed [`PlanPhase`], so every refusal has already
-/// happened and `create_dir_all` below is the first mutation. The early returns
-/// keep their order and meaning: `--check-only` (success/found damage),
+/// happened and `create_dir_all` below is the first mutation. The stale sweep
+/// runs immediately after the audio selection and before `--purge-before`, so
+/// its targets are gone before any repair bytes land. The early returns keep
+/// their order and meaning: `--check-only` (success/found damage),
 /// `--purge-only` (success/limit), a runtime ceiling (limit), a failed file
 /// (write), then the post-phase (success/limit).
 async fn execute_phase(
@@ -969,7 +1066,7 @@ async fn execute_phase(
         purge_plan,
         purge_keys,
         scan,
-        deprecated,
+        stale,
         local_map,
         persistent,
     } = phase;
@@ -983,6 +1080,12 @@ async fn execute_phase(
 
     // 5.1 the explicit `--audio` selection.
     write_explicit_audio(ctx, &game_dir, &meta, readonly)?;
+
+    // 5.15 the stale sweep: delete (or list, in a dry run) the union of the
+    // legacy deprecated files and the patch-build deletes, minus every path
+    // the live chunk manifests still carry. It runs before `--purge-before`
+    // and before any repair bytes land, and `--check-only` never reaches it.
+    run_stale_sweep(ctx, &game_dir, &stale, &mut summary).await;
 
     // 5.2 files-cleanup before.
     run_purge_before(ctx, purge_plan.clone(), &mut summary).await?;
@@ -1013,7 +1116,6 @@ async fn execute_phase(
             purge_keys,
             purge_plan.as_deref(),
             &meta,
-            &deprecated,
             persistent.as_deref(),
             summary,
         )
@@ -1077,7 +1179,6 @@ async fn execute_phase(
             purge_keys,
             purge_plan.as_deref(),
             &meta,
-            &deprecated,
             persistent.as_deref(),
             summary,
         )
@@ -1175,6 +1276,39 @@ fn write_explicit_audio(
             .map_err(RunFailure::write)?;
     }
     Ok(())
+}
+
+/// Step 5.15: the stale sweep, before `--purge-before` and before any repair
+/// byte lands.
+///
+/// The target list was decided in the plan half and is shared by `Arc`, so the
+/// blocking delete task only takes a reference bump. The delete itself is
+/// best-effort — a refused path is warned about and skipped, and a panicked
+/// task is logged by the post module's spawn wrapper — so this step never
+/// changes the run's exit class. Its bytes accumulate into the same
+/// `deleted_extra_bytes` counter as every other cleanup delete and stay outside
+/// `--max-delete-bytes`.
+///
+/// `--check-only` verifies and returns before any delete; `--print-plan` never
+/// reaches the execute half. A dry run reaches the sink, which lists the target
+/// names and returns `0`, so nothing is counted as freed.
+async fn run_stale_sweep(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    stale: &Arc<[String]>,
+    summary: &mut Summary,
+) {
+    if ctx.check_only {
+        return;
+    }
+    let deleted = phases::post::spawn_delete_stale(
+        game_dir.to_path_buf(),
+        Arc::clone(stale),
+        ctx.path_scope.clone(),
+        ctx.dry_run,
+    )
+    .await;
+    summary.add_deleted_bytes(deleted);
 }
 
 /// Run a blocking closure on the blocking pool with the caller's tracing
@@ -1298,7 +1432,6 @@ async fn run_purge_only(
     purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    deprecated: &Arc<[String]>,
     persistent: Option<&persistent::PersistentState>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
@@ -1314,7 +1447,6 @@ async fn run_purge_only(
         before_purge,
         meta,
         &mut summary,
-        deprecated,
         persistent,
     )
     .await?;
@@ -1362,7 +1494,6 @@ async fn run_post(
     purge_keys: Option<Arc<PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    deprecated: &Arc<[String]>,
     persistent: Option<&persistent::PersistentState>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
@@ -1376,7 +1507,6 @@ async fn run_post(
         before_purge,
         meta,
         &mut summary,
-        deprecated,
         persistent,
     )
     .await?;
@@ -1523,7 +1653,7 @@ async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     }
 }
 
-/// Normalise each deprecated name to the `/` form the post-phase compares
+/// Normalise each deprecated name to the `/` form the sweep compares
 /// against, dropping (with a warning) anything that is not a plain relative
 /// path. The list is a delete sink, so a name that would escape the install is
 /// never followed.
@@ -1547,12 +1677,13 @@ fn normalize_deprecated(list: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunCtx, RunExit, Summary, failed_file_outranks_limit, fetch_deprecated, finish,
-        normalize_deprecated, note_stopped, phases, prepare_install, spawn_blocking_traced,
+        RunCtx, RunExit, Summary, build_stale_list, failed_file_outranks_limit, fetch_deprecated,
+        finish, normalize_deprecated, note_stopped, phases, prepare_install, spawn_blocking_traced,
     };
     use crate::Biz;
     use crate::hyp::HypClient;
     use crate::retry::BackoffPolicy;
+    use crate::sophon::SophonChunkFile;
 
     /// A blocking task still reaches the caller's scoped subscriber: the pool
     /// thread has no thread-local dispatcher, and the cleanup passes log the
@@ -1700,6 +1831,47 @@ mod tests {
             &list[..],
             ["old/legacy.dll", "kept/file.dat", "a/b/c.dat"],
             "the fetch drops unsafe names and hands on / forms in input order"
+        );
+    }
+
+    /// The sweep target is the union of both advisory lists, minus whatever the
+    /// live chunk manifests still carry. The keep set comes from the fetched
+    /// manifests only, duplicates keep their first sighting, and a live path
+    /// spelled with `\` still exempts the `/` target.
+    #[test]
+    fn the_stale_target_unions_both_lists_and_exempts_live_paths() {
+        fn live(rel: &str) -> SophonChunkFile {
+            SophonChunkFile {
+                file: rel.to_string(),
+                ..Default::default()
+            }
+        }
+
+        let deprecated: Vec<String> = ["old/legacy.dll", "game/kept.dat", "shared.dat"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        // Patch paths arrive already normalised from `fetch_patch_deletes`;
+        // the live manifest below deliberately spells its copy with `\`.
+        let patch = vec![
+            "stale/patch.dat".to_string(),
+            "shared.dat".to_string(),
+            "game/kept.dat".to_string(),
+        ];
+        let per_manifest = vec![
+            (
+                "game".to_string(),
+                vec![live("game\\kept.dat"), live("live.dat")],
+            ),
+            ("en-us".to_string(), vec![live("en-us/old.dat")]),
+        ];
+
+        let stale = build_stale_list(deprecated.into(), patch, &per_manifest);
+
+        assert_eq!(
+            &stale[..],
+            ["old/legacy.dll", "shared.dat", "stale/patch.dat"],
+            "both lists contribute, live paths are kept, first sighting wins"
         );
     }
 

@@ -37,6 +37,10 @@ girpr-log = { path = "../../crates/log", features = ["test-support-async"] }
 serde_json = "1.0.154"
 # The manifest body is protobuf; `Message` is the encode trait the fixture needs.
 prost = "0.14.6"
+# The patch-manifest wire shape the mock encodes for a scripted `getPatchBuild`
+# delete list. The leaf owns only the byte layout, so this stays a direct,
+# in-workspace dependency rather than going through the product facade.
+girpr-proto = { path = "../../crates/proto" }
 # Manifests and chunk payloads are zstd frames on the wire.
 zstd = "0.14.4"
 # The mock is a small accept loop on an ephemeral loopback port. `rt` runs the

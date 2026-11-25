@@ -1108,6 +1108,7 @@ dependencies = [
  "girpr-lock",
  "girpr-log",
  "girpr-model",
+ "girpr-proto",
  "girpr-tempdir",
  "prost",
  "serde_json",

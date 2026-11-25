@@ -7,6 +7,9 @@
 //! - `GET <hyp>/getGameBranches` -> `{"game_branches":[...]}`
 //! - `GET <sophon>/getBuild[?tag=]` -> chunk build, or `retcode -202` for
 //!   unknown tags (exercises the local-build fallback in `repair::run`)
+//! - `POST <sophon>/getPatchBuild` -> patch build: an empty manifest list by
+//!   default, or one synthetic game patch manifest carrying the delete paths
+//!   a test scripted in [`MockOpts::patch_deletes`]
 //! - `GET <hyp>/getGameDeprecatedFileConfigs` -> deprecated list
 //! - `GET <manifest_prefix>/<manifest_id>` -> zstd(protobuf manifest)
 //! - `GET <chunk_prefix>/<chunk_id>` -> zstd(chunk payload)
@@ -39,6 +42,10 @@ use std::sync::{
 use girpr_fetch::hyp::terminal_retcode;
 use girpr_fetch::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 use girpr_model::region::Region as Biz;
+use girpr_proto::{
+    SophonPatchDeleteFile, SophonPatchDeleteFileCollection, SophonPatchDeleteTag,
+    SophonPatchManifest,
+};
 use prost::Message as _;
 
 // The lock-cleanup helpers are shared by the fixture-free integration targets
@@ -160,6 +167,11 @@ pub struct FixtureLatestManifest {
 /// writing this into `config.ini` is how a test says "the local build's
 /// manifests are available" (i.e. chunk reuse is available).
 pub const LATEST_TAG: &str = "9.9.9-test";
+
+/// The id of the one synthetic patch manifest the mock serves when a test
+/// scripts `MockOpts::patch_deletes`. Distinct from every chunk-manifest id so
+/// a fixture cannot serve one blob where the other was expected.
+pub const PATCH_MANIFEST_ID: &str = "manifest_test_patch_001";
 
 /// The local version a test writes into `config.ini` when its fixture has an
 /// old side.
@@ -814,6 +826,10 @@ pub struct MockOpts {
     /// another launcher is not silently answered with the global identity.
     pub biz: Option<Biz>,
     pub deprecated_files: Vec<String>,
+    /// Paths a synthetic game patch manifest asks to delete, for the stale
+    /// sweep. Empty (the default) serves a patch build with no manifests, so
+    /// existing fixtures are unaffected and no extra blob is requested.
+    pub patch_deletes: Vec<String>,
     pub scan_dir: String,
     pub res_dir: String,
     pub cache_dir: String,
@@ -977,6 +993,11 @@ struct Responses {
     configs: Vec<u8>,
     branches: Vec<u8>,
     deprecated: Vec<u8>,
+    /// The `getPatchBuild` answer: no manifests unless a test scripted deletes.
+    patch_build: Vec<u8>,
+    /// The synthetic patch manifest's body, by id. `None` for the empty build,
+    /// so no patch blob is served to fixtures that did not ask for one.
+    patch_manifest: Option<(String, Vec<u8>)>,
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     /// The `getBuild` answer for a **local** tag, when the server serves one.
@@ -1107,6 +1128,69 @@ fn build_responses(
             }]
         }
     });
+    // The patch build: empty by default so an existing fixture makes no extra
+    // blob request. When a test scripts deletes, one synthetic game manifest
+    // carries all of them in a single tag, under its own distinct manifest id.
+    let patch_manifest = if opts.patch_deletes.is_empty() {
+        None
+    } else {
+        let manifest = SophonPatchManifest {
+            patches: Vec::new(),
+            delete_tags: vec![SophonPatchDeleteTag {
+                tag: fx.latest_tag.clone(),
+                delete_collection: Some(SophonPatchDeleteFileCollection {
+                    delete_files: opts
+                        .patch_deletes
+                        .iter()
+                        .map(|file| SophonPatchDeleteFile {
+                            file: file.clone(),
+                            size: 0,
+                            md5: String::new(),
+                        })
+                        .collect(),
+                }),
+            }],
+            compress_mode: 0,
+        };
+        let mut raw = Vec::new();
+        manifest.encode(&mut raw).expect("encode patch manifest");
+        let checksum = md5hex(&raw);
+        Some((
+            PATCH_MANIFEST_ID.to_string(),
+            zstd_bytes(&raw),
+            raw.len(),
+            checksum,
+        ))
+    };
+    let patch_manifests: Vec<serde_json::Value> = patch_manifest
+        .as_ref()
+        .map(|(id, body, raw_len, checksum)| {
+            vec![serde_json::json!({
+                "category_id": "10016",
+                "category_name": "game-test",
+                "matching_field": "game",
+                "manifest": {
+                    "id": id,
+                    "checksum": checksum,
+                    "compressed_size": body.len(),
+                    "uncompressed_size": raw_len,
+                },
+                // `diff_download` is never a blob source for the delete list.
+                "diff_download": {"url_prefix": "", "url_suffix": ""},
+                "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""},
+            })]
+        })
+        .unwrap_or_default();
+    let patch_build = serde_json::json!({
+        "retcode": 0,
+        "message": "OK",
+        "data": {
+            "build_id": "patch_build_test_001",
+            "patch_id": "patch_test_001",
+            "tag": fx.latest_tag.clone(),
+            "manifests": patch_manifests,
+        },
+    });
     let mut latest_manifests = vec![serde_json::json!({
         "category_id": "10016",
         "category_name": "game-test",
@@ -1193,6 +1277,8 @@ fn build_responses(
         configs: serde_json::to_vec(&configs).unwrap(),
         branches: serde_json::to_vec(&branches).unwrap(),
         deprecated: serde_json::to_vec(&deprecated).unwrap(),
+        patch_build: serde_json::to_vec(&patch_build).unwrap(),
+        patch_manifest: patch_manifest.map(|(id, body, _, _)| (id, body)),
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         build_local,
@@ -1301,6 +1387,10 @@ async fn serve_one(
         }
     } else if target.contains("getGameDeprecatedFileConfigs") {
         ("200 OK", "application/json", r.deprecated.clone())
+    } else if target.contains("getPatchBuild") {
+        // A POST with all arguments in the query string. The mock reads only
+        // the request target, so the verb needs no special handling here.
+        ("200 OK", "application/json", r.patch_build.clone())
     } else if target.contains("getBuild") {
         match query_tag(&target) {
             Some(t) if t != r.latest_tag => match &r.build_local {
@@ -1342,6 +1432,10 @@ async fn serve_one(
         {
             ("200 OK", "application/octet-stream", body.clone())
         } else if let Some((_, body)) = r.extra_manifests.iter().find(|(mid, _)| mid == id) {
+            ("200 OK", "application/octet-stream", body.clone())
+        } else if let Some((patch_id, body)) = &r.patch_manifest
+            && id == patch_id
+        {
             ("200 OK", "application/octet-stream", body.clone())
         } else {
             ("404 Not Found", "text/plain", b"no such manifest".to_vec())

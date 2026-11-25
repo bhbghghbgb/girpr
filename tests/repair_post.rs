@@ -1,4 +1,4 @@
-//! Post-phase cases: deprecated files, explicit audio selection, and the
+//! Post-phase cases: the stale sweep, explicit audio selection, and the
 //! dry run that lists post-phase work.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
@@ -8,14 +8,14 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
-    build_fixture_spec, ctx_for, ctx_for_biz, load_counters, read_game_file, run, run_binary,
-    temp_dir, write_game_file,
+    build_fixture_spec, ctx_for, ctx_for_biz, load_counters, logs_of, read_game_file, run,
+    run_binary, temp_dir, write_game_file,
 };
 #[cfg(any(unix, windows))]
 use girpr::test_support::{FixtureRefusal, skip_fixture_refusal};
 use girpr::{Biz, RunExit};
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Run the binary with an explicit `--audio` and one extra refusing flag.
 ///
@@ -46,7 +46,7 @@ async fn run_audio_refusal(
 }
 
 #[tokio::test]
-async fn deprecated_files_deleted_in_post_phase() {
+async fn deprecated_files_deleted_by_the_stale_sweep() {
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -375,9 +375,9 @@ async fn an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only() 
 #[tokio::test]
 async fn dry_run_lists_the_post_phase_and_changes_nothing() {
     // A dry run answers "what would this run do?" end to end, so it reaches
-    // the post-phase's read-only paths: the deprecated deletes, the audio
-    // cache move and the cleanup. It lists them, deletes and moves nothing,
-    // counts no bytes, and stops before the `config.ini` bump.
+    // the stale sweep and the post-phase's read-only paths: the audio cache
+    // move and the cleanup. It lists them, deletes and moves nothing, counts
+    // no bytes, and stops before the `config.ini` bump.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -408,7 +408,7 @@ async fn dry_run_lists_the_post_phase_and_changes_nothing() {
     assert_eq!(
         read_game_file(&dir, "old/legacy.dll").unwrap(),
         &[0x7Eu8; 50],
-        "dry-run must not delete deprecated files"
+        "dry-run must not delete stale files"
     );
     assert!(
         read_game_file(&dir, "stray/orphan.dat").is_some(),
@@ -790,5 +790,293 @@ async fn deprecated_files_call_carries_the_per_launcher_channel() {
         assert!(!t.contains("channel="), "{api} must omit channel: {t}");
     }
 
+    mock.stop();
+}
+
+/// Lay the standard fixture's live files on disk so the sweep is the only
+/// destructive step a case exercises: the repair loop has nothing to write.
+fn write_live_files(dir: &std::path::Path) {
+    let fx = build_fixture();
+    for f in &fx.files {
+        write_game_file(dir, &f.rel, &f.data);
+    }
+}
+
+/// A patch-build delete is swept like a legacy deprecated file: the bytes are
+/// gone, the same `deleted_extra_bytes` counter carries their size, and the run
+/// really fetched the patch build. The bilibili launcher is deliberate — the
+/// sweep has no per-launcher special case.
+#[tokio::test]
+async fn a_patch_delete_is_swept_and_counted() {
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            biz: Some(Biz::Hk4eBilibili),
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("patch_delete_sweep");
+    write_live_files(&dir);
+    write_game_file(&dir, "stale/patch.dat", &[0x7Eu8; 64]);
+
+    let (summary, code) = run(ctx_for_biz(dir.to_path_buf(), &mock, 2, Biz::Hk4eBilibili))
+        .await
+        .expect("bilibili run with a patch delete");
+
+    assert_eq!(code, RunExit::Success);
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 64, "the patch delete's bytes are counted");
+    assert!(read_game_file(&dir, "stale/patch.dat").is_none());
+    assert!(
+        mock.first_target_with("getPatchBuild").is_some(),
+        "the sweep fetched the patch build"
+    );
+    mock.stop();
+}
+
+/// A delete path that the live chunk manifest still carries is exempt. The
+/// keep set is the fetched chunk manifests, not the patch manifest's patch
+/// list, and the comparison is the exact `clean_rel` spelling.
+#[tokio::test]
+async fn a_patch_delete_path_that_is_live_is_kept() {
+    let fx = build_fixture();
+    let foo = fx
+        .files
+        .iter()
+        .find(|f| f.rel == "game/foo.dat")
+        .expect("the fixture has a live foo file")
+        .data
+        .clone();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            patch_deletes: vec!["game/foo.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("patch_delete_live_overlap");
+    write_live_files(&dir);
+
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
+        .await
+        .expect("run with a live patch-delete overlap");
+
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        read_game_file(&dir, "game/foo.dat").unwrap(),
+        foo,
+        "a path still present in the live chunk manifest is never swept"
+    );
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 0, "nothing was swept");
+    mock.stop();
+}
+
+/// The sweep target is the union of the legacy list and the patch deletes.
+#[tokio::test]
+async fn the_stale_sweep_deletes_the_legacy_and_patch_union() {
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("stale_union");
+    write_live_files(&dir);
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    write_game_file(&dir, "stale/patch.dat", &[0x5Au8; 64]);
+
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
+        .await
+        .expect("run with both stale lists");
+
+    assert_eq!(code, RunExit::Success);
+    assert!(read_game_file(&dir, "old/legacy.dll").is_none());
+    assert!(read_game_file(&dir, "stale/patch.dat").is_none());
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 114, "both halves of the union are counted");
+    mock.stop();
+}
+
+/// `--check-only` and `--print-plan` never reach the sweep, so neither issues
+/// the patch-build request and neither removes the file.
+#[tokio::test]
+async fn check_only_and_print_plan_do_not_fetch_the_patch_build() {
+    for (tag, check_only, print_plan) in [("check", true, false), ("print", false, true)] {
+        let mock = MockServer::start(
+            build_fixture(),
+            MockOpts {
+                patch_deletes: vec!["stale/patch.dat".to_string()],
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir(&format!("readonly_{tag}"));
+        write_live_files(&dir);
+        write_game_file(&dir, "stale/patch.dat", &[0x7Eu8; 64]);
+
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+        ctx.check_only = check_only;
+        ctx.print_plan = print_plan;
+        let (_, code) = run(ctx).await.expect("read-only run");
+
+        assert_eq!(code, RunExit::Success);
+        assert!(
+            mock.first_target_with("getPatchBuild").is_none(),
+            "{tag} must not fetch a build it would discard"
+        );
+        assert_eq!(
+            read_game_file(&dir, "stale/patch.dat").unwrap(),
+            &[0x7Eu8; 64],
+            "{tag} must keep the file"
+        );
+        mock.stop();
+    }
+}
+
+/// A dry run lists the sweep and leaves the file in place, counting nothing.
+#[tokio::test]
+async fn dry_run_lists_the_patch_delete_and_keeps_the_file() {
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dry_run_patch_delete");
+    write_live_files(&dir);
+    write_game_file(&dir, "stale/patch.dat", &[0x7Eu8; 64]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.dry_run = true;
+    let (result, logs) = logs_of(run(ctx)).await;
+    let (summary, code) = result.expect("dry run");
+
+    assert_eq!(code, RunExit::Success);
+    assert!(
+        logs.contains("would delete stale stale/patch.dat (64 bytes)"),
+        "the dry run names the sweep target: {logs}"
+    );
+    assert_eq!(
+        read_game_file(&dir, "stale/patch.dat").unwrap(),
+        &[0x7Eu8; 64],
+        "a dry run deletes nothing"
+    );
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 0, "a dry run counts no deleted bytes");
+    mock.stop();
+}
+
+/// `--purge-only` skips the repair loop but still performs the sweep.
+#[tokio::test]
+async fn purge_only_still_performs_the_stale_sweep() {
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("purge_only_sweep");
+    write_live_files(&dir);
+    write_game_file(&dir, "stale/patch.dat", &[0x7Eu8; 64]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_only = true;
+    let (summary, code) = run(ctx).await.expect("purge-only run");
+
+    assert_eq!(code, RunExit::Success);
+    assert!(read_game_file(&dir, "stale/patch.dat").is_none());
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 64, "purge-only still sweeps");
+    mock.stop();
+}
+
+/// The sweep's bytes use `deleted_extra_bytes` but are never charged to
+/// `--max-delete-bytes`: a ceiling too small even for one stale file does not
+/// stop the sweep or turn the run into a limit.
+#[tokio::test]
+async fn max_delete_bytes_does_not_bound_the_stale_sweep() {
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("sweep_delete_ceiling");
+    write_live_files(&dir);
+    write_game_file(&dir, "stale/patch.dat", &[0x7Eu8; 256]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.limits.delete_bytes = Some(1);
+    let (summary, code) = run(ctx).await.expect("run with a delete ceiling");
+
+    assert_eq!(code, RunExit::Success, "the sweep is outside the ceiling");
+    assert!(read_game_file(&dir, "stale/patch.dat").is_none());
+    let (_, _, _, _, deleted) = load_counters(&summary);
+    assert_eq!(deleted, 256);
+    assert_eq!(summary.flags.stopped, None, "the ceiling recorded no stop");
+    mock.stop();
+}
+
+/// The sweep runs in the execute half before the repair loop: by the time the
+/// first chunk is about to be written, both stale files are already gone.
+#[tokio::test]
+async fn stale_files_are_gone_before_the_first_chunk_is_written() {
+    let dir = temp_dir("sweep_before_repair");
+    let game = dir.join("install");
+    let legacy = game.join("old/legacy.dll");
+    let patch = game.join("stale/patch.dat");
+    let legacy_at_chunk = std::sync::Arc::new(AtomicBool::new(true));
+    let patch_at_chunk = std::sync::Arc::new(AtomicBool::new(true));
+    let seen_legacy = legacy_at_chunk.clone();
+    let seen_patch = patch_at_chunk.clone();
+    let hook_legacy = legacy.clone();
+    let hook_patch = patch.clone();
+    let mock = MockServer::start(
+        build_fixture(),
+        MockOpts {
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            patch_deletes: vec!["stale/patch.dat".to_string()],
+            on_first_chunk: Some(std::sync::Arc::new(move || {
+                seen_legacy.store(hook_legacy.exists(), Ordering::SeqCst);
+                seen_patch.store(hook_patch.exists(), Ordering::SeqCst);
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    // No live fixture files on disk, so every chunk is fetched and the hook
+    // necessarily fires. Only the two stale files are present.
+    std::fs::create_dir_all(game.join("old")).unwrap();
+    std::fs::create_dir_all(game.join("stale")).unwrap();
+    std::fs::write(&legacy, b"legacy").unwrap();
+    std::fs::write(&patch, b"patch").unwrap();
+
+    let (_, code) = run(ctx_for(game.clone(), &mock, 2))
+        .await
+        .expect("run with a first-chunk hook");
+
+    assert_eq!(code, RunExit::Success);
+    assert!(!mock.chunk_hits().is_empty(), "the hook ran on a chunk");
+    assert!(
+        !legacy_at_chunk.load(Ordering::SeqCst),
+        "the legacy file was gone before the first chunk"
+    );
+    assert!(
+        !patch_at_chunk.load(Ordering::SeqCst),
+        "the patch-delete file was gone before the first chunk"
+    );
     mock.stop();
 }

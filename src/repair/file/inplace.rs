@@ -943,7 +943,7 @@ fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
 /// Only the length matters at the two sites that stat the handle: before the
 /// eager trim and for the salvage order. Keeping the error as its own state
 /// lets the failure arm be executed with an injected `io::Error`
-/// (`post::classify_deprecated`'s shape) instead of only being read, without a
+/// (`post::classify_stale`'s shape) instead of only being read, without a
 /// trait or an injection seam. [`handle_len`] turns it back into the exact
 /// `io::Result` from `handle.metadata()`, so production still propagates the
 /// error with the site's path context and fails the file (exit `3`).
@@ -959,7 +959,7 @@ enum InplaceLen {
 ///
 /// Split from [`handle_len`] so the error arm is unit-testable without a
 /// permission fixture, matching `util::classify_len` and
-/// `post::classify_deprecated`.
+/// `post::classify_stale`.
 fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> InplaceLen {
     match stat {
         Ok(m) => InplaceLen::Present(m.len()),

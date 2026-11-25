@@ -1,20 +1,21 @@
-//! The post-phase: Starward-handling deletes + `config.ini` bump, then the
+//! The post-phase: Starward-handling audio move + `config.ini` bump, then the
 //! optional files-cleanup (docs/02 step 7).
 //!
 //! Order matters and is load-bearing:
-//! 1. deprecated files (they are not in the live manifest, so the purge below
-//!    would delete them too — the explicit loop keeps them cleaned even without
-//!    any purge flag),
-//! 2. audio cache → res move (Starward parity; prevents stranded duplicates),
-//! 3. `--purge-after` files-cleanup,
-//! 4. `config.ini` bump last, so the on-disk version only advances once the
+//! 1. audio cache → res move (Starward parity; prevents stranded duplicates),
+//! 2. `--purge-after` files-cleanup,
+//! 3. `config.ini` bump last, so the on-disk version only advances once the
 //!    bytes are in place.
+//!
+//! The stale sweep (legacy deprecated files unioned with patch-build deletes,
+//! minus every path the live chunk manifests still carry) no longer lives here:
+//! the execute half runs it before `--purge-before` and before any repair byte
+//! lands. Its shared delete sink is in this module because it applies the same
+//! scope and containment safety rules as the audio move.
 //!
 //! The whole phase is skipped by `--check-only`/`--print-plan` and whenever
 //! any file failed. `--dry-run` reaches it, but every destructive step below
 //! lists instead of acting, and the `config.ini` bump is skipped.
-//! The deprecated list itself is **not** fetched here — it arrives as an
-//! argument, having been read during the plan phase.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -42,12 +43,10 @@ use girpr_repair_plan::{PathScope, PurgeKeys, PurgePlan};
 /// Failures in the bookkeeping the launcher depends on are fatal (`exit 3`):
 /// by that point the bytes are already repaired, so a half-finished
 /// `config.ini` write would desync the launcher from the game. The
-/// best-effort housekeeping steps — deprecated deletes, the audio cache move,
-/// the cleanup's directory sweep — cannot be retried into success by failing
-/// the run, so a refused delete or move is logged and the phase carries on.
-///
-/// `deprecated` is the server's deprecated-file list, already fetched (and
-/// already possibly empty, if the call failed) during the plan phase.
+/// best-effort housekeeping steps — the audio cache move and the cleanup's
+/// directory sweep — cannot be retried into success by failing the run, so a
+/// refused move or delete is logged and the phase carries on. The stale sweep
+/// uses the same best-effort sink from the execute half, before this phase.
 ///
 /// **This phase owns its own `--dry-run` discipline.** It has more than one
 /// call site — the repair run, `--purge-only`, and now a dry run — and a gate
@@ -60,7 +59,6 @@ pub async fn run(
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     summary: &mut Summary,
-    deprecated: &Arc<[String]>,
     persistent: Option<&PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let timer = crate::phase::PhaseTimer::start("post");
@@ -71,7 +69,6 @@ pub async fn run(
         before_purge,
         meta,
         summary,
-        deprecated,
         persistent,
     )
     .await
@@ -94,20 +91,9 @@ async fn run_inner(
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
     summary: &mut Summary,
-    deprecated: &Arc<[String]>,
     persistent: Option<&PersistentState>,
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
-    // The deprecated list can be long and every entry is a stat plus a delete:
-    // that is blocking filesystem work, not a task the async worker should sit
-    // through. The audio move below and the cleanup pass use the same discipline.
-    let delete_game_dir = game_dir.to_path_buf();
-    // A reference bump, not a deep copy: the list is already shared and the
-    // blocking task only reads it.
-    let delete_list = Arc::clone(deprecated);
-    let delete_scope = ctx.path_scope.clone();
-    let deleted = spawn_delete_deprecated(delete_game_dir, delete_list, delete_scope, dry).await;
-    summary.add_deleted_bytes(deleted);
     // The audio move walks the cache and renames/copies its files. It is
     // best-effort, so a panicked task is logged and the phase carries on; it
     // must not stall the runtime while it runs.
@@ -351,24 +337,21 @@ async fn purge_after_pass(
     Ok(None)
 }
 
-/// Run the blocking deprecated-file delete on the blocking pool, keeping the
-/// step best-effort: a panicked task is logged and the phase carries on, the
-/// same way the audio move does. Returns the bytes it deleted, which is `0` in
-/// a dry run.
-async fn spawn_delete_deprecated(
+/// Run the blocking stale sweep on the blocking pool, keeping the step
+/// best-effort: a panicked task is logged and the run carries on, the same way
+/// the audio move does. Returns the bytes it deleted, which is `0` in a dry
+/// run. Called from the execute half before `--purge-before`; the post-phase
+/// no longer owns a delete of its own.
+pub(crate) async fn spawn_delete_stale(
     game_dir: PathBuf,
     list: Arc<[String]>,
     scope: PathScope,
     dry_run: bool,
 ) -> u64 {
-    match spawn_blocking_traced(move || delete_deprecated(&game_dir, &list, &scope, dry_run)).await
-    {
+    match spawn_blocking_traced(move || delete_stale(&game_dir, &list, &scope, dry_run)).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "deprecated-file delete task failed; the post-phase carries on"
-            );
+            tracing::warn!(error = %e, "stale delete task failed; the run carries on");
             0
         }
     }
@@ -438,22 +421,28 @@ pub enum PostOutcome {
     DeletedNothing,
 }
 
-/// Delete every path the server still lists as deprecated. The list was
-/// fetched during the plan phase and is advisory: an empty list (failed call)
-/// simply means there is nothing to do. A path outside the active scope does
-/// not exist, so it is not deleted either.
+/// Delete every path in the sweep's target list. The list was fetched and
+/// folded during the plan phase and is advisory: an empty list (both fetches
+/// failed, or every path is still live) simply means there is nothing to do.
+/// A path outside the active scope does not exist, so it is not deleted either.
 ///
-/// The names were normalised to the `/` form in `repair::fetch_deprecated`, at
-/// the boundary where the server list enters the run, so this gate and the
+/// All names were normalised to the `/` form before they entered the list —
+/// the legacy list in `repair::fetch_deprecated`, the patch-build deletes in
+/// `girpr_fetch::sophon::fetch_patch_deletes` — so this gate and the
 /// `contained_join` sink below see one spelling.
 ///
 /// `dry_run` lists instead of deleting, and returns `0` so the caller adds
 /// nothing to the byte counter. A real run returns the bytes it deleted.
-fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_run: bool) -> u64 {
+pub(crate) fn delete_stale(
+    game_dir: &Path,
+    list: &[String],
+    scope: &PathScope,
+    dry_run: bool,
+) -> u64 {
     let mut deleted_bytes = 0u64;
     for n in list {
         if !scope.is_visible(n) {
-            tracing::debug!("deprecated path out of scope, kept: {n}");
+            tracing::debug!("stale path out of scope, kept: {n}");
             continue;
         }
         let p = match util::contained_join(game_dir, n) {
@@ -464,27 +453,27 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
                 tracing::warn!(
                     path = %n,
                     error = %format!("{e:#}"),
-                    "deprecated path escapes the game dir; kept"
+                    "stale path escapes the game dir; kept"
                 );
                 continue;
             }
         };
         // One stat, four answers. The old `if !p.is_file()` collapsed "not a
         // file" with every stat failure: an ACL or a sharing violation took
-        // the same silent `continue` as a directory, so the deprecated file was
+        // the same silent `continue` as a directory, so the stale file was
         // left in place with no log and no counter, while the comment below
         // claimed the stat had succeeded.
-        let sz = match stat_deprecated(&p) {
-            DeprecatedStat::File(len) => Some(len),
-            DeprecatedStat::AlreadyGone => {
-                tracing::debug!(path = %n, "deprecated file is already gone");
+        let sz = match stat_stale(&p) {
+            StaleStat::File(len) => Some(len),
+            StaleStat::AlreadyGone => {
+                tracing::debug!(path = %n, "stale file is already gone");
                 continue;
             }
-            DeprecatedStat::NotAFile => {
-                tracing::debug!(path = %n, "deprecated path is not a file; kept");
+            StaleStat::NotAFile => {
+                tracing::debug!(path = %n, "stale path is not a file; kept");
                 continue;
             }
-            DeprecatedStat::Failed(e) => {
+            StaleStat::Failed(e) => {
                 // A stat failure is not "0 bytes" and not "not a file": the
                 // delete still runs (the entry is server-named and contained),
                 // but the figure is left out of the counter instead of being
@@ -493,15 +482,15 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
                 tracing::warn!(
                     path = %n,
                     error = %e,
-                    "deprecated file could not be stat'd; deleting without its size"
+                    "stale file could not be stat'd; deleting without its size"
                 );
                 None
             }
         };
         if dry_run {
             match sz {
-                Some(sz) => tracing::info!("would delete deprecated {n} ({sz} bytes)"),
-                None => tracing::info!("would delete deprecated {n} (size unavailable)"),
+                Some(sz) => tracing::info!("would delete stale {n} ({sz} bytes)"),
+                None => tracing::info!("would delete stale {n} (size unavailable)"),
             }
         } else {
             match std::fs::remove_file(&p) {
@@ -512,7 +501,7 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
                         // deleted bytes is allowed to clamp rather than panic.
                         deleted_bytes = deleted_bytes.saturating_add(sz);
                     }
-                    tracing::info!("deleted deprecated {n}");
+                    tracing::info!("deleted stale {n}");
                 }
                 Err(e) => {
                     // Not fatal: a locked or vanished file is not something a
@@ -521,7 +510,7 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
                     tracing::warn!(
                         path = %n,
                         error = %e,
-                        "deprecated file could not be deleted; left in place"
+                        "stale file could not be deleted; left in place"
                     );
                 }
             }
@@ -530,13 +519,13 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
     deleted_bytes
 }
 
-/// What a deprecated entry's one `metadata` call said.
+/// What a stale entry's one `metadata` call said.
 ///
 /// Keeping the four states apart is the point: `Path::is_file()` is
 /// `metadata().map(|m| m.is_file()).unwrap_or(false)`, which reads a stat
 /// failure as "not a file" and loses the reason.
 #[derive(Debug)]
-enum DeprecatedStat {
+enum StaleStat {
     /// A regular file, with the size the delete can report.
     File(u64),
     /// A directory or other non-file: never a delete candidate.
@@ -547,19 +536,19 @@ enum DeprecatedStat {
     Failed(std::io::Error),
 }
 
-/// Classify the entry's stat result. Split from [`stat_deprecated`] so the
+/// Classify the entry's stat result. Split from [`stat_stale`] so the
 /// error-vs-not-a-file distinction is unit-testable without an injection seam.
-fn classify_deprecated(stat: std::io::Result<std::fs::Metadata>) -> DeprecatedStat {
+fn classify_stale(stat: std::io::Result<std::fs::Metadata>) -> StaleStat {
     match stat {
-        Ok(m) if m.is_file() => DeprecatedStat::File(m.len()),
-        Ok(_) => DeprecatedStat::NotAFile,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DeprecatedStat::AlreadyGone,
-        Err(e) => DeprecatedStat::Failed(e),
+        Ok(m) if m.is_file() => StaleStat::File(m.len()),
+        Ok(_) => StaleStat::NotAFile,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StaleStat::AlreadyGone,
+        Err(e) => StaleStat::Failed(e),
     }
 }
 
-fn stat_deprecated(path: &Path) -> DeprecatedStat {
-    classify_deprecated(std::fs::metadata(path))
+fn stat_stale(path: &Path) -> StaleStat {
+    classify_stale(std::fs::metadata(path))
 }
 
 /// The target name a publish may write under.
@@ -1501,55 +1490,51 @@ mod tests {
     }
 
     /// S-3: `Path::is_file()` folded "not a file" and every stat error into
-    /// `false`, so an ACL or sharing violation skipped the deprecated delete
+    /// `false`, so an ACL or sharing violation skipped the stale delete
     /// silently. The classifier keeps the error a separate state.
     #[test]
-    fn a_failed_deprecated_stat_is_not_a_non_file() {
+    fn a_failed_stale_stat_is_not_a_non_file() {
         let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         assert!(
-            matches!(classify_deprecated(Err(denied)), DeprecatedStat::Failed(_)),
+            matches!(classify_stale(Err(denied)), StaleStat::Failed(_)),
             "an ACL failure is a stat failure, not a non-file"
         );
         let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
-        assert!(matches!(
-            classify_deprecated(Err(gone)),
-            DeprecatedStat::AlreadyGone
-        ));
+        assert!(matches!(classify_stale(Err(gone)), StaleStat::AlreadyGone));
     }
 
     /// The three real filesystem answers the delete turns on.
     #[test]
-    fn stat_deprecated_separates_file_non_file_and_absent() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_deprecated", "stat");
+    fn stat_stale_separates_file_non_file_and_absent() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_stale", "stat");
         std::fs::write(dir.join("old.dll"), b"12345").unwrap();
         std::fs::create_dir_all(dir.join("old_dir")).unwrap();
 
         assert!(matches!(
-            stat_deprecated(&dir.join("old.dll")),
-            DeprecatedStat::File(5)
+            stat_stale(&dir.join("old.dll")),
+            StaleStat::File(5)
         ));
         assert!(matches!(
-            stat_deprecated(&dir.join("old_dir")),
-            DeprecatedStat::NotAFile
+            stat_stale(&dir.join("old_dir")),
+            StaleStat::NotAFile
         ));
         assert!(matches!(
-            stat_deprecated(&dir.join("gone.dll")),
-            DeprecatedStat::AlreadyGone
+            stat_stale(&dir.join("gone.dll")),
+            StaleStat::AlreadyGone
         ));
     }
 
-    /// A dry run names the deprecated file it would delete, leaves it in
+    /// A dry run names the stale file it would delete, leaves it in
     /// place, and counts no bytes.
     #[test]
-    fn a_dry_run_lists_the_deprecated_delete() {
-        let dir = girpr_tempdir::TempDir::new("girpr_test_deprecated", "dry_run");
+    fn a_dry_run_lists_the_stale_delete() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_stale", "dry_run");
         let base = &*dir;
         std::fs::create_dir_all(base.join("old")).unwrap();
         std::fs::write(base.join("old/legacy.dll"), b"12345").unwrap();
-        let summary = Summary::new();
 
         let logs = logs_of(|| {
-            let deleted = delete_deprecated(
+            let deleted = delete_stale(
                 base,
                 &["old/legacy.dll".to_string()],
                 &PathScope::default(),
@@ -1559,7 +1544,7 @@ mod tests {
         });
 
         assert!(
-            logs.contains("would delete deprecated old/legacy.dll (5 bytes)"),
+            logs.contains("would delete stale old/legacy.dll (5 bytes)"),
             "the dry run names the delete and its size: {logs}"
         );
         assert_eq!(
@@ -1567,7 +1552,6 @@ mod tests {
             b"12345",
             "a dry run deletes nothing"
         );
-        assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
     }
 
     /// A dry run names each audio cache file it would move with the `/` rel the
