@@ -1,8 +1,0 @@
-{
-  "new_chunks_total": 16,
-  "new_chunks_md5_present_in_old_manifest": 9,
-  "cross_file_only_chunks": 0,
-  "files_with_a_cross_file_only_chunk": 0,
-  "cross_file_only_bytes_forgone": 0,
-  "note": "same-file-only reuse is a deliberate simplification; this quantifies its cost"
-}

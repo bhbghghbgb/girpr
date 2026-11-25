@@ -1326,7 +1326,10 @@ is ever committed.
 
 The three manifests and every blob are the **raw** bytes: `girpr` verifies each
 MD5/size gate against these numbers and mirrors the manifests verbatim. The
-bridge fixture uses the small synthetic material under
-`tools/persistent-sophon-research/samples/fixtures/` (a test-only RSA key, an
-encrypted dispatch envelope, three tiny NDJSON manifests and two full-file
-blobs), never production keys or captured manifests.
+producer reads its test-only RSA key, encrypted dispatch envelope and tiny
+NDJSON manifests from `tests/fixtures/persistent_inputs/samples/fixtures/`
+(relocated from the old research tree), never production keys or captured
+manifests. Its hand-run test writes the gitignored `artifacts/persistent_v4/`
+bundle; girpr's three manual bridge cases consume that bundle by copying its
+stored key, record and envelope into a scratch `dispatch/` tree. They do the
+reader's fast v4 shape check, not a re-run of `gircap verify`.

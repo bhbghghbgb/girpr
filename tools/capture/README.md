@@ -89,13 +89,14 @@ cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only `
   -E 'test(write_persistent_v4_bundle)'
 # then, for the manual bridge cases:
 $env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
-.\target\debug\gircap.exe verify --artifact artifacts\persistent_v4
 ```
 
 `dispatch/key.pem` keeps its historical `.pem` filename: the bytes are
 `RSAKeyValue` XML (as in C3), and girpr accepts either PEM or XML there. The
-bundle is schema 4; the producer was re-run after the bump and the output
-re-verified (`gircap verify --artifact artifacts/persistent_v4`).
+producer writes schema 4 and verifies its own output in process; `gircap verify
+--artifact artifacts/persistent_v4` remains available as a separate, optional
+check of the bundle. The bridge does **not** invoke it — it reads the records
+directly and does only a fast v4 shape check.
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
@@ -209,8 +210,8 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 
 ```powershell
 # in the girpr package. Needs exactly one bundle and FAILS without one.
-# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
-cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+# the persistent cases use the v4 bundle written by the producer above
+$env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
 
@@ -233,7 +234,9 @@ The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
 the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, and the
 consumer never regenerates or repairs a bundle — it reads `patchmaps/`,
-`expected/` and `game/`, and runs `gircap verify` as its precondition.
+`expected/`, `game/` and the v4 `dispatch/`+`persistent/` records. It does not
+run `gircap verify`; a fast v4 record-shape check replaces that old
+precondition.
 
 The crate's shape, its test strategy and its risks are in `docs/02-plan.md`;
 `docs/03-design-notes.md` holds the reasoning behind the parts that look

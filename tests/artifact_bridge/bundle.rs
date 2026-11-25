@@ -23,7 +23,7 @@
 // different part of it, so most of it is dead code in any one of them.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -314,8 +314,69 @@ impl PersistentRecords {
         })
     }
 
-    /// A mirror's raw bytes, by kind (`res`, `data`, `silence_data`).
-    pub fn manifest(&self, root: &Path, kind: &str) -> Vec<u8> {
+    /// Fast shape check on the records this suite consumes.
+    ///
+    /// This is **input validation, not re-verification**: `gircap verify` and
+    /// its `A*`/`P*` checks still own the bundle's integrity verdict. All this
+    /// does is pin the version the driver reads (4), the three manifest kinds
+    /// and one blob per kind, and that the key/envelope the record names are
+    /// really in the bundle. A bundle of the wrong shape then fails with its
+    /// name, not with a confusing assertion deep inside a case.
+    pub fn assert_v4(&self, root: &Path) {
+        assert_eq!(
+            self.dispatch["schema_version"].as_u64(),
+            Some(4),
+            "dispatch/record.json is not schema 4"
+        );
+        assert_eq!(
+            self.index["schema_version"].as_u64(),
+            Some(4),
+            "persistent/index.json is not schema 4"
+        );
+        let manifests = self.index["manifests"]
+            .as_array()
+            .expect("persistent/index.json manifests[]");
+        for kind in ["res", "data", "silence_data"] {
+            assert!(
+                manifests.iter().any(|m| m["kind"].as_str() == Some(kind)),
+                "persistent/index.json declares no {kind} manifest"
+            );
+            assert!(
+                !self.blobs_for_kind(kind).is_empty(),
+                "persistent/index.json declares no {kind} blob"
+            );
+        }
+        assert!(
+            !self.key_bytes(root).is_empty(),
+            "the record's key_file is empty"
+        );
+        assert!(
+            !self.envelope_bytes(root).is_empty(),
+            "the record's envelope is empty"
+        );
+    }
+
+    /// The record's bundle-relative private key, read byte-for-byte.
+    ///
+    /// This is the key the bridge copies into its scratch `dispatch/` tree; it
+    /// is never a hand-copied test key.
+    pub fn key_bytes(&self, root: &Path) -> Vec<u8> {
+        let rel = self.dispatch["key_file"]
+            .as_str()
+            .unwrap_or_else(|| panic!("dispatch/record.json has no key_file"));
+        read_bundle_file(root, rel, "key_file")
+    }
+
+    /// The record's byte-exact dispatcher envelope.
+    pub fn envelope_bytes(&self, root: &Path) -> Vec<u8> {
+        let rel = self.dispatch["envelope"]
+            .as_str()
+            .unwrap_or_else(|| panic!("dispatch/record.json has no envelope"));
+        read_bundle_file(root, rel, "envelope")
+    }
+
+    /// The bundle-relative path of one kind's raw manifest.
+    pub fn manifest_path(&self, kind: &str) -> PathBuf {
         let path = self.index["manifests"]
             .as_array()
             .expect("persistent/index.json manifests[]")
@@ -323,7 +384,24 @@ impl PersistentRecords {
             .find(|f| f["kind"].as_str() == Some(kind))
             .and_then(|f| f["path"].as_str())
             .unwrap_or_else(|| panic!("no {kind} manifest in persistent/index.json"));
-        std::fs::read(root.join(path)).unwrap_or_else(|e| panic!("read {path}: {e}"))
+        assert!(safe_rel(path), "an index cannot name {path:?}");
+        PathBuf::from(path)
+    }
+
+    /// Every blob the index attributes to one manifest kind.
+    pub fn blobs_for_kind(&self, kind: &str) -> Vec<&Value> {
+        self.index["blobs"]
+            .as_array()
+            .expect("persistent/index.json blobs[]")
+            .iter()
+            .filter(|f| f["source_kind"].as_str() == Some(kind))
+            .collect()
+    }
+
+    /// A mirror's raw bytes, by kind (`res`, `data`, `silence_data`).
+    pub fn manifest(&self, root: &Path, kind: &str) -> Vec<u8> {
+        let path = self.manifest_path(kind);
+        std::fs::read(root.join(&path)).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
     /// A full-file blob's expected bytes, by the basename of its `remoteName`.
@@ -341,6 +419,23 @@ impl PersistentRecords {
             .unwrap_or_else(|| panic!("no {name} blob in persistent/index.json"));
         std::fs::read(root.join(path)).unwrap_or_else(|e| panic!("read {path}: {e}"))
     }
+}
+
+/// A record-supplied path must name a file inside the bundle. The product
+/// applies the same rule on its own side; this one keeps the reader from
+/// climbing out of the bundle before it has even parsed the record.
+fn safe_rel(rel: &str) -> bool {
+    !rel.is_empty()
+        && !rel.contains("..")
+        && !rel.contains('\\')
+        && !rel.starts_with('/')
+        && !rel.contains(':')
+}
+
+fn read_bundle_file(root: &Path, rel: &str, field: &str) -> Vec<u8> {
+    assert!(safe_rel(rel), "a record cannot name {rel:?} as {field}");
+    std::fs::read(root.join(rel))
+        .unwrap_or_else(|e| panic!("read {field} {rel} in {}: {e}", root.display()))
 }
 
 /// The `DispatchInfo` the replayed record describes.

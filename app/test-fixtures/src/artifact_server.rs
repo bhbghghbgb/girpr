@@ -33,8 +33,7 @@
 //! and `manifests[].manifest_download.url_prefix` has its **scheme and
 //! authority** swapped for the listener's own, keeping the path byte-for-byte.
 //! The bundle on disk is never written — the ports are only known after the
-//! listeners bind, and the bundle has to still pass `gircap verify`
-//! afterwards.
+//! listeners bind, and the bundle is read-only by contract.
 //!
 //! Two body fields are load-bearing and must survive the rewrite untouched:
 //! `manifest.checksum` (MD5 of the **decompressed** manifest, verified by
@@ -42,8 +41,10 @@
 //! the run at metadata with exit `2`) and `manifest.id` (it is the URL path
 //! segment). `rewrite_changes_only_the_two_url_prefixes` pins that.
 //!
-//! **The `build_id` invariant (`docs/06` §4.1).** Every blob request carries
-//! `<build_id>` as the second-to-last path segment, and it must name the build
+//! **The `build_id` invariant (`docs/06` §4.1).** Every blob request names
+//! `<build_id>` next to the id — as the second-to-last segment on production
+//! prefixes, or the third-from-last when the hand-run persistent producer's
+//! synthetic prefix ends in `manifest`/`chunk` instead. It must name the build
 //! that declared the id. That is enforced strictly for manifests: the index is
 //! keyed by `(build_id, id)` as it is built while rewriting (`docs/06` §4.2),
 //! so two builds declaring the same id keep separate entries and a request
@@ -850,7 +851,7 @@ impl Served {
     }
 
     fn manifest_response(&self, path: &str) -> Response {
-        let Some((build_id, id)) = last_two(path) else {
+        let Some((build_id, id)) = blob_key(path) else {
             return self.error_shape("blob_missing", path);
         };
         match self.manifest_index.get(&(build_id, id.clone())) {
@@ -881,7 +882,7 @@ impl Served {
     }
 
     fn chunk_response(&self, path: &str) -> Response {
-        let Some((build_id, id)) = last_two(path) else {
+        let Some((build_id, id)) = blob_key(path) else {
             return self.error_shape("chunk_missing", path);
         };
         // Every chunk download goes to the latest build's prefix
@@ -1049,17 +1050,28 @@ fn last_segment(path: &str) -> Option<String> {
 
 /// The last two path segments: `([build_id], [id])`.
 ///
-/// Every blob route is `<prefix>/<build_id>/<id>` and the route is
-/// indistinguishable from production's, which is the point: the bridge still
-/// proves `girpr` builds URLs from `url_prefix` + `id` alone.
-fn last_two(path: &str) -> Option<(String, String)> {
+/// The `(build_id, id)` a blob request names.
+///
+/// Production prefixes end with the build id: `<prefix>/<build_id>/<id>`, and
+/// the route is indistinguishable from production's — the point is that the
+/// bridge proves `girpr` builds URLs from `url_prefix` + `id` alone. The
+/// hand-run persistent producer records a synthetic prefix that ends in the
+/// route kind instead (`/cdn/<build_id>/manifest` or `/chunk`), so its request
+/// has one extra segment; the build id is then the third-from-last. Both are
+/// real bundle inputs, and only which segment names the build changes.
+fn blob_key(path: &str) -> Option<(String, String)> {
     let mut it = path
         .trim_start_matches('/')
         .split('/')
         .rev()
         .filter(|s| !s.is_empty());
     let id = it.next()?.to_string();
-    let build_id = it.next()?.to_string();
+    let second = it.next()?.to_string();
+    let build_id = if second == "manifest" || second == "chunk" {
+        it.next().map(str::to_string).unwrap_or(second)
+    } else {
+        second
+    };
     Some((build_id, id))
 }
 
@@ -1214,7 +1226,7 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
             served.build_response(tag.as_deref())
         }
         Route::Manifest => {
-            if let Some((build_id, id)) = last_two(&path) {
+            if let Some((build_id, id)) = blob_key(&path) {
                 served.record(Hit {
                     kind: HitKind::Manifest,
                     id,
@@ -1224,7 +1236,7 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
             served.manifest_response(&path)
         }
         Route::Chunk => {
-            if let Some((build_id, id)) = last_two(&path) {
+            if let Some((build_id, id)) = blob_key(&path) {
                 served.record(Hit {
                     kind: HitKind::Chunk,
                     id,

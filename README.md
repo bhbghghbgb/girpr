@@ -665,11 +665,12 @@ cargo clippy -p girsync -p gircap -p sled2redb -p girsync-cache-json --all-targe
 # need a run to be covered.
 cargo nextest run --release -p girpr-log
 
-# the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
-# builds gircap first so the `gircap verify` precondition executes
+# the artifact bridge: #[ignore]d, needs a bundle (docs/06); the persistent cases
+# use the v4 bundle produced once by C4's hand-run producer
 # the same commands, explained in "Real bytes, real flags — and expensive" below
-# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
-cargo build -p gircap
+cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only `
+  -E 'test(write_persistent_v4_bundle)'
+$env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 
 # the hash and scan throughput measurements: #[ignore]d, print MiB/s
@@ -825,17 +826,22 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   **pre-release gate: run it by hand before any release that changes the repair
   spec, and whenever a regression in that spec is suspected**:
   ```powershell
-  # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
-  cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+  cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only `
+    -E 'test(write_persistent_v4_bundle)'
+  $env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
   cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
   ```
-  The cases share one process-wide fixture — a verified bundle and one listener
-  set — and serialize against it with a run lock; under nextest each case has a
-  process of its own. Each case still gets its own scratch tree and log file,
+  The persistent cases need the v4 bundle from C4's hand-run producer; the six
+  patch-shape cases need an ordinary captured bundle. The bridge does not run
+  `gircap verify` and does not re-implement it — a fast v4 shape check on the
+  records replaces the old precondition. The cases share one process-wide
+  fixture — one bundle and one listener set — and serialize against it with a
+  run lock; under nextest each case has a process of its own. Each case still
+  gets its own scratch tree and log file,
   and checkpoints the shared request log so its fetch set holds only its own
   requests. Neither `--no-capture` nor `--test-threads=1` is needed: the per-case
   `success-output` override in `.config/nextest.toml` prints each case's
-  precondition and summary lines even though it passes. To reproduce one
+  summary line even though it passes. To reproduce one
   failure, put that case's test name in the filter of the same command.
 
   The `-E` expression narrows the set nextest has already selected; it does not
@@ -846,14 +852,18 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   build rather than failing silently. And because it only ever runs
   deliberately, a **missing prerequisite is an error**: no bundle under the
   search root (`artifacts/`, or `GIRPR_ARTIFACT_ROOT` when set; an explicit
-  `GIRPR_ARTIFACT_BUNDLE` outranks both) fails the run with the command that
-  would produce one, rather than passing quietly having checked nothing.
+  `GIRPR_ARTIFACT_BUNDLE` outranks both) fails the run, naming C4's
+  `write_persistent_v4_bundle` producer and
+  `GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4` for the persistent cases,
+  rather than passing quietly having checked nothing.
   - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md).
   - The server rewrites only the **scheme and authority** of the `url_prefix`
     inside each `getBuild` body, because manifest and chunk URLs are built from
     that body rather than from the flags. It never writes to the bundle; the
-    working tree is a scratch copy, and `gircap verify` must still pass
-    afterwards.
+    working tree is a scratch copy. The persistent cases obtain `DispatchInfo`
+    from a scratch copy of the bundle's stored `dispatch/key.pem` and
+    `dispatch/record.json` (no override, no dispatcher GET), and assert one
+    manifest's mirror, blobs and revision marker per case.
   - **What it claims, and only that:** `girpr`'s output is identical to what
     another repair tool computes. Three assertions per capture — the patched
     file's bytes are the reference bytes, the chunks asked for are exactly the

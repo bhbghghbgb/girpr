@@ -160,21 +160,23 @@ spec** and *after something has gone wrong*, and not worth paying on every
 `cargo nextest run`.
 
 So it runs **by hand, deliberately: before any release that changes the repair
-spec, and whenever that spec is suspected to have regressed**. A pre-release run
-builds the verifier first, so the `gircap verify` precondition below actually
-executes instead of skipping:
+spec, and whenever that spec is suspected to have regressed**. The persistent
+cases need the small v4 bundle produced once by C4's hand-run producer; the
+patch-shape cases need an ordinary captured bundle:
 
 ```
-# optional: GIRPR_ARTIFACT_BUNDLE names a bundle explicitly
-cargo build -p gircap
+cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only -E 'test(write_persistent_v4_bundle)'
+set GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
 
-One verified bundle and one listener set are shared per process, and a run lock
-serializes the cases against them; each case still makes its own scratch tree
-(§6.3) and checkpoints the shared request log (§6.2), so no `--test-threads`
-limit is needed. The `success-output` override for this binary's cases in
-`.config/nextest.toml` prints each case's precondition and summary lines even
+The bridge does not invoke `gircap verify` and does not re-implement it; the
+record reader only does a fast shape check (`PersistentRecords::assert_v4`)
+before a persistent case runs. One bundle and one listener set are shared per
+process, and a run lock serializes the cases against them; each case still
+makes its own scratch tree (§6.3) and checkpoints the shared request log (§6.2),
+so no `--test-threads` limit is needed. The `success-output` override for this
+binary's cases in `.config/nextest.toml` prints each case's summary line even
 though it passes, so `--no-capture` is not needed either. To reproduce one
 failure, put the case in the filter of the same command:
 
@@ -236,15 +238,14 @@ A capture the matrix records as *not answered*, with a reason, is a **fact**
 rather than a missing prerequisite — the case stands down out loud — but a
 capture the matrix does not mention at all is a missing prerequisite and fails.
 
-**Precondition.** Before any run, the bundle's own integrity is established —
-`gircap verify --artifact <dir>`, exit `0`. It makes a failing check rule the
-bundle out as the cause instead of leaving it as the first suspect. The binary is
-found next to `CARGO_BIN_EXE_girpr`, so there is no guessing at a path. When
-`gircap` is not built the precondition is **skipped with its reason printed**;
-the bridge does not re-implement `verify`. That skip is for ordinary runs only:
-a **pre-release run builds `gircap` first** (`cargo build -p gircap`), so the
-precondition runs. A bundle that *fails* verification is a hard failure, not a
-skip — a corrupt bundle is a real problem and must not hide behind a green run.
+**Bundle input validation is not re-verification.** The bridge consumes a
+bundle someone else produced and checked; it never runs `gircap verify` and
+never re-derives the tool's `A*`/`P*` verdict. The persistent cases call
+`PersistentRecords::assert_v4` — a fast check of the two schema versions, the
+three manifest kinds, a blob per kind and the presence of the record's key and
+envelope — so a wrong-shaped bundle fails with a name instead of a confusing
+assertion inside a case. Discovery through `gircap list` stays; `gircap` itself
+need not be built for the bridge to run.
 
 ---
 
@@ -274,9 +275,10 @@ and shared by the cases (§6.2).
 `--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest and
 chunk URLs are built by `sophon::join_url` from a `url_prefix` read out of the
 **response body**, so a body served verbatim sends `girpr` to the production CDN
-regardless of the flags. Rewriting the bundle on disk is not an option twice
-over: the port is not known until the listener binds, and the bundle has to stay
-byte-identical so `gircap verify` still passes afterwards.
+regardless of the flags. Rewriting the bundle on disk is not an option: the
+port is not known until the listener binds, and the bundle is read-only by
+contract — every rewrite lives in memory and the scratch tree is the only
+working tree.
 
 So: parse `api/getBuild.<tag>.json`, replace the **scheme and authority** of every
 `manifests[].chunk_download.url_prefix` and
@@ -568,8 +570,8 @@ forever for a reason that has nothing to do with the bridge.
 
 ### 6.2 Isolation is per capture, against a shared bridge
 
-**One verified bundle and one listener set are bound per process**, on a runtime
-that outlives the test runtimes; every case in that process uses them. A shared
+**One bundle and one listener set are bound per process**, on a runtime that
+outlives the test runtimes; every case in that process uses them. A shared
 scratch tree or an uncheckpointed request log would still let one run patch
 another's file or see another's requests — an intermittent failure that looks
 like a product bug — so the cases take a run lock for the whole test, and each
@@ -610,7 +612,10 @@ The other captures' files are not what this capture is about. "Every path
 outside the scope is untouched" is `girpr`'s own claim, and it is tested where
 it belongs: on a crafted multi-file manifest, in `girpr`'s
 `tests/repair_machinery.rs`, where a few small files cost only those small files
-rather than the whole fixture.
+rather than the whole fixture. The persistent cases are the exception: the
+tier writes install-wide markers, so their scratch tree copies the whole (small,
+synthetic) `game/` tree plus the new-side `expected/` files, and adds a scratch
+`dispatch/` tree built from the bundle's stored key, record and envelope (§10).
 
 ---
 
@@ -690,8 +695,8 @@ them as a *fact about a bundle* rather than as a fact about the repair.
   from a file the bundle vouches for; anything else is a different test. The same
   goes for a shim that *invents* a failure shape it has no evidence for.
 - **Parallel runs sharing a tree.** §6.2.
-- **A fixture mutated in place.** The bundle must still pass `verify` afterwards.
-  That is the precondition of §3.2 and the point of §6.3.
+- **A fixture mutated in place.** The bundle is opened read-only; the working
+  tree is a scratch copy. That is the point of §6.3.
 - **A bridge that reports success when it checked nothing.** Gate 2 exists for
   this: the suite runs only when a human asks for it, so a missing bundle — or a
   missing capture — is missing input, and it fails with the command that produces
@@ -723,37 +728,49 @@ the bridge actually reads.
 
 ## 10. The persistent extension
 
-The `dispatch/` and `persistent/` records are an **additive extension of schema
-3** (`tools/capture/docs/01-artifact-schema.md` §18): bundles written before
-them still verify, and a bundle that carries them has every byte checked by
-`files[]`/`checksums.json` plus the two `verify`-only rows `P1`/`P2`. There is no
-schema bump, so the existing ~120 MB real fixture is untouched. `gircap list`
-reports the three new counts on each `BUNDLE` record, and `select::Class` gained
-a `persistent` matrix class that no manifest path can satisfy.
+The `dispatch/` and `persistent/` records are part of **schema 4**
+(`tools/capture/docs/01-artifact-schema.md` §18). A bundle that carries them has
+every byte checked by `files[]`/`checksums.json` plus the two `verify`-only rows
+`P1`/`P2`; `gircap list` reports the three new counts on each `BUNDLE` record,
+and `select::Class` has a `persistent` matrix class that no manifest path can
+satisfy. The small bundle these cases consume is produced by C4's hand-run
+`write_persistent_v4_bundle` producer at `artifacts/persistent_v4/` and named
+with `GIRPR_ARTIFACT_BUNDLE`. The old handcrafted persistent fixture is retired;
+the read-only committed samples under `tests/fixtures/persistent_inputs/`
+remain the producer's input.
 
 The replay server binds three more listeners for these routes. At bind time it
 reads `dispatch/record.json` and rewrites the recorded `repo_*_url` and each
 descriptor URL's **scheme and authority** with `swap_authority`, exactly as the
-`getBuild` prefixes are rewritten; the rewrite lives only in memory, so the
-bundle still passes `gircap verify` afterwards. The data and silence manifests
-are both named `data_versions` on the CDN, so the path (`client/General` vs
-`client_silence/General`) is what selects the right raw body.
+`getBuild` prefixes are rewritten; the rewrite lives only in memory. The data
+and silence manifests are both named `data_versions` on the CDN, so the path
+(`client/General` vs `client_silence/General`) selects the right raw body. The
+blob routes accept both prefix spellings: production's `<prefix>/<build_id>/<id>`
+and the producer's synthetic `<prefix>/<build_id>/{manifest,chunk}/<id>`; only
+which segment names the build changes.
 
-The bridge case runs in-process with the bundle's dispatcher record supplying
-a `DispatchOverride`: the binary's real provider needs Collapse's release
-metadata, which an offline fixture must not fetch. Everything else is the real
-repair pipeline and the real listeners. It asserts two replayed hotfix files,
-all three mirrors and the whole marker block, and checks that `--dry-run` and
-`--purge-only` publish none of them. The fixture is a small synthetic bundle
-built from the committed test-only material under
-`tools/persistent-sophon-research/samples/fixtures/`, following §1.2's
-synthetic-bundle precedent; its generator is an ignored `gircap` test.
+**Three ignored manual cases, one bundle.** `persistent_res`,
+`persistent_data` and `persistent_silence` each build a scratch
+`dispatch/{key.pem,record.json,response.json}` from this bundle: the key and
+byte-exact envelope are the record's own bundle-relative files, and the record
+is `Served::load`'s in-memory copy with the listener authorities. `RunCtx` gets
+`dispatch_key_path`/`dispatch_record_path` and **no** dispatch override, so the
+claim is that girpr obtains `DispatchInfo` from the stored key/record — the file
+path performs no dispatcher GET. girpr always fetches all three manifests; "one
+manifest per case" means each case owns one manifest's assertions: its raw
+mirror, its blobs (with a `HitKind::Hotfix` whose `source_kind` matches) and its
+revision marker. The res case also pins the whole marker block, the C16 omit
+branch (`base_res_version_hash` is absent because the compact bundle records no
+hash source) and the dry-run / purge-only no-write checks. The scratch tree also
+replaces the producer's one-line `Persistent` placeholder file with the
+directory a real install has; the bundle itself is never written.
 
 ## 11. Non-goals
 
 - **Capturing.** `gircap capture` does that, with the network, deliberately.
 - **Re-verifying the bundle.** `gircap verify` and `gircap materialize` own that
-  half; the bridge consumes their verdict (§3.2), it does not recompute it.
+  half; the bridge reads the bundle's records and does a fast shape check
+  (§3.2), it does not recompute the verdict.
 - **A second mock server.** `tests/common/mod.rs` already covers the synthetic
   path with a small fixture. The bridge is the opposite: real bytes, from
   disk, at production scale.

@@ -854,7 +854,7 @@ dispatcher route follows the existing `Reply`/`TestServer` seam
 `getBuild` switch.
 
 **Fixtures — gircap bundle and bridge.** The bundle schema
-(`tools/capture/docs/01-artifact-schema.md`, `schema_version: 3`) was extended
+(`tools/capture/docs/01-artifact-schema.md`, now `schema_version: 4`) was extended
 with a `dispatch/` record (ciphertext + key fingerprint + seed + version) and
 a `persistent/` directory (raw manifests + a handful of full-file blobs). The
 writers go through `emit::write_bytes`/`write_doc` so `MANIFEST.json →
@@ -865,7 +865,8 @@ and the records in
 `tools/capture/src/verify/{checks,list}.rs` keep `gircap verify` and
 `gircap list` honest. A `persistent` matrix class in
 `tools/capture/src/select/classes.rs` (`Class::ALL`, `REQUIRED_ORDER`, `id()`
-— all length-pinned) and a bridge case through the existing `capture_test!`
+— all length-pinned) and three bridge cases (`persistent_res`,
+`persistent_data`, `persistent_silence`) through the existing `capture_test!`
 macro / `drive_named` in `tests/artifact_bridge.rs` with the record reader in
 `tests/artifact_bridge/bundle.rs` pin the replay.
 
@@ -874,10 +875,10 @@ On the replay side (`app/test-fixtures/src/artifact_server.rs`) the
 `Bundle` accessors for the new directories and the entries in `Origins` are in
 place; the endpoints are served from `hyp_response`-style handlers and their
 origins rewritten in memory at `Bridge::start` bind time with `swap_authority`,
-exactly as Sophon prefixes are rewritten — the bundle is never written, so
-`gircap verify` still passes afterwards. The existing real fixture under
-`artifacts/hk4e_global/7.1.0__7.2.0/` was the model; a new bundle is captured by
-hand, as `docs/06` §3 already requires.
+exactly as Sophon prefixes are rewritten — the bundle is read-only and never
+written. The existing real fixture under `artifacts/hk4e_global/7.1.0__7.2.0/`
+was the model; the small v4 bundle is written by C4's hand-run
+`write_persistent_v4_bundle` producer, as `docs/06` §3 already requires.
 
 ---
 

@@ -41,22 +41,24 @@
 //! run`.
 //!
 //! So it is run **by hand, deliberately** — before any release that changes
-//! the repair spec, and whenever that spec is suspected to have regressed. A
-//! pre-release run builds the verifier first, so the `gircap verify`
-//! precondition actually executes instead of skipping:
+//! the repair spec, and whenever that spec is suspected to have regressed.
+//! The persistent cases need the small v4 bundle produced by the hand-run C4
+//! producer; the patch-shape cases need the ordinary captured bundle:
 //!
 //! ```text
-//! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
-//! cargo build -p gircap
+//! # produce the v4 bundle once (C4's hand-run producer)
+//! cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only -E 'test(write_persistent_v4_bundle)'
+//! # then run the bridge against it
+//! set GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4
 //! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 //! ```
 //!
 //! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
 //! own scratch tree (§6.3) and its own listeners (§6.2), so the cases are
 //! parallel-safe, and the `[[profile.default.overrides]]` in
-//! `.config/nextest.toml` whose `filter` names these six cases sets
-//! `success-output = "immediate"`, so the precondition and per-capture lines
-//! are printed even though the cases pass.
+//! `.config/nextest.toml` whose `filter` names these cases sets
+//! `success-output = "immediate"`, so the per-capture lines are printed even
+//! though the cases pass.
 //!
 //! To reproduce one failure, put the case in the filter of the same command:
 //!
@@ -84,8 +86,10 @@
 //! missing, the run **fails**, and says exactly what to run to produce one:
 //!
 //! ```text
+//! cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only -E 'test(write_persistent_v4_bundle)'
+//! set GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4
+//! # or, for the ordinary patch-shape bundle / a bundle elsewhere:
 //! cargo run -p gircap -- capture --out artifacts
-//! # or, for a bundle elsewhere:
 //! set GIRPR_ARTIFACT_BUNDLE=<dir>
 //! ```
 //!
@@ -98,8 +102,8 @@
 //!
 //! The bundle, read-only. The working tree is a scratch *copy* of the one
 //! file the capture is about — pointing `--game-path` at the bundle in place
-//! is what turns a cleanup flag into a way to destroy the evidence, and the
-//! bundle has to still pass `gircap verify` afterwards.
+//! is what turns a cleanup flag into a way to destroy the evidence. Every
+//! rewrite the listeners apply lives in memory; nothing is written back.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -112,8 +116,8 @@ mod run_lock;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use bundle::{Capture, Patchmaps, PersistentRecords, dispatch_info};
-use girpr::test_support::{BackoffPolicy, Limits, persistent_override};
+use bundle::{Capture, Patchmaps, PersistentRecords};
+use girpr::test_support::{BackoffPolicy, Limits};
 use girpr::{Biz, OutputFormat, RunCtx, RunExit};
 use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
@@ -121,7 +125,7 @@ use girpr_tempdir::TempDir;
 use girpr_test_fixtures::artifact_server as server;
 use girpr_test_fixtures::md5hex;
 use girpr_test_support::run as run_library;
-use server::{Bridge, Bundle, Origins};
+use server::{Bridge, Bundle, HitKind, Origins};
 
 // ---------------------------------------------------------------------------
 // gate: locating a bundle
@@ -227,7 +231,10 @@ fn locate_bundle() -> PathBuf {
             "no gircap bundle under {} (via {how}).\n\
              \x20 This suite is #[ignore]d because it is expensive and is meant to be run by \
              hand, so a missing input is a failure rather than a silent pass.\n\
-             \x20   produce one with:  cargo run -p gircap -- capture --out {}\n\
+             \x20   produce the v4 bundle with:  cargo nextest run -p gircap --test \
+             persistent_capture_e2e --run-ignored only -E 'test(write_persistent_v4_bundle)'\n\
+             \x20   then point at it with:  set GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4\n\
+             \x20   or capture an ordinary bundle:  cargo run -p gircap -- capture --out {}\n\
              \x20   or point at an existing one:  set GIRPR_ARTIFACT_BUNDLE=<dir>",
             root.display(),
             root.display(),
@@ -254,47 +261,6 @@ fn patchmaps(bundle: &Bundle) -> Patchmaps {
     Patchmaps::read(&bundle.root)
 }
 
-/// `gircap verify --artifact <dir>`, exit `0`. **The precondition** of every
-/// run (`docs/06` §3): it makes a failing check rule the bundle out as the
-/// cause instead of leaving it as the first suspect. The persistent case calls
-/// it once more afterwards, so read-only replay is checked as a postcondition
-/// too (`docs/03` §7.7).
-///
-/// Deliberately **not** re-implemented here — `gircap` owns that verdict, and
-/// a second implementation would be a second thing to be wrong. When `gircap`
-/// is not built the precondition is *skipped*, with its reason printed, rather
-/// than replaced by a substitute.
-///
-/// A bundle that fails verification is a hard failure, not a skip: the
-/// precondition is about an *absent* input turning people off `--ignored`
-/// forever, and a corrupt bundle is a real problem that must not hide behind
-/// a green run.
-async fn assert_bundle_verifies(bundle: &Bundle) {
-    let Some(exe) = gircap_exe() else {
-        println!(
-            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`.\n\
-             \x20 A pre-release run builds it first: cargo build -p gircap",
-            girpr_exe_dir().display()
-        );
-        return;
-    };
-    let out = tokio::process::Command::new(&exe)
-        .args(["verify", "--artifact"])
-        .arg(&bundle.root)
-        .output()
-        .await
-        .expect("run gircap verify");
-    let code = out.status.code().unwrap_or(-1);
-    assert_eq!(
-        code,
-        0,
-        "`gircap verify` must pass around every bridge run against this bundle.\n\
-         stderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    println!("gircap verify {} -> exit 0", bundle.root.display());
-}
-
 fn girpr_exe_dir() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_girpr"))
         .parent()
@@ -316,17 +282,18 @@ fn gircap_exe() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// the suite fixture: one verified bundle, one listener set
+// the suite fixture: one bundle, one listener set
 // ---------------------------------------------------------------------------
 
 /// The one fixture every capture test in this process shares.
 ///
-/// The bundle is read-only and immutable for the whole suite, so opening it,
-/// verifying it once with `gircap verify`, and binding the four listeners are
-/// suite-level work, not per-test work. The capture *records* are read here too
-/// (`bundle()` already parses `MANIFEST.json`, and `patchmaps()` is a one-time
-/// parse of the patchmaps), so a test reads them from here rather than from the
-/// disk again.
+/// The bundle is read-only and immutable for the whole suite, so opening it and
+/// binding the listeners are suite-level work, not per-test work. The capture
+/// *records* are read here too (`bundle()` already parses `MANIFEST.json`, and
+/// `patchmaps()` is a one-time parse of the patchmaps), so a test reads them
+/// from here rather than from the disk again. The v4 records get a cheap shape
+/// check per persistent case (`PersistentRecords::assert_v4`); `gircap verify`
+/// is not invoked and is not re-implemented here.
 ///
 /// Per-capture state is deliberately **not** shared: each test still makes its
 /// own [`Scratch`] tree and runs its own pre-pass and real run, and each run
@@ -396,11 +363,10 @@ async fn suite() -> &'static Suite {
                     .build()
                     .expect("build the bridge runtime");
                 let bundle = bundle();
-                runtime.block_on(assert_bundle_verifies(&bundle));
                 let patchmaps = patchmaps(&bundle);
                 let bridge = runtime.block_on(Bridge::start(bundle));
                 println!(
-                    "bridge fixture: verified {} and bound seven listeners (once per process)",
+                    "bridge fixture: opened {} and bound seven listeners (once per process)",
                     bridge.bundle().root.display()
                 );
                 tx.send(Suite {
@@ -831,8 +797,8 @@ async fn drive_capture(handle: &SuiteRun, capture: &Capture) {
 /// only runs deliberately, so it must never report "checked nothing" as a
 /// pass.
 async fn drive_named(handle: &SuiteRun, id: &str) {
-    if id == "persistent" {
-        drive_persistent(handle).await;
+    if let Some(kind) = id.strip_prefix("persistent_") {
+        drive_persistent(handle, kind).await;
         return;
     }
     let records = &handle.suite.patchmaps;
@@ -863,8 +829,73 @@ async fn drive_named(handle: &SuiteRun, id: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// the persistent case
+// the three persistent cases
 // ---------------------------------------------------------------------------
+
+/// The bundle-derived facts one persistent case owns.
+///
+/// girpr always fetches all three manifests and replays all three kinds; "one
+/// manifest per case" means the case owns **one manifest's assertions** — its
+/// mirror, its blob(s) and its revision marker — not that the run fetches one.
+struct PersistentCase {
+    /// The `persistent_<kind>` id from `drive_named`.
+    id: &'static str,
+    /// The `index.json` kind (`silence` in the id is `silence_data` here).
+    kind: &'static str,
+    /// This kind's mirror under `GenshinImpact_Data/Persistent/`.
+    mirror: &'static str,
+    /// The blob's basename in `index.json` paired with where girpr publishes it
+    /// under `game/`. The bytes are always read from the bundle, never written
+    /// into this table.
+    publishes: &'static [(&'static str, &'static str)],
+    /// This kind's revision marker.
+    marker: &'static str,
+}
+
+const PERSISTENT_CASES: [PersistentCase; 3] = [
+    PersistentCase {
+        id: "persistent_res",
+        kind: "res",
+        mirror: "res_versions_persist",
+        publishes: &[
+            (
+                "11111111.blk",
+                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk",
+            ),
+            (
+                "VO_TEST.pck",
+                "GenshinImpact_Data/StreamingAssets/AudioAssets/English(US)/VO_TEST.pck",
+            ),
+        ],
+        marker: "res_revision",
+    },
+    PersistentCase {
+        id: "persistent_data",
+        kind: "data",
+        mirror: "data_versions_persist",
+        publishes: &[
+            (
+                "22222222.blk",
+                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/22222222.blk",
+            ),
+            (
+                "hardware_model_config.json",
+                "GenshinImpact_Data/StreamingAssets/hardware_model_config.json",
+            ),
+        ],
+        marker: "data_revision",
+    },
+    PersistentCase {
+        id: "persistent_silence",
+        kind: "silence_data",
+        mirror: "silence_data_versions_persist",
+        publishes: &[(
+            "33333333.blk",
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/33333333.blk",
+        )],
+        marker: "silence_revision",
+    },
+];
 
 /// A scratch copy of the whole (small, synthetic) `game/` tree. The persistent
 /// tier writes install-wide markers, so it cannot run under the `--include`
@@ -876,6 +907,14 @@ fn persistent_scratch(bundle: &Bundle) -> TempDir {
     // files at the new version too, so the base repair has nothing to fetch
     // and cannot mask a persistent failure with an unrelated chunk 404.
     copy_tree(&bundle.root.join("expected"), &guard.join("game"));
+    // The producer records the install's Persistent AV folder as a one-line
+    // placeholder *file*; a real install, and the repair's own prerequisites,
+    // need a directory there. Normalize the scratch copy only — the bundle is
+    // read-only.
+    let persistent = guard.join("game/GenshinImpact_Data/Persistent");
+    if persistent.is_file() {
+        std::fs::remove_file(&persistent).expect("drop the bundled placeholder");
+    }
     guard
 }
 
@@ -892,13 +931,45 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
-/// A run context against the bridge's listeners, with the dispatcher replaced
-/// by the override the bundle's record describes. The binary's own dispatcher
-/// provider is deliberately untouched: it would need Collapse's release repo.
+/// Write the scratch `dispatch/{key.pem,record.json,response.json}` a
+/// key-and-record run needs. This is C2's `write_dispatch_inputs` pattern
+/// (`tests/repair_persistent.rs`), with every byte taken from this bundle: the
+/// key and envelope are the record's own bundle-relative files, and the record
+/// is `Served::load`'s in-memory copy, whose CDN authorities name this
+/// process's listeners. The bundle on disk is never written.
+fn write_dispatch_inputs(
+    scratch: &Path,
+    records: &PersistentRecords,
+    bundle_root: &Path,
+    record: &serde_json::Value,
+) -> (PathBuf, PathBuf) {
+    let dispatch = scratch.join("dispatch");
+    std::fs::create_dir_all(&dispatch).expect("scratch dispatch dir");
+    let key = dispatch.join("key.pem");
+    let record_path = dispatch.join("record.json");
+    std::fs::write(&key, records.key_bytes(bundle_root)).expect("scratch key");
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec(record).expect("serialize record"),
+    )
+    .expect("scratch record");
+    std::fs::write(
+        dispatch.join("response.json"),
+        records.envelope_bytes(bundle_root),
+    )
+    .expect("scratch envelope");
+    (key, record_path)
+}
+
+/// A run context against the bridge's listeners, obtaining `DispatchInfo` from
+/// the scratch key+record pair. No override is set: the file path is the claim.
+/// It performs no dispatcher GET, so the production `dispatch_url` in the
+/// record is never contacted.
 fn persistent_ctx(
     scratch: &TempDir,
     origins: &Origins,
-    info: girpr::test_support::DispatchInfo,
+    key: &Path,
+    record: &Path,
     dry_run: bool,
     purge_only: bool,
 ) -> RunCtx {
@@ -926,9 +997,9 @@ fn persistent_ctx(
         repair_mode_explicit: false,
         jobs: 1,
         with_persistent: true,
-        persistent_dispatch_override: Some(persistent_override(info)),
-        dispatch_key_path: None,
-        dispatch_record_path: None,
+        persistent_dispatch_override: None,
+        dispatch_key_path: Some(key.to_path_buf()),
+        dispatch_record_path: Some(record.to_path_buf()),
         check_only: false,
         scan: false,
         purge_only,
@@ -945,151 +1016,215 @@ fn persistent_ctx(
     }
 }
 
-/// Replay the dispatcher envelope, the three manifests and the full-file blobs,
-/// then assert the bytes the repair published: hotfix files, the three mirrors
-/// and the whole marker block. The read-only modes must publish none of them.
-async fn drive_persistent(handle: &SuiteRun) {
+/// Replay the three manifests and the full-file blobs from the scratch
+/// key+record pair, then assert **this kind's** mirror, blob(s) and revision
+/// marker. All three cases use the one bundle and the one listener set; each
+/// owns a different slice of the published state.
+async fn drive_persistent(handle: &SuiteRun, kind: &str) {
+    let case = PERSISTENT_CASES
+        .iter()
+        .find(|c| c.id.strip_prefix("persistent_") == Some(kind))
+        .unwrap_or_else(|| panic!("no persistent case for {kind:?}"));
     let bridge = handle.bridge();
     let bundle = bridge.bundle();
     let Some(records) = PersistentRecords::read(&bundle.root) else {
         panic!(
-            "{} carries no dispatch/ + persistent/ records; point GIRPR_ARTIFACT_BUNDLE at a \
-             persistent fixture to exercise the bridge case",
+            "{} carries no dispatch/ + persistent/ records; produce the v4 bundle with \
+             cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only \
+             -E 'test(write_persistent_v4_bundle)' and set \
+             GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4",
             bundle.root.display()
         );
     };
+    records.assert_v4(&bundle.root);
     let Some(record) = bridge.served_dispatch_record() else {
         panic!("the bridge did not load the dispatch record");
     };
-    let info = dispatch_info(&record);
 
     let scratch = persistent_scratch(bundle);
+    let (key, record_path) = write_dispatch_inputs(&scratch, &records, &bundle.root, &record);
     let (summary, code) = run_library(persistent_ctx(
         &scratch,
         bridge.origins(),
-        info.clone(),
+        &key,
+        &record_path,
         false,
         false,
     ))
     .await
-    .unwrap_or_else(|e| panic!("a clean flagged run failed: {e}"));
-    assert_eq!(code, RunExit::Success);
-    assert_eq!(summary.flags.persistent, Some("published"));
-    assert!(summary.flags.persistent_repaired.unwrap_or(0) > 0);
+    .unwrap_or_else(|e| panic!("{}: a clean flagged run failed: {e}", case.id));
+    assert_eq!(code, RunExit::Success, "{}", case.id);
+    assert_eq!(summary.flags.persistent, Some("published"), "{}", case.id);
+    assert!(
+        summary.flags.persistent_repaired.unwrap_or(0) > 0,
+        "{}: the dispatch record must have driven a real repair",
+        case.id
+    );
 
     let persistent_dir = scratch.join("game").join("GenshinImpact_Data/Persistent");
-    // The hotfix bytes came off the replayed full-file route, not out of the
-    // bundle's game tree: those paths are absent from the fixture.
-    let hotfix = scratch
-        .join("game")
-        .join("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk");
+
+    // This kind's mirror is the raw manifest bytes from `index.json`, not a
+    // re-serialization. The other two mirrors are published by the same run
+    // but belong to their own cases.
     assert_eq!(
-        std::fs::read(&hotfix).expect("the replayed hotfix file"),
-        records.blob(&bundle.root, "11111111.blk"),
-        "the full-file blob must be byte-for-byte the bundle's"
-    );
-    let hotfix_data = scratch
-        .join("game")
-        .join("GenshinImpact_Data/StreamingAssets/hardware_model_config.json");
-    assert_eq!(
-        std::fs::read(&hotfix_data).expect("the replayed data hotfix"),
-        records.blob(&bundle.root, "hardware_model_config.json"),
+        std::fs::read(persistent_dir.join(case.mirror)).expect("the mirrored manifest"),
+        records.manifest(&bundle.root, case.kind),
+        "{}: {mirror} must be the raw manifest bytes",
+        case.id,
+        mirror = case.mirror
     );
 
-    for (kind, mirror) in [
-        ("res", "res_versions_persist"),
-        ("data", "data_versions_persist"),
-        ("silence_data", "silence_data_versions_persist"),
-    ] {
+    // The request log is the proof of which hotfix route was exercised. A
+    // source_kind is a bundle fact: the hit's basename must name one of this
+    // kind's blobs in `persistent/index.json`. The file path performs no
+    // dispatcher GET at all — there must be no Dispatch hit to lean on.
+    let hits = handle.bridge().hits_since(handle.start);
+    assert!(
+        !hits.iter().any(|h| h.kind == HitKind::Dispatch),
+        "{}: the key+record path must not query the dispatcher",
+        case.id
+    );
+    let blobs = records.blobs_for_kind(case.kind);
+    assert!(
+        hits.iter().any(|h| {
+            h.kind == HitKind::Hotfix
+                && blobs.iter().any(|b| {
+                    b["remote_name"]
+                        .as_str()
+                        .is_some_and(|r| r.rsplit('/').next() == Some(h.id.as_str()))
+                })
+        }),
+        "{}: no Hotfix hit names a blob of kind {} (hits: {hits:?})",
+        case.id,
+        case.kind
+    );
+
+    // The hotfix bytes came off the replayed full-file route and are exactly
+    // the bundle's blob bytes, byte for byte.
+    for (blob_name, publish_rel) in case.publishes {
         assert_eq!(
-            std::fs::read(persistent_dir.join(mirror)).expect("the mirrored manifest"),
-            records.manifest(&bundle.root, kind),
-            "{mirror} is the raw manifest bytes, not a re-serialization"
+            std::fs::read(scratch.join("game").join(publish_rel))
+                .unwrap_or_else(|e| panic!("{}: read {publish_rel}: {e}", case.id)),
+            records.blob(&bundle.root, blob_name),
+            "{}: {publish_rel} must be the bundle's {blob_name} blob",
+            case.id
         );
     }
 
-    let d = &record["decoded"];
-    let num = |key: &str| d[key].as_u64().unwrap().to_string();
-    let text = |key: &str| d[key].as_str().unwrap().to_string();
-    let streaming = scratch
-        .join("game")
-        .join("GenshinImpact_Data/StreamingAssets/res_versions_streaming");
-    let mut expected: Vec<(&str, String)> = vec![
-        (
-            "base_res_version_hash",
-            md5hex(&std::fs::read(streaming).expect("the hash source")),
-        ),
-        ("res_revision", num("res_revision")),
-        ("res_revision_eternal", num("res_revision")),
-        ("data_revision", num("data_revision")),
-        ("silence_revision", num("silence_revision")),
-        ("audio_revision", num("audio_revision")),
-        ("PatchDone", num("audio_revision")),
-        ("ChannelName", text("channel_name")),
-        ("ScriptVersion", text("game_version")),
-    ];
-    expected.sort_by_key(|(name, _)| *name);
-    for (name, value) in expected {
-        assert_eq!(
-            std::fs::read(persistent_dir.join(name)).expect("the marker"),
-            value.as_bytes(),
-            "{name} is exact plain text with no trailing newline"
-        );
-    }
+    // This kind's revision marker equals the revision the record decoded.
+    let decoded = &records.dispatch["decoded"];
+    let want = decoded[case.marker]
+        .as_u64()
+        .unwrap_or_else(|| panic!("decoded has no {}", case.marker))
+        .to_string();
+    assert_eq!(
+        std::fs::read(persistent_dir.join(case.marker)).expect("the revision marker"),
+        want.as_bytes(),
+        "{}: {} is exact plain text with no trailing newline",
+        case.id,
+        case.marker
+    );
 
-    // C4/C20: neither a dry run nor a cleanup-only run publishes a marker, a
-    // mirror or a hotfix file. Each gets its own fresh copy of the fixture.
-    for (dry_run, purge_only) in [(true, false), (false, true)] {
-        let ro = persistent_scratch(bundle);
-        let (summary, code) = run_library(persistent_ctx(
-            &ro,
-            bridge.origins(),
-            info.clone(),
-            dry_run,
-            purge_only,
-        ))
-        .await
-        .expect("a read-only flagged run");
-        assert_eq!(code, RunExit::Success);
+    if case.kind == "res" {
+        // The eternal res marker is the second half of the res claim.
+        let eternal = decoded["res_revision"].as_u64().unwrap().to_string();
         assert_eq!(
-            summary.flags.persistent,
-            Some(if dry_run { "listed" } else { "skipped" })
+            std::fs::read(persistent_dir.join("res_revision_eternal")).expect("eternal marker"),
+            eternal.as_bytes(),
+            "res_revision_eternal is the decoded res_revision"
         );
-        let ro_persistent = ro.join("game").join("GenshinImpact_Data/Persistent");
-        for name in [
-            "base_res_version_hash",
-            "res_revision",
-            "res_revision_eternal",
-            "data_revision",
-            "silence_revision",
-            "audio_revision",
-            "PatchDone",
-            "ChannelName",
-            "ScriptVersion",
-            "res_versions_persist",
-            "data_versions_persist",
-            "silence_data_versions_persist",
-        ] {
-            assert!(
-                !ro_persistent.join(name).exists(),
-                "{name} must not be written under dry_run={dry_run}, purge_only={purge_only}"
+
+        // The whole marker block lives in the res case only, once, so the three
+        // cases each own a slice rather than all re-asserting the world. The
+        // compact v4 producer records no `res_versions_streaming` source, so
+        // C16's omit branch is the ninth marker's expected state here: eight
+        // markers carry bundle-derived bytes and the ninth is pinned absent.
+        let num = |key: &str| decoded[key].as_u64().unwrap().to_string();
+        let text = |key: &str| decoded[key].as_str().unwrap().to_string();
+        let mut expected: Vec<(&str, String)> = vec![
+            ("res_revision", num("res_revision")),
+            ("res_revision_eternal", num("res_revision")),
+            ("data_revision", num("data_revision")),
+            ("silence_revision", num("silence_revision")),
+            ("audio_revision", num("audio_revision")),
+            ("PatchDone", num("audio_revision")),
+            ("ChannelName", text("channel_name")),
+            ("ScriptVersion", text("game_version")),
+        ];
+        expected.sort_by_key(|(name, _)| *name);
+        for (name, value) in expected {
+            assert_eq!(
+                std::fs::read(persistent_dir.join(name)).expect("the marker"),
+                value.as_bytes(),
+                "{name} is exact plain text with no trailing newline"
             );
         }
-        let ro_hotfix = ro
-            .join("game")
-            .join("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk");
-        assert!(!ro_hotfix.exists(), "a read-only run downloads no hotfix");
+        assert!(
+            !persistent_dir.join("base_res_version_hash").exists(),
+            "the bundle has no hash source, so C16 must omit the ninth marker"
+        );
+        assert_eq!(
+            summary.flags.persistent_base_hash.as_deref(),
+            Some("omitted"),
+            "the omission must be reported, not silently skipped"
+        );
+
+        // C4/C20: neither a dry run nor a cleanup-only run publishes a marker,
+        // a mirror or a hotfix file. Each gets its own fresh copy of the tree.
+        for (dry_run, purge_only) in [(true, false), (false, true)] {
+            let ro = persistent_scratch(bundle);
+            let (key, record_path) = write_dispatch_inputs(&ro, &records, &bundle.root, &record);
+            let (summary, code) = run_library(persistent_ctx(
+                &ro,
+                bridge.origins(),
+                &key,
+                &record_path,
+                dry_run,
+                purge_only,
+            ))
+            .await
+            .expect("a read-only flagged run");
+            assert_eq!(code, RunExit::Success);
+            assert_eq!(
+                summary.flags.persistent,
+                Some(if dry_run { "listed" } else { "skipped" })
+            );
+            let ro_persistent = ro.join("game").join("GenshinImpact_Data/Persistent");
+            for name in [
+                "base_res_version_hash",
+                "res_revision",
+                "res_revision_eternal",
+                "data_revision",
+                "silence_revision",
+                "audio_revision",
+                "PatchDone",
+                "ChannelName",
+                "ScriptVersion",
+                "res_versions_persist",
+                "data_versions_persist",
+                "silence_data_versions_persist",
+            ] {
+                assert!(
+                    !ro_persistent.join(name).exists(),
+                    "{name} must not be written under dry_run={dry_run}, purge_only={purge_only}"
+                );
+            }
+            for (_, publish_rel) in PERSISTENT_CASES.iter().flat_map(|c| c.publishes) {
+                assert!(
+                    !ro.join("game").join(publish_rel).exists(),
+                    "a read-only run downloads no {publish_rel}"
+                );
+            }
+        }
     }
 
-    // Replay must not mutate the bundle: docs/03 §7.7 promises `gircap verify`
-    // still passes after the run. Same check as the precondition, now as a
-    // postcondition, so a writer that reaches back into the fixture is caught.
-    assert_bundle_verifies(bundle).await;
-
     println!(
-        "bridge persistent: replayed {} manifests, {} blobs and all 9 markers",
-        records.index["manifests"].as_array().map_or(0, Vec::len),
-        records.index["blobs"].as_array().map_or(0, Vec::len)
+        "bridge {:<20} stored key+record -> mirror={} blob(s)={} hotfix hits={} repaired={}",
+        case.id,
+        case.mirror,
+        case.publishes.len(),
+        hits.iter().filter(|h| h.kind == HitKind::Hotfix).count(),
+        summary.flags.persistent_repaired.unwrap_or(0)
     );
 }
 
@@ -1097,7 +1232,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand before any release that changes the repair spec, or when a regression is suspected. The persistent cases need GIRPR_ARTIFACT_BUNDLE=artifacts/persistent_v4 from C4's hand-run producer; then: cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
             let run = suite_run().await;
             drive_named(&run, $id).await;
@@ -1151,10 +1286,23 @@ capture_test!(
 );
 
 capture_test!(
-    the_persistent_records_are_replayed_byte_exact,
-    "persistent",
-    "`persistent`: the dispatcher envelope, three raw manifests and a few \
-     full-file blobs are replayed; the hotfix bytes, all three mirrors and the \
-     full marker block are asserted, and no marker is written under --dry-run \
-     or --purge-only."
+    persistent_res,
+    "persistent_res",
+    "`persistent_res`: the v4 bundle's stored key and record drive the run; \
+     the res mirror, res blobs and res revision markers (including the eternal \
+     one) are asserted, plus the full marker block and the read-only modes."
+);
+
+capture_test!(
+    persistent_data,
+    "persistent_data",
+    "`persistent_data`: the same stored key and record, asserting the data \
+     mirror, data blobs and data revision marker."
+);
+
+capture_test!(
+    persistent_silence,
+    "persistent_silence",
+    "`persistent_silence`: the same stored key and record, asserting the \
+     silence_data mirror, silence blob and silence revision marker."
 );
