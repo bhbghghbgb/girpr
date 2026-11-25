@@ -319,10 +319,12 @@ async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFail
     let timer = PhaseTimer::start("metadata");
     let mut meta = metadata::fetch(ctx, game_dir).await?;
     // The persistent query is part of the plan half: it touches nothing. It
-    // runs for `--print-plan` and `--check-only` (both need the set to list or
-    // check), but never for `--purge-only`, which puts no bytes in place (C20).
-    // An unflagged run never constructs the provider at all.
-    if ctx.with_persistent && !ctx.purge_only {
+    // runs whenever the flag is set, `--purge-only` included: the dispatcher
+    // and its manifests are needed only to widen the purge keep set, so files
+    // the manifests expect survive a cleanup-only run. No marker or mirror is
+    // published in that mode (the post-phase guard), so the version claim is
+    // unchanged. An unflagged run never constructs the provider at all.
+    if ctx.with_persistent {
         let http = meta.hyp.http();
         meta.dispatch = Some(persistent::query(ctx, &meta.latest, &http).await?);
     }
@@ -633,9 +635,17 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
             summary.flags.persistent_base_hash = Some("omitted");
         }
     }
-    let (persistent_files, persistent_bytes) = persistent
-        .as_deref()
-        .map_or((0, 0), |p| (p.plan.assets.len() as u64, p.plan.total_bytes));
+    let (persistent_files, persistent_bytes) = if ctx.purge_only {
+        // The state exists only to widen the keep set: a cleanup-only run
+        // downloads and repairs no hotfix byte, so a ceiling on that work must
+        // not refuse it. The same figures still appear in `SUMMARY` as the
+        // plan's size; only the enforcement inputs are zeroed here.
+        (0, 0)
+    } else {
+        persistent
+            .as_deref()
+            .map_or((0, 0), |p| (p.plan.assets.len() as u64, p.plan.total_bytes))
+    };
     if !within_limits(
         ctx,
         &plan,
@@ -1086,6 +1096,22 @@ async fn execute_phase(
     // the live chunk manifests still carry. It runs before `--purge-before`
     // and before any repair bytes land, and `--check-only` never reaches it.
     run_stale_sweep(ctx, &game_dir, &stale, &mut summary).await;
+
+    // 5.2a Collapse-parity relocation of stranded non-patch AV files, before
+    // any purge. The purge candidates were walked in the plan half, before
+    // this move: a stranded `Persistent/` `.pck`/`.usm`/`.cuepoint` is in no
+    // manifest and is therefore named as an orphan there. Moving it first lands
+    // it at its `StreamingAssets/` counterpart, which the plan expects when
+    // that destination is in a manifest, so the purge keeps the moved file and
+    // the repair loop treats it as an ordinary candidate. Read-only runs never
+    // reach a write; `--purge-only` puts no bytes in place and is not a repair
+    // run.
+    if let Some(state) = persistent.as_deref()
+        && !ctx.purge_only
+        && !readonly
+    {
+        persistent_exec::relocate_stranded_av(ctx, &game_dir, &meta.config.exe_file_name, state)?;
+    }
 
     // 5.2 files-cleanup before.
     run_purge_before(ctx, purge_plan.clone(), &mut summary).await?;

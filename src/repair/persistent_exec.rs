@@ -57,7 +57,7 @@ pub(crate) async fn repair(
         return summary;
     }
 
-    if let Err(e) = prerequisites(ctx, game_dir, exe_file_name, state) {
+    if let Err(e) = prerequisites(game_dir, exe_file_name) {
         tracing::error!(
             error = %format!("{e:#}"),
             "persistent prerequisites failed; no hotfix was attempted"
@@ -244,16 +244,9 @@ fn target_of_checked(game_dir: &Path, asset: &PersistentAsset) -> anyhow::Result
 ///
 /// Every path is resolved through `contained_join`, so a crafted exe stem or a
 /// symlink inside the install cannot turn a prerequisite into an escape.
-fn prerequisites(
-    ctx: &RunCtx,
-    game_dir: &Path,
-    exe_file_name: &str,
-    state: &PersistentState,
-) -> Result<(), RunFailure> {
-    let data = data_dir_name(exe_file_name)
+fn prerequisites(game_dir: &Path, exe_file_name: &str) -> Result<(), RunFailure> {
+    let (persistent_tree, streaming_tree) = tree_rels(exe_file_name)
         .map_err(|e| RunFailure::write(anyhow!("persistent exe name: {e}")))?;
-    let persistent_tree = format!("{data}/Persistent");
-    let streaming_tree = format!("{data}/StreamingAssets");
     let persistent_dir = join(game_dir, &persistent_tree).map_err(RunFailure::write)?;
     let streaming_dir = join(game_dir, &streaming_tree).map_err(RunFailure::write)?;
 
@@ -312,6 +305,42 @@ fn prerequisites(
         }
     }
 
+    // The stranded-AV relocation is deliberately NOT here: the execute half
+    // runs it before `--purge-before`, so a file that is about to be moved is
+    // not first deleted as an orphan by a purge planned in the plan half.
+    Ok(())
+}
+
+/// The two exe-stem-derived tree rels, computed once for both the early move
+/// and the later prerequisites so the two cannot disagree about where
+/// `Persistent/` and `StreamingAssets/` live.
+fn tree_rels(exe_file_name: &str) -> anyhow::Result<(String, String)> {
+    let data = data_dir_name(exe_file_name)?;
+    Ok((
+        format!("{data}/Persistent"),
+        format!("{data}/StreamingAssets"),
+    ))
+}
+
+/// Relocate stranded non-patch AV files, as a standalone execute step.
+///
+/// This is the same Collapse `Check.cs:91-145` move that used to be the last
+/// step of `prerequisites`. It is split out so `execute_phase` can run it
+/// **before** `--purge-before`: a stranded `Persistent/` AV file is in no
+/// manifest, so a purge planned up front names it as an orphan and would delete
+/// it before this step could move it. Moving first lands it at its
+/// `StreamingAssets/` counterpart — which the plan already expects when that
+/// destination is in a manifest — so the purge keeps it and the repair loop
+/// treats it as an ordinary candidate. Best-effort: an unreadable or
+/// out-of-scope entry is logged by `move_non_patch_av` and the run carries on.
+pub(crate) fn relocate_stranded_av(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    exe_file_name: &str,
+    state: &PersistentState,
+) -> Result<(), RunFailure> {
+    let (persistent_tree, streaming_tree) = tree_rels(exe_file_name)
+        .map_err(|e| RunFailure::write(anyhow!("persistent exe name: {e}")))?;
     move_non_patch_av(ctx, game_dir, &persistent_tree, &streaming_tree, state);
     Ok(())
 }

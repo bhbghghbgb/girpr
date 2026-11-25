@@ -215,22 +215,51 @@ async fn check_only_and_dry_run_list_the_persistent_set_only() {
     mock.stop();
 }
 
-/// C20: a cleanup-only run does no persistent work at all, even with the flag.
+/// A cleanup-only run still queries the dispatcher: the manifests widen the
+/// purge keep set so existing hotfix bytes under `Persistent/` survive. A
+/// forced-persistent row is kept only by that set — no filename rule protects
+/// it — while an ordinary orphan beside it is still purged.
 #[tokio::test]
-async fn purge_only_never_calls_the_dispatcher() {
-    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
-    let dir = temp_dir("persistent_purge_only");
+async fn purge_only_queries_the_dispatcher_and_keeps_manifest_files() {
+    // A base file with different bytes at the row's default rel forces the
+    // dispatcher row into `Persistent/`, where a plain name has no keep rule.
+    let fx = build_fixture_spec(&girpr_test_fixtures::FixtureSpec::new(vec![
+        girpr_test_fixtures::FileSpec::new(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk",
+            vec![girpr_test_fixtures::ChunkSpec::new(
+                "chunk_block",
+                vec![0x5a; 64],
+                0,
+            )],
+        ),
+    ]));
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let server = manifest_server(RES);
+    let dir = temp_dir("persistent_purge_only_keeps_manifest_files");
+    let hotfix_rel = "GenshinImpact_Data/Persistent/AssetBundles/blocks/00/11111111.blk";
+    write_game_file(&dir, hotfix_rel, b"hotfix bytes");
+    write_game_file(&dir, "GenshinImpact_Data/Persistent/orphan.bin", b"orphan");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.with_persistent = true;
+    flagged(&mut ctx, dispatch_for(&server, RES));
     ctx.purge_only = true;
-    ctx.persistent_dispatch_override = Some(DispatchOverride::new(|_, _| {
-        panic!("--purge-only must not query the dispatcher")
-    }));
 
     let (summary, code) = run(ctx).await.expect("the cleanup still runs");
     assert_eq!(code, RunExit::Success);
     assert_eq!(summary.flags.persistent, Some("skipped"));
-    assert_eq!(summary.flags.persistent_files, Some(0));
+    // The dispatcher was queried: its five planned rows are visible in SUMMARY
+    // even though none of them is downloaded or published.
+    assert_eq!(summary.flags.persistent_files, Some(5));
+    assert_eq!(
+        std::fs::read(dir.join(hotfix_rel)).unwrap(),
+        b"hotfix bytes",
+        "a manifest file under Persistent survives a cleanup-only run"
+    );
+    assert!(
+        !dir.join("GenshinImpact_Data/Persistent/orphan.bin")
+            .exists(),
+        "an orphan with no keep rule is still purged"
+    );
+    assert!(!dir.join("GenshinImpact_Data/Persistent/PatchDone").exists());
     mock.stop();
 }
 
@@ -716,6 +745,62 @@ async fn prerequisites_clean_stale_state_and_restore_ctable_streaming() {
     mock.stop();
 }
 
+/// A stranded AV file whose `StreamingAssets` destination is in a manifest is
+/// relocated before `--purge-before` acts. The purge plan was walked in the
+/// plan half, before the move, and names the stranded source as an orphan;
+/// hoisting the move out of `prerequisites` and ahead of that purge keeps the
+/// moved file, which the repair pass then finds intact. Previously the purge
+/// deleted the source first and no destination was ever created.
+#[tokio::test]
+async fn a_stranded_av_file_with_a_manifest_destination_survives_purge_before() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let server = manifest_server(RES);
+    let dir = temp_dir("persistent_av_move_before_purge");
+    let source_rel = "GenshinImpact_Data/Persistent/AudioAssets/English(US)/VO_TEST.pck";
+    let dest_rel = "GenshinImpact_Data/StreamingAssets/AudioAssets/English(US)/VO_TEST.pck";
+    // Every other planned row is already intact, so the run opens no hotfix
+    // request; the only work is the relocation itself.
+    for (rel, bytes) in [
+        (
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/11111111.blk",
+            HOTFIX_A,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/22222222.blk",
+            HOTFIX_B,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/33333333.blk",
+            HOTFIX_A,
+        ),
+        (
+            "GenshinImpact_Data/StreamingAssets/hardware_model_config.json",
+            HOTFIX_B,
+        ),
+    ] {
+        write_game_file(&dir, rel, bytes);
+    }
+    // HOTFIX_B is the manifest's exact 48-byte body for this .pck row.
+    write_game_file(&dir, source_rel, HOTFIX_B);
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    flagged(&mut ctx, dispatch_for(&server, RES));
+    ctx.purge_before = true;
+
+    let (summary, code) = run(ctx).await.expect("the run completes");
+    assert_eq!(code, RunExit::Success);
+    assert!(
+        !dir.join(source_rel).exists(),
+        "the stranded source was moved, not left behind"
+    );
+    assert_eq!(
+        std::fs::read(dir.join(dest_rel)).unwrap(),
+        HOTFIX_B,
+        "the destination is in the manifest, so the purge kept it"
+    );
+    assert_eq!(summary.flags.persistent_repaired, Some(0));
+    mock.stop();
+}
+
 /// A missing `StreamingAssets/ctable.dat` is a no-op, and an existing
 /// `ctable_streaming.dat` is never replaced by nothing.
 #[tokio::test]
@@ -992,17 +1077,16 @@ async fn a_dry_run_lists_every_marker_and_writes_nothing() {
     mock.stop();
 }
 
-/// C20: a cleanup-only run puts no bytes in place, so it publishes no state.
+/// A cleanup-only run queries the dispatcher for the keep set but puts no
+/// bytes in place, so it publishes no marker block, no mirror and no version.
 #[tokio::test]
 async fn purge_only_publishes_no_markers_or_mirrors() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let server = manifest_server(RES);
     let dir = temp_dir("persistent_post_purge_only");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.with_persistent = true;
+    flagged(&mut ctx, dispatch_for(&server, RES));
     ctx.purge_only = true;
-    ctx.persistent_dispatch_override = Some(DispatchOverride::new(|_, _| {
-        panic!("--purge-only must not query the dispatcher")
-    }));
 
     let (summary, code) = run(ctx).await.expect("the cleanup still runs");
     assert_eq!(code, RunExit::Success);

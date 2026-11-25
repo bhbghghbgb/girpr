@@ -612,9 +612,10 @@ All sites below are in the shipped `src/repair/mod.rs` pipeline:
 ### 7.5.1 Plan half — decide, touch nothing
 
 1. **Dispatcher query, in `fetch_and_report` after `metadata::fetch`.**
-   Only when `ctx.with_persistent && !ctx.purge_only` (C20: a cleanup-only run
-   does no persistent work at all; `--print-plan` and `--check-only` do need the
-   query so they can list/check the persistent set). Load `DispatchKeys` (B2(a): fetch and unwrap
+   Whenever `ctx.with_persistent` — `--purge-only` included, where the query and
+   manifests are a keep-set input only (C20 revised: no marker, mirror or version
+   is published in that mode); `--print-plan` and `--check-only` need the query
+   so they can list/check the persistent set. Load `DispatchKeys` (B2(a): fetch and unwrap
    Collapse's release metadata from
    `metadata/v3/stable/config_master.json` + the per-region config file, pinned
    URLs + digest check on the key blob; B2(b) embedded versioned table only as
@@ -633,8 +634,8 @@ All sites below are in the shipped `src/repair/mod.rs` pipeline:
    and exit `2` (C6, B3). An unflagged run never calls this provider. Cache
    nothing (Collapse's 5-minute cache is not needed for a single-shot run).
 
-2. **Persistent manifests, in `fetch_plan_network`** (same `with_persistent &&
-   !purge_only` gate). The dispatcher's embedded descriptor NDJSON (root `3` → `22` → `3`, root `3` → `19` and root `3` → `20`)
+2. **Persistent manifests, in `fetch_plan_network`** (same `with_persistent`
+   gate, `--purge-only` included). The dispatcher's embedded descriptor NDJSON (root `3` → `22` → `3`, root `3` → `19` and root `3` → `20`)
    supplies each full manifest's `remoteName`, `md5` and `fileSize`; derive the
    three URLs from those names, not from hardcoded paths. Fetch all three
    concurrently with the existing manifest/reuse/deprecated trio under the
@@ -708,7 +709,14 @@ The shipped `execute_phase` inserts a persistent repair path next to
    `meta.config.exe_file_name`, not a hardcoded string.
 2. **Move non-patch `.pck`/`.usm`/`.cuepoint` from `Persistent/` back to
    `StreamingAssets/`** (Collapse `Check.cs:91–145`), so a hotfix that ended
-   does not leave a stranded duplicate. Never in `--check-only`.
+   does not leave a stranded duplicate. Never in `--check-only`. This is a
+   standalone execute step (`persistent_exec::relocate_stranded_av`) placed
+   **before `--purge-before`**: the purge candidates were walked in the plan
+   half, before the move, so a stranded file is named as an orphan there. Moving
+   first lands it at its manifest-expected `StreamingAssets/` counterpart, which
+   the purge keeps; the repair pass then treats it as an ordinary candidate.
+   Without the hoist the purge deletes the source first and no destination is
+   ever created.
 3. **Read-only flags (C17(b)).** Clear the read-only attribute on a persistent
    target immediately before overwriting it — tree-wide stripping would
    mutate files the run does not otherwise touch. If the file still cannot be
@@ -737,9 +745,11 @@ In the shipped `src/repair/phases/post.rs::run_inner`, one step sits after the
 
 1. If a delete ceiling ended the phase (`PostOutcome::DeleteCeiling`), return
    first — no markers.
-2. If `ctx.purge_only` (C20), skip all persistent work: no dispatcher query in
-   the plan half, no mirror, no marker. The already-widened keep-set still
-   protects existing markers.
+2. If `ctx.purge_only` (C20 revised), skip the *publication*: no mirror, no
+   marker, no version bump. The dispatcher and manifests are still queried in
+   the plan half, but only to widen the purge keep set, so existing hotfix bytes
+   under `Persistent/` that the manifests expect survive the cleanup. The
+   run-wide keep-set (C1/C2) still protects existing markers.
 3. If read-only (`--dry-run`), log one `would write marker …` line per file and
    publish nothing (C4).
 4. If the C7(f) scope suppression fired, log the suppression and publish
@@ -838,7 +848,7 @@ not own (`README.md` "For developers / AI agents"). Scratch trees go under
 | Unit — decoder | `app/dispatch/` tests | metadata blob unwrap against recorded samples; proto field decode against `samples/dispatch_fields.txt`; version-match rule; key/seed version coverage; URL/subdomain builders; per-biz channel constants |
 | Unit — pure plan | `app/persistent-plan/` tests | suffix→folder table; force-persistent MD5 diff (same/different/missing base); URL primary/alternate swap; digest preference hash-vs-md5; blank-line and extra-key tolerance; marker byte rendering (no trailing newline, `PatchDone` = audio revision, hash omission); scope suppression predicate |
 | Unit — purge | `src/repair/purge.rs` table test `cached_keys_classify_every_keep_rule` | new keep patterns for `*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*`, root `pkg_version`; negative rows proving `*versions_remote*` and `VideoAssets/*.tmp` still purge |
-| Integration | `app/test-fixtures` mock + `tests/repair_offline.rs` (pulled into the `tests/repair.rs` root) | dispatcher failure → 2; version disagreement → 2; manifest MD5 failure → 2; three-mirror publish (res/data/silence), including silence CDN fallback; full hotfix download with primary 404 → alternate; corrupt body → retry/gate failure → 3 with no markers; read-only flags; `ctable`/`DXSETUP` prerequisites; read-only modes list-only; `--purge-only` skip; scoped run with marker path out of scope → 1; scoped run with hotfix path out of scope → suppressed; pre-flight and runtime ceilings including persistent bytes; check-only marker damage → 4 |
+| Integration | `app/test-fixtures` mock + `tests/repair_offline.rs` (pulled into the `tests/repair.rs` root) | dispatcher failure → 2; version disagreement → 2; manifest MD5 failure → 2; three-mirror publish (res/data/silence), including silence CDN fallback; full hotfix download with primary 404 → alternate; corrupt body → retry/gate failure → 3 with no markers; read-only flags; `ctable`/`DXSETUP` prerequisites; read-only modes list-only; `--purge-only` queries the dispatcher but publishes no markers and keeps manifest bytes; stranded AV file with a manifest destination survives `--purge-before`; scoped run with marker path out of scope → 1; scoped run with hotfix path out of scope → suppressed; pre-flight and runtime ceilings including persistent bytes; check-only marker damage → 4 |
 | Binary contract | `tests/cli_contract.rs` (in the `tests/contracts.rs` root) | flag parse, help text, exit codes, conditional `SUMMARY` keys absent unflagged and present in order under the flag |
 | Bridge (`#[ignore]`d, run by hand) | `tests/artifact_repair_bridge.rs` + `app/test-fixtures/src/artifact_server.rs` | six repair-only cross-tool cases (identical, no-reuse, reuse-in-place, reuse-moved, added, removed) against captured bundles; each asserts the patched file's bytes, the exact set of chunks fetched and the patch's byte total |
 | Manual, real install | recorded in docs/01 §6.6 step 5 | update Persistent with the flag, copy the game to a second machine, launch once, confirm no verification/re-download |
@@ -924,7 +934,7 @@ synthetic mini-bundle follows this rule today, `docs/06` §1.2).
 | C16 omit `base_res_version_hash` if source missing | (a) | §7.4.3, `persistent_base_hash=omitted` |
 | C17 strip read-only on persistent paths only | (b) | §7.5.2.3 |
 | C19 always write full block under flag | (a) | §7.5.3 |
-| C20 purge-only skips persistent | (a) | §7.5.3, integration test |
+| C20 purge-only queries for keep set, publishes nothing | (d), superseding (a) | §7.5.1.1, §7.5.3, integration test |
 | B1 one master flag | (a) | §7.1.1 |
 | B2 key/seed from metadata, embedded fallback | (a)/(b) | §7.5.1.1 |
 | B3 failure while opted in → 2 | (a) | §7.6.1 |

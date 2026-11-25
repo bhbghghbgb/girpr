@@ -48,7 +48,8 @@ pub struct Meta {
     pub blacklist: HashSet<String>,
     /// Effective audio selection, canonical codes; empty = game-only.
     pub audio: HashSet<String>,
-    /// The dispatcher result, present only for a flagged, non-purge-only run.
+    /// The dispatcher result, present whenever `--with-persistent` was passed,
+    /// `--purge-only` included (where it widens the purge keep set only).
     /// Read-only: no file or mirror has been written when this is set.
     pub dispatch: Option<DispatchInfo>,
 }
