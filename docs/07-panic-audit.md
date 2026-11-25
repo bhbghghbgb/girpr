@@ -23,7 +23,7 @@ a non-panicking clamp in the same region; "Disposition" says which.
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
 | `app/fetch/src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: clamped to a bounded capacity before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
-| `app/fetch/src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
+| `app/fetch/src/sophon/stream.rs` `fetch_manifest`'s protobuf parse (inside `try_fetch_verified_blob`) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
 | `app/fetch/src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `app/fetch/src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
 | `app/fetch/src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |

@@ -100,8 +100,8 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
    list. This call is fetched best-effort during the plan phase, never in
-   `--check-only`/`--print-plan`, and in `--dry-run` only because the post-phase (Step 7)
-   lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
+   `--check-only`/`--print-plan`, and in `--dry-run` because the execute-half stale-file
+   sweep lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
    **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
    `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
    returns the wrong set. It is the only one of these API calls that carries them.
@@ -173,6 +173,9 @@ The write modes, chosen per file by `--repair-mode` (default `auto`):
   target exactly as it was. The peak extra disk is the whole file. It is the mode to pick
   when the target must not be touched, and the way a file is written when its target cannot
   be opened for writing.
+- **discard**: the target is deleted and the file written from scratch through the in-place
+  path, so nothing is reused and every chunk is fetched. It holds no second copy: the peak
+  extra disk is the file's growth (0 when the target was already full size).
 
 **Corruption versus upgrade.** The in-place path is not a defragmentation, and the difference decides the
 design. There is no staging area anywhere in it — a reuse source and its destination are

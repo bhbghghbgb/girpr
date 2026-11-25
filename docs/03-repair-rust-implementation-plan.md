@@ -192,17 +192,19 @@ the separate `--with-persistent` tier described in docs/01 §6 and implemented i
 
 **The write modes, and what each one is for:**
 
-| | `inplace` (`auto` picks this when the target is writable) | `temp` (`--repair-mode temp`) |
-|---|---|---|
-| the target file | is written where it lies: the wrong bytes are replaced in place | is **never modified**: the repair is assembled in `{path}_tmp` and swapped in with an atomic rename |
-| an interrupted run | leaves a file that fails the same check; the next run re-verifies and continues | leaves the target exactly as it was, plus a partial `*_tmp` the next run resumes by length |
-| a final-MD5 mismatch | redoes only the chunks the per-chunk verdicts name | deletes the temp and restarts the file |
-| the resume artefact | none: the scan finds the chunks that are already right, so a corrupt prefix cannot be inherited | the `*_tmp` prefix, kept and continued |
-| peak extra disk | `jobs × largest *growth*` — 0 for a same-size repair | `jobs × largest file` |
-| `stopped=--max-download-bytes`/`stopped=--max-write-bytes` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
+| | `inplace` (`auto` picks this when the target is writable) | `temp` (`--repair-mode temp`) | `discard` (`--repair-mode discard`) |
+|---|---|---|---|
+| the target file | is written where it lies: the wrong bytes are replaced in place | is **never modified**: the repair is assembled in `{path}_tmp` and swapped in with an atomic rename | is deleted first and written from scratch through the in-place path |
+| an interrupted run | leaves a file that fails the same check; the next run re-verifies and continues | leaves the target exactly as it was, plus a partial `*_tmp` the next run resumes by length | leaves the rewritten target; the next run re-verifies and continues |
+| a final-MD5 mismatch | redoes only the chunks the per-chunk verdicts name | deletes the temp and restarts the file | redoes only the chunks the per-chunk verdicts name |
+| the resume artefact | none: the scan finds the chunks that are already right, so a corrupt prefix cannot be inherited | the `*_tmp` prefix, kept and continued | none: the target was deleted before the scan |
+| reuse | verified local chunks are kept where they belong | the same, assembled into the temp file | none: deleting the target leaves no source, so every chunk is fetched |
+| peak extra disk | `jobs × largest *growth*` — 0 for a same-size repair | `jobs × largest file` | `jobs × largest *growth*` — 0 when the target was already full size |
+| `stopped=--max-download-bytes`/`stopped=--max-write-bytes` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix | the next run re-verifies and continues |
 
-The rows are ways to spend disk, not rungs of a safety ladder. Both gate the file on
-the same whole-file MD5, and `config.ini` advances only when every planned file verified.
+The rows are ways to spend disk, not rungs of a safety ladder. Every mode gates the
+file on the same whole-file MD5, and `config.ini` advances only when every planned
+file verified.
 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
 decoded as it arrives and the decoded bytes are written into the target as they are
@@ -249,14 +251,14 @@ and the CLI contract in `README.md`.
 | `app/dispatch/` (`girpr_dispatch`) | unwrap Collapse release metadata into key/seed, dispatcher URL building, RSA PKCS#1 v1.5 decrypt, protobuf decode, typed `DispatchInfo` |
 | `app/persistent-plan/` (`girpr_persistent_plan`) | value types and pure decisions: row normalisation, suffix→folder placement, force-persistent rule, CDN URL selection, digest preference, marker rendering, scope suppression |
 | `app/fetch/src/persistent.rs` | fetch + MD5-verify + NDJSON-parse the persistent manifests; full-file HTTP download (primary → alternate on 404), temp sibling, digest gate, atomic publish |
-| `app/repair-plan/` | a sibling `PersistentPlan` alongside `RepairPlan`; persistent bytes in the download estimate and plan summary; dispatcher paths in `PurgeKeys` |
-| `crates/model/src/region.rs` | the per-biz dispatcher host and channel prefix values |
+| `app/repair-plan/` | persistent bytes in the download estimate and plan summary; dispatcher paths in `PurgeKeys` |
+| `app/dispatch/src/url.rs` | the per-biz dispatcher host and channel prefix values |
 | `app/report/` | conditional `SummaryFlags` fields and `PLAN` totals for persistent work |
 | `src/cli.rs`, `src/config.rs` | `--with-persistent` → `RunCtx.with_persistent` |
 | `src/repair/persistent.rs` | plan-half decisions, marker rendering and scope guards |
 | `src/repair/persistent_exec.rs` | prerequisites, stranded-AV relocation and the execute-half repair |
 | `src/repair/mod.rs`, `src/repair/phases/{metadata,post,check}.rs`, `src/repair/purge.rs` | phase wiring, marker publication, check-only and keep rules |
-| `app/test-fixtures/`, `tools/capture/`, `tests/repair_persistent.rs` | mock routes, bundle records and integration cases; inputs live under `tests/fixtures/persistent_inputs/` |
+| `app/test-fixtures/`, `tests/repair_persistent.rs` | mock routes and integration cases; inputs live under `tests/fixtures/persistent_inputs/` |
 
 `app/repair-plan` already depends on `girpr-fetch`; persistent value types are a
 separate leaf so neither crate has to depend on the other for them.
@@ -425,7 +427,7 @@ manifest routes live in the mock under `app/test-fixtures`, with inputs under
 Dispatcher template: https://{host}.yuanshen.com/query_cur_region?version={1}
   &lang=1&platform=3&binary=1&time=260&channel_id=1&sub_channel_id=1
   &account_type=1&dispatchSeed={2}&key_id=5
-Hosts by biz: pinned in girpr-model; channel OSRELWin or CNRELWin
+Hosts by biz: pinned in girpr-dispatch (`app/dispatch/src/url.rs`); channel OSRELWin or CNRELWin
 Query version: channel prefix + meta.latest
 Key/response: RSA-2048 PKCS#1 v1.5, 256-byte blocks; metadata master key
   RSA-1024, 128-byte blocks; seed pinned per game version

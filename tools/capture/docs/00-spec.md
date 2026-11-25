@@ -873,8 +873,9 @@ record emitter.
 it is asked to.** A release build's default is
 `<exe-dir>/logs/gircap_<timestamp>.log`; `--log-file` and `GIRCAP_LOG_FILE`
 name one otherwise, in that order, and `--no-log-file` turns the file off in
-any build. Its verbosity is `--log-file-level` (`debug` by
-default), the console's is `--log-level` (`info` by default). `RUST_LOG` *adds*
+any build. Its verbosity is `--log-file-level` (`debug` by default in a debug
+build, `info` in a release build), the console's is `--log-level` (`info` by
+default). `RUST_LOG` *adds*
 to the console — it can turn up other crates, but it cannot change this
 program's own level, because a flag is what the person running the tool typed.
 The policy is the workspace's and lives in `crates/log/`, shared with the
@@ -986,9 +987,10 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
 
 1. **Copy `game/` to scratch.** `girpr` writes into the game directory, so point
    `--game-path` at the copy and never at the bundle: that is what keeps a
-   cleanup flag from turning into a way to destroy the evidence. Run every capture
-   against the same copy — each touches exactly one path, so the runs accumulate
-   and the reuse map stays anchored to the old version. Afterwards
+   cleanup flag from turning into a way to destroy the evidence. Give each capture
+   its own minimal scratch copy of the one path it is about (plus `config.ini` and
+   the audio scan file), so the reuse map stays anchored to the old version and one
+   capture cannot see another's writes. Afterwards
    `gircap verify --artifact <bundle>` must still exit `0`.
 
 2. **Pre-flight for free, before spending anything.** `--print-plan` does not
@@ -1023,13 +1025,13 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
-   is the cheap answer to `*` crossing `/` — and this fixture contains
+   path, plus `--jobs 1` and `--fail-fast`. That single-path scope is the bound:
+   a file ceiling would be vacuous here. This fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
-   it, so the glob is worth quoting and bounding. One run per capture is what
+   it, so the glob is worth quoting. One run per capture is what
    makes `download_bytes` attributable; a single run over all captures sums to the
    same total but cannot be compared per capture. `removed` is the exception and
-   takes `--purge-only` instead of `--max-files 1` (§8.1.2).
+   takes `--purge-only` instead of `--repair-mode inplace` (§8.1.2).
 
 4. **Assert the cross-tool claim**, per capture — the assertions, and the
    run's preconditions:
@@ -1047,8 +1049,8 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    answer: it is the only one that sees every request, including any that no
    client-side log line describes.
 
-   The procedure reads assertion 2 out of a log file at `--log-level trace` as
-   the fallback for a reader with no shim — name one with `--log-file <path>`,
+   The procedure reads assertion 2 out of a log file at `--log-file-level trace`
+   as the fallback for a reader with no shim — name one with `--log-file <path>`,
    which is written in any build. Its own caveat
    is the reason the server log is better: **a reused chunk is logged too**, as
    `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the id
@@ -1130,7 +1132,7 @@ Three details worth knowing rather than rediscovering:
   `--dry-run` can carry `--audio` under a scope without complaint. That is not
   inconsistency: neither writes the scan file, so there is no conflict to refuse.
 - **The path is `/`-separated and case-insensitive**, like every other glob, and
-  `*` also crosses `/` — which is why step 3 passes `--max-files 1`.
+  `*` also crosses `/` — which is why step 3 names the path with `--include`.
 
 The expected per-capture figures come from each artifact's own patchmap, never
 from a fixed table: `expectations.download_bytes` (which must equal the run's

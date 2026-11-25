@@ -455,9 +455,9 @@ the log alone is the mechanism.
 `--log-file` is the **documented last resort**, not the first choice: parse
 `chunk downloaded chunk=<id>` and `no local reuse candidate -> download
 chunk=<id>` out of the trace lines. Those are `trace` records, and the log
-file's own level is `debug` by default, so the run needs
-`--log-file-level trace` to have them (`--log-level trace` would only make
-them visible on the console).
+file's own level defaults to `debug` in a debug build and `info` in a release
+build, so the run needs `--log-file-level trace` to have them (`--log-level
+trace` would only make them visible on the console).
 
 **What the two records mean.** `chunk downloaded chunk=<id>` is emitted as soon as the
 origin has answered with the chunk — it says **the origin was asked for this chunk

@@ -198,8 +198,9 @@ flowchart TD
   chunk id was never fetched" needs a request log, not the data plane.
 - stderr: structured `tracing` logs (`--log-level`, with `RUST_LOG` adding to
   it), at `info` by default; the same events go to
-  `<exe-dir>/logs/girpr_<timestamp>.log`, at `debug` by default — in a release
-  build, or wherever `--log-file` points in any build (see **Logging**).
+  `<exe-dir>/logs/girpr_<timestamp>.log`, whose own level defaults to `debug`
+  in a debug build and `info` in a release build — in a release build, or
+  wherever `--log-file` points in any build (see **Logging**).
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
@@ -265,9 +266,10 @@ flowchart TD
   and it uses the per-launcher pair (cn `1/1`, global `1/0`, bili `14/0`) — the
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
-  no `config.ini`, byte counters stay 0). `--dry-run` also exercises the post-phase's
-  read-only paths: it lists the deprecated deletes, the audio cache move and the
-  cleanup, and stops before the `config.ini` bump. With both purge flags it lists
+  no `config.ini`, byte counters stay 0). `--dry-run` also runs the stale sweep in
+  list-only mode and exercises the post-phase's read-only paths: it lists the stale
+  deletes, the audio cache move and the cleanup, and stops before the `config.ini` bump.
+  With both purge flags it lists
   each candidate once — the after pass names only candidates the before pass did
   not. The `purge dry-run: N bytes would be freed` line is per pass: it is
   emitted once for each pass that reaches the delete step, including a pass with
@@ -279,8 +281,8 @@ flowchart TD
   ceiling still stops a dry run, including the post-repair delete
   re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
   purge that cannot be planned is the same write-class failure (exit `3`) as in a
-  real run. `--check-only` and `--print-plan` do not run the post-phase, so they
-  also skip its deprecated-list request; `--print-plan --dry-run` is just
+  real run. `--check-only` and `--print-plan` do not reach the execute-half stale
+  sweep, so they also skip the deprecated-file request; `--print-plan --dry-run` is just
   `--print-plan`.
   A malformed manifest chunk range is a **plan** error (exit `2`) in every
   mode, including these read-only ones, so `--check-only` cannot report such a
@@ -417,7 +419,7 @@ cargo build --release
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, the `--purge-after`/`--purge-only` re-plan in the same run deletes it as an unexpected file (`--purge-before` acts on the plan built before the document exists). Write it outside the install when combining it with a purge |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` *adds* to it — it can turn up other crates, but it cannot change this program's own level |
-| `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
+| `--log-file-level <LVL>` | `debug` in a debug build, `info` in a release build | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
 | `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable (release builds only) | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. An unopenable file is a stderr warning, never a failure |
 | `--no-log-file` | off | Write no log file at all. Turns the default off in a release build, and says so explicitly in a debug build. Cannot be combined with `--log-file`: the two say opposite things about the same file. The console is unaffected |
 | `--hyp-base <URL>` | production | Point the HYP API at another base (overrides `GIRPR_HYP_BASE`) |
@@ -630,8 +632,8 @@ shared crates carries a program's flags, exit-code values or published shapes.
   the tool and an environment variable is whatever the shell happened to
   export.
 - **Separate levels for the console and the file.** `--log-level` is the **console's** (`info` by
-  default); `--log-file-level` is the **file's** (`debug` by default, or
-  `GIRPR_LOG_FILE_LEVEL`). They are separate because they answer separate
+  default); `--log-file-level` is the **file's** (`debug` in a debug build, `info` in
+  a release build, or `GIRPR_LOG_FILE_LEVEL`). They are separate because they answer separate
   questions: the console is for the person watching the run, the file is for
   the person reading it afterwards.
 - **`RUST_LOG` adds to the console; it does not replace it.** The console's

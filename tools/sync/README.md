@@ -149,8 +149,8 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   running the tool and an environment variable is whatever the shell happened
   to export.
 - **A level for each destination.** `--log-level` is the console's (`info` by default);
-  `--log-file-level` is the file's (`debug` by default, or
-  `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
+  `--log-file-level` is the file's (`debug` in a debug build, `info` in a release
+  build, or `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
   file is read afterwards.
 - **`RUST_LOG` adds to the console; it does not replace it.** The console's
   spec is this program's own directive (`girsync=info`, plus `redb=warn`) with
@@ -764,8 +764,9 @@ being asked for it twice in two shapes.
 
 Whether that event is written is decided by what the run has a subscriber for,
 not by `--log-level`: the console layer is filtered by that flag, but the file
-layer is filtered by `--log-file-level`, which is `debug` by default — so a
-file log captures every record even at the default `info` console.
+layer is filtered by `--log-file-level`, which defaults to `debug` in a debug
+build and `info` in a release build. So a debug-build file log captures more than
+the default `info` console; a release build needs a higher file level for that.
 
 ### sync
 

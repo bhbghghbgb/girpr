@@ -163,8 +163,8 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
   kept by these rules purges into the
   single `deleted_extra_bytes` counter — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
   `ldiff/`, `staging/`, legacy `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`,
-  logs, and server bookkeeping files (`ctable.dat` purges when absent from the live
-  manifest; the exe is normally kept via manifest membership).
+  logs, and server bookkeeping files (`ctable*` is kept for every run as a
+  verification-state pattern; the exe is normally kept via manifest membership).
   `--purge-before` and `--purge-after` run this same cleanup; only the timing differs.
 
 ## 4. Verdict
@@ -186,8 +186,9 @@ Reasons:
    left untouched. Collapse's preload-then-apply and patch-blob retention use strictly more
    transient space.
 3. Smallest implementation: HYP `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
-   dedup] → manifest download/verify/parse → per-file repair → **Starward-handling post-phase**
-   (`getGameDeprecatedFileConfigs` delete + audio cache→res move + `config.ini` bump).
+   dedup] → manifest download/verify/parse → per-file repair → **execute-half stale sweep and
+   post-phase** (the `getGameDeprecatedFileConfigs`/patch-build stale-file deletion before
+   `--purge-before`, then the audio cache→res move and `config.ini` bump).
    No hdiff/7z pipeline, no SDK/WPF/plugin zips, no speed limiter, and no quota dialog. The
    dispatcher (`res_versions`/`data_versions`) and persistent revisions are a separate opt-in
    tier (`--with-persistent`, §6); the default path stays the small one described here.

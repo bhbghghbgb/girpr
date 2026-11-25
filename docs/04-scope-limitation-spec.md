@@ -96,7 +96,7 @@ touches a path by name has to participate:
 | `repair::phases::check::verify_plan` | already narrowed |
 | `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
 | `repair::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
-| `repair::phases::post::delete_deprecated` | skip any hidden path |
+| `repair::phases::post::spawn_delete_stale` (execute-half stale sweep) | skip any hidden path |
 | `repair::phases::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
 | `util::write_config_ini` (from `repair::phases::post::run`) | **not bumped** — see below |
 | `repair::write_explicit_audio` → `audio::write_scan_file` (execute phase) | refused under a scope — see §3 A1 guard 2 |
@@ -747,11 +747,14 @@ log (§1.2).
 ```
 app/repair-plan/src/plan.rs
                 RepairPlan, PlannedFile, est_download_bytes, build_plan
+app/repair-plan/src/purge_values.rs
+                PurgePlan, PurgeCandidate
 src/repair/purge.rs
-                PurgePlan, PurgeCandidate, plan_purge, apply_purge
+                plan_purge, apply_purge
 src/repair/scope/
-  mod.rs      re-exports (PathScope, Limits, Preflight), no policy of its own
-  filter.rs   PathScope, is_visible, compile_patterns     (pure)
+  mod.rs      re-exports (Limits, Preflight), no policy of its own
+app/repair-plan/src/path_scope.rs
+                PathScope, is_visible, compile_patterns   (pure)
   limits.rs   Limits (files / download / write / verified / delete / ram)
               + the pre-flight assertion that turns a plan into pass/refuse (pure)
   ledger.rs   thin alias re-exporting Meter and StoppedBy from girpr-report;

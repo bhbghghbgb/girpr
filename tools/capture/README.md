@@ -186,8 +186,8 @@ cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
 ```
 
-The cases run in parallel — each with its own scratch tree and listeners —
-so no `--test-threads=1` is needed; `girpr`'s
+The cases run in parallel — each with its own scratch tree, sharing the
+process's listener set — so no `--test-threads=1` is needed; `girpr`'s
 `.config/nextest.toml` shows each case's output through a per-case
 `success-output` override, so no `--no-capture` is needed either. Narrow a run
 to one failure by putting the case in the filter of the same command:
