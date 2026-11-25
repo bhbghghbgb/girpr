@@ -208,6 +208,15 @@ girpr-model = { path = "../../crates/model", features = ["clap"] }
 # leaf mechanics crate: gircap still publishes lowercase hex strings and owns
 # its own algorithm set, it only borrows the spelling.
 girpr-digest = { path = "../../crates/digest" }
+# The dispatcher's pure query/decoder value types. gircap needs the envelope,
+# key and seed a replay record must carry, so it drives these APIs with its own
+# fetcher. This is a leaf: no `girpr-fetch`, no repair coupling, no product
+# SUMMARY/PLAN key crosses the boundary.
+girpr-dispatch = { path = "../../app/dispatch" }
+# Pure persistent-manifest parsing and CDN URL assembly. gircap keeps all
+# verification, selection and artifact writing on its own side; only the row
+# value and the URL rule are borrowed.
+girpr-persistent-plan = { path = "../../app/persistent-plan" }
 # The chunk-identity value types and the digest-normalisation rule, shared with
 # the repair binary. The leaf owns the borrowed `(digest hex, length)` view and
 # the case-insensitive parse; gircap keeps the normalisation at its single

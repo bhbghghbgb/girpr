@@ -1610,6 +1610,7 @@ mod tests {
                 },
                 selection: crate::select::Selection {
                     admitted: Vec::new(),
+                    persistent: Vec::new(),
                     rejected: Vec::new(),
                     forced_skipped: Vec::new(),
                     forced_unscored: Vec::new(),
@@ -1807,14 +1808,20 @@ mod tests {
 
     #[test]
     fn a17_accepts_a_complete_matrix() {
-        // The positive half: every known class, each once. `persistent` is
-        // optional, so the six patch shapes alone are also complete.
+        // The positive half: every known class, each once. The three record
+        // classes are optional at schema 3, so the six patch shapes alone are
+        // also complete. A17 still requires `PATCH_SHAPES`, unchanged, until
+        // the schema-v4 commit.
         let (ok, detail) = manifest_with(&complete_rows()).a17();
         assert!(ok, "{detail}");
-        assert!(detail.contains("7 classes"), "{detail}");
+        assert!(detail.contains("9 classes"), "{detail}");
         let old: Vec<(&str, &str)> = complete_rows()
             .into_iter()
-            .filter(|(c, _)| *c != "persistent")
+            .filter(|(c, _)| {
+                !crate::select::Class::PERSISTENT
+                    .iter()
+                    .any(|p| p.id() == *c)
+            })
             .collect();
         let (ok, detail) = manifest_with(&old).a17();
         assert!(ok, "a pre-persistent bundle stays complete: {detail}");
@@ -2184,10 +2191,10 @@ impl Manifest {
     /// matrix is a *claim* the bundle makes about itself; `verify` is where a
     /// claim is checked, and `Bundle::open` stays a structural reader.
     pub fn a17(&self) -> (bool, String) {
-        // `persistent` is an optional, additive record class: a bundle written
-        // before it existed has a complete matrix without it. Every other row
-        // is still required, and any row that *is* present must be a real class
-        // in an acceptable state.
+        // The three persistent classes are optional, additive record classes:
+        // a bundle written before they existed has a complete matrix without
+        // them. Every patch shape is still required, and any row that *is*
+        // present must be a real class in an acceptable state.
         let required = crate::select::Class::PATCH_SHAPES;
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {

@@ -10,6 +10,8 @@
 //! values the decoder derived from it. The three manifests and the full-file
 //! blobs are raw bytes: no re-serialisation, because the bridge replays them.
 
+pub mod capture;
+
 use serde::{Deserialize, Serialize};
 
 /// One mirrored manifest's descriptor, as the dispatcher published it.
@@ -36,10 +38,12 @@ pub struct Decoded {
     pub res_revision: u64,
     pub data_revision: u64,
     pub silence_revision: u64,
+    /// Derived from the second `base_revision` GET, not from the envelope.
     pub audio_revision: u64,
     pub res_hash: String,
     pub data_hash: String,
     pub silence_hash: String,
+    /// Also derived from the second GET.
     pub audio_hash: String,
     pub repo_res_version_url: String,
     pub repo_design_data_url: String,
@@ -57,8 +61,13 @@ pub struct DispatchRecord {
     pub version: String,
     /// The full query string's version parameter, e.g. `OSRELWin9.9.0`.
     pub query_version: String,
+    /// The full dispatcher URL that produced `envelope`, as queried.
+    pub dispatch_url: String,
     /// SHA-256 of the **public** key's DER form, never a private key.
     pub key_fingerprint: String,
+    /// Bundle-relative path of the private key material. A live key belongs
+    /// only in a gitignored artifact directory; tests use a synthetic key.
+    pub key_file: String,
     pub seed: String,
     /// Bundle-relative path of the byte-exact dispatcher envelope.
     pub envelope: String,
@@ -82,6 +91,10 @@ pub struct ManifestFile {
 pub struct BlobFile {
     /// The dispatcher's `remoteName`, which decides the install-side folder.
     pub remote_name: String,
+    /// The mirrored manifest kind: `res`, `data` or `silence_data`.
+    pub source_kind: String,
+    /// The capture id that admitted this blob (`persistent_res+1` for extras).
+    pub capture_id: String,
     pub path: String,
     pub bytes: u64,
     pub md5: String,

@@ -280,9 +280,20 @@ fn the_instrument_reproduces_the_crates_class_populations() {
     let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("the matrix");
     let matrix: serde_json::Value = serde_json::from_slice(&raw).expect("json");
 
+    // The instrument measures patch shapes over manifest paths. The three
+    // persistent rows are record classes with no path population at all, so
+    // comparing their `candidates_considered` to the instrument would ask it
+    // about a population it never claims to know.
+    let record_ids: Vec<&str> = gircap::select::Class::PERSISTENT
+        .iter()
+        .map(|c| c.id())
+        .collect();
     let mut checked = 0;
     for row in matrix["matrix"].as_array().expect("a matrix array") {
         let class = row["class"].as_str().expect("a class");
+        if record_ids.contains(&class) {
+            continue;
+        }
         let considered = row["candidates_considered"].as_u64().expect("a count");
         let ours = proposed[class].as_u64().expect("the instrument counts it");
         assert_eq!(

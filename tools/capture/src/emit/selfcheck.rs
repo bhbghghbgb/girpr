@@ -1280,6 +1280,7 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("gircap-a14", "missing-game");
         let selection = crate::select::Selection {
             admitted: Vec::new(),
+            persistent: Vec::new(),
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
             forced_unscored: Vec::new(),

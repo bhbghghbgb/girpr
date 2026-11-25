@@ -707,8 +707,9 @@ fn a_class_whose_cheapest_candidate_cannot_be_funded_is_over_budget_not_absent()
     assert!(row.unsatisfied());
     assert!(!row.is_satisfied());
     // Both one-sided classes had a candidate and could not be funded; the
-    // other nine had none at all. `unmet` carries both, but the *reason*
-    // is the useful part and it differs.
+    // other seven rows (four patch shapes and the three record classes) had
+    // none at all. `unmet` carries the two patch shapes, but the *reason* is
+    // the useful part and it differs.
     let over: Vec<Class> = s
         .matrix
         .iter()
@@ -1041,6 +1042,7 @@ fn capture_ids_are_the_class_then_the_ordinal() {
 fn empty_selection() -> Selection {
     Selection {
         admitted: Vec::new(),
+        persistent: Vec::new(),
         rejected: Vec::new(),
         forced_skipped: Vec::new(),
         forced_unscored: Vec::new(),

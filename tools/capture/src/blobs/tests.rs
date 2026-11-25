@@ -334,6 +334,7 @@ fn a_capture_from_another_field_gets_its_sides_from_that_field() {
             budget_cost: 10,
             patch_bytes: 0,
         }],
+        persistent: Vec::new(),
         rejected: Vec::new(),
         forced_skipped: Vec::new(),
         forced_unscored: Vec::new(),

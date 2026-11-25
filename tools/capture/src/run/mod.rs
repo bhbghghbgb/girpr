@@ -20,6 +20,7 @@ use crate::http::{
 };
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
+use crate::persistent::capture::{self as persistent_capture, PreparedRecords};
 use crate::report::{self, OutputFormat, Record};
 use crate::{blobs, emit, hyp, manifest, select};
 
@@ -298,7 +299,80 @@ pub async fn capture_with_http(
     //     and the account of it moved together into `select::decide`.
     let decided =
         select::decide::decide(&diffs, plan.per_class, plan.max_download_bytes, &plan.files);
-    let (selection, candidates_scored) = (decided.selection, decided.pool_len);
+    let (mut selection, candidates_scored) = (decided.selection, decided.pool_len);
+    // The bundle directory is needed by the persistent writer too, so resolve
+    // it once here rather than after the chunk plan. It is a pure function of
+    // the version pair and the start time; nothing about the tree has changed.
+    let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
+
+    // 6c-ii. Query the dispatcher with the same fetcher the rest of the run
+    // uses, after the content selection and before `--require-class`. A mock
+    // capture with no dispatcher routes is skipped explicitly: it must not
+    // spend a GET on a production metadata URL nor gain a row in the pinned
+    // `api/requests.ndjson`. A test that supplies routes opts in with the
+    // test-only `GIRCAP_TEST_DISPATCH_PIN` hook (0 = synthetic master key).
+    let dispatch_source = if plan.hyp_base.is_some() || plan.sophon_base.is_some() {
+        match persistent_capture::master_pin_from(
+            std::env::var("GIRCAP_TEST_DISPATCH_PIN").ok().as_deref(),
+        ) {
+            Some(pin) => persistent_capture::DispatchSource::Live { pin },
+            None => persistent_capture::DispatchSource::Skip(
+                "no dispatcher routes configured for this capture",
+            ),
+        }
+    } else {
+        persistent_capture::DispatchSource::Live {
+            pin: persistent_capture::master_pin(),
+        }
+    };
+    let persistent = persistent_capture::capture(persistent_capture::CaptureInput {
+        fetcher: &fetcher,
+        biz: plan.biz.region(),
+        latest: &new_tag,
+        budget: selection.budget,
+        source: dispatch_source,
+    })
+    .await;
+    // Merge the three record rows into the selection: A17 reads one matrix,
+    // and the ledger must remain one number across content and records.
+    for row in &persistent.selection.matrix {
+        if let Some(existing) = selection.matrix.iter_mut().find(|r| r.class == row.class) {
+            *existing = row.clone();
+        } else {
+            selection.matrix.push(row.clone());
+        }
+    }
+    selection.bytes_admitted = persistent.selection.bytes_admitted;
+    selection.budget = persistent.selection.budget;
+    selection.persistent = persistent.selection.admitted.clone();
+    debug_assert_eq!(
+        selection.bytes_admitted,
+        selection.budget.spent(),
+        "the content and persistent ledgers must be one number"
+    );
+
+    let mut persistent_written: Vec<String> = Vec::new();
+    if let Some(records) = persistent.records {
+        let PreparedRecords {
+            record,
+            envelope,
+            key_material,
+            index,
+            bodies,
+        } = records;
+        persistent_written.extend(
+            emit::write_dispatch(&dir, &record, &envelope).map_err(|e| write_err(&dir, e))?,
+        );
+        persistent_written.push(
+            emit::write_rel(&dir, "dispatch/key.pem", &key_material)
+                .map_err(|e| write_err(&dir, e))?,
+        );
+        persistent_written
+            .extend(emit::write_persistent(&dir, &index, &bodies).map_err(|e| write_err(&dir, e))?);
+        tracing::info!(blobs = index.blobs.len(), "persistent records written");
+    } else if let Some(reason) = persistent.reason {
+        tracing::info!(reason = %reason, "persistent records not written");
+    }
 
     // 6d. `--require-class` is the only thing that turns an absent class into a
     //     failed run. Without it an over-budget class is recorded and the run
@@ -326,7 +400,6 @@ pub async fn capture_with_http(
     //    stay useful, and the bytes are the evidence behind every number in the
     //    summary. `manifests` is borrowed mutably because marking where each
     //    archive landed is what makes the chunk store's URLs resolve.
-    let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
     let tree = emit::tree::write(emit::tree::TreeInput {
         dir: &dir,
         captured: &captured,
@@ -343,6 +416,7 @@ pub async fn capture_with_http(
         path_map: &path_map,
     })?;
     let mut written = tree.written;
+    written.extend(persistent_written);
     let mut api_documents = tree.api_documents;
 
     // 7a-ii. What the run refused, beside what it kept.
