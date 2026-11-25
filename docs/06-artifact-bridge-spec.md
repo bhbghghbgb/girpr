@@ -124,12 +124,10 @@ use girpr_test_fixtures::artifact_server as server;
 use server::{Bridge, Bundle, Origins};
 ```
 
-The replay server used to be a `#[path = "artifact_repair_bridge/server.rs"] mod server;`
-in both this binary and `tests/artifact_server.rs`, compiling the module into
-each. It now lives once in
+The replay server lives in
 `app/test-fixtures/src/artifact_server.rs` as a public library module, reached
-through a `use` shim in both binaries so the replay mechanics compile
-once. The `#[path]` on `bundle.rs` stays: that module has no other consumer, so
+through a `use` shim in both binaries so the replay mechanics compile once.
+The `#[path]` on `bundle.rs` remains: that module has no other consumer, so
 there is nothing to share it with.
 
 The server remains a **distinct** fake HTTP server from the offline HYP/

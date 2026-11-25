@@ -53,9 +53,7 @@ resource to be loaded.
 
 ---
 
-## 2. Looked at and deliberately left alone
-
-So nobody re-audits them.
+## 2. Deliberately left alone
 
 | | |
 |---|---|

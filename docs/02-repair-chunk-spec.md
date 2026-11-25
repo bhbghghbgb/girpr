@@ -331,11 +331,13 @@ optimization).
 ### Step 7 — Post-phase (deletes + config)
 
 **Starward-handling remainder** (`GameInstallService.cs:ClearDeprecatedFiles` + audio/config):
-1. Delete each `deprecated_files[]` path if present (joined under `game_dir`, files only).
-   Bytes deleted here count toward the single `deleted_extra_bytes` counter even when
-   neither purge flag is set.
-   (Redundant when the purge below is enabled — deprecated files are not in the
-   live manifest — but keeps them cleaned without any purge flag.)
+1. The stale-file sweep runs in the prerequisite phase, before any repair or
+   purge: it deletes the union of `getGameDeprecatedFileConfigs` names and the
+   delete tags in the selected `getPatchBuild` patch manifests, minus every path
+   present in the live chunk manifests. Both fetches are best-effort (a failure
+   only warns), and the sweep is skipped by `--check-only` and `--print-plan`,
+   listed under `--dry-run`, and run under `--purge-only`. Its bytes count toward
+   `deleted_extra_bytes` but stay outside `--max-delete-bytes`.
 2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite)
    (Starward parity `GameInstallService.cs`). Only files are moved;
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
@@ -357,10 +359,11 @@ optimization).
     after each section. Create `[General]` if missing.
 
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
-`GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
-`{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
-1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
-   `{the legacy in-install girpr.lock}` ∪ `{blacklisted paths}`. `config.ini`
+`GenshinInstall.GetUnusedFileInfoList` parity; no SDK/WPF union):
+1. Build expected set = `{live manifest paths}` ∪ `{config.ini}` ∪
+   `{the legacy in-install girpr.lock}` ∪ `{blacklisted paths}` ∪
+   `{verification-state names and root pkg_version}`, plus the dispatcher
+   persistent paths when `--with-persistent` is set. `config.ini`
    and the legacy lock are the only metadata keeps: neither appears in a chunk
    manifest. The run's own lock lives outside `game_dir`, so only a leftover
    from an older run is kept. `config.ini` lives inside `game_dir` and the tool
@@ -460,11 +463,11 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | A read-only attribute on a game file | cleared before the write, the way the launcher does it |
 | Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 3, a write-path failure) by name, and by pid when the body is readable (an exclusive lock can hide it on Windows) |
 
-## 5. What was deliberately excluded (and when to add)
+## 5. Deliberately not implemented
 
-- hdiff/patch-diff updates (faster downloads, needs intact source + `ldiff/` space) — add as
-  `--update-fast` later; repair remains the fallback.
+- hdiff/patch-diff updates (faster downloads, needs intact source + `ldiff/` space) — repair uses
+  chunk verification only.
 - 7z/legacy package path, predownload, SDK/WPF/plugin zips, quota dialogs, hardlinks, speed limiter —
-  launcher conveniences; game launches without them. Add `--with-sdk/--with-wpf` only if a channel's
-  launch check proves otherwise. Dispatcher persistent files and `ctable.dat` are no longer on this
-  list: they ship behind the `--with-persistent` opt-in tier (docs/01 §6; implementation design in docs/03 §7).
+  launcher conveniences; the game launches without them.
+- Dispatcher persistent files and `ctable.dat` are maintained by the `--with-persistent` opt-in tier
+  (docs/01 §6; implementation design in docs/03 §7).

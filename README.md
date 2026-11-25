@@ -103,7 +103,7 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["phases::manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["girpr_repair_plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
+    D --> E["girpr_repair_plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan (+ persistent plan under --with-persistent)"]
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
@@ -132,7 +132,7 @@ flowchart TD
     J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
     J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=--max-download-bytes\|--max-write-bytes<br/>exit 5, the next run re-verifies"]
-    K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
+    K -->|no| M["post::run (skipped when readonly)<br/>audio cache→res move → purge-after?<br/>→ persistent mirrors + markers → config.ini bump"]
     M -->|"delete ceiling hit"| X6["SUMMARY stopped=--max-delete-bytes<br/>exit 5, that pass deleted nothing"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
     M --> N["SUMMARY to stdout+log<br/>exit 0"]
@@ -155,20 +155,17 @@ flowchart TD
   not about installs whose contents changed: verification-state files
   (`Persistent/*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`,
   `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*` and the
-  root `pkg_version`) are now kept for every run, so an install that already
-  has them reports a one-time **lower `deleted_extra_bytes`** the first time it
-  is purged after this fix (C12/B5). No new flag is involved.
-  An **always-on stale-file sweep** now runs in the prerequisite phase: it
+  root `pkg_version`) are kept for every run, so they never appear in
+  `deleted_extra_bytes`. No flag is involved.
+  An **always-on stale-file sweep** runs in the prerequisite phase: it
   deletes the union of the `getGameDeprecatedFileConfigs` names and every
   delete tag in the selected `getPatchBuild` patch manifests, minus any path
   still present in the live chunk manifests. The patch-build fetch is
   best-effort — a failed fetch only warns — and the sweep is skipped by
   `--check-only` and `--print-plan`, listed under `--dry-run`, and also run
   under `--purge-only`. Its bytes count into `deleted_extra_bytes` but stay
-  outside `--max-delete-bytes`. As with the C12/B5 change above, an install
-  that still has any of these files sees a **one-time lower
-  `deleted_extra_bytes`** on its first swept run. No new flag or version key is
-  promised: the artifact bridge captures deliberately serve an empty patch
+  outside `--max-delete-bytes`. No new flag or version key is
+  involved: the artifact bridge captures deliberately serve an empty patch
   build, so their `SUMMARY`, `PLAN` and `PLAN` JSON contracts are unchanged.
   The byte counts come in **pairs** when their ceiling is active:
   `download_bytes` (the bytes of the files that were actually repaired) beside
@@ -411,11 +408,11 @@ cargo build --release
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (no second copy: 0 extra disk when the target is already full size, its growth when it is truncated, and a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
-| `--with-persistent` | off | Opt in to the dispatcher + `Persistent/` tier: query the dispatcher, mirror the three persistent manifests, download hotfix full files over HTTP and publish the marker block, then bump `config.ini` last. Without it no dispatcher/persistent request is made and `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the work without writing markers; `--purge-only` queries the dispatcher only to widen the purge keep set and publishes no markers. Stranded non-patch `.pck`/`.usm`/`.cuepoint` files under `Persistent/` are moved back to `StreamingAssets/` before `--purge-before`, so a file whose destination is in a manifest survives the purge and is repaired normally. See the contract below; findings in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6, design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7 |
-| `--check-only` | off | Verify size+MD5; writes nothing. Under `--with-persistent` it also checks persistent files and the marker block (C5). A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
+| `--with-persistent` | off | Opt in to the dispatcher + `Persistent/` tier: query the dispatcher, mirror the three persistent manifests, download hotfix full files over HTTP and publish the marker block, then bump `config.ini` last. Without it no dispatcher/persistent request is made and `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the work without writing markers; `--purge-only` queries the dispatcher only to widen the purge keep set and publishes no markers. Stranded non-patch `.pck`/`.usm`/`.cuepoint` files under `Persistent/` are moved back to `StreamingAssets/` before `--purge-before`, so a file whose destination is in a manifest survives the purge and is repaired normally. See the contract below; the two delivery paths are in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6 and the design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7 |
+| `--check-only` | off | Verify size+MD5; writes nothing. Under `--with-persistent` it also checks persistent files and the marker block. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Cap each file at a single attempt and abort the run on the first failed file; no further files are started and in-flight files are dropped. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once) |
-| `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
+| `--dry-run` | off | Log actions, including the stale sweep, audio-cache move, cleanup and persistent work; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, the `--purge-after`/`--purge-only` re-plan in the same run deletes it as an unexpected file (`--purge-before` acts on the plan built before the document exists). Write it outside the install when combining it with a purge |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
@@ -444,21 +441,18 @@ is still queried and the three manifests are still fetched and verified, but
 only as a keep input: a hotfix row under `Persistent/` is not deleted by the
 cleanup, while no marker, mirror or version claim is published. Under the flag, `--check-only` has a
 **narrower meaning**: "intact" includes the persistent files *and* the marker
-block, so a byte-intact install with stale or missing markers is not clean (C5).
-The existing byte/file ceilings are **broadened** to include the persistent
-bytes — they cannot be bypassed by the new download path (C11/B7). Separately,
-the run-wide keep-set fix for the markers and root `pkg_version` causes a
-**one-time lower `deleted_extra_bytes`** the first time an install that already
-has them is purged, with or without the flag (C12/B5). Findings, URLs, CDN shapes
-and the decision tables are in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6;
-the implementation design is in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7.
+block, so a byte-intact install with stale or missing markers is not clean.
+The existing byte/file ceilings also bound persistent bytes — they cannot be
+bypassed by that download path. The markers and root `pkg_version` are kept by
+the purge on every run, flag or no flag. The two delivery paths are described in
+[`docs/01`](docs/01-repair-findings-and-verdict.md) §6 and the implementation
+design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7.
 
-**Manual verification (operator step).** This repository has **no real-install
-test**. With a real install, run `--with-persistent`, copy the game directory to
-a second machine and launch it **once** there, then confirm that the game neither
-re-verifies nor re-downloads hotfixes (`res_revision == res_revision_eternal`, no
-`*versions_remote*` or `VideoAssets/*.tmp` leftovers). That check has **not** been
-performed here; it is for an operator with the game installed.
+**Manual verification (operator step, not a repository test).** With a real
+install, run `--with-persistent`, copy the game directory to a second machine and
+launch it **once** there, then confirm that the game neither re-verifies nor
+re-downloads hotfixes (`res_revision == res_revision_eternal`, no
+`*versions_remote*` or `VideoAssets/*.tmp` leftovers).
 
 ### Text values in `--output`
 

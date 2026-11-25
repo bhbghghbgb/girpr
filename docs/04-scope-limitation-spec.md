@@ -849,6 +849,6 @@ The `SUMMARY` additions follow §6's discipline: `persistent=` (published /
 suppressed / listed / skipped / failed), `persistent_files=`,
 `persistent_repaired=`, `persistent_failed=` and `persistent_base_hash=omitted`
 are emitted **only** under the flag, so an unflagged line stays byte-identical.
-The one run-wide exception is the keep-set fix (C1/C2/C12 in docs/01 §6.5):
-installs that already carry markers see a one-time lower `deleted_extra_bytes`
-on purge, flag or no flag.
+The run-wide exception is the keep-set: verification-state files are kept by the
+purge on every run, so they never contribute to `deleted_extra_bytes`, flag or
+no flag.

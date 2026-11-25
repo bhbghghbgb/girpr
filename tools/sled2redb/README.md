@@ -3,26 +3,21 @@
 **Audience: developers and AI agents working on `girpr`. Not for end users.**
 
 A standalone dev tool that reads a legacy `<root>/girpr-cache` **sled directory**
-and writes a new **redb** cache file. It used to live inside `girsync` behind a
-`convert` Cargo feature; it is now its own workspace member so that the
-`girsync` package and binary have no `sled` in their dependency graph at all.
+and writes a new **redb** cache file. It is its own workspace member so that the
+`girsync` package and binary have no `sled` in their dependency graph.
 
 ## Why it is separate
 
-`sled` was used by exactly one thing — this one-shot migration — while every
-live cache path in `girsync` uses redb. Keeping the converter in `girsync`
-meant adding `sled` to girsync's graph (even as an optional dependency) and
-gating a binary and a test target behind a feature. The extraction keeps the
-conversion code unchanged and moves only the crate boundary:
+`sled` is used by exactly one thing — this one-shot migration — while every
+live cache path in `girsync` uses redb. Keeping the boundary here leaves:
 
-- `sled` is a plain (non-optional) dependency of `tools/sled2redb` alone.
-- `girsync` has no `[features]`, no `dep:sled`, no `required-features` targets
+- `sled` as a plain (non-optional) dependency of `tools/sled2redb` alone.
+- `girsync` with no `[features]`, no `dep:sled`, no `required-features` targets
   and no `sled2redb` binary.
-- The converter calls girsync's **public** cache/hash/util/report API through a
+- The converter calling girsync's **public** cache/hash/util/report API through a
   normal path dependency (`girsync::cache`, `girsync::hash`, `girsync::util`,
   `girsync::report`, `girsync::init_tracing`, `girsync::logging::Level`).
-  Nothing private was used, so no new public API had to be exposed.
-  `crate::…` paths in the moved source became `girsync::…` paths.
+  It exposes no private girsync API.
 
 ## Build and run
 
@@ -32,7 +27,7 @@ cargo nextest run -p sled2redb                   # its end-to-end cases
 .\target\debug\sled2redb <SLED_DIR> <REDB_PATH>
 ```
 
-`cargo nextest run -p girsync` no longer builds or runs any converter target.
+`cargo nextest run -p girsync` builds no converter target.
 
 ## Command line
 
