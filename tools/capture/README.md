@@ -72,6 +72,31 @@ feature, so a normal run does not compile or link that binary:
 cargo nextest run -p gircap --features manual-tests --test bundle_shapes --run-ignored only
 ```
 
+The persistent end-to-end test (`tests/persistent_capture_e2e.rs`) is
+**always on**. One loopback mock answers the Collapse metadata, the dispatcher
+query, `base_revision`, the three mirrored manifests and the hotfix blobs from
+the read-only committed inputs under `tests/fixtures/persistent_inputs/`, and
+the real `run::capture_with_http` fetches and decodes the byte-exact dispatcher
+response itself. It uses the test-only `GIRCAP_TEST_DISPATCH_PIN=0` hook and a
+synthetic key, never a production key or endpoint.
+
+A second, `#[ignore]`d test in that file produces the small bundle the later
+manual bridge cases consume. It writes **no committed fixture**: the output is
+the gitignored directory `artifacts/persistent_v4/` itself.
+
+```powershell
+cargo nextest run -p gircap --test persistent_capture_e2e --run-ignored only `
+  -E 'test(write_persistent_v4_bundle)'
+# then, for the manual bridge cases:
+$env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
+.\target\debug\gircap.exe verify --artifact artifacts\persistent_v4
+```
+
+`dispatch/key.pem` keeps its historical `.pem` filename: the bytes are
+`RSAKeyValue` XML (as in C3), and girpr accepts either PEM or XML there. The
+bundle is schema 3 at this commit; a schema-4/bridge session must re-run this
+producer only after bumping the schema and re-verifying the output.
+
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
 environment variable — can reach the next one. The price is that the mock's

@@ -29,6 +29,14 @@ gircap = { path = ".." }
 # The scratch-directory policy, shared with the other two programs' tests only
 # as a naming/cleanup leaf; no program logic crosses with it.
 girpr-tempdir = { path = "../../../crates/tempdir" }
+# The dispatcher's pure URL/decoder values and the persistent plan's URL rule.
+# The mock uses them to derive the *addresses* of the read-only fixture bodies;
+# it never borrows a key, an envelope or a manifest from the repair binary.
+girpr-dispatch = { path = "../../../app/dispatch" }
+girpr-persistent-plan = { path = "../../../app/persistent-plan" }
+girpr-model = { path = "../../../crates/model" }
+# The shared hex spelling, used only for the synthetic master key literal below.
+girpr-digest = { path = "../../../crates/digest" }
 # The shared bundle is published under a cross-process file lock; every test
 # process must agree on the one on-disk tree.
 fs2 = "0.4.3"
@@ -39,3 +47,11 @@ prost = "0.14.6"
 tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
 # Chunk and manifest bodies are zstd frames on the wire.
 zstd = "0.14.4"
+# Collapse metadata wraps its fields in base64 Brotli blobs; the dispatcher
+# envelope is base64 PKCS#1 v1.5 ciphertext. All three are built here, from a
+# synthetic master and the committed synthetic dispatcher key, never from a
+# production key or endpoint.
+base64 = "0.23.1"
+brotli = "9.0.0"
+rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+rand = "0.10.4"

@@ -804,10 +804,18 @@ dependencies = [
 name = "gircap-test-support"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "brotli",
  "fs2",
  "gircap",
+ "girpr-digest",
+ "girpr-dispatch",
+ "girpr-model",
+ "girpr-persistent-plan",
  "girpr-tempdir",
  "prost",
+ "rand 0.10.4",
+ "rsa",
  "serde_json",
  "tokio",
  "zstd",

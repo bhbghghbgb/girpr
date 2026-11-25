@@ -27,10 +27,18 @@
 //! | `/sophon`| `getBuild`                                          |
 //! | `/cdn`   | manifest archives and chunk blobs                  |
 //!
-//! All three live on `127.0.0.1` with an ephemeral port, so **no test can reach
-//! the network even by accident** — there is nothing else to reach. That is the
-//! property the suite asserts, so it is enforced by construction rather than by
-//! remembering to pass `--hyp-base`.
+//! [`Mock::persistent`] adds a fourth family to the **same route table**:
+//! absolute URLs for Collapse metadata, `query_cur_region`, `base_revision`,
+//! the three mirrored NDJSON manifests and the full-file blobs. Those bodies
+//! are read byte-for-byte from `tests/fixtures/persistent_inputs/samples/fixtures/`
+//! and never edited here. The metadata and envelope wrappers are built from a
+//! synthetic master and the committed synthetic dispatcher key.
+//!
+//! All loopback-relative routes live on `127.0.0.1` with an ephemeral port, and
+//! the in-memory transport refuses every absolute URL the route table does not
+//! own, so **no test can reach the network even by accident** — there is nothing
+//! else to reach. That is the property the suite asserts, so it is enforced by
+//! construction rather than by remembering to pass `--hyp-base`.
 //!
 //! ## Why a library, not an inlined `tests/common` module
 //!
@@ -61,6 +69,13 @@ use gircap::http::{HttpRequest, HttpResponse, HttpTransport, SendFuture};
 use gircap::report::Record;
 use gircap::run::{self, Failure, Outcome};
 use girpr_tempdir::TempDir;
+
+mod dispatch;
+
+pub use dispatch::{
+    DispatchProfile, LATEST as PERSISTENT_LATEST, PersistentRoutes, fixture as persistent_fixture,
+    routes as persistent_routes,
+};
 
 // ------------------------------------------------- in-process command dispatch
 
@@ -1001,6 +1016,20 @@ impl World {
         }
     }
 
+    /// [`World::all_shapes`] under the version pair the committed dispatcher
+    /// envelope answers (`9.9.0`), so `meta.latest` and the response's
+    /// `9.9_live` agree on the minor number.
+    ///
+    /// Only the tags move: build ids, CDN paths, manifest shapes and the pinned
+    /// request-log bodies of the default world are untouched. The persistent
+    /// e2e test is the only caller, so no existing pin sees this variant.
+    pub fn persistent() -> World {
+        let mut world = World::all_shapes();
+        world.old.tag = "9.8.0".into();
+        world.new.tag = "9.9.0".into();
+        world
+    }
+
     /// [`World::all_shapes`] with no audio field at all.
     ///
     /// Only usable with `--audio none`: with the default, the capture asks for an
@@ -1288,6 +1317,42 @@ impl Mock {
         }
     }
 
+    /// One mock whose **single route table** serves the whole persistent
+    /// capture: Collapse metadata, `query_cur_region`, `base_revision`, the
+    /// three committed NDJSON manifests and every committed full-file blob,
+    /// beside the ordinary HYP/Sophon/CDN routes for [`World::persistent`].
+    ///
+    /// The transport stays in-process (no socket and no threads), but its base
+    /// is a loopback URL of the same shape as [`Mock::in_memory`]'s: nothing
+    /// outside the mock can be reached. The dispatcher's fixed production URLs
+    /// are matched by the same table before the normal relative-route lookup,
+    /// so the real producer path fetches and decodes the committed envelope
+    /// instead of receiving a hand-copied record.
+    pub fn persistent(profile: DispatchProfile) -> Mock {
+        let base = "http://127.0.0.1:50000".to_string();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let table = Arc::new(build_table_with(
+            &World::persistent(),
+            &base,
+            Some(dispatch::routes(profile)),
+        ));
+        Mock {
+            base,
+            stop: Arc::new(AtomicBool::new(false)),
+            log,
+            listening: false,
+            table,
+        }
+    }
+
+    /// The absolute-URL routes this mock answers for the dispatcher query.
+    pub fn persistent_routes(&self) -> &PersistentRoutes {
+        self.table
+            .persistent
+            .as_ref()
+            .expect("a persistent mock installs its dispatcher routes")
+    }
+
     /// A transport handle backed by this mock's table, for [`dispatch_with`].
     pub fn transport(&self) -> Arc<dyn HttpTransport> {
         Arc::new(MemoryTransport {
@@ -1392,9 +1457,15 @@ impl HttpTransport for MemoryTransport {
         let url = request.url;
         Box::pin(async move {
             // Nothing is allowed to escape the fixture, exactly like the TCP
-            // mock's loopback-only listener. A URL under another host is a
-            // transport error rather than a real request.
-            if !url.starts_with(&base) {
+            // mock's loopback-only listener. The persistent route table owns a
+            // few fixed production URLs (metadata and dispatcher) so they are
+            // served here rather than sent to the network; every other URL
+            // outside the loopback base is a transport error.
+            let owned = table
+                .persistent
+                .as_ref()
+                .is_some_and(|r| r.body(&url).is_some());
+            if !url.starts_with(&base) && !owned {
                 return Err(format!(
                     "in-memory transport refuses URL outside {base}: {url}"
                 ));
@@ -1409,7 +1480,19 @@ impl HttpTransport for MemoryTransport {
                     tag: tag.clone(),
                 });
 
-            let (status, content_type, body) = if table.take_flaky_failure(&path).is_some() {
+            // The Collapse metadata and dispatcher hosts are fixed by the
+            // product leaf, so their requests arrive here as absolute URLs
+            // rather than under the loopback base. They are answered by the
+            // *same* table as everything else; the ordinary relative-route
+            // lookup below is only reached for URLs this mock does not own.
+            let absolute = table
+                .persistent
+                .as_ref()
+                .and_then(|r| r.body(&url))
+                .map(<[u8]>::to_vec);
+            let (status, content_type, body) = if let Some(bytes) = absolute {
+                (200, absolute_content_type(&url), bytes)
+            } else if table.take_flaky_failure(&path).is_some() {
                 (503, "text/plain", b"armed to fail once".to_vec())
             } else {
                 match respond(&table, &path, &query, tag.as_deref()) {
@@ -1471,6 +1554,12 @@ struct Table {
     /// thread per connection, and whichever connection serves the request is the
     /// one that has to decrement the count.
     flaky: Mutex<BTreeMap<String, usize>>,
+    /// Absolute-URL routes for the persistent dispatcher query. `None` for the
+    /// ordinary HYP/CDN world: a mock with no dispatcher routes must not spend a
+    /// GET on a production metadata URL nor gain a request-log row it cannot
+    /// explain. `Some` on the one mock used by the persistent e2e test; the
+    /// bodies are the committed read-only offline inputs.
+    persistent: Option<PersistentRoutes>,
 }
 
 /// Every `matching_field` any build publishes, in a stable order.
@@ -1617,6 +1706,11 @@ fn compact(text: String) -> Vec<u8> {
 
 /// Render the world's responses.
 fn build_table(world: &World, base: &str) -> Table {
+    build_table_with(world, base, None)
+}
+
+/// [`build_table`] with the persistent dispatcher routes installed.
+fn build_table_with(world: &World, base: &str, persistent: Option<PersistentRoutes>) -> Table {
     // `categories` is derived from what the builds actually publish, never
     // declared separately: a mock that claims to publish a manifest it does not
     // carry would fail the capture at the join for a reason that has nothing to
@@ -1845,6 +1939,7 @@ fn build_table(world: &World, base: &str) -> Table {
         package_id,
         // Empty until a test arms a route with `Mock::fail_once_for`.
         flaky: Mutex::new(BTreeMap::new()),
+        persistent,
     }
 }
 
@@ -2034,6 +2129,17 @@ fn content_type(path: &str) -> &'static str {
         "application/json"
     } else {
         "application/octet-stream"
+    }
+}
+
+/// The content type of an absolute dispatcher-route body. The fetcher does not
+/// gate on it, but the mock should still describe the bytes it serves: NDJSON
+/// manifests and full-file blobs are octet-stream, the rest is JSON.
+fn absolute_content_type(url: &str) -> &'static str {
+    if url.ends_with(".ndjson") || url.ends_with(".blk") || url.ends_with(".pck") {
+        "application/octet-stream"
+    } else {
+        "application/json"
     }
 }
 
