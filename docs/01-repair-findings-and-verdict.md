@@ -84,7 +84,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
 | Repair entry | `GameInstallService.cs:ExecuteRepairTaskAsync` ← `PrepareForInstallOrRepairAsync` (latest chunk build + optional local-version build for dedup) | `RepairManagement/Genshin/GenshinRepair.cs:CheckRoutine`: `ResetAndFetchAssets→CountAssetIndex→Check→Summarize`; `Repair.cs:RepairAssetTypeGeneric` |
 | Update entry | `ExecuteUpdateTaskAsnyc`: Patch build if `localVersion ∈ DiffTags`, else latest+local chunk builds, else legacy package patch/major | `InstallManagerBase.Sophon*.cs`: (A) `SophonPatch` hdiff path `EnumerateUpdateAsync`+`DownloadPatchAsync`+`ApplyPatchUpdateAsync`, (B) `SophonUpdate` chunk-diff fallback `EnumerateUpdateAsync(oldPair,newPair)` + `WriteUpdateAsync` |
 | Hash | **MD5 (lowercase hex) + size only**. `GameInstallHelper.cs:CheckFileMD5Async` (streamed blocks). File-level skip, per-reused-chunk slice MD5 (`FileSliceStream`), chunk-cache compressed MD5, final `_tmp` MD5; mismatch → delete tmp + throw | Size first, then `XxHash64` if `xxh64hash` present else MD5 (`Check.cs:CheckAssetAllType`). Per-chunk decompressed hash verified on the fly during copy/download (`SophonAsset.Download.cs:InnerWriteStreamToAsync`); mismatch → retry from network. `UseFastMethod` can skip hashing (not for us) |
-| Full vs diff | **Repair never uses diffs**: every target file verified; missing/corrupt bytes re-fetched as **full chunks** (zstd blobs). Update prefers `Patch` (ldiff blobs + `HPatch.PatchZstandard`) or legacy `hdiffmap.json/hdifffiles.txt/deletefiles.txt` + 7z, falling back to chunk-dedup (only chunks with empty `OriginalFileFullPath` download; rest copied from `OriginalFileFullPath:Offset` after slice-MD5 check) | Repair: full-file `WriteToStreamAsync` per broken asset (chunk-parallel, per-chunk resume/skip via `CheckChunkMd5HashAsync`). Update (A) hdiff: needs intact `OriginalFile` (hash-checked, else `PatchMethod=DownloadOver` fallback; 5 retries → force full). Update (B) chunk-diff: joins old+new **server** manifests by `AssetName` and `ChunkDecompressedHashMd5`; `ChunkOldOffset=-1` = download, else copy from old file / staged `chunk_collapse/` blob / network; old-reference bytes are hash-verified after copy with network fallback |
+| Full vs diff | **Repair never uses diffs**: every target file verified; missing/corrupt bytes re-fetched as **full chunks** (zstd blobs). Update prefers `Patch` (ldiff blobs + `HPatch.PatchZstandard`) or legacy `hdiffmap.json/hdifffiles.txt/deletefiles.txt` + 7z, falling back to chunk-dedup (only chunks with empty `OriginalFileFullPath` download; rest copied from `OriginalFileFullPath:Offset` after slice-MD5 check) | Repair: full-file `WriteToStreamAsync` per broken asset (chunk-parallel, per-chunk resume/skip via `CheckChunkMd5HashAsync`). Update (A) hdiff: needs intact `OriginalFile` (hash-checked, else `PatchMethod=DownloadOver` fallback; retries → force full). Update (B) chunk-diff: joins old+new **server** manifests by `AssetName` and `ChunkDecompressedHashMd5`; `ChunkOldOffset=-1` = download, else copy from old file / staged `chunk_collapse/` blob / network; old-reference bytes are hash-verified after copy with network fallback |
 | Version gate | **Repair = Install path: no `DiffTags` check.** Works from any/unknown local version (missing `config.ini` → `localFile=null` → full fetch, still skips already-correct files by MD5). This is the behavior the user relies on ("patch to new version directly") | Update refuses/redirects when local version has no diff entry (`SophonPatchBranch.IsFound=false` → fallback to B). Repair itself is version-agnostic, but the surrounding launcher gates repair on version checks (the user's complaint). Overall flow also depends on dispatcher persistent revisions |
 
 Both therefore **can** repair corruption (final/full verification + network fallback), but only
@@ -231,7 +231,7 @@ Base/InstallManagerBase*.cs},Helper/Metadata/PresetConfig.cs}`. Libs: `Google.Pr
 
 ## 6. Persistent-directory update
 
-GI has two live content paths. The launcher path (§1–§5) installs chunked files
+GI has a launcher content path and an in-game hot-patch path. The launcher path (§1–§5) installs chunked files
 under `*_Data/StreamingAssets/` and tracks them with `config.ini` and
 `pkg_version`. The in-game hot-patch path reads the dispatcher
 (`query_cur_region`) and keeps full replacement files plus verification state
@@ -257,11 +257,11 @@ writes both halves in its repair routine; Starward writes neither.
 §7). The default repair makes no dispatcher or persistent request and writes no
 markers. With the flag:
 
-- The dispatcher is queried with `meta.latest` for the selected `--biz`; all
-  three regions are supported. Key and seed come from Collapse's release
+- The dispatcher is queried with `meta.latest` for the selected `--biz`; every
+  supported region is handled. Key and seed come from Collapse's release
   metadata and are checked against a pinned versioned seed; a mismatch is a
   metadata failure (exit `2`).
-- The three manifests are fetched from the dispatcher descriptors, verified by
+- The dispatcher descriptors' manifests are fetched, verified by
   size and MD5, and mirrored in the post phase.
 - Rows are placed under `StreamingAssets/` or `Persistent/` by suffix and by
   comparison with the base manifest's MD5; the comparison decides which
@@ -273,7 +273,7 @@ markers. With the flag:
   when the source exists and the target differs. Stranded non-patch
   `.pck`/`.usm`/`.cuepoint` files are moved from `Persistent/` back to
   `StreamingAssets/` before `--purge-before`.
-- The marker block and all three mirrors are published in the post phase,
+- The marker block and all mirrors are published in the post phase,
   before the final `config.ini` bump. A failed persistent file (or a ceiling
   stop) suppresses the whole block; a byte-intact install still gets the full
   block refreshed. `--check-only` verifies persistent files, mirrors and

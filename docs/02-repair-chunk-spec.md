@@ -112,11 +112,11 @@ Each HYP response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `ret
 For each wanted manifest in latest build (filter: drop `matching_field ∈ ignore_set`; drop every
 `*-??` audio field except selected audio langs; keep `game` + selected):
 1. `manifest{id,checksum,compressed_size}` + `manifest_download{url_prefix}`, `chunk_download{url_prefix}`.
-2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 with jittered exponential backoff).
+2. Download `GET {manifest_prefix}/{id}` (single GET, retried with jittered exponential backoff).
 3. The blob is **streamed**: it is zstd-decoded as it arrives into a buffer sized by the
    API's `uncompressed_size`, so the compressed body is never resident and the decode never
    has to grow the buffer → compute MD5 of **decompressed** bytes → must equal `checksum`
-   (case-insensitive); mismatch → retry whole fetch up to 5× with jittered exponential backoff → still
+   (case-insensitive); mismatch → retry the whole fetch with jittered exponential backoff → still
    mismatch → abort (exit 2).
 
    The reported size is a **hint, not a promise**: it is a raw number out of the API's JSON
@@ -143,7 +143,7 @@ For each latest file `F{path,size,md5,chunks[]}`:
 - Build `chunk_plan[]`: for each chunk `C{offset,uncompressed_size,uncompressed_md5}`:
   `reuse = (local_F contains chunk with same (uncompressed_md5, uncompressed_size))`
   → record `(reuse_path=game_dir/local_F.path, reuse_offset)`, else `reuse=null`.
-  (Cross-file dedup by md5 is allowed but optional; same-file covers ~all GI wins.)
+  (Cross-file dedup by md5 is allowed but optional; same-file covers the common GI cases.)
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
   drop listed paths from the work list. They stay part of the expected install:
   the files-cleanup keeps them (Step 7), so a blacklist entry excludes repair,
@@ -161,9 +161,9 @@ only candidates the before pass did not, so each candidate is reported once.
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
 Concurrency: semaphore of `jobs` over **files**; chunks within a file strictly sequential
-(HDD-friendly). Retries: 5× per file.
+(HDD-friendly). Failed files are retried with backoff.
 
-Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
+The write modes, chosen per file by `--repair-mode` (default `auto`):
 
 - **in place** (the default): the target is opened `read+write` and only the bytes that are
   wrong are written, at the offsets they belong at. No `_tmp` file is created, and the peak
@@ -174,7 +174,7 @@ Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
   when the target must not be touched, and the way a file is written when its target cannot
   be opened for writing.
 
-**Two regimes.** The in-place path is not a defragmentation, and the difference decides the
+**Corruption versus upgrade.** The in-place path is not a defragmentation, and the difference decides the
 design. There is no staging area anywhere in it — a reuse source and its destination are
 both inside the same file, and the copy between them uses a fixed-size copy buffer
 (`COPY_BUF`) and nothing else.
@@ -191,7 +191,7 @@ problem, and its answers are: **order the relocations** so no source is
 overwritten before it is read, or **stage the moving bytes in RAM**. The first is free and
 forces the writes into one direction (a backwards-seek pattern); the second costs RAM and
 buys everything else. Which one a file gets is decided per file, so the in-place path is
-not one algorithm but two tiers:
+not one algorithm but distinct tiers:
 
 | tier | when | extra disk | RAM | reuse | writes | direction |
 |---|---|---|---|---|---|---|
@@ -229,7 +229,7 @@ Per file `F`:
    arrives and the decoded bytes are written at `C.offset` as they are produced, digested on
    the way past, so the chunk is never resident as a whole. `uncompressed_size` is enforced
    as the bytes go, and `uncompressed_md5` is verified when the stream ends — mismatch fails
-   the attempt and retries the whole file (up to 5×).
+   the attempt and retries the whole file (up to the retry budget).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
 5. **Verify** — one read answers the gate: the whole-file digest. `if md5==F.md5` the file is
@@ -428,7 +428,7 @@ The per-mode model, with `S` = target size, `O` = current on-disk size (0 if abs
 | `temp` | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file untouched + a partial `*_tmp` |
 | `discard` | `S` | `max(0, S − min(O, S))` | a partial file |
 
-The rows are two ways to spend disk, not two rungs of a safety ladder: `inplace` spends the
+The rows are ways to spend disk, not rungs of a safety ladder: `inplace` spends the
 least and writes the least, and `temp` spends the whole file in exchange for the target
 never being modified. For a corrupt-but-right-sized file — the common repair case —
 `inplace` needs **zero** extra space and writes only the corrupt bytes. For a file that
@@ -450,9 +450,9 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 
 | Failure | Handling |
 |---|---|
-| Manifest MD5 mismatch | retry whole fetch up to 5×, then abort exit 2 (never patch from bad metadata) |
-| Chunk download corrupt (chunk MD5 fail) | the attempt fails and the file is retried (×5): the in-place path re-scans, finds the chunk wrong and rewrites it; the temp path rolls the chunk back to its offset and re-downloads it, keeping the good prefix. The file is then gated by the whole-file MD5, and a file that still fails is counted and the run exits 3 |
-| Whole-file MD5 mismatch | the temp path deletes `_tmp` and retries the file ×5; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
+| Manifest MD5 mismatch | retry the whole fetch, then abort exit 2 (never patch from bad metadata) |
+| Chunk download corrupt (chunk MD5 fail) | the attempt fails and the file is retried: the in-place path re-scans, finds the chunk wrong and rewrites it; the temp path rolls the chunk back to its offset and re-downloads it, keeping the good prefix. The file is then gated by the whole-file MD5, and a file that still fails is counted and the run exits 3 |
+| Whole-file MD5 mismatch | the temp path deletes `_tmp` and retries the file; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (GI is chunk-only; no legacy path in v1) |
@@ -461,7 +461,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |
 | The volume fills while a file grows | the file fails, is counted, retried and reported; `--repair-mode temp` is the mode for a volume with no room for the growth |
 | A read-only attribute on a game file | cleared before the write, the way the launcher does it |
-| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 3, a write-path failure) by name, and by pid when the body is readable (an exclusive lock can hide it on Windows) |
+| Concurrent `girpr` runs against one install | the single-writer lock refuses the later one (exit 3, a write-path failure) by name, and by pid when the body is readable (an exclusive lock can hide it on Windows) |
 
 ## 5. Deliberately not implemented
 

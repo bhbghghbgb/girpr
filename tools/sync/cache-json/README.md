@@ -73,7 +73,7 @@ lock sidecar is removed with it. A process killed mid-import can leave the
 temporary behind; its name is inside the `girpr-cache` namespace, so it reads as
 tool state rather than as content, and nothing reclaims it automatically.
 
-`to-json` streams rows from one cache read transaction. If the output file
+`to-json` streams rows from a read transaction on the cache. If the output file
 already exists it is truncated. If stdout is the target and an error occurs
 mid-export, the lines written so far are already on stdout — the format is
 incremental, so a parser can consume them even when the run fails.
@@ -82,7 +82,7 @@ incremental, so a parser can consume them even when the run fails.
 
 | File | Responsibility |
 | --- | --- |
-| `src/lib.rs` | crate root: the clap surface, the two public conversion functions |
+| `src/lib.rs` | crate root: the clap surface, the public conversion functions |
 | `src/ndjson.rs` | the line shapes, their serde impls and the hex digest spelling |
 | `src/convert.rs` | the two directions, destination safety and the temporary/publish protocol |
 | `src/main.rs` | the binary: endpoint selection, dispatch, stderr summary, exit code |
@@ -91,6 +91,6 @@ incremental, so a parser can consume them even when the run fails.
 The cache API, its `CACHE_VERSION` and its digest vocabulary come from
 `tools/sync/cache/` (`girsync-cache`) directly, not through girsync's lib facade:
 an edit to girsync's planner or commands leaves this tool's cache tree cached.
-The two read seams this tool needs — `CacheDb::visit_entries` and `CacheDb::meta`
+The read seams this tool needs — `CacheDb::visit_entries` and `CacheDb::meta`
 — live in that crate beside the other read methods, so the wire format stays in
 one place.

@@ -1,6 +1,6 @@
 # The bundle differ — comparing bundles across commits
 
-`gircap`'s own gate (`tests/bundle_diff.rs`) compares **two captures of one
+`gircap`'s own gate (`tests/bundle_diff.rs`) compares **captures of one
 binary against each other**. That catches a change that is *non-uniform* — a row
 that flips depending on which worker woke first — and it is blind by
 construction to a change applied **uniformly to every capture**. This is the
@@ -38,7 +38,7 @@ a reformatted `MANIFEST.json` still fails.
 ## 2. The run-local tokens, and how the list was arrived at
 
 Not assumed — **discovered**, by capturing twice from one binary and diffing
-*without* normalisation first. The raw diff of two captures of one binary is a
+*without* normalisation first. The raw diff of captures of one binary is a
 fixed set of documents:
 
 ```
@@ -49,7 +49,7 @@ fixed set of documents:
 ```
 
 which is the cascade, exactly as `tests/bundle_diff.rs` documents it. After
-scrubbing those documents, two captures of one binary are identical — which is the
+scrubbing those documents, captures of one binary are identical — which is the
 check that the normalisation is not vacuous, and it is re-run for **every** commit
 probed (see §5).
 
@@ -73,13 +73,13 @@ The mock binds `127.0.0.1:0` and takes an ephemeral port. That port is
 `patchmaps/*.json` chunk URL, every `api/error_shapes.json` URL, and every row
 of `api/requests.ndjson`.
 
-Two captures of **one** binary share a mock, so the port matched and the
-self-check passed — the trap only opens when you compare **two commits**, which
-is the only thing this differ is for. It reported a large number of documents as
-changed between two commits that had changed nothing at all.
+Captures of **one** binary share a mock, so the port matched and the
+self-check passed — the trap only opens when you compare **different commits**,
+which is the only thing this differ is for. A volatile field shared by both ends
+can then make unrelated commits look like they changed many documents.
 
-Fixing the token in the bodies collapsed that to a small residue. The residue was
-the *digests* of those bodies, recorded in `MANIFEST.json` and
+Fixing the token in the bodies removes that false signal, leaving the residue
+below: the *digests* of those bodies, recorded in `MANIFEST.json` and
 `verify/checksums.json` — content that compares equal after scrubbing has a
 digest that does not.
 
@@ -153,8 +153,8 @@ fingerprint, and the differ is required to catch each one:
   OK     unmutated copy reads identical
 ```
 
-The last line is the negative control, and it is the one that matters: a harness
-that always fires proves nothing.
+The unmutated copy is the negative control, and it is the one that matters: a
+harness that always fires proves nothing.
 
 Each mutation asserts its own precondition first — that the fixture really
 contains the string it is about to change — so a mutation cannot pass by quietly
@@ -164,7 +164,7 @@ rather than silently "passing".
 
 ## 5. The per-commit guard
 
-Every probed commit is captured **twice** and the two fingerprints must agree,
+Every probed commit must produce agreeing fingerprints across captures,
 or the probe is rejected and no fingerprint is cached. That is what stops a
 badly-normalised commit from entering the search as a false boundary — the
 failure mode where one commit looks like it changed the output because its
@@ -205,9 +205,9 @@ A few more details are not obvious, and each cost a run to find:
   needle of `/chunk/` is not sufficient either: it also selects the 404 probes,
   which live under the same prefix — so it would measure `observe`, which already
   reads the body regardless, rather than the path under test.
-- **Armed rules are re-armed between the probe's two captures.** Otherwise the
-  second capture meets a mock that has already spent its one armed answer, the
-  two captures legitimately differ, and the determinism guard rejects the commit
+- **Armed rules are re-armed between the probe's captures.** Otherwise a later
+  capture meets a mock that has already spent its one armed answer, the
+  captures legitimately differ, and the determinism guard rejects the commit
   for a reason that has nothing to do with the tool. The guard is right to
   reject; the instrument was wrong.
 
@@ -244,7 +244,7 @@ One probe of the midpoint splits the interval and proves one half boundary-free.
 For *k* boundaries among *n* commits that is O(k·log(n/k)) builds instead of n−1,
 and the results are cached, so a re-run costs nothing.
 
-Two rules the search must follow, both learned the hard way:
+Rules the search must follow, both learned the hard way:
 
 - **A split that finds a difference must search both halves; only a split that
   finds equality may discard one.** A search that pops one interval and pushes
@@ -262,14 +262,13 @@ reports a result rather than failing.
 
 The mock is convenient and deterministic; it is also not the thing anybody
 reads. So the same differ is run over the reference bundles, with no build at
-all. Two comparisons of captures of the same world — taken days apart, and an
-older capture against the then-current reference — both show the same small set
-of volatile documents changing.
+all. Comparing captures of the same world — an earlier capture against a later
+one — shows the same small set of volatile documents changing.
 
-Those results are recorded outcomes, not a recipe: the bundles they compared
-have since been replaced, and the current reference bundle under `artifacts/`
-is the one `docs/00-spec.md` §4.1 describes. The number to beat is the same one
-either way — a small set of documents move on a capture of the same world.
+These are recorded outcomes, not a recipe: the bundles compared are snapshots,
+and the current reference bundle under `artifacts/` is the one
+`docs/00-spec.md` §4.1 describes. The property to check is the same either way —
+a small set of documents move on a capture of the same world.
 
 The volatility floor of a real capture is that small set of documents, and it is
 close to the mock's volatility floor — close enough to be a check on the
@@ -290,8 +289,8 @@ not know that.
 
 The reusable finding is: **every chunk blob, every assembled
 `game/` and `expected/` file, every `patchmaps/`, every `diff/`, every
-`manifests/` document is byte-identical across two captures of the same world on
-different days.** That is the claim worth re-checking after any change to the
+`manifests/` document is byte-identical across captures of the same world taken
+at different times.** That is the claim worth re-checking after any change to the
 writer, and it is a cheap check — no build required.
 
 ## 9. Cost
@@ -307,7 +306,7 @@ rather than one build per adjacent pair.
 
 Sharing one `CARGO_TARGET_DIR` across the worktrees is what makes a per-commit
 build affordable at all: dependencies are compiled once and only `gircap` itself
-is rebuilt. On a small machine two builds do not run concurrently anyway — cargo
+is rebuilt. On a small machine builds do not run concurrently anyway — cargo
 takes a target-directory lock — so this is deliberately serial.
 
 ## 10. Reproducing it

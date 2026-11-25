@@ -93,10 +93,9 @@ Getting either half wrong is silent and damaging:
 - Diffing **pre**-rename resurrects the `CASE-MISMATCH` bucket the rename pass
   exists to eliminate.
 
-Every other case-only fixture in the suite uses identical bytes and would pass
-either way. The one that does not is
-`tests/sync.rs::a_case_only_difference_in_content_is_copied_not_merely_renamed`
-and its row in `tests/sync_plan/`. If you add a case-only fixture, give the two
+Case-only fixtures with identical bytes would pass either way; the
+difference-in-content coverage in `tests/sync.rs` and `tests/sync_plan/` gives
+the two sides different bytes. If you add a case-only fixture, give the two
 sides **different bytes at the same length** or it tests nothing.
 
 ### The fold sites, and the questions each one answers
@@ -211,7 +210,7 @@ to every row.
 
 ### The effective source is checked against dst before a plan exists
 
-Two roots can be siblings and still overlap through the walk. `walk_live`
+Roots can be siblings and still overlap through the walk. `walk_live`
 follows links, so if `src/link` resolves to `dst` (or to a directory containing
 `dst`), one physical file appears both at its real dst path and under `link/`.
 The real path then looks `EXTRA`, the delete pass removes it, and the copy that
@@ -299,10 +298,10 @@ write contract, wherever it lives — and the documented dst **symlink**
 write-through is unchanged, because a symlink is a different directory entry
 rather than a second name for the truncated inode.
 
-**Enforced by:** `a_dst_hard_link_is_refused_without_touching_the_shared_inode`
-(also under `--hash-all-of none`), `the_hard_link_refusal_is_the_same_decision_in_both_modes`,
-the plan-time preflight cases in `plan::tests`, and the `hardlink::tests`
-count and identity cases.
+**Enforced by:** a dst hard link is refused without touching the shared inode
+(also under `--hash-all-of none`), the refusal is the same decision in both
+modes, the plan-time preflight cases, and the count and identity cases in the
+link-classification leaf.
 
 ### A kept dst file link's target is its content, not an extra
 
@@ -335,7 +334,7 @@ interleave them. A target the plan replaces with a directory is refused for the
 same reason. A target outside `dst` is the documented write-through and is not
 the plan's business.
 
-Two or more kept links can resolve to one terminal even when neither target is
+Kept links can resolve to one terminal even when neither target is
 itself mirrored by `src` (`a -> c` and `b -> c`, or the chained `a -> b -> c`).
 `ensure_shared_storage_safe` judges that set as a whole by terminal storage: a
 plan that would copy any member is refused before the plan print and before any
@@ -429,7 +428,7 @@ The copies the tool keeps beside a cache are written under a **working name**
 (`girpr-cache-partial-<ts>`) and are **published** under a name of a copy list
 (`girpr-cache-backup-<ts>`, `girpr-cache-old-<ts>`) once the copy is complete.
 
-Two things follow, and both are load-bearing.
+What follows is load-bearing.
 
 **The bound can only ever select a whole copy.** The bound ranges over the
 published names, and a published name holds the whole copy or none of it: a
@@ -505,7 +504,7 @@ handle, and its identity is read from the name — which is enough, because the
 name is asked about **again** before the claim is dropped, and the claim is
 dropped only while the name still holds it.
 
-**The check is a check-then-act, and the gap is one syscall wide.** The
+**The check is a check-then-act, and the gap is a narrow one.** The
 check and the rename that follows it are two calls, and a claim taken away
 between them is still landed on. There is no portable rename that is
 conditional on the name holding this run's claim, so the gap cannot be
@@ -547,8 +546,8 @@ directory copy is published in.** Where the removal succeeded the claim is
 gone and the name is free, and the rename is the next call, so another run
 can take the name in between. The rename then fails: a platform that cannot
 replace a directory cannot replace the claim another run holds either, so
-the name is taken and the publish moves on to the next name. The gap is one
-syscall wide and cannot be closed. It is reachable only where the filesystem
+the name is taken and the publish moves on to the next name. The gap is narrow
+and cannot be closed. It is reachable only where the filesystem
 cannot lock a file: the record the publishing run holds keeps another run
 off the name, and a bound off it, until the run opens the folder's cache.
 
@@ -645,9 +644,9 @@ the run that opens the cache is the run that published them, and the run
 before it published the ones before that. A run that publishes nothing into a
 list has nothing of its own to spare there — so the copy the run before it
 published is an ordinary copy again, and sparing it would keep an older copy
-in place of a newer one. The registry that says this holds two lists per
-folder: the copies waiting for the next open, and the copies the last open
-adopted. It is process-wide because the copies are made in more than one
+in place of a newer one. The registry that says this keeps, per folder, the
+copies waiting for the next open and the copies the last open adopted. It is
+process-wide because the copies are made in more than one
 place, and it is scoped to a run because the guarantee is about a run's copy
 and not about a process's.
 
@@ -757,10 +756,10 @@ them would make the record path look swappable with the disk path, which is
 exactly the mistake the record path exists to prevent — and `compare-self` is what
 that separation buys. `effective/record.rs`'s own module doc says so.
 
-**Do not turn `Side` / `RwSide` into a trait.** Two variants, one dispatch site
-each (`effective/side.rs` for `Side`, the rw gate for `RwSide`). A trait here
-would be ceremony with no second implementor, and the enum's shape is what keeps
-each dispatch site readable at a glance.
+**Do not turn `Side` / `RwSide` into a trait.** Each is a small enum with its
+dispatch concentrated at one site (`effective/side.rs` for `Side`, the rw gate
+for `RwSide`). A trait here would be ceremony with no second implementor, and
+the enum's shape is what keeps each dispatch site readable at a glance.
 
 **Do not touch the `--rw-threads*` family, `RwLimiter`, or the lock order.** See
 the lock-ordering section above. The tests are good
@@ -779,7 +778,7 @@ exact-match rule is written: the lookup that finds a digest under a name no
 algorithm answers to, and the two writers that put one there, all come through
 it. (A known algorithm is found under any ASCII-case spelling of its name, and
 that is the other rule — the one the algorithm's own resolver writes.) Inlined,
-the rule would be spelled at three call sites, and a second spelling of a
+the rule would be spelled at every call site, and a second spelling of a
 rule is a rule that can drift — and this one drifts quietly, because a row
 that grew a second entry under one name still answers its lookups. If the
 arm's exact-match rule ever stops being exact, this is where it changes.
@@ -848,7 +847,7 @@ This is the price of not re-reading src, and it is recorded in `README.md`'s
 **A stat-only row can get stuck.** A row whose stat changed arrives in phase A with
 its digests dropped, and while a stat difference settles the pair for free — a size
 difference, or an mtime one — no comparison rehashes it, so the row stays
-stat-only. Two repairs: the flag that distrusts the field doing the settling —
+stat-only. Repairs: the flag that distrusts the field doing the settling —
 `--no-trust-size` for a size difference, `--no-trust-mtime` for an mtime one, and
 either acts only when the distrusted field is the *only* difference — and
 `girsync update --dir <the folder>`, which rehashes every file and writes the
@@ -893,7 +892,7 @@ the approximation is kept rather than guessed at.
 
 ---
 
-## Two things that are one
+## Things that are one
 
 **"What must be computed" and "can the pair be answered" are different questions,
 and only one of them honours `no_trust`.** A side's availability is `cached ∪
@@ -905,8 +904,8 @@ two.
 
 **The diff and the planner must agree about the short circuit.** Both read
 `StatTrust::settles`, and the planner's decision travels out in `PairPlan::stat`
-rather than being re-derived from the flags. If they disagree, one of two *silent*
-things happens: the planner hashes a pair whose digest nobody reads, or — worse —
+rather than being re-derived from the flags. If they disagree, a *silent*
+failure results: the planner hashes a pair whose digest nobody reads, or — worse —
 a pair the planner called settled turns out to have needed a digest nobody
 computed. There is deliberately no `untrusted_disagrees() -> bool` next to
 `untrusted_differs`: a second spelling of a rule is a rule that can drift, and the

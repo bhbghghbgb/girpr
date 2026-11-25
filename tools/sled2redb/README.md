@@ -8,8 +8,8 @@ and writes a new **redb** cache file. It is its own workspace member so that the
 
 ## Why it is separate
 
-`sled` is used by exactly one thing — this one-shot migration — while every
-live cache path in `girsync` uses redb. Keeping the boundary here leaves:
+`sled` is used only for this one-shot migration, while every live cache path
+in `girsync` uses redb. Keeping the boundary here leaves:
 
 - `sled` as a plain (non-optional) dependency of `tools/sled2redb` alone.
 - `girsync` with no `[features]`, no `dep:sled`, no `required-features` targets
@@ -79,7 +79,7 @@ running conversion is making. The random name says nothing about which run left
 it, so there is nothing to interpret — a leftover is simply yours to remove.
 
 A **legacy sled directory** has to be removed before the new file can take its
-name. That removal is the one step that is not atomic — a failure in that
+name. That removal is the step that is not atomic — a failure in that
 window leaves no cache at all, and the error says so when it happens. A stale
 file under `--force` is replaced by an atomic rename instead, with no such
 window. A conversion that fails before that point never touches the previous
@@ -94,7 +94,7 @@ digests in the legacy JSON rows are decoded to raw bytes on the way in.
 | File | Responsibility |
 | --- | --- |
 | `src/lib.rs` | the crate root; `pub mod convert` |
-| `src/convert.rs` | the converter: the one module in this crate that touches `sled` |
+| `src/convert.rs` | the converter: the module in this crate that touches `sled` |
 | `src/main.rs` | the `sled2redb` binary: the two paths, `--force` and `--output`, and the shared `report::Record` writer |
 | `tests/convert.rs` | end-to-end cases (build a legacy sled DB, convert, read the redb cache back) |
 | `tests/common/mod.rs` | the shared test fixtures, copied from `girsync` so the cases run unchanged |

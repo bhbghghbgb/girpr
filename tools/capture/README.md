@@ -2,7 +2,7 @@
 
 **Dev-only. Not a patcher, not part of the `girpr` binary, shares no program code
 with it — only logic-free leaf crates: the log policy, the named UTC timestamp
-formats (the compact sortable stamp, two RFC 3339 spellings and chrono's default,
+formats (the compact sortable stamp, the RFC 3339 spellings and chrono's default,
 each with its own pinned spelling), the ordered-JSON/line-writing
 mechanics (each tool keeps its own key order, event placement, value types,
 escaping and boolean spelling), the digest hex mechanics,
@@ -18,8 +18,8 @@ mechanism (each tool supplies its own codes and meanings), the clap-error to
 usage-code mapping (each tool passes its own usage code) and the audio-language
 mechanics (each tool keeps its own alias map, sentinel and validation), plus the
 test scratch-directory policy.** It talks to the real HYP + Sophon
-APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding one real file per test-matrix
-variant, every API response and manifest behind it, every chunk blob needed to
+APIs and writes a self-contained artifact bundle: a real `game_dir` fixture holding real files for the test-matrix
+variants, every API response and manifest behind it, every chunk blob needed to
 materialize the old file, the current file, and the patch between them, and
 ground truth for the result.
 
@@ -64,7 +64,7 @@ The HTTP mechanics tests live with the mechanics in the `gircap-http` package
 (`cargo nextest run -p gircap-http`); the probe and negative cases, which depend
 on gircap's own contracts, remain in this package.
 
-The three whole-capture shape checks in `tests/bundle_shapes.rs` are `#[ignore]`d
+The whole-capture shape checks in `tests/bundle_shapes.rs` are `#[ignore]`d
 and hand-run. Their test target is gated behind the empty `manual-tests`
 feature, so a normal run does not compile or link that binary:
 
@@ -90,8 +90,8 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (tens of MiB on disk for a captured pair, with the retained
-manifests the largest contributor) and regenerable, so they belong on disk, not
+bundles are large (for a captured pair the retained manifests are the largest
+contributor on disk) and regenerable, so they belong on disk, not
 in history. Of `manifests/`, only the served `*.manifest.zst` archives are ever
 fetched — a fraction of the total — while the rest is the `.manifest.json.gz`
 copies and the `.meta.json` / `.paths.tsv` sidecars. **This is the project
@@ -144,15 +144,15 @@ one — and a bundle whose selfcheck does not pass is not a fixture: re-capture 
 
 Complete. A live `capture` writes the `api/` documents byte-exact — including
 `api/tag_probe.json`, `api/error_shapes.json` and `api/error_responses.json`, the
-generated measurements — fetches and verifies the `game` manifest for both
-builds, diffs them, and assembles a **complete artifact**:
+generated measurements — fetches and verifies the `game` manifests for the
+pair, diffs them, and assembles a **complete artifact**:
 
 | | shipped |
 |---|---|
 | `api/` | the response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `error_responses.json` and retained `error_bodies/` + `requests.ndjson` |
 | `diagnostics/` | `rejections.json` (refused values) and `path_map.json` (escaped device names) |
 | `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json`, `matrix.json` |
-| `chunks/` | the three retention sets, every blob, `index.json` with `build_id` on each reference |
+| `chunks/` | the retention sets, every blob, `index.json` with `build_id` on each reference |
 | `game/` / `expected/` | the fixture and the ground truth, per capture |
 | `patchmaps/` | one per capture: where every chunk's bytes come from |
 | `verify/` | `checksums.json` (A16) and `selfcheck.json` |
@@ -164,7 +164,7 @@ directory named `<UTC timestamp>Z`, the one the tool writes today — **verifies
 with every check green, exit `0`**, and its own selfcheck is **`pass`**. Find the
 local bundle with `gircap list --root artifacts`.
 
-It holds **one capture per patch shape**: the class set is a partition on the
+It covers the patch shapes: the class set is a partition on the
 content, so a file answers exactly one shape.
 
 **A class the budget refused is recorded, not dropped.** `--max-download-bytes`
@@ -186,8 +186,8 @@ cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
 cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
 ```
 
-The cases run in parallel — one scratch tree and one set of listeners per
-capture — so no `--test-threads=1` is needed; `girpr`'s
+The cases run in parallel — each with its own scratch tree and listeners —
+so no `--test-threads=1` is needed; `girpr`'s
 `.config/nextest.toml` shows each case's output through a per-case
 `success-output` override, so no `--no-capture` is needed either. Narrow a run
 to one failure by putting the case in the filter of the same command:

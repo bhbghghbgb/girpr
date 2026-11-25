@@ -32,18 +32,20 @@ only affects allocation needs nothing but `cargo nextest run`.
 
 ### The shape of the data
 
-The magnitudes below are measured against a captured pair and are here because
-several of the design decisions below are only obvious against them.
-Re-measure before trusting them; they are a scale reference, not a benchmark.
+The magnitudes below are illustrative, drawn from a captured pair; they vary
+with the pair, and the bundle's own documents are authoritative rather than these
+values being constants to copy. They are here because several of the design
+decisions below are only obvious against them. Re-measure before trusting them;
+they are a scale reference, not a benchmark.
 
 | quantity | scale |
 |---|---|
-| files and chunks in the `game` manifest | thousands of files, hundreds of thousands of chunks per tag |
-| total chunk bytes | on the order of a hundred gigabytes |
-| manifest archive | megabytes compressed, larger decompressed |
+| files and chunks in the `game` manifest | many files and chunks per tag — a description to be checked, not a resource to be loaded |
+| total chunk bytes | large — far more than a capture retains |
+| manifest archive | compressed, larger when decompressed |
 | largest single chunk | bounds the main tool's whole-chunk buffering |
-| a default capture | tens of MiB on disk, with manifests the largest contributor, alongside stored chunks and request rows |
-| admitted files per capture | one fixture file in `game/` and one ground-truth file in `expected/` per capture |
+| a default capture | large on disk, with manifests the largest contributor, alongside stored chunks and request rows |
+| admitted files per capture | a fixture file in `game/` with its ground-truth counterpart in `expected/`, per capture |
 | assembled bytes per capture | the captured files' own sizes |
 
 The ratio that matters: the `game` manifest describes **far more content than a
@@ -89,9 +91,9 @@ them.
 | gate | compares | blind to |
 |---|---|---|
 | `cargo nextest run` | the code against written expectations | nothing about the bytes, and a lot about fields only a live capture produces |
-| `tests/bundle_diff.rs` | **two captures of one binary** | a change applied **uniformly to every capture** — by construction |
+| `tests/bundle_diff.rs` | **captures of one binary** | a change applied **uniformly to every capture** — by construction |
 | the per-document pins in `tests/capture_layout.rs` | a written expectation for the volatile documents | any **digest** in those documents, on purpose: A16 owns those |
-| `tools/bundle_differ.py` | **two commits** | a change that was wrong the same way at both ends |
+| `tools/bundle_differ.py` | **captures from different commits** | a change that was wrong the same way at both ends |
 
 **The rule that falls out of the second row:** a before/after comparison cannot
 see uniform drift. Two captures of one binary both get the new behaviour, so
@@ -109,15 +111,15 @@ The cross-binary instrument is described in
 one: **a self-check that only ever compares one binary to itself cannot find a
 field that one binary happens to share with itself.** That is a real failure mode
 here, not a hypothetical — the mock's ephemeral port is recorded throughout a
-bundle, and it reads as many documents changed between two commits that
-changed nothing at all.
+bundle, so a volatile value shared by both ends can make unrelated commits look
+like they changed many documents.
 
 ### Mutating to prove a gate works
 
 A gate that has never been seen to fail is not known to work. Every new
 expectation in this crate was checked by making the mutant it is supposed to
-catch, and the two ends were confirmed: the mutant fails the pin, and every
-other suite passes with it. Two that were caught only by the new pin, with
+catch, and both ends were confirmed: the mutant fails the pin, and every
+other suite passes with it. Some that were caught only by the new pin, with
 nothing else noticing:
 
 - a total in `MANIFEST.json` moved slightly
@@ -153,13 +155,13 @@ before investigating anything else.
 The tool's speed work is allocation- and algorithm-shaped rather than
 codegen-shaped, and these three answers are the ones worth not asking again.
 
-**`verify` decompresses each blob once, not twice.** The verifier has to check
-every blob *and* rebuild the files from them, and those are the same bytes twice
-over. One memoised decode, taken *after* `check_blobs` has had the blob in hand,
-covers both without touching what is asserted. The same argument does **not**
-extend to `capture`, which rebuilds each file up to three times and wants the
-page cache rather than three resident copies — so the memo is opt-out, and the
-opt-out's reasoning is recorded at the method.
+**`verify` memoises each blob's decode.** The verifier has to check every blob
+*and* rebuild the files from them, which needs the same bytes for both purposes.
+A memoised decode, taken *after* `check_blobs` has had the blob in hand, covers
+both without touching what is asserted. The same argument does **not** extend to
+`capture`, which rebuilds files repeatedly and prefers the page cache to resident
+copies — so the memo is opt-out, and the opt-out's reasoning is recorded at the
+method.
 
 **The request log's mutex is not the concurrency ceiling.** A process-wide lock
 around the log record does not serialise the workers. What is left under the lock
@@ -172,7 +174,7 @@ thread handoff. A micro-benchmark on a single small frame settles it: the zstd
 decode is a small fraction of that call, and creating, renaming and reopening a
 fresh file — with no decode at all — is several times the decode.
 
-Two consequences:
+Consequences:
 
 1. The cost is **per file, not per directory entry**. A `chunks/blobs/` directory
    growing from a small to a large number of entries leaves the per-blob cost

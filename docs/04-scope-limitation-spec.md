@@ -4,7 +4,7 @@
 
 **Scope:** the `girpr` crate. `gircap` is named because it is the consumer that
 motivated the work, not because anything here changes it. `tools/sync`
-(`girsync`) is named because two of the rules below are specified to match its
+(`girsync`) is named because some of the rules below are specified to match its
 behaviour.
 
 ---
@@ -12,11 +12,11 @@ behaviour.
 ## 1. The problem
 
 `gircap` writes a self-contained artifact bundle per version pair: a real
-`game/` fixture holding **one real file per test-matrix variant**, the API
+`game/` fixture holding real files for the test-matrix variants, the API
 responses and manifests behind them, every chunk blob, `expected/` ground truth,
-and a `patchmaps/<id>.json` per capture. Three consumption paths work — inspect
-from metadata alone, rebuild old/new offline (`gircap materialize`), prove the
-bundle's own integrity (`gircap verify`). The fourth does not: **run `girpr
+and a `patchmaps/<id>.json` per capture. The bundle can be inspected from
+metadata alone, rebuilt old/new offline (`gircap materialize`), and checked for
+its own integrity (`gircap verify`). What it cannot yet do is **run `girpr
 --game-path <artifact>/game` and assert it patches to the new version.**
 
 Pointed at such a fixture, `girpr` does exactly what it is specified to do:
@@ -24,7 +24,7 @@ Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 - `girpr_repair_plan::build_plan` builds the work list from the **whole live `game` manifest**
   — every common path in the live pair, and many more across the audio fields;
 - `file::repair_all` runs one task per planned file (bounded to the `--jobs`
-  window) and downloads whatever is not intact — on the order of **tens of gigabytes**;
+  window) and downloads whatever is not intact — a large volume of game data;
 - `--purge-after` / `--purge-before` delete **everything the live manifest does
   not contain**, which for a fixture that small is most of it.
 
@@ -32,7 +32,7 @@ None of that is a bug. It is the correct behaviour of a whole-install patcher
 given a whole-install input, and `gircap` must not shim around it — the fix
 belongs in `girpr`.
 
-### 1.1 Two jobs, not one
+### 1.1 Path scope and resource scope
 
 | | job | failure if wrong |
 |---|---|---|
@@ -47,7 +47,7 @@ worthless without the selector tier being right most of the time.
 
 ### 1.2 What a consumer must be able to assert
 
-An end-to-end check against a bundle has three per-capture assertions, not one:
+An end-to-end check against a bundle makes the following per-capture assertions:
 
 1. `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes`;
 2. the patched file's MD5 equals `expectations.result_md5`;
@@ -55,8 +55,8 @@ An end-to-end check against a bundle has three per-capture assertions, not one:
    assertion that is invisible in a byte count, and the one that actually catches
    a broken reuse path.
 
-**Assertion 3 cannot be made from the data plane at all.** `SUMMARY` is
-byte-level by design — that is what makes assertions 1 and 2 cheap and
+**The fetch-set assertion cannot be made from the data plane at all.** `SUMMARY` is
+byte-level by design — that is what makes the byte assertions cheap and
 diffable — and per-chunk request detail exists only as `trace` lines in the log
 file (by default `logs/girpr_<ts>.log` beside the executable in a release build).
 It needs a **request log**: the file's level is set by `--log-file-level trace`
@@ -66,14 +66,14 @@ itself).
 
 The key-adjacent fact that *is* on the data plane is `local_manifest` (§6):
 `unavailable` means `getBuild(local)` could not be served, so the reuse map was
-empty and **no chunk could have been reused at all**. That makes assertion 3
-vacuously true and explains a `download_bytes` far above the capture's
+empty and **no chunk could have been reused at all**. That makes the fetch-set
+assertion vacuously true and explains a `download_bytes` far above the capture's
 `totals`. It is a summary of the situation, not a substitute for a request log:
 it cannot name an id.
 
 ---
 
-## 2. Two design rules
+## 2. Design rules
 
 ### 2.1 A filtered-out path does not exist
 
@@ -105,7 +105,7 @@ A content glob such as `mods/*` hides the files under `mods` but not `mods`
 itself, so an empty `mods` directory is still visible and may be swept; a
 directory is hidden only when the glob matches the directory path itself.
 
-There are two ways to make a path invisible to the purge: filter inside the
+There are ways to make a path invisible to the purge: filter inside the
 purge walk (the classifier takes the scope verdict and returns `Keep` *before*
 the manifest check — the test-facing `classify_purge_path` computes the verdict
 itself, while the walk passes it to `classify_purge_path_visible`), or push every
@@ -137,13 +137,13 @@ is pointed at.
 
 Every ceiling is an **enforcement bound**. A run whose plan exceeds a manually
 requested ceiling **fails before doing the work**, exit `5`. It never truncates
-the work list. Three reasons:
+the work list. The reasons:
 
 **1. These flags are for testing, and testing wants a failure, not a subset.**
 A ceiling exists to stop a whole-install run from happening. Admission stops the
 *downloads* — but the run has already paid for the part that costs most on a
-real install: the metadata calls, the manifest fetches, and a plan of thousands
-of paths. What it returns is an install that reports success and is still mostly
+real install: the metadata calls, the manifest fetches, and a plan of many
+paths. What it returns is an install that reports success and is still mostly
 broken. Refusal returns promptly, writes nothing, and says by how much it was
 over.
 
@@ -230,7 +230,7 @@ misused:
    explicit `--audio` — in the execution phase, after every plan-half refusal,
    so a refused run leaves the install untouched. Under a scope that write is a
    mutation of a path the scope may not have admitted, so the combination is
-   refused outright. Two flags asking for opposite scopes is a contradiction,
+   refused outright. Flags asking for opposite scopes are a contradiction,
    not a merge. The escape hatch
    is to include the scan file's own rel path (`<scan-parent>/<audio-scan-dir>`
    for a global install) — it comes from `getGameConfigs`, so it is never
@@ -363,7 +363,7 @@ ceiling bounds what is *done*.
 
 ### B5 · `--max-verified-download-bytes <N>` / `--max-verified-write-bytes <N>` — **P1** — runtime hard stop
 
-The two ceilings the **live/settled** split makes possible.
+The ceilings the **live/settled** split makes possible.
 
 **The problem they solve.** `--max-download-bytes` and `--max-write-bytes` bound
 the **live** figures: the traffic the run caused, and the disk it took. Neither
@@ -387,7 +387,7 @@ bytes are counted either way — the write happened, and a figure that stopped
 counting would be a lie — and the run stops with the work it had done left in
 place, which is what every other hard stop does.
 
-**Why two flags and not one.** A user who wants "do not rewrite more than N
+**Why separate flags.** A user who wants "do not rewrite more than N
 bytes of my install" wants the write one; a user who wants "do not fetch more
 than N bytes that actually land in files" wants the download one. Collapsing
 them into a single `--max-repair-bytes` would have to pick one of the two
@@ -567,7 +567,7 @@ the `game` field plus one per selected audio language, each carrying many
 further file entries; languages are chosen with `--audio`. Capping to `game`
 would cut fetch and parse cost when the audio manifests cannot hold the file
 under test. Low value — `--audio none` plus `--audio en-us` already spans it —
-and it would add a third way to say "which manifests", so it should stay cut
+and it would add another way to say "which manifests", so it should stay cut
 unless the surface needs it.
 
 ---
@@ -599,7 +599,7 @@ correct answer rather than a limitation of the design.
 **A refusal has no partial state, except for work already done.** For B1, B2's
 pre-flight half and B4's up-front check: nothing has been written when the run
 exits `5` — no directory created, no `_tmp` opened, no file deleted, no
-`config.ini` touched. Two cases differ. A runtime hard stop (B2, B3, B5) fires
+`config.ini` touched. The cases differ. A runtime hard stop (B2, B3, B5) fires
 mid-flight and leaves `*_tmp` behind; the post-repair `--max-delete-bytes`
 re-check refuses only that cleanup pass, after the repair and any earlier pass
 have already run. That is safe, but it is state, and `SUMMARY stopped=` must say
@@ -687,9 +687,9 @@ and the `girpr_report::summary` source; they follow the same discipline.
 own counters rather than by a flag: they too appear only when non-zero, so a
 clean or unpurged run stays byte-identical.
 
-### 6.1 Two numbers for every byte count
+### 6.1 Live and settled figures for every byte count
 
-A byte count answers two questions, and they have different answers: *what did
+A byte count answers different questions: *what did
 the run **spend*** and *what did the run **achieve***.
 
 - The **live** figure is the spend. It is charged *before* the resource is
@@ -811,7 +811,7 @@ Touch points outside the scope directory:
   its patchable captures; nothing here needs a throttle, and ceilings do not
   bound metadata traffic (§2.2).
 - **Sharing code with `gircap` or `girsync`.** Independence between the tools is
-  a design constraint, and the filter and the budget are each a few dozen lines
+  a design constraint, and the filter and the budget are each small
   that will be written more than once.
 - **Making any of this default.** Every option here produces an install that is
   not a working install. Defaults stay as they are.
@@ -830,13 +830,13 @@ the same pipeline; the rules above apply to them unchanged.
   the expected set alongside the base plan's `expected_rels()`. A marker file
   outside an active scope is a usage error (exit `1`); a hotfix path outside the
   scope still repairs the in-scope files, but the whole marker block and all
-  three mirrors are suppressed and the run reports `persistent=suppressed` — a
+  mirrors are suppressed and the run reports `persistent=suppressed` — a
   partial revision must not claim a complete one. Neither guard applies without
   the flag. A scoped or `--purge-only` run still leaves `config.ini` unbumped
   (`config_bumped=0`, §2.1 / E2).
 - **Ceilings (§2.2, B1/B2/B3/B5).** Persistent bytes join the pre-flight totals
   and the live/verified counters, so `--max-files`, `--max-download-bytes`,
-  `--max-write-bytes` and the two `--max-verified-*` flags refuse or hard-stop
+  `--max-write-bytes` and the `--max-verified-*` flags refuse or hard-stop
   on persistent work exactly as they do on base work. `--scan` still reads only
   base files: each persistent file is already read in full by its own digest
   gate and its size comes from the manifest row.

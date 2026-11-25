@@ -3,10 +3,10 @@
 Implements `docs/02-repair-chunk-spec.md`. Findings:
 `docs/01-repair-findings-and-verdict.md`.
 
-The `repair-` prefix on all three documents is load-bearing: this file, the spec
+The `repair-` prefix on the repair-spec documents is load-bearing: this file, the spec
 and the findings are one series describing the whole-install repair patcher.
 [`docs/04-scope-limitation-spec.md`](04-scope-limitation-spec.md) is a separate
-tier and does not amend any of the three.
+tier and does not amend that series.
 
 ## 1. Crate layout (single binary, std + tokio)
 
@@ -21,7 +21,7 @@ src/lib.rs            # module map + re-exports
 src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx -> RunCtx
 src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit code) + RepairMode
 src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
-crates/log/           # the shared log policy: log file path, log levels, env vars (shared by girpr and the three dev tools)
+crates/log/           # the shared log policy: log file path, log levels, env vars (shared by girpr and the dev tools)
 crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
 app/test-fixtures/ # facade-free offline HYP/Sophon mock + fixture builders for the root integration tests, reached through thin shims under tests/common/
 app/test-support/  # facade-coupled run glue (RunCtx construction, pipeline driver) shared by the root integration tests, reached through the thin tests/common/ shim
@@ -108,7 +108,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Begin `REPORT` | `report::report_record` + `report::emit` (2.5) | Starward |
 | Manifest fetch/verify/parse | `repair::phases::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `girpr_repair_plan::build_plan` (4) + `repair::phases::manifest::local_reuse_map` → `sophon::build_local_chunk_map` keyed by path, chunk md5+size (3) | Starward |
-| Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
+| Exact plan figures (`--scan`) | `repair::scan::scan_plan` — reads each planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (fetched in the plan phase, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Single-writer lock | `girpr_lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 3 (5, taken in the execute phase) | — |
@@ -121,7 +121,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 Concurrency: a bounded spawn/join window over files (`repair::file::join_file_tasks`, at most
 `jobs` tasks in flight); a single `reqwest::Client` with a fixed
 connection-pool cap (see `app/fetch/src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
-with fixed-size buffers. Retries: 5× with jittered exponential backoff on manifest/chunk/file ops.
+with fixed-size buffers. Manifest/chunk/file ops are retried with jittered exponential backoff.
 
 ## 4. Testing
 
@@ -132,8 +132,8 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
   `channel`/`sub_channel`, `getBuild` tag encoding), local chunk-map build, manifest
   filter, work-list build/dedup, expected-set/purge classification, audio scan file,
   REPORT/PROGRESS/SUMMARY formatting, HYP wrapper and int-or-string parsing.
-- **Integration tests** (`tests/repair_offline.rs`): a dedicated `#[tokio::test]` per
-  behavior, each running the full `repair::run` pipeline against a `MockServer`
+- **Integration tests** (`tests/repair_offline.rs`): dedicated `#[tokio::test]` cases
+  for the behaviors, each running the full `repair::run` pipeline against a `MockServer`
   on `127.0.0.1:<ephemeral>` (`app/test-fixtures`, reached through the thin
   `tests/common/mod.rs` shim) injected through
   `RunCtx::hyp_base_override` / `sophon_base_override`. Covers repair, check-only
@@ -164,8 +164,7 @@ with fixed-size buffers. Retries: 5× with jittered exponential backoff on manif
 `tracing` to stderr (`--log-level`, with `RUST_LOG` adding to
 it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`).
 Both layers are built in `src/logging.rs` over the shared
-policy in `crates/log/` — the same policy the three dev tools (`gircap`, `girsync`,
-`sled2redb`) follow. The two
+policy in `crates/log/` — the same policy the dev tools follow. The two
 levels are separate: `--log-level` only affects stderr, `--log-file-level` only
 the file. A log file that cannot be opened degrades to a warning and a sink,
 never a failure. Where the file goes, in order: `--no-log-file` (none at all),
@@ -191,7 +190,7 @@ Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, i
 manifest cache never written, `chunk/` reuse dir not retained. Dispatcher/persistent updates are
 the separate `--with-persistent` tier described in docs/01 §6 and implemented in §7.
 
-**The two write modes, and what each one is for:**
+**The write modes, and what each one is for:**
 
 | | `inplace` (`auto` picks this when the target is writable) | `temp` (`--repair-mode temp`) |
 |---|---|---|
@@ -202,7 +201,7 @@ the separate `--with-persistent` tier described in docs/01 §6 and implemented i
 | peak extra disk | `jobs × largest *growth*` — 0 for a same-size repair | `jobs × largest file` |
 | `stopped=--max-download-bytes`/`stopped=--max-write-bytes` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
 
-The rows are two ways to spend disk, not two rungs of a safety ladder. Both gate the file on
+The rows are ways to spend disk, not rungs of a safety ladder. Both gate the file on
 the same whole-file MD5, and `config.ini` advances only when every planned file verified.
 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
@@ -219,7 +218,7 @@ them, which is the one term the decode cannot remove.
 
 | item | why not now |
 |---|---|
-| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is a pure function (`repair::reuse::salvage_order_refs`, with test-only `salvage_order`) to swap, and the writer does not know which tier produced the order |
+| the interval-graph optimum for the chunk order | the RAM tier removes the ordering constraint entirely wherever the payload fits, and the ordered-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is a pure function (`repair::reuse::salvage_order_refs`, with test-only `salvage_order`) to swap, and the writer does not know which tier produced the order |
 | a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves a read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about, and the read is mostly served by the page cache |
 | cross-file salvage (a chunk from any local file, not just the same path) | mutually exclusive with an in-place repair absent a file-level order: repairing a donor destroys a donee's source. The reuse map is same-file-only, so the conflict is latent — but it must be settled before anyone adds it |
 | reclaim-on-demand (delete files mid-run to make room) | the in-place repair removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and its own doc |
@@ -233,8 +232,8 @@ them, which is the one term the decode cannot remove.
 
 The flag adds one opt-in phase group to the repair pipeline described in §§1–6.
 Without it `girpr` makes no dispatcher or persistent request and publishes no
-markers; `PLAN`, `SUMMARY` and the exit codes are unchanged. All three `--biz`
-values are supported. Hotfix bytes are served as full files over HTTP, not as
+markers; `PLAN`, `SUMMARY` and the exit codes are unchanged. All supported `--biz`
+values are handled. Hotfix bytes are served as full files over HTTP, not as
 Sophon chunks, so the chunk writer is not reused for them. The verification-state
 names and the root `pkg_version` are kept by the purge on every run, flag or no
 flag; this is the tier's only run-wide effect.
@@ -249,7 +248,7 @@ and the CLI contract in `README.md`.
 |---|---|
 | `app/dispatch/` (`girpr_dispatch`) | unwrap Collapse release metadata into key/seed, dispatcher URL building, RSA PKCS#1 v1.5 decrypt, protobuf decode, typed `DispatchInfo` |
 | `app/persistent-plan/` (`girpr_persistent_plan`) | value types and pure decisions: row normalisation, suffix→folder placement, force-persistent rule, CDN URL selection, digest preference, marker rendering, scope suppression |
-| `app/fetch/src/persistent.rs` | fetch + MD5-verify + NDJSON-parse the three manifests; full-file HTTP download (primary → alternate on 404), temp sibling, digest gate, atomic publish |
+| `app/fetch/src/persistent.rs` | fetch + MD5-verify + NDJSON-parse the persistent manifests; full-file HTTP download (primary → alternate on 404), temp sibling, digest gate, atomic publish |
 | `app/repair-plan/` | a sibling `PersistentPlan` alongside `RepairPlan`; persistent bytes in the download estimate and plan summary; dispatcher paths in `PurgeKeys` |
 | `crates/model/src/region.rs` | the per-biz dispatcher host and channel prefix values |
 | `app/report/` | conditional `SummaryFlags` fields and `PLAN` totals for persistent work |
@@ -268,8 +267,8 @@ calls are plain GETs and its dispatcher response is an encrypted binary body.
 ### 7.2 Data model and pure rules
 
 `DispatchInfo` carries the game version, channel name, server and codename, the
-four revision numbers (`res`, `data`, `silence`, `audio`) and their hashes, the
-four CDN prefixes and one `ManifestDescriptor` per mirrored manifest. A
+revision numbers (`res`, `data`, `silence`, `audio`) and their hashes, the
+CDN prefixes and a `ManifestDescriptor` per mirrored manifest. A
 descriptor holds the manifest's `kind`, URL, expected MD5 and size from the
 dispatcher's own NDJSON descriptor, and the mirror destination rel. A
 `PersistentRow` is one NDJSON line: `remoteName`, `md5`, optional XXH64 `hash`
@@ -304,7 +303,7 @@ decides placement.
 | `data_versions` | design-data/…, design-data/… | design-data/…, design-data/… |
 | silence `data_versions` | silence-data/…, silence-data/… | silence-data/…, silence-data/… |
 
-The four prefixes come from `DispatchInfo`; the final URL is
+The prefixes come from `DispatchInfo`; the final URL is
 `{prefix}/{folder}/{remoteName}`. The alternate is tried on a 404 only, never on
 a digest failure; `408`/`429`/`5xx` are retried on the same URL.
 
@@ -326,7 +325,7 @@ otherwise MD5. The result is verified again after the atomic publish.
 | `ChannelName` | `channel_name` |
 | `ScriptVersion` | `game_version` (= `meta.latest`) |
 
-`DownloadPref` is launcher metadata and is not written. The three mirrors are
+`DownloadPref` is launcher metadata and is not written. The mirrors are
 the raw, MD5-verified manifest bytes. Without the flag none of these files is
 written; with it the full block is written even when no file was broken.
 
@@ -343,7 +342,7 @@ disagreement is a metadata failure (exit `2`). The selected dispatcher host is
 pinned per biz in `crates/model`; no subdomain sweep and no local `info.txt`
 read is performed.
 
-`fetch_plan_network` fetches the three manifests (res, data, silence) from the
+`fetch_plan_network` fetches the manifests (res, data, silence) from the
 dispatcher descriptors, checks each body against its declared size and MD5, and
 parses the NDJSON while skipping blank lines and tolerating extra keys. A
 failure is fatal (exit `2`). The plan half keeps the raw bytes in memory only.
@@ -352,7 +351,7 @@ marker paths and adds every persistent expected rel to `PurgeKeys`.
 
 Scope guards: a marker or mirror outside an active scope is a usage error
 (exit `1`); a forced-persistent hotfix outside the scope leaves the in-scope
-files repairable but withholds the whole marker block and the three mirrors,
+files repairable but withholds the whole marker block and the mirrors,
 reported as `persistent=suppressed`. Neither guard applies without the flag.
 Persistent files and bytes join the pre-flight totals and the live/verified
 counters, so all file and byte ceilings apply; `--scan` reads only base files
@@ -383,12 +382,12 @@ the keep set but publishes no mirror, marker or version claim; read-only and
 scope-suppressed runs publish nothing. A publish failure is fatal (exit `3`).
 
 **Check-only** additionally verifies every persistent file against its row, all
-three mirror bodies against the dispatcher digest, and every marker's presence
+mirror bodies against the dispatcher digest, and every marker's presence
 and exact value; any mismatch is damage (exit `4`).
 
 ### 7.4 User-facing contracts
 
-`--with-persistent` is the only new flag. Exit codes stay the six in
+`--with-persistent` is the only new flag. Exit codes stay as defined in
 `src/config.rs`: `0` success, `1` usage (a marker or mirror outside the scope),
 `2` metadata/network (metadata unwrap, dispatcher query/decrypt/decode, version
 disagreement, manifest fetch/MD5), `3` write (failed persistent file, publish
@@ -406,7 +405,7 @@ unflagged lines are byte-identical.
 ### 7.5 Testing
 
 All tier tests are offline; no test scans a directory it does not own.
-A deterministic encrypted dispatcher body, a fixed test key/seed and three
+A deterministic encrypted dispatcher body, a fixed test key/seed and the
 manifest routes live in the mock under `app/test-fixtures`, with inputs under
 `tests/fixtures/persistent_inputs/`.
 
