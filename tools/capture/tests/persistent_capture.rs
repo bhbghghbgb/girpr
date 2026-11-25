@@ -232,7 +232,7 @@ async fn the_producer_queries_the_dispatcher_and_writes_records() {
     assert!(outcome.reason.is_none());
 
     let records = outcome.records.expect("records were staged");
-    assert_eq!(records.record.schema_version, 3);
+    assert_eq!(records.record.schema_version, 4);
     assert_eq!(
         records.record.ciphertext_bytes,
         records.envelope.len() as u64

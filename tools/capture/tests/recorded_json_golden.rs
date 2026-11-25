@@ -78,7 +78,7 @@ pub const REQUESTS_JSON: &str = concat!(
 pub const ERROR_RESPONSES_JSON: &str = concat!(
     r#"{"#,
     "\n",
-    r#"  "schema_version": 3,"#,
+    r#"  "schema_version": 4,"#,
     "\n",
     r#"  "budget_bytes": 8388608,"#,
     "\n",
@@ -93,7 +93,7 @@ pub const ERROR_RESPONSES_JSON: &str = concat!(
 pub const ERROR_SHAPES_JSON: &str = concat!(
     r#"{"#,
     "\n",
-    r#"  "schema_version": 3,"#,
+    r#"  "schema_version": 4,"#,
     "\n",
     r#"  "shapes": ["#,
     "\n",

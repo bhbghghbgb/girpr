@@ -1808,13 +1808,19 @@ mod tests {
 
     #[test]
     fn a17_accepts_a_complete_matrix() {
-        // The positive half: every known class, each once. The three record
-        // classes are optional at schema 3, so the six patch shapes alone are
-        // also complete. A17 still requires `PATCH_SHAPES`, unchanged, until
-        // the schema-v4 commit.
+        // The positive half: every known class, each once. Schema 4 requires
+        // all nine — the six patch shapes and the three record classes — so a
+        // matrix missing a record class is no longer complete.
         let (ok, detail) = manifest_with(&complete_rows()).a17();
         assert!(ok, "{detail}");
         assert!(detail.contains("9 classes"), "{detail}");
+    }
+
+    #[test]
+    fn a17_rejects_a_six_row_matrix_missing_the_record_classes() {
+        // The three persistent classes became required with schema 4. An
+        // older writer's six-row matrix must now name what it lacks rather
+        // than passing as complete.
         let old: Vec<(&str, &str)> = complete_rows()
             .into_iter()
             .filter(|(c, _)| {
@@ -1824,8 +1830,9 @@ mod tests {
             })
             .collect();
         let (ok, detail) = manifest_with(&old).a17();
-        assert!(ok, "a pre-persistent bundle stays complete: {detail}");
-        assert!(detail.contains("6 classes"), "{detail}");
+        assert!(!ok, "six rows are no longer a complete matrix: {detail}");
+        assert!(detail.contains("persistent_res"), "{detail}");
+        assert!(detail.contains("missing"), "{detail}");
     }
 
     #[test]
@@ -1846,8 +1853,9 @@ mod tests {
 
     #[test]
     fn a17_rejects_an_unknown_class_even_beside_the_required_six() {
-        // A row for a class that does not exist is not a substitute for the six:
-        // it must be reported itself, not silently carried as an extra row.
+        // A row for a class that does not exist is not a substitute for a real
+        // class: it must be reported itself, not silently carried as an extra
+        // row.
         let mut rows = complete_rows();
         rows.push(("bogus", "captured"));
         let (ok, detail) = manifest_with(&rows).a17();
@@ -2191,11 +2199,10 @@ impl Manifest {
     /// matrix is a *claim* the bundle makes about itself; `verify` is where a
     /// claim is checked, and `Bundle::open` stays a structural reader.
     pub fn a17(&self) -> (bool, String) {
-        // The three persistent classes are optional, additive record classes:
-        // a bundle written before they existed has a complete matrix without
-        // them. Every patch shape is still required, and any row that *is*
-        // present must be a real class in an acceptable state.
-        let required = crate::select::Class::PATCH_SHAPES;
+        // Schema 4 requires the whole matrix: six patch shapes and three
+        // persistent record classes. Every row must also be a real class in
+        // an acceptable state, whether or not its class was required.
+        let required = crate::select::Class::ALL;
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {
             if !matches!(

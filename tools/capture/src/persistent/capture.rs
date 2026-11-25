@@ -10,8 +10,8 @@
 //! The query runs **after** `select::decide` and **before**
 //! `select::require::check`. A capture without a dispatcher response stays a
 //! normal capture: the three record rows are `unavailable`, and no `dispatch/`
-//! or `persistent/` bytes are written. That is the schema-3 degradation path;
-//! records are still optional at this version.
+//! or `persistent/` bytes are written. That is the schema-4 degradation path:
+//! records are present only when a dispatcher route was actually captured.
 
 use std::sync::Arc;
 

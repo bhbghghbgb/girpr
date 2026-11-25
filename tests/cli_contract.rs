@@ -953,7 +953,7 @@ fn dispatch_input_files_are_checked_at_the_flag_boundary() {
     assert!(err.contains("dispatch record"), "{err}");
 
     let bad_seed = serde_json::json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "version": "9.9.0",
         "query_version": "OSRELWin9.9.0",
         "key_fingerprint": "e0fcb3321f5dfd7a6e5d208699782e44c40da897b6ee6813c3d81ff8bae303c0",

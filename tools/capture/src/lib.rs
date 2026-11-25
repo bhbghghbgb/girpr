@@ -131,4 +131,22 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// A version-2 bundle is refused for the same reason a version-1 bundle is: a
 /// current reader would parse it and silently supply a different story for the
 /// evidence it lacks.
-pub const SCHEMA_VERSION: u32 = 3;
+///
+/// **Version 4** promotes the persistent records from an unversioned extension
+/// to part of the schema:
+///
+/// - `dispatch/record.json`, `dispatch/response.json`, `dispatch/key.pem` and
+///   `persistent/index.json` plus its raw manifests and blobs are stamped 4 and
+///   are fully re-verified whenever present — including the key fingerprint,
+///   the envelope digests and length, and the record's own path claims;
+/// - `MANIFEST.json → matrix` carries all nine classes: the six patch shapes
+///   and the three `persistent_*` record classes. A17, the completeness
+///   assertion, requires all nine rows;
+/// - a bundle whose three record rows honestly say `unavailable` (the capture
+///   had no dispatcher routes) still carries no records and still verifies. A
+///   bundle that says any of them is `captured` must carry the records.
+///
+/// A version-3 bundle is refused for the same reason a version-2 bundle is: a
+/// current reader would treat its six-row matrix as complete and its unversioned
+/// records as current evidence.
+pub const SCHEMA_VERSION: u32 = 4;

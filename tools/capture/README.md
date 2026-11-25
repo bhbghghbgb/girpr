@@ -94,8 +94,8 @@ $env:GIRPR_ARTIFACT_BUNDLE = 'artifacts/persistent_v4'
 
 `dispatch/key.pem` keeps its historical `.pem` filename: the bytes are
 `RSAKeyValue` XML (as in C3), and girpr accepts either PEM or XML there. The
-bundle is schema 3 at this commit; a schema-4/bridge session must re-run this
-producer only after bumping the schema and re-verifying the output.
+bundle is schema 4; the producer was re-run after the bump and the output
+re-verified (`gircap verify --artifact artifacts/persistent_v4`).
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real: nothing one test does — a global, a temp directory, an
@@ -153,11 +153,14 @@ difference between a quick loop and a slow one.
   to. Pin both when you want a specific pair, especially when the result is going
   to be kept.
 
-**Compatibility.** Every document carries `"schema_version": 3`, and a reader
+**Compatibility.** Every document carries `"schema_version": 4`, and a reader
 should reject an unknown one rather than guess. Backwards compatibility is not a
-requirement: version 3 makes the evidence fields and documents that earlier
-versions omitted **required**, so a version-2 bundle is re-captured rather than
-read with a default substituted for what nobody recorded. `verify` reports what
+requirement: version 4 requires all nine matrix rows and fully verifies the
+persistent records whenever a `persistent_*` class says `captured`, while a
+capture that honestly found no dispatcher routes keeps those rows `unavailable`
+and writes no records. Version 3 made the earlier evidence fields and documents
+**required**, so a version-3 bundle is re-captured rather than read with a
+default substituted for what nobody recorded. `verify` reports what
 it cannot re-derive instead of refusing, so a bundle whose `selfcheck` disagrees
 is a finding rather than an unreadable tree; a bundle *missing a required
 document* is refused, because a fixture that half-answers a question is worse

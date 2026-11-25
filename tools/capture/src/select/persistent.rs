@@ -188,7 +188,7 @@ pub fn select(
             .fold(0u64, |n, m| n.saturating_add(m.raw.len() as u64)),
     );
 
-    // The envelope and all three manifests are indivisible at schema 3: girpr
+    // The envelope and all three manifests are indivisible at schema 4: girpr
     // always fetches all three from the one aggregate dispatch record. If the
     // fixed cost alone does not fit, no row can honestly be called captured.
     if !budget.admits(fixed) {

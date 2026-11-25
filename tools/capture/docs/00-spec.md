@@ -1192,7 +1192,7 @@ patchmaps; `added` contributes its whole-file download cost.
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| `schema_version` | **`3`**; a bump is a deliberate decision, not a default, and version 3 requires the added evidence | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| `schema_version` | **`4`**; a bump is a deliberate decision, not a default. Version 3 made the added evidence required; version 4 requires all nine matrix rows and verifies the persistent records when present | [`01-artifact-schema.md`](01-artifact-schema.md) |
 | commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---

@@ -141,15 +141,12 @@ fn facts(bundle: &Path) -> BundleFacts {
 /// Re-derive the record's facts from the bytes it carries, independently of
 /// the producer: the envelope is decrypted with the key stored in this bundle.
 fn assert_self_contained(f: &BundleFacts) -> String {
-    assert_eq!(
-        f.record.schema_version, 3,
-        "schema is still 3 in this commit"
-    );
+    assert_eq!(f.record.schema_version, 4, "the record carries schema 4");
     assert_eq!(
         f.record.key_file, "dispatch/key.pem",
         "historical extension stays"
     );
-    assert_eq!(f.index.schema_version, 3);
+    assert_eq!(f.index.schema_version, 4);
     assert_eq!(f.record.ciphertext_bytes, f.envelope.len() as u64);
     assert_eq!(f.record.envelope_md5, md5_hex(&f.envelope));
     assert_eq!(f.record.envelope_sha256, sha256_hex(&f.envelope));

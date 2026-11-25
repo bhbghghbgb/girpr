@@ -84,7 +84,7 @@ const SILENCE_URL: &str = "https://mock.girpr.test/client_design_data/test/outpu
 /// with its CDN authorities rewritten to `base`.
 fn record_value(base: &str) -> Value {
     json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "version": "9.9.0",
         "query_version": "OSRELWin9.9.0",
         "dispatch_url": format!("{base}/query"),

@@ -231,8 +231,8 @@ pub fn reverify(bundle: Bundle) -> Report {
 
     // 4. The two claims that are about documents rather than blobs.
     rows.extend(super::checks::check_config_ini(&root, &bundle.manifest));
-    // The optional persistent records are byte-exact when present and simply
-    // absent from the rows when the bundle predates them.
+    // The persistent records are byte-exact when present, absent only when no
+    // record class was captured, and red when the matrix claims otherwise.
     rows.extend(super::checks::check_persistent_records(
         &root,
         &bundle.manifest,

@@ -1,8 +1,9 @@
 //! Per-blob and per-patchmap re-verification checks: A6, A7, A8, A11, A18 and A20.
 //!
-//! `P1`/`P2` below are the optional persistent records' own checks. They are
-//! absent for a bundle written before the records existed, and byte-exact for
-//! one that carries them.
+//! `P1`/`P2` below are the persistent records' own checks. They are absent for
+//! a bundle that honestly captured no dispatcher routes (all three record
+//! rows are `unavailable`), byte-exact for one that carries them, and red for
+//! one whose matrix claims a record class was `captured` without the records.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -16,6 +17,9 @@ use crate::blobs::{ChunkIndex, IndexedBlob};
 use crate::emit::index::Manifest;
 use crate::emit::selfcheck::Assertion;
 use crate::hash;
+use crate::select::Class;
+
+use girpr_dispatch::{private_key_fingerprint, private_key_from_bytes};
 
 use super::bundle::Bundle;
 use super::materialize;
@@ -767,17 +771,33 @@ fn read_dispatch_record(
 /// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the
 /// capture also calls — one spelling of the read → parse → compare, so
 /// `verify`'s rows cannot disagree with the capture's recorded ones.
-/// P1 and P2: the optional persistent records, **verified byte-exactly when
-/// present and skipped when absent**.
+/// P1 and P2: the persistent records, **verified byte-exactly when present,
+/// absent only when no record class was captured, and red when the matrix
+/// claims a capture the bundle cannot back up**.
 ///
 /// A16 already re-hashes every file in `checksums.json`, including these; these
-/// rows check the *records' own claims* about those files — the envelope's
-/// fingerprint and the manifests'/blobs' digests — so a record that was edited
-/// to name different bytes cannot pass just because its edit was re-checksummed.
+/// rows check the *records' own claims* about those files — the key's public
+/// DER fingerprint, the envelope's digests and length, and the manifests' and
+/// blobs' digests — so a record that was edited to name different bytes cannot
+/// pass just because its edit was re-checksummed.
+///
+/// Every path in either record is checked with [`crate::paths::relative_path_problem`]
+/// before it is joined onto the bundle root. A record is a document someone
+/// may have edited; a `..`, absolute or backslash path in it must be reported
+/// as a failed assertion, never used as the destination of a read.
 pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
     const P1: &str = "the dispatch record's digests match its byte-exact envelope";
     const P2: &str = "the persistent index's digests match its raw manifests and blobs";
+    const KINDS: [&str; 3] = ["res", "data", "silence_data"];
     let mut rows = Vec::new();
+
+    // The records are optional only in the honest sense: a capture with no
+    // dispatcher routes says `unavailable` for all three record classes and
+    // writes nothing. A class marked `captured` without them is a broken claim.
+    let required = manifest
+        .matrix
+        .iter()
+        .any(|r| r.status == "captured" && Class::parse(&r.class).is_ok_and(Class::is_record));
 
     let record_path = root.join("dispatch").join("record.json");
     if record_path.is_file() {
@@ -790,21 +810,30 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                 &actual,
             )),
             Ok(record) => {
-                // The envelope is a path from a fixture someone may have edited.
-                // Refuse `..`, absolute, backslash and drive paths before the
-                // join, exactly as the replay server does.
-                if let Some(problem) = crate::paths::relative_path_problem(&record.envelope) {
-                    rows.push(Assertion::fail(
-                        "P1",
-                        P1,
-                        "dispatch/record.json",
-                        "a bundle-relative envelope path",
-                        &problem,
+                let mut problems = Vec::new();
+                let kinds: Vec<&str> = record
+                    .decoded
+                    .descriptors
+                    .iter()
+                    .map(|d| d.kind.as_str())
+                    .collect();
+                if kinds != KINDS {
+                    problems.push(format!(
+                        "descriptor kinds {kinds:?} instead of res/data/silence_data"
                     ));
-                } else {
-                    let envelope = root.join(&record.envelope);
-                    let mut problems = Vec::new();
-                    let actual = match std::fs::read(&envelope) {
+                }
+
+                // Both record-supplied paths are checked before either join.
+                let envelope =
+                    if let Some(problem) = crate::paths::relative_path_problem(&record.envelope) {
+                        problems.push(format!("envelope path: {problem}"));
+                        None
+                    } else {
+                        Some(root.join(&record.envelope))
+                    };
+                let mut actual = String::from("<no readable envelope>");
+                if let Some(envelope) = envelope {
+                    actual = match std::fs::read(&envelope) {
                         Ok(b) => {
                             if b.len() as u64 != record.ciphertext_bytes {
                                 problems.push(format!(
@@ -820,7 +849,6 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                             format!("unreadable: {e}")
                         }
                     };
-                    let expected = format!("{} {}", record.envelope_md5, record.envelope_sha256);
                     let listed = manifest
                         .files
                         .iter()
@@ -830,17 +858,52 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                     if listed != record.envelope_md5 {
                         problems.push(format!("envelope md5 listed as {listed}"));
                     }
-                    rows.push(if actual == expected && problems.is_empty() {
-                        Assertion::pass("P1", P1, &record.envelope, &expected)
-                    } else {
-                        if actual != expected {
-                            problems.push(format!("digests {actual} instead of {expected}"));
-                        }
-                        Assertion::fail("P1", P1, &record.envelope, &expected, &problems.join("; "))
-                    });
                 }
+
+                if let Some(problem) = crate::paths::relative_path_problem(&record.key_file) {
+                    problems.push(format!("key_file path: {problem}"));
+                } else {
+                    match std::fs::read(root.join(&record.key_file)) {
+                        Ok(raw) => {
+                            match private_key_from_bytes(&raw)
+                                .and_then(|key| private_key_fingerprint(&key))
+                            {
+                                Ok(fingerprint)
+                                    if fingerprint
+                                        .eq_ignore_ascii_case(&record.key_fingerprint) => {}
+                                Ok(fingerprint) => problems.push(format!(
+                                    "key_fingerprint {} != {} (SHA-256 of the key's public DER)",
+                                    record.key_fingerprint, fingerprint
+                                )),
+                                Err(e) => problems.push(format!(
+                                    "{} is neither a PKCS#1 PEM nor an RSAKeyValue XML key: {e}",
+                                    record.key_file
+                                )),
+                            }
+                        }
+                        Err(e) => problems.push(format!("key_file unreadable: {e}")),
+                    }
+                }
+
+                let expected = format!("{} {}", record.envelope_md5, record.envelope_sha256);
+                rows.push(if actual == expected && problems.is_empty() {
+                    Assertion::pass("P1", P1, &record.envelope, &expected)
+                } else {
+                    if actual != expected {
+                        problems.push(format!("digests {actual} instead of {expected}"));
+                    }
+                    Assertion::fail("P1", P1, &record.envelope, &expected, &problems.join("; "))
+                });
             }
         }
+    } else if required {
+        rows.push(Assertion::fail(
+            "P1",
+            P1,
+            "dispatch/record.json",
+            "a dispatch record because a persistent_* class is captured",
+            "absent",
+        ));
     }
 
     let index_path = root.join("persistent").join("index.json");
@@ -879,6 +942,12 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                 crate::SCHEMA_VERSION
             ));
         }
+        let kinds: Vec<&str> = index.manifests.iter().map(|m| m.kind.as_str()).collect();
+        if kinds != KINDS {
+            problems.push(format!(
+                "manifest kinds {kinds:?} instead of res/data/silence_data"
+            ));
+        }
         let mut files: Vec<(&String, u64, &String)> = index
             .manifests
             .iter()
@@ -886,6 +955,11 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
             .collect();
         files.extend(index.blobs.iter().map(|f| (&f.path, f.bytes, &f.md5)));
         for (path, bytes, md5) in files {
+            // Every path here came from a document someone may have edited.
+            if let Some(problem) = crate::paths::relative_path_problem(path) {
+                problems.push(format!("{path}: {problem}"));
+                continue;
+            }
             match std::fs::read(root.join(path)) {
                 Ok(body) => {
                     if body.len() as u64 != bytes || hash::md5_hex(&body) != *md5 {
@@ -902,6 +976,31 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                 problems.push(format!(
                     "{path} is not listed with that md5 in MANIFEST.json"
                 ));
+            }
+        }
+        for blob in &index.blobs {
+            if !kinds.contains(&blob.source_kind.as_str()) {
+                problems.push(format!(
+                    "{} source_kind {:?} is not a manifest kind",
+                    blob.path, blob.source_kind
+                ));
+            }
+        }
+        for class in manifest
+            .matrix
+            .iter()
+            .filter(|r| r.status == "captured")
+            .filter_map(|r| Class::parse(&r.class).ok())
+            .filter(|c| c.is_record())
+        {
+            let kind = match class {
+                Class::PersistentRes => "res",
+                Class::PersistentData => "data",
+                Class::PersistentSilence => "silence_data",
+                _ => unreachable!("only record classes reach this loop"),
+            };
+            if !index.blobs.iter().any(|b| b.source_kind == kind) {
+                problems.push(format!("{} is captured but has no blob", class.id()));
             }
         }
         rows.push(if problems.is_empty() {
@@ -924,6 +1023,14 @@ pub fn check_persistent_records(root: &Path, manifest: &Manifest) -> Vec<Asserti
                 &problems.join("; "),
             )
         });
+    } else if required {
+        rows.push(Assertion::fail(
+            "P2",
+            P2,
+            "persistent/index.json",
+            "a persistent index because a persistent_* class is captured",
+            "absent",
+        ));
     }
     rows
 }
@@ -1088,6 +1195,16 @@ mod tests {
         serde_json::from_slice(&raw).expect("parse MANIFEST.json")
     }
 
+    /// The committed synthetic key and its public-DER fingerprint, so a test
+    /// record can carry facts that P1 re-derives from bytes rather than a
+    /// placeholder string.
+    fn test_key() -> (Vec<u8>, String) {
+        let raw = gircap_test_support::persistent_fixture("test_key.pem");
+        let key = private_key_from_bytes(&raw).expect("the committed key parses");
+        let fingerprint = private_key_fingerprint(&key).expect("fingerprint");
+        (raw, fingerprint)
+    }
+
     /// A record whose envelope digests match, for the cases where the guard is
     /// the *only* thing standing between a bad path and a green P1 row.
     fn valid_record(envelope: &str, body: &[u8]) -> crate::persistent::DispatchRecord {
@@ -1096,6 +1213,7 @@ mod tests {
         let (bytes, md5, sha256) = crate::persistent::digest(body);
         let envelope_md5 = md5.clone();
         let envelope_sha256 = sha256.clone();
+        let (_, fingerprint) = test_key();
         let descriptor = |kind: &str, name: &str| Descriptor {
             kind: kind.into(),
             remote_name: name.into(),
@@ -1108,7 +1226,7 @@ mod tests {
             version: "9.9".into(),
             query_version: "OSRELWin9.9.0".into(),
             dispatch_url: "http://127.0.0.1:1/query_cur_region".into(),
-            key_fingerprint: "test-fingerprint".into(),
+            key_fingerprint: fingerprint,
             key_file: "dispatch/key.pem".into(),
             seed: "test-seed".into(),
             envelope: envelope.into(),
@@ -1149,6 +1267,19 @@ mod tests {
             root,
             &serde_json::to_vec_pretty(record).expect("serialize record"),
         );
+        // P1 re-derives the fingerprint from the key named by the record, so
+        // the key the record points at has to be on disk and in the inventory.
+        let (key, _) = test_key();
+        let key_path = root.join(&record.key_file);
+        std::fs::create_dir_all(key_path.parent().expect("has a parent")).expect("key dir");
+        std::fs::write(&key_path, &key).expect("write key");
+        manifest.files.push(crate::emit::index::FileEntry {
+            path: record.key_file.clone(),
+            bytes: key.len() as u64,
+            md5: hash::md5_hex(&key),
+            sha256: hash::sha256_hex(&key),
+            encoding: hash::Encoding::Identity,
+        });
         let full = root.join(&record.envelope);
         std::fs::create_dir_all(full.parent().expect("has a parent")).expect("envelope dir");
         std::fs::write(&full, body).expect("write envelope");
@@ -1167,9 +1298,11 @@ mod tests {
     }
 
     /// Make P2 green so the test says something about its *presence*, not about
-    /// a second failure masking the first.
-    fn write_persistent_index(root: &Path, manifest: &mut Manifest) {
-        use crate::persistent::{ManifestFile, PersistentIndex};
+    /// a second failure masking the first. `blobs` is `(source_kind, path)`;
+    /// the body of each is derived from its path, so a test can mutate the
+    /// record without having to recompute digests by hand.
+    fn write_persistent_index(root: &Path, manifest: &mut Manifest, blobs: &[(&str, &str)]) {
+        use crate::persistent::{BlobFile, ManifestFile, PersistentIndex};
 
         std::fs::create_dir_all(root.join("persistent")).expect("persistent dir");
         let mut files = Vec::new();
@@ -1196,16 +1329,58 @@ mod tests {
                 md5,
             });
         }
+        let mut blob_rows = Vec::new();
+        for (kind, path) in blobs {
+            let body = format!("blob bytes at {path}\n").into_bytes();
+            // A deliberately unsafe path is a record claim, not a file this
+            // helper should write: P2 must refuse it before any join.
+            if crate::paths::relative_path_problem(path).is_none() {
+                std::fs::create_dir_all(root.join(path).parent().expect("has a parent"))
+                    .expect("blob dir");
+                std::fs::write(root.join(path), &body).expect("write blob body");
+                manifest.files.push(crate::emit::index::FileEntry {
+                    path: (*path).into(),
+                    bytes: body.len() as u64,
+                    md5: hash::md5_hex(&body),
+                    sha256: hash::sha256_hex(&body),
+                    encoding: hash::Encoding::Identity,
+                });
+            }
+            blob_rows.push(BlobFile {
+                remote_name: (*path).into(),
+                source_kind: (*kind).into(),
+                capture_id: "test".into(),
+                path: (*path).into(),
+                bytes: body.len() as u64,
+                md5: hash::md5_hex(&body),
+            });
+        }
         let index = PersistentIndex {
             schema_version: crate::SCHEMA_VERSION,
             manifests: files.try_into().expect("three manifests"),
-            blobs: Vec::new(),
+            blobs: blob_rows,
         };
         std::fs::write(
             root.join("persistent/index.json"),
             serde_json::to_vec_pretty(&index).expect("serialize index"),
         )
         .expect("write index");
+    }
+
+    /// Mark one record class as captured in the in-memory manifest, the way a
+    /// producer's matrix would. Verification reads the matrix it is given.
+    fn mark_captured(manifest: &mut Manifest, class: Class) {
+        manifest.matrix.push(crate::emit::index::ManifestMatrixRow {
+            class: class.id().into(),
+            status: "captured".into(),
+            capture_id: Some(class.id().into()),
+            path: Some(format!("persistent/blobs/{}", class.id())),
+            matching_field: None,
+            covered_by: None,
+            also_satisfies: None,
+            reason: None,
+            candidates_considered: Some(1),
+        });
     }
 
     /// A bad `dispatch/record.json` used to `return` a single P1 row, hiding
@@ -1224,7 +1399,7 @@ mod tests {
         for raw in bad_raws {
             let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-p2-malformed");
             let mut manifest = read_manifest(&root);
-            write_persistent_index(&root, &mut manifest);
+            write_persistent_index(&root, &mut manifest, &[]);
             write_dispatch_raw(&root, &raw);
 
             let rows = check_persistent_records(&root, &manifest);
@@ -1243,7 +1418,7 @@ mod tests {
     fn traversal_envelope_is_refused() {
         let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-traversal");
         let mut manifest = read_manifest(&root);
-        write_persistent_index(&root, &mut manifest);
+        write_persistent_index(&root, &mut manifest, &[]);
         let body = b"escaped envelope bytes";
         write_dispatch(
             &root,
@@ -1273,7 +1448,7 @@ mod tests {
     fn ciphertext_bytes_must_match_the_envelope_length() {
         let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-ciphertext");
         let mut manifest = read_manifest(&root);
-        write_persistent_index(&root, &mut manifest);
+        write_persistent_index(&root, &mut manifest, &[]);
         let body = b"envelope bytes";
         let mut record = valid_record("dispatch/response.json", body);
         record.ciphertext_bytes += 1;
@@ -1294,6 +1469,169 @@ mod tests {
             rows[0].actual.contains("ciphertext_bytes"),
             "the failure should name the mismatched claim: {:?}",
             rows[0].actual
+        );
+    }
+
+    /// An ordinary capture has no dispatcher routes and says `unavailable` in
+    /// all three record rows. It must stay green with no record files at all.
+    #[test]
+    fn an_unavailable_matrix_needs_no_records() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-absent-ok");
+        let mut manifest = read_manifest(&root);
+        for class in Class::PERSISTENT {
+            manifest.matrix.push(crate::emit::index::ManifestMatrixRow {
+                class: class.id().into(),
+                status: "unavailable".into(),
+                capture_id: None,
+                path: None,
+                matching_field: None,
+                covered_by: None,
+                also_satisfies: None,
+                reason: Some("no dispatcher route".into()),
+                candidates_considered: Some(0),
+            });
+        }
+        assert!(
+            check_persistent_records(&root, &manifest).is_empty(),
+            "an honest unavailable matrix writes no P1/P2 rows"
+        );
+    }
+
+    /// The matrix is a claim. A `captured` record class without the records is
+    /// a failed P1 and P2 even though the bundle has no other broken bytes.
+    #[test]
+    fn a_captured_record_class_without_records_fails_both_rows() {
+        for class in Class::PERSISTENT {
+            let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-captured-absent");
+            let mut manifest = read_manifest(&root);
+            mark_captured(&mut manifest, class);
+            let rows = check_persistent_records(&root, &manifest);
+            assert_eq!(
+                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                ["P1", "P2"],
+                "both verdicts are present: {rows:?}"
+            );
+            assert!(!rows[0].ok && !rows[1].ok, "{rows:?}");
+            assert!(rows[0].actual.contains("absent"), "{rows:?}");
+            assert!(rows[1].actual.contains("absent"), "{rows:?}");
+        }
+    }
+
+    /// The key file is part of P1: a record that names a key whose public DER
+    /// hashes to something else is a broken claim about that key.
+    #[test]
+    fn a_wrong_key_fingerprint_fails_p1() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-fingerprint");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(&root, &mut manifest, &[]);
+        let body = b"envelope bytes";
+        let mut record = valid_record("dispatch/response.json", body);
+        record.key_fingerprint = "00".repeat(32);
+        write_dispatch(&root, &mut manifest, &record, body);
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(!rows[0].ok && rows[1].ok, "{rows:?}");
+        assert!(rows[0].actual.contains("key_fingerprint"), "{rows:?}");
+    }
+
+    /// The key must parse as one of girpr's two spellings, not merely exist.
+    #[test]
+    fn an_unparseable_key_file_fails_p1() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-bad-key");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(&root, &mut manifest, &[]);
+        let body = b"envelope bytes";
+        write_dispatch(
+            &root,
+            &mut manifest,
+            &valid_record("dispatch/response.json", body),
+            body,
+        );
+        std::fs::write(root.join("dispatch/key.pem"), b"not a key").expect("replace the key");
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(!rows[0].ok && rows[1].ok, "{rows:?}");
+        assert!(
+            rows[0].actual.contains("PEM") || rows[0].actual.contains("XML"),
+            "{rows:?}"
+        );
+    }
+
+    /// A record that describes a fourth manifest kind, or misspells one, is
+    /// not a record girpr can replay.
+    #[test]
+    fn wrong_descriptor_kinds_fail_p1() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p1-kinds");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(&root, &mut manifest, &[]);
+        let body = b"envelope bytes";
+        let mut record = valid_record("dispatch/response.json", body);
+        record.decoded.descriptors[2].kind = "silence".into();
+        write_dispatch(&root, &mut manifest, &record, body);
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(!rows[0].ok && rows[1].ok, "{rows:?}");
+        assert!(rows[0].actual.contains("descriptor kinds"), "{rows:?}");
+    }
+
+    /// Every blob the index carries has to name one of its three manifests,
+    /// even when its own bytes and digests are intact.
+    #[test]
+    fn an_unknown_blob_source_kind_fails_p2() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p2-source-kind");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(
+            &root,
+            &mut manifest,
+            &[("bogus", "persistent/blobs/bogus.bin")],
+        );
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok, "{rows:?}");
+        assert!(rows[0].actual.contains("source_kind"), "{rows:?}");
+    }
+
+    /// A class marked `captured` must have at least one blob of its own kind;
+    /// shipping only the other two manifests' blobs is not a capture of it.
+    #[test]
+    fn a_captured_class_with_no_blob_fails_p2() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p2-no-blob");
+        let mut manifest = read_manifest(&root);
+        mark_captured(&mut manifest, Class::PersistentSilence);
+        write_persistent_index(&root, &mut manifest, &[("res", "persistent/blobs/res.bin")]);
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(!rows[0].ok, "the record is absent: {rows:?}");
+        assert!(!rows[1].ok, "the index cannot prove the capture: {rows:?}");
+        assert!(
+            rows[1].actual.contains("persistent_silence is captured"),
+            "{rows:?}"
+        );
+    }
+
+    /// Path safety covers the index's paths too, not just the record's
+    /// envelope: a blob path that escapes the root must never be joined.
+    #[test]
+    fn traversal_blob_path_is_refused() {
+        let (_scratch, root) = gircap_test_support::minimal_bundle("gircap-p2-traversal");
+        let mut manifest = read_manifest(&root);
+        write_persistent_index(
+            &root,
+            &mut manifest,
+            &[("res", "../persistent/blobs/escape.bin")],
+        );
+
+        let rows = check_persistent_records(&root, &manifest);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok, "{rows:?}");
+        assert!(
+            rows[0].actual.contains("escapes the bundle root"),
+            "{rows:?}"
         );
     }
 }

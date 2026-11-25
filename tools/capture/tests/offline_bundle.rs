@@ -441,20 +441,39 @@ fn manifest() -> Manifest {
             bytes_downloaded: 0,
             bytes_on_disk: 0,
         },
-        matrix: rows
-            .iter()
-            .map(|(class, status, _)| ManifestMatrixRow {
-                class: (*class).into(),
-                status: (*status).into(),
-                capture_id: None,
-                path: Some(DLL.into()),
-                matching_field: Some("game".into()),
-                covered_by: None,
-                also_satisfies: None,
-                reason: Some("no candidate in the pool".into()),
-                candidates_considered: Some(0),
-            })
-            .collect(),
+        matrix: {
+            // Schema 4 requires all nine rows. This offline capture had no
+            // dispatcher routes, so the three record classes are honestly
+            // `unavailable` and the bundle carries no records.
+            let mut matrix: Vec<ManifestMatrixRow> = rows
+                .iter()
+                .map(|(class, status, _)| ManifestMatrixRow {
+                    class: (*class).into(),
+                    status: (*status).into(),
+                    capture_id: None,
+                    path: Some(DLL.into()),
+                    matching_field: Some("game".into()),
+                    covered_by: None,
+                    also_satisfies: None,
+                    reason: Some("no candidate in the pool".into()),
+                    candidates_considered: Some(0),
+                })
+                .collect();
+            matrix.extend(gircap::select::Class::PERSISTENT.iter().map(|class| {
+                ManifestMatrixRow {
+                    class: class.id().into(),
+                    status: "unavailable".into(),
+                    capture_id: None,
+                    path: None,
+                    matching_field: None,
+                    covered_by: None,
+                    also_satisfies: None,
+                    reason: Some("no dispatcher route in this offline fixture".into()),
+                    candidates_considered: Some(0),
+                }
+            }));
+            matrix
+        },
         files: Vec::new(),
         totals_by_set: BTreeMap::new(),
     }

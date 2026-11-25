@@ -1,9 +1,11 @@
 //! The optional `dispatch/` and `persistent/` records.
 //!
-//! These are an **additive extension of schema 3**: an older bundle has neither
-//! directory and still verifies, while a bundle that carries them has every
-//! byte checked exactly like every other bundle file (`MANIFEST.json → files[]`
-//! and `verify/checksums.json` are generated from what the writers return).
+//! These are a **conditional part of schema 4**: a bundle whose three record
+//! rows are honestly `unavailable` has neither directory and still verifies,
+//! while a bundle that carries them has every byte checked exactly like every
+//! other bundle file (`MANIFEST.json → files[]` and `verify/checksums.json` are
+//! generated from what the writers return), and a bundle that marks a record
+//! class `captured` without them fails verification.
 //!
 //! The dispatcher envelope is a byte-exact response body; the record beside it
 //! states the key fingerprint, seed and version it was queried with, and the

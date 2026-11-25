@@ -82,7 +82,7 @@ pub fn dispatch_failure(e: impl fmt::Display) -> RunFailure {
 
 /// The record schema version this binary accepts. The capture tool owns the
 /// writer; a different value is a usage error at the flag, never a fallback.
-pub const DISPATCH_RECORD_SCHEMA_VERSION: u64 = 3;
+pub const DISPATCH_RECORD_SCHEMA_VERSION: u64 = 4;
 const DISPATCH_KEY_BLOCK_BYTES: usize = 256;
 
 /// The bundle record whose digest facts are checked against the envelope.
