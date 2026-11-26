@@ -9,7 +9,7 @@
 //! [`verify_bytes`] is the convenience form for in-memory bytes (manifests and
 //! unit tests).
 
-use girpr_digest::{Md5, md5_hex, xxhash64_hex};
+use girpr_digest::{Md5, md5_hex};
 
 use crate::value::PersistentRow;
 
@@ -137,11 +137,13 @@ pub fn verify_bytes(row: &PersistentRow, bytes: &[u8]) -> DigestVerdict {
     verify_observed(row, &ObservedDigest::of_bytes(bytes))
 }
 
-/// The numeric XXH64 a hex spelling denotes. `xxhash64_hex` emits exactly 16
-/// hex digits, so the parse cannot fail for our own output; a zero fallback is
-/// only there to avoid a panic in a leaf with no error policy of its own.
+/// The numeric XXH64 (seed 0) of `bytes`. This is the same value
+/// `xxhash64_hex` spells, taken straight from the hasher with no hex round-trip.
 fn xxhash64_u64(bytes: &[u8]) -> u64 {
-    u64::from_str_radix(&xxhash64_hex(bytes), 16).unwrap_or_default()
+    use std::hash::Hasher as _;
+    let mut hasher = xxhash_rust::xxh64::Xxh64::new(0);
+    hasher.update(bytes);
+    hasher.finish()
 }
 
 #[cfg(test)]

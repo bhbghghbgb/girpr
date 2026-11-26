@@ -96,13 +96,14 @@ fn into_row(wire: WireRow, line: usize) -> Result<PersistentRow, ParseError> {
     })
 }
 
-/// The manifest spells XXH64 as 16 lowercase hex digits: the big-endian bytes
-/// of the 64-bit value, the same spelling `girpr_digest::xxhash64_hex` emits.
-fn parse_hash_hex(hex: &str) -> Result<u64, String> {
-    if hex.len() != 16 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("hash is not 16 hex digits: {hex:?}"));
-    }
-    u64::from_str_radix(hex, 16).map_err(|e| format!("hash {hex:?} is not a u64: {e}"))
+/// The manifest spells XXH64 as 16 hex digits: the big-endian bytes of the
+/// 64-bit value, the same spelling `girpr_digest::xxhash64_hex` emits. `hex`
+/// accepts either case and enforces the exact width.
+fn parse_hash_hex(text: &str) -> Result<u64, String> {
+    let mut bytes = [0u8; 8];
+    hex::decode_to_slice(text, &mut bytes)
+        .map(|()| u64::from_be_bytes(bytes))
+        .map_err(|_| format!("hash is not 16 hex digits: {text:?}"))
 }
 
 #[cfg(test)]

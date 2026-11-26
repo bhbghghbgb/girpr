@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_aux::field_attributes::deserialize_number_from_string;
 
 use crate::retry::{BackoffPolicy, Retry, retry};
 use girpr_model::region::Region as Biz;
@@ -229,47 +230,6 @@ pub struct PatchManifestMeta {
     pub manifest_download: ManifestUrl,
 }
 
-/// Deserialize an API size from either a JSON number or a JSON string.
-///
-/// Any `i64` is accepted, including a negative one. These sizes are hints, not
-/// promises; the consumers clamp a negative value to zero instead of treating
-/// the whole build as unparseable.
-fn num_from_string<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::{self, Visitor};
-
-    /// Parse the string shape, keeping the parser's reason so the serde error
-    /// names both the offending value and why it was rejected.
-    fn parse_size(v: &str) -> std::result::Result<i64, String> {
-        v.parse::<i64>()
-            .map_err(|e| format!("size {v:?} is not an integer that fits an i64: {e}"))
-    }
-
-    struct V;
-    impl Visitor<'_> for V {
-        type Value = i64;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("int or string int")
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<i64, E> {
-            Ok(v)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<i64, E> {
-            i64::try_from(v)
-                .map_err(|_| E::custom(format!("size {v} is larger than i64::MAX ({})", i64::MAX)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
-            parse_size(v).map_err(E::custom)
-        }
-        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
-            parse_size(&v).map_err(E::custom)
-        }
-    }
-    deserializer.deserialize_any(V)
-}
-
 /// A manifest's sizes as the API reports them.
 ///
 /// Both sizes are hints, not promises. `uncompressed_size` is read (it sizes
@@ -284,9 +244,9 @@ pub struct ManifestFile {
     pub checksum: String,
     // Deserialized for completeness; the manifest fetch uses `uncompressed_size`.
     #[allow(dead_code)]
-    #[serde(default, deserialize_with = "num_from_string")]
+    #[serde(default, deserialize_with = "deserialize_number_from_string")]
     pub compressed_size: i64,
-    #[serde(default, deserialize_with = "num_from_string")]
+    #[serde(default, deserialize_with = "deserialize_number_from_string")]
     pub uncompressed_size: i64,
 }
 
@@ -770,7 +730,7 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct Size {
-        #[serde(deserialize_with = "num_from_string")]
+        #[serde(deserialize_with = "deserialize_number_from_string")]
         n: i64,
     }
 
@@ -779,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn num_from_string_both_shapes() {
+    fn number_or_string_sizes_keep_the_full_i64_range() {
         let a = parse(r#"{"n":12}"#).unwrap();
         let b = parse(r#"{"n":"34"}"#).unwrap();
         assert_eq!((a.n, b.n), (12, 34));
@@ -789,30 +749,13 @@ mod tests {
         let max_str = parse(r#"{"n":"9223372036854775807"}"#).unwrap();
         assert_eq!((max_num.n, max_str.n), (i64::MAX, i64::MAX));
 
-        // One past the top of the range must not wrap into a negative size.
-        let above = parse(r#"{"n":9223372036854775808}"#)
-            .unwrap_err()
-            .to_string();
-        assert!(above.contains("9223372036854775808"), "{above}");
-
+        // One past the top of the range, and a string that is not a number,
+        // are rejected rather than wrapped into a negative size. The exact
+        // serde error wording is the library's, not an output contract.
+        assert!(parse(r#"{"n":9223372036854775808}"#).is_err());
         assert!(parse(r#"{"n":18446744073709551615}"#).is_err());
         assert!(parse(r#"{"n":"9223372036854775808"}"#).is_err());
-
-        // A string that does not parse keeps the parser's reason: the message
-        // must say *why* the value was rejected, not just that it was.
-        let not_a_number = parse(r#"{"n":"abc"}"#).unwrap_err().to_string();
-        assert!(
-            not_a_number.contains("invalid digit found in string"),
-            "{not_a_number}"
-        );
-        let too_large = parse(r#"{"n":"9223372036854775808"}"#)
-            .unwrap_err()
-            .to_string();
-        assert!(too_large.contains("9223372036854775808"), "{too_large}");
-        assert!(
-            too_large.contains("number too large to fit in target type"),
-            "{too_large}"
-        );
+        assert!(parse(r#"{"n":"abc"}"#).is_err());
     }
 
     /// A negative size is accepted rather than rejected: it is a hint, and the

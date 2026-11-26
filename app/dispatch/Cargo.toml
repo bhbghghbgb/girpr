@@ -21,6 +21,9 @@ rsa = { version = "0.10.0", features = ["pkcs1v15"] }
 brotli = "9.0.0"
 base64 = "0.23.1"
 prost = "0.14.6"
+# The dispatcher key arrives as .NET `RSAKeyValue` XML; the `serialize`
+# feature is what provides `quick_xml::de::from_str`.
+quick-xml = { version = "0.42.0", features = ["serialize"] }
 # The `--biz` values and the digest/hex spelling come from the existing
 # value/mechanics leaves. No `girpr-fetch`: its transport is this crate's own
 # injectable seam, and depending on it would close the graph.

@@ -252,18 +252,21 @@ pub fn unwrap_metadata_field(
 /// InverseQ are deliberately not read: the key derives its own CRT values from
 /// the five components it does need.
 pub fn rsa_key_from_xml(xml: &str) -> Result<PrivateKey> {
-    fn component(xml: &str, tag: &str) -> Result<Vec<u8>> {
-        let open = format!("<{tag}>");
-        let close = format!("</{tag}>");
-        let start = xml
-            .find(&open)
-            .ok_or_else(|| DispatchError::Metadata(format!("key XML has no {tag}")))?
-            + open.len();
-        let end = xml[start..]
-            .find(&close)
-            .ok_or_else(|| DispatchError::Metadata(format!("key XML has no closing {tag}")))?
-            + start;
-        decode_base64(xml[start..end].trim())
+    /// The five components .NET spells in an `RSAKeyValue`. `InverseQ` and the
+    /// other CRT fields are deliberately absent: serde leaves unknown elements
+    /// unread, and the key derives its own CRT values from these five.
+    #[derive(serde::Deserialize)]
+    struct RsaKeyValue {
+        #[serde(rename = "Modulus")]
+        modulus: String,
+        #[serde(rename = "Exponent")]
+        exponent: String,
+        #[serde(rename = "D")]
+        d: String,
+        #[serde(rename = "P")]
+        p: String,
+        #[serde(rename = "Q")]
+        q: String,
     }
 
     fn uint(bytes: &[u8], name: &str) -> Result<BoxedUint> {
@@ -278,11 +281,13 @@ pub fn rsa_key_from_xml(xml: &str) -> Result<PrivateKey> {
             .map_err(|e| DispatchError::Metadata(format!("bad {name} in key XML: {e}")))
     }
 
-    let n_bytes = component(xml, "Modulus")?;
-    let e_bytes = component(xml, "Exponent")?;
-    let d_bytes = component(xml, "D")?;
-    let p_bytes = component(xml, "P")?;
-    let q_bytes = component(xml, "Q")?;
+    let values: RsaKeyValue = quick_xml::de::from_str(xml)
+        .map_err(|e| DispatchError::Metadata(format!("invalid key XML: {e}")))?;
+    let n_bytes = decode_base64(&values.modulus)?;
+    let e_bytes = decode_base64(&values.exponent)?;
+    let d_bytes = decode_base64(&values.d)?;
+    let p_bytes = decode_base64(&values.p)?;
+    let q_bytes = decode_base64(&values.q)?;
     let key = PrivateKey::from_components(
         uint(&n_bytes, "Modulus")?,
         uint(&e_bytes, "Exponent")?,

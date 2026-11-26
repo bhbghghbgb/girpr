@@ -7,16 +7,17 @@
 
 use crate::{DispatchError, Result};
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 use rsa::{PrivateKey, pkcs1v15::Pkcs1v15Encrypt, traits::PublicKeyParts};
 
-/// Decode standard base64, tolerating the omitted padding that some Collapse
-/// fields and mock bodies use.
+/// Decode standard base64, tolerating both padding shapes: some Collapse
+/// fields and mock bodies omit `=`, while the XML key components keep it.
+/// Whitespace is dropped before decoding either shape.
 pub fn decode_base64(text: &str) -> Result<Vec<u8>> {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    let padded = format!("{}{}", compact, "=".repeat((4 - compact.len() % 4) % 4));
-    STANDARD
-        .decode(padded.as_bytes())
+    STANDARD_NO_PAD
+        .decode(compact.as_bytes())
+        .or_else(|_| STANDARD.decode(compact.as_bytes()))
         .map_err(|e| DispatchError::Crypto(format!("invalid base64: {e}")))
 }
 
