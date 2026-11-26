@@ -3,32 +3,38 @@
 //!
 //! ## What it is, and what it is not
 //!
-//! A **local measurement aid**, not a gate. It prints numbers and asserts
-//! nothing about them: there is no timing assertion anywhere in this file, a
-//! slow disk is not a failure, and nothing in CI runs this target. What it
-//! makes checkable is a claim about where a run's time goes — that a tree of
-//! many small files is dominated by the per-entry cost of the walk, and a tree
-//! of few large files by the bytes.
+//! A **local measurement aid**, not a gate. criterion owns the harness: it
+//! warms up, gathers statistics and can compare against a saved baseline,
+//! but it asserts no timing bound — a slow disk is not a failure and nothing
+//! in CI runs this target as a gate. What it makes checkable is a claim about
+//! where a run's time goes: that a tree of many small files is dominated by
+//! the per-entry cost of the walk, and a tree of few large files by the bytes.
+//!
+//! Two things are measured per shape. `walk` reports throughput in walked
+//! files and tree bytes; `hash` reports throughput in MiB/s for one
+//! representative file. The old hand-rolled `files_per_s`/`mib_per_s` lines
+//! become criterion's throughput estimates, with warm-up, distributions and
+//! regression output in place of a single hand-computed ratio.
 //!
 //! ## The fixture
 //!
-//! Each shape is built in its own scratch directory ([`TempDir`]), which
-//! removes the tree when the value goes out of scope, so nothing is left
-//! behind however the run ends. `GIRSYNC_BENCH_SCALE` multiplies the fixture
-//! size; the default is `1`, and a value that is not a positive whole number
-//! is read as `1`.
+//! Each shape is built in its own scratch directory ([`TempDir`]), which is
+//! removed when the value goes out of scope, so nothing is left behind
+//! however the run ends. Fixture construction is the `iter_batched` setup:
+//! it runs outside the measured region, so only the walk or the hash is
+//! timed. `GIRSYNC_BENCH_SCALE` multiplies the fixture size; the default is
+//! `1`, and a value that is not a positive whole number is read as `1`.
 //!
 //! The walk is capped at [`WALK_DEPTH`] levels, and the deep shape's chain is
 //! deeper than that — 200 levels at scale 1 — so the deep shape's numbers are
-//! the walk of the chain's top 64 levels. `fixture_files` and `fixture_bytes`
-//! say how much the tree holds, beside the `files` and `bytes` the walk saw.
+//! the walk of the chain's top 64 levels.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use anyhow::{Context, Result};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use girpr_tempdir::TempDir;
 use girsync::hash::{AlgoSet, HashAlg, hash_file};
 use girsync::scan::walk_live;
@@ -44,7 +50,7 @@ const WALK_DEPTH: usize = 64;
 /// **2 000 at scale 1, not 10 000.** Writing the tree is the expensive half
 /// of this shape — a file creation costs about 0.7 ms on an ordinary Windows
 /// host, so ten thousand of them is nearly seven seconds before the walk is
-/// even timed, and the whole run then takes longer than a measurement should.
+/// even measured, and the whole run then takes longer than a measurement should.
 /// Two thousand is a fifth of that and still walks for long enough to time.
 /// `GIRSYNC_BENCH_SCALE` multiplies it, so a larger run is one variable away.
 const TINY_FILES: u64 = 2_000;
@@ -72,25 +78,17 @@ const DEEP_BYTES: usize = 128;
 const LARGE_CHUNK: usize = 1024 * 1024;
 
 /// One tree the walk is measured over.
-struct Shape {
-    /// The name the line is printed under.
-    name: &'static str,
+///
+/// The scratch guard is the first field so it is dropped when the fixture is:
+/// the tree stays alive for the whole measured routine and is removed
+/// however the benchmark ends.
+struct Fixture {
+    /// Owns the scratch tree; kept solely for its `Drop`.
+    _dir: TempDir,
     /// The tree's root.
     root: PathBuf,
     /// One representative file, for the hashing sample.
     sample: PathBuf,
-    /// How many files the fixture holds.
-    fixture_files: u64,
-    /// How many bytes those files hold.
-    fixture_bytes: u64,
-}
-
-fn main() {
-    let scale = scale();
-    if let Err(e) = run(scale) {
-        eprintln!("bench: {e:#}");
-        std::process::exit(1);
-    }
 }
 
 /// The fixture multiplier: `GIRSYNC_BENCH_SCALE`, defaulting to `1`.
@@ -106,93 +104,136 @@ fn scale() -> u64 {
         .unwrap_or(1)
 }
 
-/// Build and measure each shape in turn.
-fn run(scale: u64) -> Result<()> {
-    println!("scale={scale}");
-    shape("many-tiny", |dir| {
-        build_many_tiny(dir, scale.saturating_mul(TINY_FILES))
-    })?;
-    shape("few-large", |dir| {
-        build_few_large(dir, scale.saturating_mul(LARGE_FILES))
-    })?;
-    shape("deep", |dir| {
-        build_deep(dir, scale.saturating_mul(DEEP_LEVELS))
-    })?;
-    Ok(())
+/// The three measured shapes and the throughput their fixtures imply at the
+/// current scale.
+///
+/// The counts are derived from the same constants the builders use, so
+/// criterion can attach a files/s (and MiB/s) estimate to each `BenchmarkId`
+/// without building an extra fixture just to count it.
+fn shapes(scale: u64) -> [ShapeSpec; 3] {
+    let tiny = scale.saturating_mul(TINY_FILES);
+    let large = scale.saturating_mul(LARGE_FILES);
+    let deep = scale.saturating_mul(DEEP_LEVELS);
+    [
+        ShapeSpec {
+            name: "many-tiny",
+            build: build_many_tiny,
+            count: tiny,
+            walked_files: tiny,
+            tree_bytes: tiny * TINY_BYTES as u64,
+            sample_bytes: TINY_BYTES as u64,
+        },
+        ShapeSpec {
+            name: "few-large",
+            build: build_few_large,
+            count: large,
+            walked_files: large,
+            tree_bytes: large * LARGE_BYTES as u64,
+            sample_bytes: LARGE_BYTES as u64,
+        },
+        ShapeSpec {
+            name: "deep",
+            build: build_deep,
+            count: deep,
+            // The walk stops at WALK_DEPTH levels, so the chain's deeper
+            // levels are not counted in the walk's throughput.
+            walked_files: deep.min(WALK_DEPTH as u64) * DEEP_FILES_PER_LEVEL,
+            tree_bytes: deep * DEEP_FILES_PER_LEVEL * DEEP_BYTES as u64,
+            sample_bytes: DEEP_BYTES as u64,
+        },
+    ]
 }
 
-/// Build one shape in its own scratch directory, walk it, and print its line.
+/// What a builder returns: tree root, sample file, file count, byte count.
+type Built = Result<(PathBuf, PathBuf, u64, u64)>;
+
+/// A fixture builder: scratch directory and scaled count to a built tree.
+type Builder = fn(&Path, u64) -> Built;
+
+/// What distinguishes one measured shape from the others.
+struct ShapeSpec {
+    /// The shape's name, used as the benchmark function name.
+    name: &'static str,
+    /// The fixture builder.
+    build: Builder,
+    /// The scaled file/level count handed to the builder.
+    count: u64,
+    /// Files the capped walk sees, for the walk's element throughput.
+    walked_files: u64,
+    /// Bytes the tree holds, for the walk's byte throughput.
+    tree_bytes: u64,
+    /// Bytes of the one file the hash routine reads.
+    sample_bytes: u64,
+}
+
+/// Build a fresh tree for one iteration of a benchmark.
 ///
-/// The scratch directory is dropped — and with it the tree — when this
-/// returns, so the fixture is gone however the run ends.
-fn shape<F>(name: &'static str, build: F) -> Result<()>
-where
-    F: FnOnce(&Path) -> Result<(PathBuf, PathBuf, u64, u64)>,
-{
-    let dir = TempDir::new("girsync_bench", name);
-    let t0 = Instant::now();
-    let (root, sample, fixture_files, fixture_bytes) = build(&dir)?;
-    let build_s = t0.elapsed().as_secs_f64();
-    let shape = Shape {
-        name,
+/// This is the `iter_batched` setup: it is deliberately outside the measured
+/// region, so writing the fixture is never mistaken for the walk or the hash.
+fn build_fixture(spec: &ShapeSpec) -> Fixture {
+    let dir = TempDir::new("girsync_bench", spec.name);
+    let (root, sample, _, _) =
+        (spec.build)(&dir, spec.count).unwrap_or_else(|e| panic!("build {}: {e:#}", spec.name));
+    Fixture {
+        _dir: dir,
         root,
         sample,
-        fixture_files,
-        fixture_bytes,
-    };
-    measure(&shape, build_s)
+    }
 }
 
-/// Walk the tree, hash one file of it, and print what that cost.
+/// The measured walk: one capped traversal of the freshly built tree.
 ///
-/// `build_s` is how long the fixture took to write: it is the price of the
-/// measurement rather than part of it, and it is printed so the two are not
-/// confused for each other.
-fn measure(shape: &Shape, build_s: f64) -> Result<()> {
-    let t0 = Instant::now();
-    let live = walk_live(&shape.root, WALK_DEPTH)
-        .with_context(|| format!("walk {}", shape.root.display()))?;
-    let walk_s = t0.elapsed().as_secs_f64();
-
-    // The bytes are the files' own sizes, summed — the content, not the
-    // directory's size on disk, which is a different number entirely.
-    let files: u64 = live.iter().filter(|e| !e.is_dir).count() as u64;
-    let bytes: u64 = live.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
-
-    let hash_bytes = std::fs::metadata(&shape.sample)
-        .with_context(|| format!("stat {}", shape.sample.display()))?
-        .len();
-    let t1 = Instant::now();
-    hash_file(&shape.sample, &AlgoSet::one(HashAlg::Md5))
-        .with_context(|| format!("hash {}", shape.sample.display()))?;
-    let hash_s = t1.elapsed().as_secs_f64();
-
-    let files_per_s = rate(files as f64, walk_s);
-    let mib_per_s = rate(hash_bytes as f64 / (1024.0 * 1024.0), hash_s);
-
-    println!(
-        "shape={} files={} bytes={} fixture_files={} fixture_bytes={} \
-         build_ms={:.1} walk_ms={:.1} files_per_s={:.1} hash_bytes={} hash_ms={:.3} mib_per_s={:.2}",
-        shape.name,
-        files,
-        bytes,
-        shape.fixture_files,
-        shape.fixture_bytes,
-        build_s * 1000.0,
-        walk_s * 1000.0,
-        files_per_s,
-        hash_bytes,
-        hash_s * 1000.0,
-        mib_per_s,
-    );
-    Ok(())
+/// The fixture is handed back rather than dropped here: criterion drops the
+/// routine's output *after* it stops the timer, so removing the tree stays
+/// outside the measured region just as building it does.
+fn walk(fixture: Fixture) -> Fixture {
+    let live = walk_live(&fixture.root, WALK_DEPTH)
+        .unwrap_or_else(|e| panic!("walk {}: {e:#}", fixture.root.display()));
+    std::hint::black_box(live.len());
+    fixture
 }
 
-/// A rate per second, and zero rather than an infinity when the interval was
-/// too short to measure.
-fn rate(amount: f64, seconds: f64) -> f64 {
-    if seconds > 0.0 { amount / seconds } else { 0.0 }
+/// The measured hash: one representative file of the freshly built tree.
+///
+/// As in `walk`, the fixture is returned so its teardown is not timed.
+fn hash(fixture: Fixture) -> Fixture {
+    let digest = hash_file(&fixture.sample, &AlgoSet::one(HashAlg::Md5))
+        .unwrap_or_else(|e| panic!("hash {}: {e:#}", fixture.sample.display()));
+    std::hint::black_box(digest);
+    fixture
 }
+
+/// Measure the capped walk over all three shapes.
+fn walk_bench(c: &mut Criterion) {
+    let scale = scale();
+    let mut group = c.benchmark_group("walk");
+    for spec in shapes(scale) {
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: spec.walked_files,
+            bytes: spec.tree_bytes,
+        });
+        group.bench_function(BenchmarkId::new(spec.name, format!("scale={scale}")), |b| {
+            b.iter_batched(|| build_fixture(&spec), walk, BatchSize::LargeInput);
+        });
+    }
+    group.finish();
+}
+
+/// Measure the hash of one representative file over all three shapes.
+fn hash_bench(c: &mut Criterion) {
+    let scale = scale();
+    let mut group = c.benchmark_group("hash");
+    for spec in shapes(scale) {
+        group.throughput(Throughput::Bytes(spec.sample_bytes));
+        group.bench_function(BenchmarkId::new(spec.name, format!("scale={scale}")), |b| {
+            b.iter_batched(|| build_fixture(&spec), hash, BatchSize::LargeInput);
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, walk_bench, hash_bench);
+criterion_main!(benches);
 
 /// A wide directory of small files: the shape where the walk's per-entry cost
 /// dominates.

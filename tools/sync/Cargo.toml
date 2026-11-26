@@ -24,9 +24,12 @@ path = "src/lib.rs"
 name = "girsync"
 path = "src/main.rs"
 
-# The benchmark target: a plain `main` that prints numbers. No harness, no
-# criterion, no new dependency — and no assertion about how long anything took,
-# so it is a local measurement aid rather than a gate.
+# The benchmark target: criterion owns the harness. Fixture construction is
+# setup (outside the measured region); the walk and the hash sample are what
+# get measured. This stays a local measurement aid — no assertion is a gate.
+# `harness = false` is required by criterion itself: with Cargo's default
+# libtest harness, rustc generates its own `main`, `criterion_main!` never
+# runs and the target reports "0 benchmarks" instead of measuring anything.
 [[bench]]
 name = "tree_shapes"
 path = "benches/tree_shapes.rs"
@@ -121,3 +124,6 @@ girpr-tempdir = { path = "../../crates/tempdir" }
 # so it is the right place for them; the scratch-directory crate stays free of
 # girsync for the programs that do not otherwise use it.
 girsync-test-support = { path = "test-support" }
+# Statistics-driven harness for the tree-shape benchmark. Dev-only: nothing in
+# the shipped library or binary links against it.
+criterion = "0.8.2"
