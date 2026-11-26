@@ -980,7 +980,9 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
                 });
                 Response::ok_json(EMPTY_PATCH_BUILD.as_bytes().to_vec())
             } else {
-                let tag = query_value(&target, "tag");
+                let query = target.split_once('?').map_or("", |(_, q)| q);
+                let tag = url::form_urlencoded::parse(query.as_bytes())
+                    .find_map(|(k, v)| (k == "tag").then(|| v.into_owned()));
                 served.record(Hit {
                     kind: HitKind::Build,
                     id: tag.clone().unwrap_or_else(|| "latest".to_string()),
@@ -1058,41 +1060,4 @@ fn hyp_response(served: &Served, path: &str) -> Response {
         build: None,
     });
     Response::ok_json(body)
-}
-
-fn query_value(target: &str, key: &str) -> Option<String> {
-    let q = target.split_once('?')?.1;
-    q.split('&')
-        .find_map(|pair| pair.strip_prefix(&format!("{key}=")).map(urldecode))
-}
-
-/// `girpr` percent-encodes every non-alphanumeric byte (`hyp::urlencode`), so
-/// a tag comes back as `%2E`-style escapes only if it has any; handle them
-/// rather than assume.
-fn urldecode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
-                match u8::from_str_radix(hex, 16) {
-                    Ok(b) => {
-                        out.push(b);
-                        i += 3;
-                    }
-                    Err(_) => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

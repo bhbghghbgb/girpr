@@ -2094,39 +2094,12 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
     }
 }
 
+/// Look up one decoded query value. The standard form parser handles `%XX`,
+/// `+` and lossy UTF-8; bracketed keys stay literal because that is the spelling
+/// the recorded request URLs use.
 fn query_param(query: &str, key: &str) -> Option<String> {
-    for pair in query.split('&') {
-        if let Some((k, v)) = pair.split_once('=')
-            && k == key
-        {
-            return Some(percent_decode(v));
-        }
-    }
-    None
-}
-
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
-                out.push(u8::from_str_radix(hex, 16).unwrap_or(b'%'));
-                i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(k, v)| (k == key).then(|| v.into_owned()))
 }
 
 /// A minimal, correct HTTP/1.1 response.

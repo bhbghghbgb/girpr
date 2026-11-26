@@ -178,6 +178,27 @@ fn trimmed_url(base: &str, name: &str) -> Result<String> {
     Ok(base.trim_end_matches('/').to_owned())
 }
 
+/// Append path segments to a CDN base with `Url`, so separators and escaping
+/// are the library's job rather than a second string URL grammar.
+fn cdn_url<'a>(base: &str, segments: impl IntoIterator<Item = &'a str>) -> Result<String> {
+    let mut url = url::Url::parse(base).map_err(|e| {
+        DispatchError::Metadata(format!("CDN base URL is not absolute: {base:?}: {e}"))
+    })?;
+    {
+        let mut path = url.path_segments_mut().map_err(|_| {
+            DispatchError::Metadata(format!("CDN base URL has an opaque path: {base:?}"))
+        })?;
+        for segment in segments {
+            for part in segment.split('/') {
+                if !part.is_empty() {
+                    path.push(part);
+                }
+            }
+        }
+    }
+    Ok(url.to_string())
+}
+
 fn descriptor(
     kind: ManifestKind,
     row: DescriptorRow,
@@ -272,39 +293,42 @@ where
     if res_ver.res_hash.is_empty() || props.data_hash.is_empty() || props.silence_hash.is_empty() {
         return Err(DispatchError::Proto("a revision hash is empty".into()));
     }
-    let client_game_res_url = format!(
-        "{res_base}/output_{}_{}/client",
-        res_ver.res_revision, res_ver.res_hash
-    );
-    let client_design_data_url = format!(
-        "{data_base}/output_{}_{}/client/General",
-        props.data_revision, props.data_hash
-    );
-    let client_silence_data_url = format!(
-        "{data_base}/output_{}_{}/client_silence/General",
-        props.silence_revision, props.silence_hash
-    );
+    let res_out = format!("output_{}_{}", res_ver.res_revision, res_ver.res_hash);
+    let client_game_res_url = cdn_url(&res_base, [res_out.as_str(), "client"])?;
+    let data_out = format!("output_{}_{}", props.data_revision, props.data_hash);
+    let client_design_data_url = cdn_url(&data_base, [data_out.as_str(), "client", "General"])?;
+    let silence_out = format!("output_{}_{}", props.silence_revision, props.silence_hash);
+    let client_silence_data_url = cdn_url(
+        &data_base,
+        [silence_out.as_str(), "client_silence", "General"],
+    )?;
 
-    let base_revision_url = format!("{client_game_res_url}/StandaloneWindows64/base_revision");
+    let base_revision_url = cdn_url(
+        &client_game_res_url,
+        ["StandaloneWindows64", "base_revision"],
+    )?;
     let revision_body = base_revision.get(&base_revision_url).map_err(|e| {
         DispatchError::Transport(format!("base_revision GET {base_revision_url}: {e}"))
     })?;
     let (audio_revision, audio_hash) = parse_base_revision(&revision_body)?;
-    let client_audio_assets_url = format!("{res_base}/output_{audio_revision}_{audio_hash}/client");
+    let audio_out = format!("output_{audio_revision}_{audio_hash}");
+    let client_audio_assets_url = cdn_url(&res_base, [audio_out.as_str(), "client"])?;
 
     let res_row = parse_descriptor(&res_ver.res_descriptor)?;
     let data_row = parse_descriptor(&props.data_descriptor)?;
     let silence_row = parse_descriptor(&props.silence_descriptor)?;
-    let res_prefix = format!("{client_game_res_url}/StandaloneWindows64");
-    let res_url = format!("{res_prefix}/{}", res_row.remote_name);
-    let data_url = format!(
-        "{client_design_data_url}/AssetBundles/{}",
-        data_row.remote_name
-    );
-    let silence_url = format!(
-        "{client_silence_data_url}/AssetBundles/{}",
-        silence_row.remote_name
-    );
+    let res_url = cdn_url(
+        &client_game_res_url,
+        ["StandaloneWindows64", res_row.remote_name.as_str()],
+    )?;
+    let data_url = cdn_url(
+        &client_design_data_url,
+        ["AssetBundles", data_row.remote_name.as_str()],
+    )?;
+    let silence_url = cdn_url(
+        &client_silence_data_url,
+        ["AssetBundles", silence_row.remote_name.as_str()],
+    )?;
     let manifest_digests = [
         descriptor(ManifestKind::Res, res_row, res_url, &keys.exe_stem),
         descriptor(ManifestKind::Data, data_row, data_url, &keys.exe_stem),

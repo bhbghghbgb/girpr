@@ -126,13 +126,19 @@ pub fn build_dispatcher_url(
         .replacen("{0}", host, 1)
         .replacen("{1}", version, 1)
         .replacen("{2}", seed, 1);
-    let (prefix, tail) = expanded
-        .split_once("://")
-        .ok_or_else(|| DispatchError::Metadata(format!("URL has no scheme: {expanded:?}")))?;
-    let (_, rest) = tail
-        .split_once('/')
-        .ok_or_else(|| DispatchError::Metadata(format!("URL has no path: {expanded:?}")))?;
-    Ok(format!("{prefix}://{host}.yuanshen.com/{rest}"))
+    let mut url = url::Url::parse(&expanded).map_err(|e| {
+        DispatchError::Metadata(format!("dispatcher URL is not absolute: {expanded:?}: {e}"))
+    })?;
+    // Force the authority unconditionally: a template that pins a different
+    // host, a port or user info must not redirect the query. This is the same
+    // fail-closed rewrite the string version made, now owned by `Url`.
+    url.set_host(Some(&format!("{host}.yuanshen.com")))
+        .map_err(|_| DispatchError::Metadata(format!("invalid dispatcher host: {host:?}")))?;
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_port(None)
+        .map_err(|_| DispatchError::Metadata(format!("invalid dispatcher port: {expanded:?}")))?;
+    Ok(url.to_string())
 }
 
 /// Check the fixed query parameters against the per-biz constants. Called by
@@ -144,19 +150,26 @@ pub fn validate_dispatcher_url(url: &str, biz: Region) -> Result<()> {
     let key_id = if biz == Region::Hk4eGlobal { 5 } else { 4 };
     let (query_channel, query_sub_channel, query_account_type) = query_channel_tuple(biz);
     let expected = [
-        format!("lang={lang}"),
-        "platform=3".to_owned(),
-        "binary=1".to_owned(),
-        format!("time={time}"),
-        format!("channel_id={query_channel}"),
-        format!("sub_channel_id={query_sub_channel}"),
-        format!("account_type={query_account_type}"),
-        format!("key_id={key_id}"),
+        ("lang", lang.to_string()),
+        ("platform", "3".to_owned()),
+        ("binary", "1".to_owned()),
+        ("time", time.to_string()),
+        ("channel_id", query_channel.to_string()),
+        ("sub_channel_id", query_sub_channel.to_string()),
+        ("account_type", query_account_type.to_string()),
+        ("key_id", key_id.to_string()),
     ];
-    for item in expected {
-        if !url.split(['?', '&']).any(|part| part == item) {
+    let parsed = url::Url::parse(url).map_err(|e| {
+        DispatchError::Metadata(format!("dispatcher URL is not absolute: {url:?}: {e}"))
+    })?;
+    let sent: Vec<_> = parsed.query_pairs().collect();
+    for (key, value) in expected {
+        if !sent
+            .iter()
+            .any(|(k, v)| k.as_ref() == key && v.as_ref() == value.as_str())
+        {
             return Err(DispatchError::Metadata(format!(
-                "dispatcher URL for {biz} is missing {item:?}: {url:?}"
+                "dispatcher URL for {biz} is missing {key}={value:?}: {url:?}"
             )));
         }
     }

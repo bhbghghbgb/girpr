@@ -24,11 +24,21 @@
 
 use crate::cli::Biz as BizId;
 use crate::http::ApiError;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-// `percent` lives in `crate::encoding` now; this re-export keeps the
-// `crate::biz::percent` path that `report` and callers resolve today, and it
-// also brings `percent` into scope for `enc` below.
+// The public path for the shared byte-to-`%XX` helper stays here even though
+// `enc` now obtains its escapes from the byte table directly.
 pub use crate::encoding::percent;
+
+/// The recorded query-value spelling: every byte except the RFC3986 unreserved
+/// set becomes an uppercase `%XX`. `Url`'s form serializer would send spaces as
+/// `+` and brackets as `%5B%5D`; the measured URLs keep both literal, so the
+/// byte table's exact set is used here rather than its default escaping.
+const QUERY_VALUE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 /// Which API/CDN family serves a region.
 ///
@@ -328,26 +338,7 @@ fn push_pair(url: &mut String, key: &str, value: &str) {
 /// Keys are appended literally (see [`Endpoints::hyp_url`]); values are encoded,
 /// so a `password` with a `/` or a space cannot change the request's shape.
 pub fn enc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut run = Vec::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                // Flush any pending escape run first, so a literal byte is never
-                // emitted after the escapes that follow it.
-                if !run.is_empty() {
-                    out.push_str(&percent(&run));
-                    run.clear();
-                }
-                out.push(b as char)
-            }
-            _ => run.push(b),
-        }
-    }
-    if !run.is_empty() {
-        out.push_str(&percent(&run));
-    }
-    out
+    utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
 }
 
 #[cfg(test)]

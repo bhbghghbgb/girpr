@@ -318,6 +318,21 @@ fn recorded_summaries_pin_the_master_blob_and_all_three_urls() {
 }
 
 #[test]
+fn dispatcher_url_forces_the_selected_host_and_discards_authority_extras() {
+    // A changed metadata blob can pin any authority it likes; the query must
+    // still go to the selected host, with no port and no user info.
+    let template = "https://user:pw@evil.example:9443/query_cur_region?version={1}&lang=1&platform=3&binary=1&time=260&channel_id=1&sub_channel_id=1&account_type=1&dispatchSeed={2}&key_id=5";
+    let url =
+        build_dispatcher_url(template, "osusadispatch", "OSRELWin7.2.0", "seed").expect("url");
+    assert_eq!(
+        url,
+        "https://osusadispatch.yuanshen.com/query_cur_region?version=OSRELWin7.2.0&lang=1&platform=3&binary=1&time=260&channel_id=1&sub_channel_id=1&account_type=1&dispatchSeed=seed&key_id=5"
+    );
+    assert!(!url.contains('@'), "user info must not survive: {url}");
+    validate_dispatcher_url(&url, Region::Hk4eGlobal).expect("query parameters");
+}
+
+#[test]
 fn synthetic_metadata_blob_unwraps_and_the_production_pin_is_loud() {
     let master = synthetic_master();
     let master_bytes = master_json(&master);

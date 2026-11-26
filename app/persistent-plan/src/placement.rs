@@ -167,18 +167,39 @@ pub fn asset_urls(
         return Err(PlanError::MissingValue("client CDN prefix"));
     }
     let name = remote_name.replace('\\', "/");
-    let leaf = if folder == Folder::Root {
-        name
-    } else {
-        format!("{}/{}", folder.as_str(), name)
+    let build = |prefix: &str| -> Result<String> {
+        let mut url = url::Url::parse(prefix).map_err(|e| PlanError::Rel {
+            value: prefix.to_owned(),
+            reason: e.to_string(),
+        })?;
+        {
+            let mut path = url.path_segments_mut().map_err(|_| PlanError::Rel {
+                value: prefix.to_owned(),
+                reason: "opaque URL path".to_owned(),
+            })?;
+            // A prefix may end in '/'; `Url` keeps that as an empty trailing
+            // segment, which would otherwise become a double slash on append.
+            path.pop_if_empty();
+            path.push(segment);
+            if folder != Folder::Root {
+                path.push(folder.as_str());
+            }
+            // `remoteName` uses backslashes; folding them into '/' here and
+            // pushing each part lets `Url` own the separators and escaping.
+            for part in name.split('/') {
+                if !part.is_empty() {
+                    path.push(part);
+                }
+            }
+        }
+        Ok(url.to_string())
     };
-    let build = |prefix: &str| format!("{}/{segment}/{leaf}", prefix.trim_end_matches('/'));
     // A hotfix swaps the two res prefixes; the other two sources have identical
     // primary and alternate prefixes by design.
     let (primary, alternate) = if hotfix && source == ManifestKind::Res {
-        (build(prefix_alternate), build(prefix_primary))
+        (build(prefix_alternate)?, build(prefix_primary)?)
     } else {
-        (build(prefix_primary), build(prefix_alternate))
+        (build(prefix_primary)?, build(prefix_alternate)?)
     };
     Ok((primary, alternate))
 }

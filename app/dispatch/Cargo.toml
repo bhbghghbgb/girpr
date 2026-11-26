@@ -29,6 +29,9 @@ girpr-digest = { path = "../../crates/digest" }
 # JSON is the metadata/envelope format; the descriptor rows use serde's derive.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The dispatcher template's authority is forced and its fixed query parameters
+# are checked with `Url` / `Url::query_pairs`, not local string splitting.
+url = "2.5.9"
 # Opaque wire fields are reported at debug level, never used to place files.
 tracing = "0.1.44"
 

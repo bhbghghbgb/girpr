@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -36,8 +37,8 @@ const JSON_BODY_IDLE: Duration = Duration::from_secs(30);
 /// Request URLs are logged verbatim at debug.
 pub struct HypClient {
     client: reqwest::Client,
-    hyp_base: String,
-    sophon_base: String,
+    hyp_base: reqwest::Url,
+    sophon_base: reqwest::Url,
     launcher_id: &'static str,
     game_id: &'static str,
     /// Per-launcher `channel`/`sub_channel` query values, from
@@ -368,6 +369,8 @@ impl HypClient {
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .context("build http client")?;
+        let hyp_base = reqwest::Url::parse(&hyp_base).context("parse HYP base URL")?;
+        let sophon_base = reqwest::Url::parse(&sophon_base).context("parse Sophon base URL")?;
         Ok(Self {
             client,
             hyp_base,
@@ -382,11 +385,14 @@ impl HypClient {
     }
 
     fn hyp_base(&self) -> &str {
-        &self.hyp_base
+        // `Url` adds a trailing slash to an origin-only base; the recorded
+        // endpoint spelling appends its own, so drop it here rather than
+        // emitting a double slash.
+        self.hyp_base.as_str().trim_end_matches('/')
     }
 
     fn sophon_base(&self) -> &str {
-        &self.sophon_base
+        self.sophon_base.as_str().trim_end_matches('/')
     }
 
     /// Build a HYP API URL.
@@ -716,22 +722,18 @@ pub fn production_bases(host: &str) -> (String, String) {
     )
 }
 
+/// The recorded query-value spelling: every byte except the RFC3986 unreserved
+/// set becomes an uppercase `%XX`. `Url`'s form serializer would send spaces as
+/// `+` and brackets as `%5B%5D`, so the table's exact set is kept here rather
+/// than delegating to its default escaping.
+const QUERY_VALUE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
 fn urlencode(s: &str) -> String {
-    use std::fmt::Write as _;
-    // Unescaped bytes keep the input length; escapes grow from there. Reserve
-    // once so the common all-safe case allocates exactly once.
-    let mut o = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-.~_".contains(&b) {
-            o.push(b as char);
-        } else {
-            // Format straight into the buffer: the old `format!` built a
-            // temporary `String` for every escaped byte. Writing to a `String`
-            // cannot fail, so the infallible result is discarded.
-            let _ = write!(o, "%{b:02X}");
-        }
-    }
-    o
+    utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
 }
 
 #[cfg(test)]
