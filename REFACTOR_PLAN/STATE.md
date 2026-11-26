@@ -23,7 +23,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T09 | URL assembly & percent-encoding | completed | 22e7f073 | Decision recorded in Persistent context below: literal brackets + %20, exact AsciiSet. Deviation: query_pairs_mut().append_pair not used for the literal key; push_pair/with_param remain (now append library-encoded values). Report lines 822–823 pointer is stale (permissive versions, not host checks). |
 | T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | completed | d2e830d6 | Durable: both padded and unpadded base64 occur in checked-in key XML — decode_base64 keeps STANDARD as fallback to STANDARD_NO_PAD; later base64 delegation must retain it. serde-aux pinned default-features=false; quick-xml needs features=["serialize"]; xxhash-rust direct dep for finish(); parse_hash_hex error text kept. |
 | T11 | FNV-1a hashing → fnv | completed | 7a3d9385 | FnvHasher constants/byte order identical to local loops: lock filenames preserved (no invalidation). Shared bundle FORMAT bumped 3→4 once because bundle_source_key hashes this edited src/lib.rs. |
-| T12 | Protobuf → prost decode + prost-build codegen | todo | | §APP-8 lines 359–369, §LEAF-4 lines 451–465; build-tooling and dump-key pins |
+| T12 | Protobuf → prost decode + prost-build codegen | in_progress | | §APP-8 lines 359–369, §LEAF-4 lines 451–465; build-tooling and dump-key pins |
 | T13 | Junction creation → junction crate | todo | | §APP-6 lines 334–345, §LEAF-3 lines 441–449; Windows only |
 | T14 | Artifact-server fixtures → wiremock | todo | | §APP-11 lines 391–402, §X1 lines 56–89; large test blast radius |
 | T15 | ScriptedServer → wiremock | todo | | §LEAF-1 lines 415–430, §X1 lines 56–89; large test blast radius |
