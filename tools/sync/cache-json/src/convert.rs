@@ -13,8 +13,9 @@
 
 use anyhow::{Context, Result, bail};
 use girsync_cache::{CACHE_VERSION, CacheOpen};
+use std::cell::Cell;
 use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -42,6 +43,86 @@ pub struct ImportStats {
 /// `girpr-cache` namespace: a leftover from a killed import reads as tool
 /// state rather than as content the next mirror would copy or delete.
 pub const JSON_TEMP_PREFIX: &str = "girpr-cache-json-";
+
+/// Line bookkeeping shared between the import's reader and its error paths.
+///
+/// `Cell` lets the reader, which the JSON stream deserializer owns, update the
+/// counters while the caller reads them to label its own semantic errors.
+struct LineState {
+    line: Cell<usize>,
+    bytes: Cell<usize>,
+    content: Cell<bool>,
+}
+
+impl LineState {
+    fn new() -> Self {
+        Self {
+            line: Cell::new(1),
+            bytes: Cell::new(0),
+            content: Cell::new(false),
+        }
+    }
+}
+
+/// Feed bytes to the JSON stream deserializer while counting lines and
+/// refusing blank ones.
+///
+/// `serde_json`'s stream skips whitespace between values, so a line containing
+/// only whitespace would otherwise be silently accepted. This adapter keeps
+/// the import's rule that a blank line is a malformed line, and gives it the
+/// same one-based line number the report's parser used to supply.
+struct LineReader<'a, R> {
+    inner: R,
+    state: &'a LineState,
+}
+
+impl<R: Read> Read for LineReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let read = self.inner.read(buf)?;
+        if read == 0 {
+            // A whitespace-only last line, with no newline to trip the check
+            // below, is blank as well.
+            if self.state.bytes.get() > 0 && !self.state.content.get() {
+                return Err(blank_line(self.state.line.get()));
+            }
+            return Ok(0);
+        }
+        for &byte in &buf[..read] {
+            self.state.bytes.set(self.state.bytes.get() + 1);
+            if byte == b'\n' {
+                if !self.state.content.get() {
+                    return Err(blank_line(self.state.line.get()));
+                }
+                self.state.line.set(self.state.line.get() + 1);
+                self.state.bytes.set(0);
+                self.state.content.set(false);
+            } else if !byte.is_ascii_whitespace() {
+                self.state.content.set(true);
+            }
+        }
+        Ok(read)
+    }
+}
+
+fn blank_line(line: usize) -> io::Error {
+    io::Error::other(format!("line {line}: blank line"))
+}
+
+/// Attach the one-based line number a JSON error was detected at.
+///
+/// I/O errors carry no meaningful position in `serde_json` (it reports line
+/// 0 for them); a blank-line error already names its own line.
+fn json_error(err: serde_json::Error) -> anyhow::Error {
+    if err.classify() == serde_json::error::Category::Io {
+        anyhow::Error::new(err)
+    } else {
+        let line = err.line();
+        anyhow::Error::new(err).context(format!("line {line}"))
+    }
+}
 
 /// Export the cache at `cache_path` to `out` as NDJSON.
 ///
@@ -87,12 +168,21 @@ pub fn export_cache<W: Write>(cache_path: &Path, mut out: W) -> Result<ExportSta
 /// at `cache_path` is touched until the whole stream has been written, and
 /// then it is replaced in one rename. Set `force` to replace an existing file.
 pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Result<ImportStats> {
-    let mut lines = input.lines();
-    let first = lines
+    let state = LineState::new();
+    let reader = LineReader {
+        inner: input,
+        state: &state,
+    };
+    let mut stream = serde_json::Deserializer::from_reader(reader).into_iter::<Line>();
+    let first = match stream
         .next()
-        .context("empty NDJSON (expected a meta line)")?
-        .context("read meta line")?;
-    let meta = match ndjson::parse_line(&first).context("line 1")? {
+        .transpose()
+        .map_err(|err| json_error(err).context("read meta line"))?
+    {
+        Some(line) => line,
+        None => bail!("empty NDJSON (expected a meta line)"),
+    };
+    let meta = match first {
         Line::Meta(meta) => meta,
         Line::Entry(_) => bail!("line 1 is an entry; a meta line must come first"),
     };
@@ -117,7 +207,7 @@ pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Res
     // namespace, and dropping the handle on an error removes the file.
     let temp = claim_temp_sibling(cache_path)?;
     let temp_path = temp.path().to_path_buf();
-    let stats = match build_cache(&temp_path, lines, case_sensitive) {
+    let stats = match build_cache(&temp_path, &mut stream, &state, case_sensitive) {
         Ok(stats) => stats,
         Err(e) => return Err(cleanup_temp(e, &temp_path)),
     };
@@ -125,7 +215,7 @@ pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Res
     Ok(stats)
 }
 
-/// Write the rows from `lines` into the cache at `temp`.
+/// Write the rows from `stream` into the cache at `temp`.
 ///
 /// The cache's own `open_db` creates the tables and the meta row with the case
 /// mode read from the stream; `begin_write` batches the rows, committing at the
@@ -134,7 +224,8 @@ pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Res
 /// here with its line number instead.
 fn build_cache(
     temp: &Path,
-    lines: impl Iterator<Item = std::io::Result<String>>,
+    stream: &mut impl Iterator<Item = Result<Line, serde_json::Error>>,
+    state: &LineState,
     case_sensitive: bool,
 ) -> Result<ImportStats> {
     let cache = girsync_cache::open_db(
@@ -148,26 +239,23 @@ fn build_cache(
     )?;
     let mut stats = ImportStats::default();
     let mut seen = HashSet::new();
-    let mut line_no = 1usize;
     {
         let mut write = cache.begin_write()?;
-        for line in lines {
-            line_no += 1;
-            let text = line.with_context(|| format!("read line {line_no}"))?;
-            let entry =
-                match ndjson::parse_line(&text).with_context(|| format!("line {line_no}"))? {
-                    Line::Entry(entry) => entry,
-                    Line::Meta(_) => bail!("line {line_no} is a second meta line"),
-                };
+        for item in stream {
+            let line = state.line.get();
+            let entry = match item.map_err(json_error)? {
+                Line::Entry(entry) => entry,
+                Line::Meta(_) => bail!("line {line} is a second meta line"),
+            };
             if !seen.insert(entry.path.clone()) {
-                bail!("line {line_no} repeats path {:?}", entry.path);
+                bail!("line {line} repeats path {:?}", entry.path);
             }
             let rec = entry
                 .to_rec()
-                .with_context(|| format!("line {line_no}, path {:?}", entry.path))?;
+                .with_context(|| format!("line {line}, path {:?}", entry.path))?;
             write
                 .put(&entry.path, &rec)
-                .with_context(|| format!("write cache row at line {line_no}"))?;
+                .with_context(|| format!("write cache row at line {line}"))?;
             stats.entries += 1;
             if rec.is_file() {
                 stats.files += 1;

@@ -27,15 +27,15 @@ anyhow = "1.0.105"
 clap = { version = "4.6.9", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The JSON boundary spells digests as hex; this is the same crate the shared
+# digest leaf uses, promoted to a direct dependency here.
+hex = "0.4.3"
 # The import writes into a random sibling of the destination and publishes the
 # whole cache in one rename, so a failed import leaves the old cache intact.
 tempfile = "3.27"
 # The clap-error to usage-code mapping, shared with girsync. The
 # leaf decides only help/version -> 0; this binary owns its failure code.
 girpr-cli = { path = "../../../crates/cli" }
-# Digest spelling at the JSON boundary, shared with the other tools. The cache
-# itself keeps raw bytes; only this tool's text form spells them as hex.
-girpr-digest = { path = "../../../crates/digest" }
 # The redb cache, its public read/write API and its schema version. Reached
 # directly rather than through girsync's lib facade: an edit to a planner or a
 # command leaves this converter's cache tree cached.

@@ -91,10 +91,10 @@ impl EntryLine {
     pub fn from_rec(path: &str, rec: &FileRec) -> Self {
         let mut hashes = Vec::with_capacity(rec.hashes.len());
         for (algo, digest) in rec.hashes.iter() {
-            hashes.push((algo.as_str().to_string(), girpr_digest::encode_hex(digest)));
+            hashes.push((algo.as_str().to_string(), hex::encode(digest)));
         }
         for (name, digest) in rec.hashes.foreign_iter() {
-            hashes.push((name.to_string(), girpr_digest::encode_hex(digest)));
+            hashes.push((name.to_string(), hex::encode(digest)));
         }
         Self {
             path: path.to_string(),
@@ -107,7 +107,7 @@ impl EntryLine {
 
     /// Decode back into the row the cache stores.
     ///
-    /// Hex is decoded through the shared primitive; algorithm names go through
+    /// Hex is decoded with `hex::decode`; algorithm names go through
     /// [`DigestSet::insert_named`], which is the cache's own routing rule, so
     /// an unknown name is carried verbatim and a known name with an unexpected
     /// length lands where the wire decoder would put it. `kind` is a closed
@@ -118,7 +118,7 @@ impl EntryLine {
         }
         let mut hashes = DigestSet::default();
         for (name, hex) in &self.hashes {
-            let digest = girpr_digest::decode_hex(hex)
+            let digest = hex::decode(hex)
                 .with_context(|| format!("decode hex digest for algorithm {name:?}"))?;
             hashes.insert_named(name, &digest);
         }
@@ -129,12 +129,6 @@ impl EntryLine {
             hashes,
         })
     }
-}
-
-/// Parse one line. A bad line names the JSON error; the caller adds the line
-/// number and any context about which stream it came from.
-pub fn parse_line(text: &str) -> Result<Line> {
-    serde_json::from_str(text).context("parse NDJSON line")
 }
 
 /// Write one line, including its newline.

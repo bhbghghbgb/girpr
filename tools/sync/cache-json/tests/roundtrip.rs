@@ -62,7 +62,7 @@ fn lines(bytes: &[u8]) -> Vec<ndjson::Line> {
     String::from_utf8(bytes.to_vec())
         .unwrap()
         .lines()
-        .map(ndjson::parse_line)
+        .map(serde_json::from_str)
         .map(Result::unwrap)
         .collect()
 }
@@ -194,6 +194,18 @@ fn import_refuses_bad_streams_without_touching_the_destination() {
             "invalid record kind",
         ),
         ("blank line", format!("{meta}\n\n"), "line 2"),
+        (
+            "blank line between entries",
+            format!("{meta}\n{}\n\n{}\n", entry("a.txt"), entry("b.txt")),
+            "line 3",
+        ),
+        ("whitespace-only line", format!("{meta}\n   \n"), "line 2"),
+        (
+            "whitespace-only final line",
+            format!("{meta}\n  "),
+            "line 2",
+        ),
+        ("CRLF blank line", format!("{meta}\r\n\r\n"), "line 2"),
         ("empty stream", String::new(), "expected a meta line"),
     ];
 
@@ -214,6 +226,24 @@ fn import_refuses_bad_streams_without_touching_the_destination() {
         .filter(|n| n.starts_with(JSON_TEMP_PREFIX))
         .collect();
     assert!(leftovers.is_empty(), "no import temporary was left behind");
+}
+
+#[test]
+fn import_accepts_whitespace_separated_objects() {
+    let dir = TempDir::new("girsync_cache_json", "whitespace_separated");
+    let dst = dir.join("imported-cache");
+    let meta = r#"{"type":"meta","version":4,"case_sensitive":true}"#;
+    let entry = |path: &str| {
+        format!(
+            r#"{{"type":"entry","path":"{path}","kind":"file","size":1,"mtime_ns":2,"hashes":[]}}"#
+        )
+    };
+    let stream = format!("{} {} {}", meta, entry("a.txt"), entry("b.txt"));
+    let stats = import_cache(Cursor::new(stream), &dst, false).unwrap();
+    assert_eq!(stats.entries, 2);
+    let after = CacheDb::open_record(&dst).unwrap();
+    assert!(after.get("a.txt").unwrap().is_some());
+    assert!(after.get("b.txt").unwrap().is_some());
 }
 
 #[test]
