@@ -1,12 +1,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::utf8_percent_encode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_aux::field_attributes::deserialize_number_from_string;
 
 use crate::retry::{BackoffPolicy, Retry, retry};
+use girpr_model::query::QUERY_VALUE_SET;
 use girpr_model::region::Region as Biz;
 use girpr_model::region::{CHANNEL_ENDPOINT, Host};
 
@@ -682,16 +683,9 @@ pub fn production_bases(host: &str) -> (String, String) {
     )
 }
 
-/// The recorded query-value spelling: every byte except the RFC3986 unreserved
-/// set becomes an uppercase `%XX`. `Url`'s form serializer would send spaces as
-/// `+` and brackets as `%5B%5D`, so the table's exact set is kept here rather
-/// than delegating to its default escaping.
-const QUERY_VALUE_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
+/// Uses the byte table from `girpr-model`, so fetch and capture cannot re-spell
+/// a query value differently. The set stays an exact `AsciiSet` rather than
+/// `Url`'s form serializer: spaces must be `%20` and brackets in values `%XX`.
 fn urlencode(s: &str) -> String {
     utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
 }

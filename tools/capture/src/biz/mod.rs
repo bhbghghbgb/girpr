@@ -24,21 +24,11 @@
 
 use crate::cli::Biz as BizId;
 use crate::http::ApiError;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::utf8_percent_encode;
 
 // The public path for the shared byte-to-`%XX` helper stays here even though
 // `enc` now obtains its escapes from the byte table directly.
 pub use crate::encoding::percent;
-
-/// The recorded query-value spelling: every byte except the RFC3986 unreserved
-/// set becomes an uppercase `%XX`. `Url`'s form serializer would send spaces as
-/// `+` and brackets as `%5B%5D`; the measured URLs keep both literal, so the
-/// byte table's exact set is used here rather than its default escaping.
-const QUERY_VALUE_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
 
 /// Which API/CDN family serves a region.
 ///
@@ -46,6 +36,8 @@ const QUERY_VALUE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// `girpr-model::region`. The `Biz::resolve` policy and the `Endpoints` override
 /// seam stay here, at this tool's call site.
 pub use girpr_model::region::Host;
+
+use girpr_model::query::QUERY_VALUE_SET;
 
 /// The four HYP endpoints `gircap` addresses.
 ///
@@ -335,8 +327,10 @@ fn push_pair(url: &mut String, key: &str, value: &str) {
 
 /// Percent-encode a query **value**.
 ///
-/// Keys are appended literally (see [`Endpoints::hyp_url`]); values are encoded,
-/// so a `password` with a `/` or a space cannot change the request's shape.
+/// Keys are appended literally (see [`Endpoints::hyp_url`]); values are encoded
+/// with the byte table shared through `girpr-model`, so a `password` with a `/`
+/// or a space cannot change the request's shape and cannot be re-spelled by a
+/// change on the fetch side.
 pub fn enc(s: &str) -> String {
     utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
 }
