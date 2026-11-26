@@ -21,8 +21,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T07 | Structured JSON log capture | completed | e990678b | Deliberate skip of repair_machinery.rs:318–342 — it reads the shipped file log (no level/token workaround); that report pointer is stale for this finding. |
 | T08 | INI parser/merger → rust-ini | completed | ff782018, 8578f13e | Decision: read_game_version stays a Starward-parity last-match raw line scan (Ini::get is first-match + trims whitespace — would break pinned behavior); later version-parsing work must keep it. rust-ini load_from_str_noescape (default escape corrupts Windows paths); policy layer does quote/comment pre-pass, last-wins duplicate keys, verbatim render. |
 | T09 | URL assembly & percent-encoding | completed | 22e7f073 | Decision recorded in Persistent context below: literal brackets + %20, exact AsciiSet. Deviation: query_pairs_mut().append_pair not used for the literal key; push_pair/with_param remain (now append library-encoded values). Report lines 822–823 pointer is stale (permissive versions, not host checks). |
-| T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | pending_review | d2e830d6 | Durable: both padded and unpadded base64 occur in checked-in key XML — decode_base64 keeps STANDARD as fallback to STANDARD_NO_PAD; later base64 delegation must retain it. serde-aux pinned default-features=false; quick-xml needs features=["serialize"]; xxhash-rust direct dep for finish(); parse_hash_hex error text kept. Follow-up held for reviewer: focused decode_base64 padded/unpadded/whitespace unit test. |
-| T11 | FNV-1a hashing → fnv | pending_review | 7a3d9385 | FnvHasher constants/byte order identical to local loops: lock filenames preserved (no invalidation). Shared bundle FORMAT bumped 3→4 once because bundle_source_key hashes this edited src/lib.rs. Follow-up held for reviewer: move fixture/world construction to its own module so the fingerprint is narrower. |
+| T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | completed | d2e830d6 | Durable: both padded and unpadded base64 occur in checked-in key XML — decode_base64 keeps STANDARD as fallback to STANDARD_NO_PAD; later base64 delegation must retain it. serde-aux pinned default-features=false; quick-xml needs features=["serialize"]; xxhash-rust direct dep for finish(); parse_hash_hex error text kept. |
+| T11 | FNV-1a hashing → fnv | completed | 7a3d9385 | FnvHasher constants/byte order identical to local loops: lock filenames preserved (no invalidation). Shared bundle FORMAT bumped 3→4 once because bundle_source_key hashes this edited src/lib.rs. |
 | T12 | Protobuf → prost decode + prost-build codegen | todo | | §APP-8 lines 359–369, §LEAF-4 lines 451–465; build-tooling and dump-key pins |
 | T13 | Junction creation → junction crate | todo | | §APP-6 lines 334–345, §LEAF-3 lines 441–449; Windows only |
 | T14 | Artifact-server fixtures → wiremock | todo | | §APP-11 lines 391–402, §X1 lines 56–89; large test blast radius |
@@ -54,6 +54,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | D | T05, T06 | done | Both completed; no fix or revert; endorsed F04, dropped the async predicate-wrapper suggestion. |
 | E1 | T07, T08 | done | Both completed; one comment-only fix (8578f13e); endorsed F05, dropped the conditional downloaded_chunks and single-quote suggestions. |
 | G | T09 | done | Completed; no fix or revert; spelling decision verified consistent in every product. Endorsed F06. |
+| H1 | T10, T11 | done | Both completed; no fix or revert; endorsed F07, dropped the fixture-module suggestion. |
 
 ## Follow-ups
 
@@ -69,6 +70,7 @@ A follow-up planning review batches the survivors only after every task is settl
 | F04 | Add a trycmd case for short -h output (distinct clap rendering path from --help) | open | Low priority, non-blocking. Endorsed by review D. |
 | F05 | Add a typed CapturedLogRecord wrapper over the JSON capture Value surface | open | Low priority, non-blocking; removes stringly-typed field assertions. Endorsed by review E1. |
 | F06 | Consolidate duplicated QUERY_VALUE_SET (fetch/hyp.rs, capture/biz/mod.rs) into a shared leaf | open | Non-blocking; prevents fetch/capture drift against the standing game_ids[]/%20 decision. Endorsed by review G. |
+| F07 | Add a focused crypto.rs unit test for decode_base64 covering padded, unpadded and whitespace-containing inputs | open | Non-blocking; directly pins the CRITICAL STANDARD fallback and whitespace filter. Endorsed by review H1. |
 
 ## Persistent context
 
