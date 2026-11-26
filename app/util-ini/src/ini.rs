@@ -48,11 +48,11 @@ fn game_version_line(line: &str) -> Option<String> {
 
 /// Split an INI line at its **first** `=`.
 ///
-/// This is the single spelling of the shared boundary rule: both the config
-/// loader and the `game_version` scan treat the first `=` as the key/value
-/// boundary, so a later `=` belongs to the value. Only that boundary is shared;
-/// the callers keep their own key anchoring, trimming and empty-value rules,
-/// which deliberately differ.
+/// This is the `game_version` scan's spelling of the shared boundary rule;
+/// the config loader applies the same first-`=` rule in its own pre-pass
+/// before handing the line to the INI library. Both treat a later `=` as part
+/// of the value. Only that boundary is shared; the callers keep their own key
+/// anchoring, trimming and empty-value rules, which deliberately differ.
 fn split_first_eq(line: &str) -> Option<(&str, &str)> {
     line.split_once('=')
 }
