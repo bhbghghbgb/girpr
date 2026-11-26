@@ -513,18 +513,63 @@ pub(crate) fn check_mixed_case_keys<'a>(
     Ok(())
 }
 
-/// Modification time as nanoseconds since the epoch (0 if unavailable).
+/// Modification time as nanoseconds since the epoch (0 if unavailable or
+/// before the epoch).
+///
+/// `filetime` owns the seconds/nanos split — including the platform-specific
+/// Windows epoch — so this shim does no calendar arithmetic of its own. It only
+/// folds the two documented accessors into the i64 the cache stores; no step
+/// rounds away sub-second precision.
 pub fn mtime_ns_of(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| (d.as_nanos().min(i64::MAX as u128)) as i64)
-        .unwrap_or(0)
+    let Ok(t) = meta.modified() else {
+        return 0;
+    };
+    // A `FileTime` can hold pre-epoch seconds, but folding those into one i64
+    // would produce a negative value. The cache has always used 0 for that
+    // case, so keep the convention explicit instead of relying on a failed
+    // `duration_since`.
+    if t < std::time::UNIX_EPOCH {
+        return 0;
+    }
+    let ft = filetime::FileTime::from_system_time(t);
+    let total = (ft.unix_seconds() as u128) * 1_000_000_000 + ft.nanoseconds() as u128;
+    total.min(i64::MAX as u128) as i64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cache value is exact nanoseconds: a sub-second mtime must survive
+    /// as the same count of nanoseconds, with no seconds-only intermediate.
+    #[test]
+    fn mtime_ns_of_keeps_exact_nanoseconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exact.bin");
+        std::fs::write(&path, b"x").unwrap();
+        // 100 ns is the coarsest precision shared by NTFS and common POSIX
+        // filesystems, so the stamp round-trips through the filesystem intact.
+        let stamp = filetime::FileTime::from_unix_time(1_700_000_000, 123_456_700);
+        #[allow(deprecated)] // filetime 0.2.30 defers these setters to std
+        filetime::set_file_mtime(&path, stamp).unwrap();
+        assert_eq!(
+            mtime_ns_of(&std::fs::metadata(&path).unwrap()),
+            1_700_000_000_123_456_700
+        );
+    }
+
+    /// Pre-epoch mtimes keep the cache's long-standing 0 convention rather
+    /// than becoming a negative i64.
+    #[test]
+    fn mtime_ns_of_maps_pre_epoch_to_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("past.bin");
+        std::fs::write(&path, b"x").unwrap();
+        let stamp = filetime::FileTime::from_unix_time(-10, 0);
+        #[allow(deprecated)] // filetime 0.2.30 defers these setters to std
+        filetime::set_file_mtime(&path, stamp).unwrap();
+        assert_eq!(mtime_ns_of(&std::fs::metadata(&path).unwrap()), 0);
+    }
 
     /// Containment is component-wise, not a string prefix: `C:\AB` is not
     /// inside `C:\A`, and the root itself counts as within itself.

@@ -273,7 +273,11 @@ fn copy_and_stamp(
         flush_file(&fout, rel, hooks).with_context(|| format!("flush {}", d.display()))?;
     }
     if let Some(st) = smtime_sys {
-        fout.set_modified(st)
+        let ft = filetime::FileTime::from_system_time(st);
+        // Still stamped on the handle that wrote the bytes: the flush above has
+        // made them durable, and the handle closes only after this succeeds.
+        #[allow(deprecated)] // filetime 0.2.30 defers these setters to std
+        filetime::set_file_handle_times(&fout, None, Some(ft))
             .with_context(|| format!("set mtime {}", d.display()))?;
     }
     drop(fout);

@@ -41,3 +41,6 @@ girpr-tempdir = { path = "../../../crates/tempdir" }
 # crate keeps its own lossy text rendering and installs girsync's subscriber
 # stack, so sharing it pulls no program crate into the log leaf.
 girpr-log = { path = "../../../crates/log", features = ["test-support"] }
+# `age()` moves fixture mtimes by a whole number of seconds without rounding
+# away the existing sub-second part; filetime owns that arithmetic.
+filetime = "0.2.30"

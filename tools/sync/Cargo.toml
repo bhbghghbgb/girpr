@@ -84,6 +84,10 @@ rayon = "1.12.0"
 # create and random name; tempfile owns that claim in the shipped pass too, so
 # this is a regular dependency rather than a test-only one.
 tempfile = "3.27"
+# Timestamps in the cache are exact nanoseconds since the epoch; filetime owns
+# the seconds/nanos split and the platform-specific stamp mechanics (already a
+# transitive package, promoted here for the shipped library).
+filetime = "0.2.30"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2.5"

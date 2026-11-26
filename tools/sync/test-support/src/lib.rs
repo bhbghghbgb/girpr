@@ -402,13 +402,11 @@ pub fn poison_digest(dir: &Path, rel: &str, algo: &str) {
 /// Push a file's mtime forward, so a stat-equal pair stops being equal.
 pub fn age(dir: &Path, rel: &str, secs: u64) {
     let p = dir.join(rel);
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(secs);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&p)
-        .unwrap()
-        .set_modified(later)
-        .unwrap();
+    let now = filetime::FileTime::now();
+    let later =
+        filetime::FileTime::from_unix_time(now.unix_seconds() + secs as i64, now.nanoseconds());
+    #[allow(deprecated)] // filetime 0.2.30 defers these setters to std
+    filetime::set_file_mtime(&p, later).unwrap();
 }
 
 /// The digest rows currently hold, for asserting what a case left behind.
