@@ -445,6 +445,7 @@ pub fn normalize_audio_lang(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     fn sel(values: &[&str]) -> Result<(HashSet<String>, bool)> {
         let owned: Vec<String> = values.iter().map(|s| s.to_string()).collect();
@@ -577,7 +578,18 @@ mod tests {
 
     #[test]
     fn the_jobs_help_is_generated_from_the_compiled_in_default_and_ceiling() {
-        let long = jobs_long_help();
+        // Read the help clap actually registered for the flag, not the string a
+        // local constructor returned: the numbers must be the ones this run
+        // applies, whether they come from a literal or from an annotation.
+        let command = Args::command();
+        let jobs = command
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some("jobs"))
+            .expect("--jobs is a registered argument");
+        let long = jobs
+            .get_long_help()
+            .expect("--jobs has long help")
+            .to_string();
         assert!(
             long.contains(&format!("Defaults to {DEFAULT_JOBS} when omitted")),
             "{long}"

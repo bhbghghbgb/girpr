@@ -6,12 +6,12 @@
 //! produces, and that clap's own `2` never leaks into the "2 = metadata/network"
 //! slot (docs/02 §1).
 //!
-//! Pure argument/help cases now run in process through clap directly (see
-//! [`real_help`] and [`usage_rejection`]): rendering `--help` and classifying a
-//! bad argument need no process spawn, no runtime and no tracing. A small set of
-//! real binary cases remains to pin the process-level contract: a bad flag
-//! exits 1, `--help` exits 0, and post-parse usage errors carry their exact
-//! stderr text.
+//! The rendered `--help` is a trycmd snapshot under `tests/cmd`; flag presence
+//! and descriptions are checked through clap's own introspection, never by
+//! parsing its layout by hand. Bad arguments are classified in process through
+//! [`usage_rejection`]. A small set of real binary cases remains to pin the
+//! process-level contract: a bad flag exits 1, `--help` exits 0, and post-parse
+//! usage errors carry their exact stderr text.
 //!
 //! The log-announcement cases resolve a plan and render the announcement in
 //! process; only one binary smoke reads the same bytes back out of a real log
@@ -31,12 +31,11 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use girpr::girpr_log::{self, EnvOptions, LogOptions, LogPlan};
 use girpr::{Args, Level, log_file_announcement};
 use girpr_tempdir::TempDir;
 use std::process::Command;
-use std::sync::OnceLock;
 
 use crate::common::{
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
@@ -71,145 +70,13 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// substring at all — and an assertion that a coloured string does *not*
 /// contain one passes for the wrong reason, which is worse than no assertion.
 fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        // Skip the escape sequence: ESC, '[', then up to its final byte.
-        for c in chars.by_ref() {
-            if c.is_ascii_alphabetic() || c == '~' {
-                break;
-            }
-        }
-    }
-    out
+    strip_ansi_escapes::strip_str(s)
 }
 
-/// The indent clap's help gives a long-only option line.
+/// The message from a panic a parser raises for input it cannot read.
 ///
-/// The command's `--help` lays options out flat under `Options:` with six
-/// leading spaces. [`help_entry`] depends on that layout: if a clap upgrade
-/// changes it, the entry will not be found and the helper panics with the
-/// expected shapes and the help text, rather than returning a slice of the
-/// wrong part of the output.
-const HELP_OPTION_INDENT: &str = "      ";
-
-/// The indent clap's help gives an option line that begins with a short alias.
-///
-/// An option with both spellings puts the short one in its own column
-/// (`-h, --help`), two spaces in, rather than at [`HELP_OPTION_INDENT`].
-const HELP_SHORT_OPTION_INDENT: &str = "  ";
-
-/// The indent clap's help gives an option line's description.
-///
-/// A description continues under the flag column: [`HELP_OPTION_INDENT`] (six
-/// spaces) plus four more.
-const HELP_DESCRIPTION_INDENT: &str = "          ";
-
-/// The punctuation between a short alias and the long spelling clap gives it.
-///
-/// An option with both spellings is written `-j, --jobs`: the one-character
-/// alias, then this separator, then the long flag. A clap change to either
-/// half of it moves the long flag out of the shape [`option_body`] matches.
-const HELP_SHORT_ALIAS_SEPARATOR: &str = ", ";
-
-/// The part of an option line that starts at its long flag, when `line` is one.
-///
-/// clap writes a long-only option as `      --jobs <JOBS>` and one with a short
-/// alias as `  -j, --jobs <JOBS>`; a description line is indented further and is
-/// not an option line. Returning the body lets the caller look for the flag
-/// without caring which of the two shapes the line has.
-///
-/// A line before the description column that starts with a single `-` is a
-/// short-alias option line. It must match that shape. Panicking instead of
-/// returning `None` keeps a layout change loud: `None` would read as "not an
-/// option line" and let a neighbouring entry swallow it.
-fn option_body(line: &str) -> Option<&str> {
-    let indent = indent_width(line);
-    let body = &line[indent..];
-    if indent >= HELP_DESCRIPTION_INDENT.len() {
-        return None;
-    }
-    if body.starts_with("--") {
-        return (indent == HELP_OPTION_INDENT.len()).then_some(body);
-    }
-    let alias_and_long = body.strip_prefix('-')?;
-    let (short, long) = alias_and_long
-        .split_once(HELP_SHORT_ALIAS_SEPARATOR)
-        .unwrap_or_else(|| {
-            panic!("short option line is not `-X{HELP_SHORT_ALIAS_SEPARATOR}--long`: {line:?}")
-        });
-    assert_eq!(
-        indent,
-        HELP_SHORT_OPTION_INDENT.len(),
-        "short option line starts at the wrong indent: {line:?}"
-    );
-    assert!(
-        short.chars().count() == 1,
-        "short option line does not carry a one-character alias: {line:?}"
-    );
-    assert!(
-        long.starts_with("--"),
-        "short option line is not followed by a long flag: {line:?}"
-    );
-    Some(long)
-}
-
-/// The slice of `--help` output that belongs to one option: from the option's
-/// own line to the next option's line.
-///
-/// Help is a flat text plane, so a substring search over all of it can be
-/// satisfied by another option's annotation. The block keeps an assertion about
-/// one flag about that flag.
-fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
-    let mut start = None;
-    for line in std::iter::once(0).chain(help.match_indices('\n').map(|(i, _)| i + 1)) {
-        let rest = &help[line..];
-        let current = rest.split('\n').next().unwrap_or(rest);
-        let Some(body) = option_body(current) else {
-            continue;
-        };
-        if let Some(start) = start {
-            // The newline before this line ends the previous entry. A CRLF
-            // capture also has the previous line's `\r` there; dropping it
-            // keeps the block the same text as the LF capture's.
-            let mut end = line - 1;
-            if help.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\r') {
-                end -= 1;
-            }
-            return &help[start..end];
-        }
-        // A flag is a whole token: `--jobs` must not match a `--jobs-<something>`
-        // option line. clap follows the flag with a space when it takes a value
-        // and with a newline when it does not; a CRLF capture puts `\r` there
-        // instead, and the end of the text is also a boundary.
-        if body.starts_with(flag)
-            && matches!(
-                body.as_bytes().get(flag.len()),
-                Some(b' ' | b'\n' | b'\r') | None
-            )
-        {
-            start = Some(line);
-        }
-    }
-    let Some(start) = start else {
-        panic!(
-            "help has no {flag} entry as an option line \
-             (`{HELP_OPTION_INDENT}{flag}` or `{HELP_SHORT_OPTION_INDENT}-x{HELP_SHORT_ALIAS_SEPARATOR}{flag}`):\n{help}"
-        )
-    };
-    &help[start..]
-}
-
-/// The message from a panic a layout helper raises for input it cannot read.
-///
-/// A helper that spots a layout change panics instead of returning `None`, so a
-/// neighbouring entry cannot swallow the bad line. Catching the panic keeps the
-/// message assertable inside a table-driven test — the same cases used to be
-/// separate `#[should_panic]` functions.
+/// Catching the panic keeps the message assertable inside a table-driven test —
+/// the same cases used to be separate `#[should_panic]` functions.
 fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
     let panic = std::panic::catch_unwind(f).expect_err("the helper must panic");
     panic
@@ -220,247 +87,8 @@ fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
         .to_owned()
 }
 
-#[test]
-fn help_entry_extracts_the_right_block() {
-    // The fixtures below build descriptions from this indent on the strength
-    // of the layout the documentation above claims. Pin the claim itself, so
-    // the two constants cannot be edited apart from one another.
-    assert_eq!(
-        HELP_DESCRIPTION_INDENT,
-        format!("{HELP_OPTION_INDENT}    "),
-        "a description continues four columns past the option's flag column"
-    );
-
-    let jobs = format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n");
-    let dry_run = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n");
-    let dry_run_help = dry_run.clone();
-    let at_end = format!("{HELP_OPTION_INDENT}--dry-run");
-
-    let neighbours = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--other\n\
-         {HELP_DESCRIPTION_INDENT}[default: 4]\n"
-    );
-    // `--jobs` is a prefix of `--jobs-extra`, but they are different options:
-    // only the space after the flag tells them apart.
-    let prefix = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--jobs-extra <N>\n\
-         {HELP_DESCRIPTION_INDENT}different option\n"
-    );
-    // The wanted entry is not the first line, so its start comes from the
-    // newline before it rather than from the start of the text.
-    let after_preceding = format!(
-        "{HELP_OPTION_INDENT}--first\n\
-         {HELP_DESCRIPTION_INDENT}first text\n\n\
-         {HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--last\n\
-         {HELP_DESCRIPTION_INDENT}last text\n"
-    );
-    assert!(!after_preceding.starts_with(&format!("{HELP_OPTION_INDENT}--jobs")));
-    // clap puts an option's short spelling in its own column, so the long flag
-    // is no longer the first token on the line; the entry must start there and
-    // stop before the next entry's short-alias line.
-    let behind_alias = format!(
-        "{HELP_OPTION_INDENT}--first\n\
-         {HELP_DESCRIPTION_INDENT}first text\n\n\
-         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--last\n\
-         {HELP_DESCRIPTION_INDENT}last text\n"
-    );
-    let before_alias = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_SHORT_OPTION_INDENT}-h, --help\n\
-         {HELP_DESCRIPTION_INDENT}Print help\n"
-    );
-
-    // A Windows-console capture ends its lines with `\r\n`; the flag's token
-    // boundary is then the `\r`, and the block keeps the same text as the LF
-    // capture's (without the blank separator's stray `\r`).
-    let crlf = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\r\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
-         {HELP_OPTION_INDENT}--dry-run\r\n\
-         {HELP_DESCRIPTION_INDENT}no value\r\n"
-    );
-    let crlf_alias = format!(
-        "{HELP_OPTION_INDENT}--first\r\n\
-         {HELP_DESCRIPTION_INDENT}first text\r\n\r\n\
-         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
-         {HELP_OPTION_INDENT}--last\r\n\
-         {HELP_DESCRIPTION_INDENT}last text\r\n"
-    );
-
-    // Every case is (label, help text, flag, exact block). Exact equality is
-    // stronger than the old `contains`/`!contains` assertions: an entry that
-    // borrowed a neighbour's annotation or swallowed a following option no
-    // longer matches its block.
-    let cases = [
-        (
-            "a neighbour's annotation is not borrowed",
-            neighbours.clone(),
-            "--jobs",
-            jobs.clone(),
-        ),
-        (
-            "the neighbour keeps its own annotation",
-            neighbours,
-            "--other",
-            format!("{HELP_OPTION_INDENT}--other\n{HELP_DESCRIPTION_INDENT}[default: 4]\n"),
-        ),
-        (
-            "--jobs is a whole token, not a prefix",
-            prefix,
-            "--jobs",
-            jobs.clone(),
-        ),
-        (
-            "a flag's newline is a boundary",
-            dry_run_help,
-            "--dry-run",
-            dry_run.clone(),
-        ),
-        (
-            "the end of the text is a boundary",
-            at_end.clone(),
-            "--dry-run",
-            at_end,
-        ),
-        (
-            "the entry after a preceding option",
-            after_preceding,
-            "--jobs",
-            jobs.clone(),
-        ),
-        (
-            "an entry behind a short alias",
-            behind_alias,
-            "--jobs",
-            format!(
-                "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"
-            ),
-        ),
-        (
-            "a preceding entry stops before a short alias",
-            before_alias,
-            "--jobs",
-            jobs.clone(),
-        ),
-        (
-            "CRLF --jobs",
-            crlf.clone(),
-            "--jobs",
-            format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"),
-        ),
-        (
-            "CRLF boolean flag",
-            crlf,
-            "--dry-run",
-            format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_DESCRIPTION_INDENT}no value\r\n"),
-        ),
-        (
-            "CRLF behind a short alias",
-            crlf_alias.clone(),
-            "--jobs",
-            format!(
-                "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"
-            ),
-        ),
-    ];
-    for (name, help, flag, expected) in &cases {
-        assert_eq!(help_entry(help, flag), expected.as_str(), "{name}");
-    }
-
-    // The CRLF alias case also pins that its first line is read as an option
-    // body and that the block ends on a line feed, not a stray `\r`.
-    let crlf_alias_entry = help_entry(&crlf_alias, "--jobs");
-    assert_eq!(
-        option_body(
-            crlf_alias_entry
-                .lines()
-                .next()
-                .expect("the entry has a line")
-        ),
-        Some("--jobs <JOBS>"),
-        "the entry starts at the long flag behind its short alias"
-    );
-    assert_eq!(
-        crlf_alias_entry.as_bytes().last(),
-        Some(&b'\n'),
-        "the entry ends on a line feed, not a stray carriage return"
-    );
-
-    // The real help renders its one short alias as `  -h, --help`, and its
-    // entry is found by the long flag behind it.
-    let help_option = help_entry(real_help(), "--help");
-    assert!(
-        help_option.starts_with(&format!("{HELP_SHORT_OPTION_INDENT}-h, --help")),
-        "the --help entry starts at its short-alias line:\n{help_option}"
-    );
-    assert!(help_option.contains("Print help"), "{help_option}");
-}
-
-#[test]
-fn layout_helpers_name_the_bad_layout_in_their_panic() {
-    // A missing flag names both shapes it looked for, so a layout change reads
-    // as a layout change rather than as a broken option.
-    let absent = format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n");
-    let message = panic_message(|| {
-        help_entry(&absent, "--absent");
-    });
-    assert!(
-        message.contains(
-            "help has no --absent entry as an option line (`      --absent` or `  -x, --absent`)"
-        ),
-        "a missing flag names both shapes it looked for: {message}"
-    );
-
-    // A short-alias line outside the pinned shape has to be reported, not read
-    // as "no option here": `None` would let the preceding entry run past it.
-    // Each row is one way the shape can break; the message must name both the
-    // line and what is wrong with it.
-    let cases = [
-        (
-            format!("{HELP_SHORT_OPTION_INDENT}-j --jobs <JOBS>"),
-            "short option line",
-        ),
-        (
-            format!("{HELP_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR}--jobs <JOBS>"),
-            "wrong indent",
-        ),
-        (
-            format!("{HELP_SHORT_OPTION_INDENT}-jj{HELP_SHORT_ALIAS_SEPARATOR}--jobs <JOBS>"),
-            "one-character alias",
-        ),
-        (
-            format!("{HELP_SHORT_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR} --jobs <JOBS>"),
-            "long flag",
-        ),
-    ];
-    for (line, expected) in &cases {
-        let message = panic_message(|| {
-            option_body(line);
-        });
-        assert!(
-            message.contains(line),
-            "the report names the line: {message}"
-        );
-        assert!(
-            message.contains(expected),
-            "the report names what is wrong with `{line}`: {message}"
-        );
-    }
-}
-
-/// The binary's file name, which clap uses as the displayed program name in
-/// `--help`. On Windows this includes `.exe`; using the real name keeps the
-/// in-process capture byte-identical to what the process prints.
+/// The binary's file name, passed as argv[0] to in-process parses so their
+/// diagnostics name the same program the real binary does.
 fn bin_name() -> String {
     std::path::Path::new(env!("CARGO_BIN_EXE_girpr"))
         .file_name()
@@ -468,27 +96,6 @@ fn bin_name() -> String {
         .to_str()
         .expect("the binary name is UTF-8")
         .to_string()
-}
-
-/// The real `--help` output, rendered in process once.
-///
-/// `main.rs` renders `--help` by handing clap's `DisplayHelp` error to `print()`;
-/// doing the same here — with the binary's own file name as argv[0] — produces
-/// the exact same text (long help, including the `girpr[.exe]` program name)
-/// without spawning a process or installing tracing. The layout constants above
-/// are claims about clap, and the fixture tests only build text *from* those
-/// claims; the tests below check the claims against what clap actually writes,
-/// so they all read the same render.
-fn real_help() -> &'static str {
-    static HELP: OnceLock<String> = OnceLock::new();
-    HELP.get_or_init(|| {
-        let name = bin_name();
-        Args::try_parse_from([name.as_str(), "--help"])
-            .expect_err("--help is clap's DisplayHelp error")
-            .render()
-            .to_string()
-    })
-    .as_str()
 }
 
 /// Why `args` is rejected as a usage error, computed in process.
@@ -507,89 +114,14 @@ fn usage_rejection(args: &[&str]) -> Option<String> {
     }
 }
 
-/// The width of a help line's leading indent.
-///
-/// The indent is measured, not searched for: a line that carries *more*
-/// spaces than the constant is not a line that starts at the constant.
-fn indent_width(line: &str) -> usize {
-    line.len() - line.trim_start_matches(' ').len()
-}
-
-/// A selector for the real-help line a layout claim is about.
-type LineFinder = for<'a> fn(&'a str) -> Option<&'a str>;
-
-/// Each of clap's help columns is a claim pinned against the real render.
-///
-/// The fixtures build their text *from* the indent constants, so they cannot
-/// tell a right constant from a wrong one — they only show the suite agrees
-/// with itself. Reading the real help asks whether clap actually puts each
-/// line where the constants say: a clap upgrade that moves a column fails here
-/// as the layout change it is, instead of passing on the fixtures' word. The
-/// measured width is compared as well as the prefix, so a line carrying *more*
-/// indent than the constant says is a failure and not a match.
+/// The whole rendered `--help` is a trycmd snapshot under `tests/cmd`. It pins
+/// every flag's presence and description without reconstructing clap's layout:
+/// a rendering change fails here and the snapshot is regenerated deliberately.
 #[test]
-fn the_real_help_puts_every_line_at_its_pinned_indent() {
-    let help = real_help();
-    let cases: [(&str, &str, &str, bool, LineFinder); 3] = [
-        (
-            "short option",
-            HELP_SHORT_OPTION_INDENT,
-            "-h, --help",
-            true,
-            |help| {
-                let mut lines = help
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("-h,"));
-                let line = lines.next()?;
-                assert!(
-                    lines.next().is_none(),
-                    "the real help has exactly one short-option line:\n{help}"
-                );
-                Some(line)
-            },
-        ),
-        ("option", HELP_OPTION_INDENT, "--game-path", false, |help| {
-            help.lines()
-                .find(|line| line.trim_start().starts_with("--"))
-        }),
-        (
-            "description",
-            HELP_DESCRIPTION_INDENT,
-            "Game install directory",
-            false,
-            |help| {
-                let lines: Vec<&str> = help.lines().collect();
-                let at = lines
-                    .iter()
-                    .position(|line| line.trim_start().starts_with("--game-path"))?;
-                lines.get(at + 1).copied()
-            },
-        ),
-    ];
-    for (name, indent, expected, exact, find) in cases {
-        let line = find(help).unwrap_or_else(|| panic!("the real help has a {name} line:\n{help}"));
-        if exact {
-            assert_eq!(
-                line.trim_start(),
-                expected,
-                "the {name} line is the pinned one:\n{help}"
-            );
-        } else {
-            assert!(
-                line.trim_start().starts_with(expected),
-                "the {name} line is the pinned one:\n{line}"
-            );
-        }
-        assert!(
-            line.starts_with(indent),
-            "the {name} starts at the pinned indent:\n{line:?}"
-        );
-        assert_eq!(
-            indent_width(line),
-            indent.len(),
-            "the {name}'s column moved:\n{help}"
-        );
-    }
+fn help_output_matches_the_snapshot() {
+    trycmd::TestCases::new()
+        .case("tests/cmd/*.trycmd")
+        .default_bin_path(env!("CARGO_BIN_EXE_girpr"));
 }
 
 #[test]
@@ -598,13 +130,27 @@ fn help_exits_zero() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "--help should exit 0");
     assert!(stdout.contains("Usage"), "{stdout}");
-    // The in-process renderer must stay byte-identical to what the binary
-    // prints. Reusing this spawn keeps the guard free of any extra process.
-    assert_eq!(
-        stdout,
-        real_help(),
-        "the in-process --help render must match the binary byte for byte"
-    );
+}
+
+/// The argument carrying `flag` (given without its leading `--`).
+///
+/// clap's own command model is the source of truth for flag names and their
+/// descriptions. Reading it avoids pinning rendering details such as indentation
+/// or the position of a short alias.
+fn argument<'a>(command: &'a clap::Command, flag: &str) -> &'a clap::Arg {
+    command
+        .get_arguments()
+        .find(|arg| arg.get_long() == Some(flag))
+        .unwrap_or_else(|| panic!("no argument registered for --{flag}"))
+}
+
+/// The help text clap stores for `flag`, including the long form when present.
+fn argument_help(command: &clap::Command, flag: &str) -> String {
+    let arg = argument(command, flag);
+    arg.get_long_help()
+        .or_else(|| arg.get_help())
+        .expect("the argument has help text")
+        .to_string()
 }
 
 #[test]
@@ -748,8 +294,12 @@ fn argument_errors_exit_one_not_two() {
 }
 
 #[test]
-fn help_text_lists_every_documented_flag() {
-    let stdout = real_help();
+fn every_documented_flag_is_registered_with_clap() {
+    let command = Args::command();
+    let registered: Vec<&str> = command
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .collect();
     for flag in [
         "--game-path",
         "--biz",
@@ -782,29 +332,33 @@ fn help_text_lists_every_documented_flag() {
         "--with-persistent",
         "--scan",
     ] {
-        assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
+        let long = flag.strip_prefix("--").expect("a documented long flag");
+        assert!(
+            registered.contains(&long),
+            "clap has no --{long} argument: {registered:?}"
+        );
     }
 }
 
 #[test]
-fn help_names_jobs_and_keeps_the_compatibility_alias_discoverable() {
-    let stdout = real_help();
-    let jobs = help_entry(stdout, "--jobs");
-    assert!(jobs.contains("--jobs"), "{jobs}");
+fn jobs_keeps_the_compatibility_alias_and_documents_the_applied_default() {
+    let command = Args::command();
+    let jobs = argument(&command, "jobs");
     assert!(
-        jobs.contains("--io-threads"),
-        "the compatibility alias stays discoverable:\n{jobs}"
+        jobs.get_visible_aliases()
+            .is_some_and(|aliases| aliases.contains(&"io-threads")),
+        "the compatibility alias stays discoverable"
     );
-    // The entry must show the default the run actually applies, and only the
-    // `--jobs` entry is searched: another option's `[default: …]` cannot make
-    // this pass.
+    // The help stored on this argument must show the default the run actually
+    // applies — not a neighbour's `[default: …]` in a flat help plane.
     let applied = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"])
         .into_ctx()
         .expect("the defaults are a valid configuration")
         .jobs;
+    let help = argument_help(&command, "jobs");
     assert!(
-        jobs.contains(&format!("[default: {applied}]")),
-        "the --jobs entry does not show the applied default:\n{jobs}"
+        help.contains(&format!("[default: {applied}]")),
+        "the --jobs help does not show the applied default:\n{help}"
     );
 }
 
@@ -846,10 +400,10 @@ fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
     );
 }
 
-/// `--with-persistent` is a boolean, defaults off, and has its own help entry
-/// that says read-only modes only list the tier.
+/// `--with-persistent` is a boolean, defaults off, and its own help says
+/// read-only modes only list the tier.
 #[test]
-fn with_persistent_is_an_opt_in_flag_with_its_own_help_entry() {
+fn with_persistent_is_an_opt_in_flag_with_its_own_help() {
     let off = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"])
         .into_ctx()
         .expect("the default is valid");
@@ -868,9 +422,10 @@ fn with_persistent_is_an_opt_in_flag_with_its_own_help_entry() {
     assert!(on.with_persistent);
     assert!(on.persistent_dispatch_override.is_none());
 
-    let entry = help_entry(real_help(), "--with-persistent");
+    let command = Args::command();
+    let help = argument_help(&command, "with-persistent");
     for needle in ["Opt-in", "Read-only modes", "--purge-only"] {
-        assert!(entry.contains(needle), "{needle} missing from: {entry}");
+        assert!(help.contains(needle), "{needle} missing from: {help}");
     }
 }
 
@@ -1011,14 +566,14 @@ fn the_jobs_flag_is_validated_at_the_same_process_level_ceiling_as_the_alias() {
 
 #[test]
 fn plan_out_help_documents_every_serialized_field() {
-    // R-9: `RepairEntry` serializes `mode` and `extra_bytes` too. The help is
-    // the operator-facing description of the document, so it must name the
-    // whole shape the binary writes. `help_text_lists_every_documented_flag`
-    // only checks flag names and cannot catch a stale JSON shape.
-    let stdout = real_help();
+    // The help is the operator-facing description of the document, so the
+    // argument's own help must name the whole shape the binary writes. A flag
+    // list alone cannot catch a stale JSON shape.
+    let command = Args::command();
+    let help = argument_help(&command, "plan-out");
     assert!(
-        stdout.contains("mode,extra_bytes"),
-        "the --plan-out help omits the serialized fields:\n{stdout}"
+        help.contains("mode,extra_bytes"),
+        "the --plan-out help omits the serialized fields:\n{help}"
     );
 }
 

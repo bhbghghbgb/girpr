@@ -42,23 +42,10 @@ pub const TEMP_PREFIX: &str = "girsync";
 /// the escape sequences land *between* them: the text is `DEBUG`, then an
 /// escape, then the target. A substring that spans one is not a substring at
 /// all — and an assertion that a coloured string does *not* contain one passes
-/// for the wrong reason, which is worse than no assertion.
+/// for the wrong reason, which is worse than no assertion. The escape grammar
+/// belongs to `strip-ansi-escapes`; callers only need the plain text.
 pub fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        // Skip the escape sequence: ESC, '[', then up to its final byte.
-        for c in chars.by_ref() {
-            if c.is_ascii_alphabetic() || c == '~' {
-                break;
-            }
-        }
-    }
-    out
+    strip_ansi_escapes::strip_str(s)
 }
 
 /// A fresh, uniquely named scratch directory carrying the caller's prefix and

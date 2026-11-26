@@ -1,0 +1,139 @@
+The whole rendered `--help` is pinned here: every flag's presence and description
+in one snapshot, with the executable suffix normalized by `[EXE]`. Regenerate
+after an intentional help change with
+`TRYCMD=overwrite cargo test -p girpr --test contracts help_output_matches_the_snapshot`.
+
+```console
+$ girpr --help
+GI low-disk repair patcher
+
+Usage: girpr[EXE] [OPTIONS] --game-path <GAME_PATH> --biz <BIZ>
+
+Options:
+      --game-path <GAME_PATH>
+          Game install directory (contains config.ini, *_Data, ...)
+
+      --biz <BIZ>
+          Game biz / channel
+          
+          [possible values: hk4e_cn, hk4e_global, hk4e_bilibili]
+
+      --audio <AUDIO>
+          Audio languages to keep (repeatable). If omitted, keeps current selection (falls back to `en-us` if the scan file is missing). Use `--audio none` for game-only (no audio); it overwrites the scan file with an empty list. `none` cannot be mixed with language codes
+
+      --jobs <JOBS>
+          Max concurrent FILES (chunks inside a file are sequential -> HDD friendly). SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker threads; `--io-threads` is a deprecated alias. Defaults to 4 when omitted; values above 1024 are a usage error.
+          
+          [default: 4]
+          
+          [alias: --io-threads]
+
+      --purge-after
+          Delete files not in the live manifest after patching (Collapse files-cleanup parity). Same cleanup as `--purge-before`, only the timing differs
+
+      --purge-before
+          Same files-cleanup as `--purge-after`, but run before patching (frees space for the repair itself)
+
+      --include <GLOB>
+          Only act on paths matching this glob (repeatable). Matched against the `/`-separated path relative to `--game-path`, case-insensitively. NOTE: `*` also crosses `/`, so `*.blk` matches at any depth. Paths that do not match are treated as nonexistent: not repaired, not deleted, and `config.ini` is not bumped. With no `--include`, every path is admitted
+
+      --exclude <GLOB>
+          Treat paths matching this glob as nonexistent (repeatable). Beats `--include`. e.g. `--exclude "*_tmp"` protects in-flight temp files
+
+      --max-files <N>
+          Refuse the run (exit 5) if the plan touches more than N files. `0` is a valid ceiling, not a usage error. Checked *after* `--include`, so it means "the files the scope selected"
+
+      --max-delete-bytes <N>
+          Refuse the run (exit 5) if the files-cleanup would delete more than N bytes. Counted once over both purge passes; out-of-scope paths are not candidates and so never count
+
+      --max-download-bytes <N>
+          Refuse the run (exit 5) if the plan's estimated chunk downloads exceed N bytes, and hard-stop mid-flight if reuse falls back to more than the estimate predicted. The estimate counts only what the local chunk map cannot supply, so a ceiling set to the estimate still stops a run whose reuse path breaks. Does not bound metadata or manifest traffic
+
+      --max-write-bytes <N>
+          Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`) once this many bytes have been written into the install — the target itself on the in-place path, `{path}_tmp` on the temp path. Unlike `download_bytes`, this is the disk cost: every reuse-copy and every chunk write is counted, so a zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse success is decided per chunk at runtime
+
+      --max-verified-download-bytes <N>
+          Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-download-bytes`) once this many **verified** download bytes have been made — the bytes of the files that were actually repaired, not the traffic the run caused. A budget on the *repair* rather than on the network: a retry that fetched the same chunk twice, and a chunk that failed its digest, cost nothing here. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime
+
+      --max-verified-write-bytes <N>
+          Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-write-bytes`) once this many bytes have been written into the install **from sources that passed their gate**. The same split as `--max-write-bytes`, on the other half: the bytes that landed without passing a gate are spent and are what `--max-write-bytes` bounds; this bounds the bytes the repair was allowed to spend. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime
+
+      --max-ram-bytes <N>
+          Cap the RAM the in-place repair may use to stage the bytes it has to move inside a file. A file that cannot get its reservation is written in the other direction instead of failing — the same file, with less reuse. `0` forces that path
+
+      --repair-mode <REPAIR_MODE>
+          How each file is repaired. `auto` (the default) repairs in place when the target can be opened for writing, and writes it the `temp` way when it cannot; `inplace` forces the in-place path; `temp` assembles the repair in `{path}_tmp` and renames it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice; `discard` deletes the target and writes it from scratch
+
+          Possible values:
+          - auto:    Repair in place when the target can be opened for writing, and write the file the `temp` way when it cannot. The default
+          - inplace: Repair in place: write only the bytes that are wrong, at the offsets they belong at. No `_tmp` file, and the peak extra disk is the file's *growth* rather than its size
+          - temp:    Assemble the repair in `{path}_tmp` and rename it over the target. The target file is never modified and the swap is atomic, and the peak extra disk is the whole file
+          - discard: Delete the target and write the file from scratch. Zero peak extra disk, and a full download for every file it touches
+
+      --scan
+          Read the whole install once, in the plan phase, and report the **exact** figures: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file, and makes a ceiling refusal slower (the estimate a ceiling is checked against is only exact after the scan)
+
+      --with-persistent
+          Query the dispatcher and include the `Persistent/` update in the plan. Opt-in: without it no dispatcher or persistent request is made and the `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the persistent work without writing markers or mirrors; `--purge-only` does no persistent work at all
+
+      --check-only
+          Only verify (size+md5) and report; writes nothing
+
+      --purge-only
+          Make the install match the live manifest without repairing anything: runs the files-cleanup and the post-phase, skips the repair loop. The inverse of `--check-only` ("is it intact?" → "make it match"). `config.ini` is **not** bumped — a cleanup does not put the bytes in place, so claiming the newer version would desync the launcher
+
+      --fail-fast
+          Stop the run as soon as one file exhausts its retries: no further files are started, and a file gets one attempt instead of five. Without it one failing file costs ~125 s of pure retry sleeping (5 file attempts × linear backoff, each with its own 5× chunk retry), so a plan of a few thousand files can hang for hours before reaching its SUMMARY. Counters stay honest: the file that failed still counts as failed, exit `3`
+
+      --dry-run
+          Print actions without writing anything
+
+      --print-plan
+          Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=…`) to stdout and exit 0 without repairing, purging or bumping anything. NOT an offline mode: the plan *is* the manifest, so this still fetches the API and the manifests, exactly as any other run does
+
+      --plan-out <FILE>
+          Also write the per-file plan detail to this file as JSON `{repair:[{rel,size,chunks_total,est_download_bytes,mode,extra_bytes}],purge:[{rel,size}]}`. `mode` is `inplace` or `temp`; `extra_bytes` is the extra disk the file needs beyond the install. Implies nothing: use it with `--print-plan`, or on its own to dump the plan of a run that does the work
+
+      --output <OUTPUT>
+          How stdout is written: one human `key=value` line per record, or one JSON object per line (NDJSON) carrying the same records in the same order. Only stdout is affected — diagnostics stay on stderr as `tracing` events either way — and `--log-file`, if given, carries the same rendered lines
+
+          Possible values:
+          - text: One human-readable `key=value` line per record: `SUMMARY total=0 …`. The default, and the format every doc example and golden line is written against
+          - json: One JSON object per line (NDJSON), same records, same order: `{"event":"summary","total":0,…}`. No enclosing array, so a caller can stream it and recover the exact ordering
+          
+          [default: text]
+
+      --log-level <LV>
+          Console verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+          
+          The console is for the person watching the run, so it is `info` by default. `RUST_LOG` *adds* to it: it can turn up other crates (`RUST_LOG=reqwest=debug`), but it cannot change this program's own level, because a flag is what the person running the tool typed.
+          
+          [default: info]
+
+      --log-file-level <LV>
+          Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+          
+          The file is for the person reading it afterwards, so it is one step louder than the console: `debug` by default. `GIRPR_LOG_FILE_LEVEL` says otherwise when this flag is absent. The two levels are separate because they answer separate questions, and a run that wants a quiet console and a detailed file should not have to choose.
+
+      --log-file <FILE>
+          Where the log file goes.
+          
+          In a **release** build the default is `logs/girpr_<timestamp>.log` in a `logs/` directory beside the executable; in a **debug** build there is no default and the file is written only because this flag named it. `GIRPR_LOG_FILE` names one when this flag does not. Missing parent directories are created. A file that cannot be opened is a stderr warning, never a failure.
+
+      --no-log-file
+          Write no log file at all.
+          
+          The console is unaffected: this turns off the *file*, which is where a run is read afterwards, and not the console, which is where a run is watched while it happens.
+          
+          A release build writes a log file by default and this turns that off; a debug build writes none by default and this says so explicitly. It cannot be combined with `--log-file`: the two say opposite things about the same file, and a usage error says so rather than one of them silently winning.
+
+      --hyp-base <URL>
+          Point the HYP API at this base URL instead of the production CDN. Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects `getGameConfigs`/`getGameBranches`/`getBuild`/`getGameDeprecatedFileConfigs` only — the manifest and chunk URLs come from `url_prefix` inside the *response bodies*, so a mock server must return bodies pointing at itself
+
+      --sophon-base <URL>
+          Point the Sophon `getBuild` API at this base URL. Overrides `GIRPR_SOPHON_BASE`. Same caveat as `--hyp-base`: only `getBuild` is redirected; manifests and chunks follow `url_prefix` in the bodies
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+```

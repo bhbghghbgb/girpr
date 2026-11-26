@@ -206,6 +206,14 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 tempfile = "3.27"
 
 [dev-dependencies]
+# CLI help is snapshotted as the whole rendered output instead of parsing clap's
+# layout by hand. The binary is already built for the other integration tests;
+# trycmd runs it and compares the output byte for byte (with newlines and the
+# executable suffix normalized).
+trycmd = "1.2.1"
+# Console captures are compared as plain text; the library knows the full escape
+# grammar, including the sequences the old hand-written loop skipped.
+strip-ansi-escapes = "0.2.1"
 # The shared offline HYP/Sophon mock, fixture builders and lock-cleanup
 # helpers for the root integration binaries. They used to be inlined by
 # `mod common;` into every binary; the public library surface lets each binary
