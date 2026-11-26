@@ -38,8 +38,16 @@ serde_json = "1.0.154"
 url = "2.5.9"
 # The canned manifest bodies are protobuf frames the mock encodes by hand.
 prost = "0.14.6"
-# `block_on` drives gircap's async command dispatch on a current-thread runtime.
-tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
+# axum owns the mock's listener, HTTP parsing, keep-alive, routing and header
+# writing. A regular dependency, not a dev-dependency: this crate is consumed as
+# a library by gircap's integration tests, and a dev-dependency of a library is
+# not linked into those consumers. Only `http1`/`tokio` are needed (the mock is
+# HTTP/1.1); the rest of the workspace already resolves the same axum 0.8.9.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+# `block_on` drives gircap's async command dispatch on a current-thread runtime;
+# `net`/`time`/`sync` drive the axum server's listener, idle connections and
+# shutdown signal on its own current-thread runtime.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "sync"] }
 # Chunk and manifest bodies are zstd frames on the wire.
 zstd = "0.14.4"
 # 64-bit FNV-1a for the shared bundle cache key; only change detection matters.

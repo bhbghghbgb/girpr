@@ -8,14 +8,15 @@
 //! and a mock that shares code with the code under test is a mock that agrees
 //! with a bug.
 //!
-//! ## Why a hand-rolled HTTP/1.1 server
+//! ## Why axum serves the mock
 //!
-//! Because `tokio`'s test utilities are a dependency this crate does not need
-//! for anything else, and a mock server is the one place where "serve whatever
-//! bytes the world says" has to be *obviously* correct. A `TcpListener`, a read
-//! loop for the request line, and a write of the response is the whole protocol
-//! this client uses, and being able to read it end to end is worth the forty
-//! lines.
+//! The mock is the one place where "serve whatever bytes the world says" has to
+//! be *obviously* correct, but that is a property of the `World`/`Table` the
+//! test builds, not of the wire protocol. `axum` owns the listener, HTTP/1.1
+//! parsing, keep-alive, routing and header writing; this module owns only the
+//! reply policy (`respond`, `no_such_key`, the fail-once table) that the
+//! in-memory `HttpTransport` seam shares byte-for-byte. The listener binds
+//! `127.0.0.1:0`, so the no-network property below still holds by construction.
 //!
 //! ## The bases
 //!
@@ -47,12 +48,20 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use axum::{
+    Router,
+    body::Body,
+    extract::State,
+    http::{StatusCode, Uri, header},
+    response::Response,
+    routing::get,
+};
+use tokio::sync::watch;
 
 use fs2::FileExt;
 use gircap::cli::{Cmd, parse_from, recorded_argv};
@@ -1216,18 +1225,28 @@ impl Recorded {
     }
 }
 
-/// A running mock. Dropping it stops the listener.
+/// A running mock. Dropping it signals the axum server to shut down.
 pub struct Mock {
     base: String,
-    stop: Arc<AtomicBool>,
+    /// The graceful-shutdown signal. A `watch` sender needs no runtime to send,
+    /// so `Drop` can stop the server from the test's thread.
+    stop: watch::Sender<bool>,
     log: Arc<Mutex<Vec<Recorded>>>,
-    /// Whether a TCP listener and serving threads were actually started.
-    /// Only used to skip the Drop-time unblock probe for an in-memory mock.
-    listening: bool,
     /// Kept so `fail_once_for` can arm a route after the listener is already
-    /// bound. Shared with the serving threads, which is why the map inside is
+    /// bound. Shared with the axum handlers, which is why its `flaky` map is
     /// behind its own lock.
     table: Arc<Table>,
+}
+
+/// The state every axum handler receives: the reply policy and the request log.
+///
+/// `Arc<Table>` is `Clone`, which is what `axum`'s `State` requires, and shares
+/// the `flaky` lock with `MemoryTransport` so arming a failure affects both
+/// paths identically.
+#[derive(Clone)]
+struct RouterState {
+    table: Arc<Table>,
+    log: Arc<Mutex<Vec<Recorded>>>,
 }
 
 impl Mock {
@@ -1237,34 +1256,47 @@ impl Mock {
     /// two of its tests run at once, and this suite does run its tests in
     /// parallel.
     pub fn start(world: World) -> Mock {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
-        let base = format!("http://{}", listener.local_addr().expect("local addr"));
-        let stop = Arc::new(AtomicBool::new(false));
+        // Bind synchronously so `base` is known before returning; the socket is
+        // handed to tokio's listener on the thread that drives the server.
+        let std_listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        std_listener
+            .set_nonblocking(true)
+            .expect("a nonblocking listener for tokio");
+        let base = format!("http://{}", std_listener.local_addr().expect("local addr"));
         let log = Arc::new(Mutex::new(Vec::new()));
         let table = Arc::new(build_table(&world, &base));
+        let (stop, stopped) = watch::channel(false);
 
-        let thread_stop = Arc::clone(&stop);
-        let thread_log = Arc::clone(&log);
-        let thread_table = Arc::clone(&table);
+        let state = RouterState {
+            table: Arc::clone(&table),
+            log: Arc::clone(&log),
+        };
         std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                if thread_stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                let Ok(stream) = stream else { continue };
-                let table = Arc::clone(&thread_table);
-                let log = Arc::clone(&thread_log);
-                std::thread::spawn(move || {
-                    let _ = serve(stream, &table, &log);
-                });
-            }
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime for the mock server");
+            runtime.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(std_listener)
+                    .expect("adopt the bound listener");
+                let router = Router::new()
+                    .route("/hyp/{endpoint}", get(answer))
+                    .route("/sophon/getBuild", get(answer))
+                    .route("/cdn/{build}/manifest/{id}", get(answer))
+                    .route("/cdn/{build}/chunk/{id}", get(answer))
+                    .fallback(answer)
+                    .with_state(state);
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(shutdown_signal(stopped))
+                    .await
+                    .expect("serve");
+            });
         });
 
         Mock {
             base,
             stop,
             log,
-            listening: true,
             table,
         }
     }
@@ -1283,11 +1315,12 @@ impl Mock {
         let base = "http://127.0.0.1:50000".to_string();
         let log = Arc::new(Mutex::new(Vec::new()));
         let table = Arc::new(build_table(&world, &base));
+        // No listener and no shutdown future; the receiver is dropped at once.
+        let (stop, _) = watch::channel(false);
         Mock {
             base,
-            stop: Arc::new(AtomicBool::new(false)),
+            stop,
             log,
-            listening: false,
             table,
         }
     }
@@ -1357,12 +1390,10 @@ impl Mock {
 
 impl Drop for Mock {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if self.listening {
-            // One connect-and-close is enough to unblock `incoming()`. An
-            // in-memory mock has no listener, so it needs no unblock probe.
-            let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
-        }
+        // `watch::Sender::send` is callable off-runtime: the server's graceful
+        // shutdown future observes the change and releases every connection.
+        // An in-memory mock has no receiver, so the send simply fails.
+        let _ = self.stop.send(true);
     }
 }
 
@@ -1875,118 +1906,81 @@ fn envelope_with_data(retcode: i64, message: &str, data: serde_json::Value) -> V
     .expect("render json")
 }
 
-/// Serve requests on one connection until the peer closes it or asks to close.
+/// Answer one request. `axum` owns the listener, HTTP parsing, keep-alive,
+/// routing and header writing; only the reply policy lives here.
 ///
-/// **Keep-alive, because the real servers keep alive.** Answering one request
-/// per connection and `Connection: close` unconditionally costs a fresh TCP
-/// connection per chunk blob, which is not just unfaithful to the CDN — it
-/// measures Windows' connect path rather than anything about the fetcher.
-///
-/// The client's pool is never the thing at fault: `Fetcher` builds one
-/// `reqwest::Client` and every clone shares it, so a mock that refuses to let
-/// the pool be used is the only way to see this.
-///
-/// A request body is still never read: this client sends none, and a body-carrying
-/// request on a reused connection would desynchronise the stream. The reader is
-/// only advanced to the blank line that ends the headers.
-fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    loop {
-        let mut request_line = String::new();
-        if reader.read_line(&mut request_line)? == 0 {
-            return Ok(()); // peer closed: the normal end of a pooled connection
-        }
-        if request_line.trim().is_empty() {
-            continue; // tolerate a stray CRLF between pipelined requests
-        }
-
-        // Drain the headers, noting `Connection:` so the reply can agree.
-        let mut client_says_close = false;
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line)? == 0 {
-                return Ok(());
-            }
-            if line.trim().is_empty() {
-                break;
-            }
-            let lower = line.to_ascii_lowercase();
-            if lower.starts_with("connection:") && lower.contains("close") {
-                client_says_close = true;
-            }
-        }
-
-        let target = request_line
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or("/")
-            .to_string();
-        let (path, query) = match target.split_once('?') {
-            Some((p, q)) => (p.to_string(), q.to_string()),
-            None => (target.clone(), String::new()),
-        };
-        let tag = query_param(&query, "tag");
-        log.lock().expect("log").push(Recorded {
+/// `Uri` is the extractor that replaces the old hand-rolled request-line parse:
+/// `path()` and `query()` are the raw target components, so `respond` and
+/// `Recorded` see exactly the values the in-memory transport passes them. The
+/// four route patterns in `start` are the path guards, and the fallback keeps
+/// the old "unknown targets get a measured 404" behavior.
+async fn answer(State(state): State<RouterState>, uri: Uri) -> Response {
+    let path = uri.path().to_string();
+    let query = uri.query().unwrap_or("").to_string();
+    let tag = query_param(&query, "tag");
+    state
+        .log
+        .lock()
+        .expect("the request log is not poisoned")
+        .push(Recorded {
             path: path.clone(),
             query: query.clone(),
             tag: tag.clone(),
         });
 
-        // HTTP/1.1 keeps alive unless someone asks otherwise; HTTP/1.0 is the
-        // other way round. The mock is HTTP/1.1, and this client is 1.1.
-        let keep_alive = !client_says_close;
-
-        // An armed route answers `503` until its count runs out, which is what
-        // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
-        // request succeeds on the second attempt and the row must say `2`.
-        if table.take_flaky_failure(&path).is_some() {
-            // The response is complete either way, so honour its `Connection:`
-            // header: returning here would close a connection the reply just
-            // advertised as reusable. The pool would then hand the retry a dead
-            // socket, which turns the armed `503` into a transport error and
-            // makes the retry count depend on whether the socket was reused.
-            write_response(
-                &mut stream,
-                503,
-                "text/plain",
-                b"armed to fail once",
-                keep_alive,
-            )?;
-            if !keep_alive {
-                return Ok(());
-            }
-            continue;
-        }
-
-        let outcome = match respond(table, &path, &query, tag.as_deref()) {
+    // An armed route answers `503` until its count runs out, which is what
+    // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
+    // request succeeds on the second attempt and the row must say `2`. The
+    // `flaky` map is behind its own lock, shared with `MemoryTransport`.
+    let (status, media_type, body) = if state.table.take_flaky_failure(&path).is_some() {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "text/plain",
+            b"armed to fail once".to_vec(),
+        )
+    } else {
+        match respond(&state.table, &path, &query, tag.as_deref()) {
             // A blob route's miss is the measured shape, not a generic one: the
             // real CDN (`Server: AliyunOSS`) answers `404` with
             // `application/xml` and a `NoSuchKey` envelope, and that is what
             // `api/error_shapes.json` records and a replayer will replay. A
             // `text/plain` stand-in would let the mock agree with itself about a
             // detail the mock cannot know.
-            None if is_blob_route(&path) => write_response(
-                &mut stream,
-                404,
-                "application/xml",
-                &no_such_key(&path),
-                keep_alive,
-            ),
-            None => write_response(
-                &mut stream,
-                404,
-                "text/plain",
-                format!("no route for {path}").as_bytes(),
-                keep_alive,
-            ),
-            Some(bytes) => {
-                write_response(&mut stream, 200, content_type(&path), &bytes, keep_alive)
+            None if is_blob_route(&path) => {
+                (StatusCode::NOT_FOUND, "application/xml", no_such_key(&path))
             }
-        };
+            None => (
+                StatusCode::NOT_FOUND,
+                "text/plain",
+                format!("no route for {path}").into_bytes(),
+            ),
+            Some(bytes) => (StatusCode::OK, content_type(&path), bytes),
+        }
+    };
 
-        outcome?;
-        if !keep_alive {
-            return Ok(());
+    // `connection` mirrors the old server so the recorded header set stays as
+    // close as possible to the in-memory transport's three headers; hyper owns
+    // `content-length` and adds its own `date`. Header names are lowercased by
+    // the `http` crate before the fetcher records them, so spelling here is not
+    // observable beyond the values.
+    Response::builder()
+        .status(status)
+        .header(header::CONNECTION, "keep-alive")
+        .header(header::CONTENT_TYPE, media_type)
+        .body(Body::from(body))
+        .expect("a static response head is valid")
+}
+
+/// The graceful-shutdown future: resolve when `Mock::drop` signals, or when the
+/// sender goes away. `borrow_and_update` before `changed` closes the race where
+/// a signal sent just before the first `changed` call would otherwise be missed.
+async fn shutdown_signal(mut stopped: watch::Receiver<bool>) {
+    loop {
+        if *stopped.borrow_and_update() {
+            break;
+        }
+        if stopped.changed().await.is_err() {
+            break;
         }
     }
 }
@@ -2104,27 +2098,4 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
 fn query_param(query: &str, key: &str) -> Option<String> {
     url::form_urlencoded::parse(query.as_bytes())
         .find_map(|(k, v)| (k == key).then(|| v.into_owned()))
-}
-
-/// A minimal, correct HTTP/1.1 response.
-fn write_response(
-    stream: &mut TcpStream,
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-    keep_alive: bool,
-) -> std::io::Result<()> {
-    let reason = match status {
-        200 => "OK",
-        404 => "Not Found",
-        _ => "Error",
-    };
-    let connection = if keep_alive { "keep-alive" } else { "close" };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: {connection}\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
 }
