@@ -31,35 +31,35 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use assert_cmd::assert::Assert;
 use clap::{CommandFactory, Parser};
 use girpr::girpr_log::{self, EnvOptions, LogOptions, LogPlan};
 use girpr::{Args, Level, log_file_announcement};
 use girpr_tempdir::TempDir;
-use std::process::Command;
+use predicates::prelude::*;
 
 use crate::common::{
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
     remove_run_lock_for_args, temp_dir, write_game_file,
 };
 
-fn run(args: &[&str]) -> (i32, String, String) {
-    // Every post-parse run names a scratch log: a run that reaches
-    // `init_tracing` must never leave a default log beside the binary.
+/// Spawn the binary and hand its captured output to the caller's assertions.
+///
+/// Every post-parse run names a scratch log: a run that reaches
+/// `init_tracing` must never leave a default log beside the binary. The
+/// captured `Assert` carries stdout, stderr and the exit code, so each caller
+/// chains the predicates its own contract needs.
+fn run(args: &[&str]) -> Assert {
     let scratch = TempDir::new("girpr_cli", "post_parse");
     let log = scratch.join("run.log");
-    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+    assert_cmd::Command::cargo_bin("girpr")
+        .expect("the girpr binary is built for integration tests")
         .args(args)
         .args([
             "--log-file",
             log.to_str().expect("the scratch path is utf-8"),
         ])
-        .output()
-        .expect("run girpr");
-    (
-        out.status.code().expect("process must exit normally"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
+        .assert()
 }
 
 /// The console's records, with the colour taken out.
@@ -127,9 +127,9 @@ fn help_output_matches_the_snapshot() {
 #[test]
 fn help_exits_zero() {
     // `Args` declares no `version`, so only `--help` gets the conventional 0.
-    let (code, stdout, _) = run(&["--help"]);
-    assert_eq!(code, 0, "--help should exit 0");
-    assert!(stdout.contains("Usage"), "{stdout}");
+    run(&["--help"])
+        .code(0)
+        .stdout(predicate::str::contains("Usage"));
 }
 
 /// The argument carrying `flag` (given without its leading `--`).
@@ -285,12 +285,9 @@ fn argument_errors_exit_one_not_two() {
     // a bad flag exits 1 (never clap's default 2, the metadata/network slot)
     // and explains itself on stderr. The other cases are classified in process
     // above — the same rejection, without paying for a process each.
-    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "-x"]);
-    assert_eq!(code, 1, "a bad flag should exit 1, got {code} ({stderr})");
-    assert!(
-        !stderr.is_empty(),
-        "a bad flag should explain itself on stderr"
-    );
+    run(&["--game-path", ".", "--biz", "hk4e_global", "-x"])
+        .code(1)
+        .stderr(predicate::str::is_empty().not());
 }
 
 #[test]
@@ -364,9 +361,9 @@ fn jobs_keeps_the_compatibility_alias_and_documents_the_applied_default() {
 
 #[test]
 fn zero_jobs_is_exit_one_and_the_message_names_the_flag() {
-    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(stderr.contains("--jobs must be >= 1"), "{stderr}");
+    run(&["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"])
+        .code(1)
+        .stderr(predicate::str::contains("--jobs must be >= 1"));
 }
 
 #[test]
@@ -381,22 +378,19 @@ fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
     // `into_ctx` (hence `usage_rejection`) does not, and that the runtime is
     // never built. The other boundary cases classify in process via
     // `usage_rejection`, since the ceiling text itself is unit-tested in cli.rs.
-    let (code, _, stderr) = run(&[
+    run(&[
         "--game-path",
         ".",
         "--biz",
         "hk4e_global",
         "--jobs",
         "1000000",
-    ]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(
-        stderr.contains("usage error: --jobs must be <= 1024"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains("failed to start runtime"),
-        "the flag must be refused before the runtime is built:\n{stderr}"
+    ])
+    .code(1)
+    // The flag must be refused before the runtime is built.
+    .stderr(
+        predicate::str::contains("usage error: --jobs must be <= 1024")
+            .and(predicate::str::contains("failed to start runtime").not()),
     );
 }
 
@@ -901,23 +895,17 @@ fn log_levels_and_rust_log_are_applied_to_the_two_sinks() {
 fn the_log_file_announcement_reaches_the_process() {
     let scratch = TempDir::new("girpr_cli_logfile", "process_smoke");
     let name = "girpr-process-smoke.log";
-    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+    let assert = assert_cmd::Command::cargo_bin("girpr")
+        .expect("the girpr binary is built for integration tests")
         .args(LOG_BASE_ARGS)
         .args(["--log-file", name, "--log-level", "error"])
         .current_dir(&scratch)
-        .output()
-        .expect("run girpr");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(
-        out.status.code().expect("process must exit normally"),
-        1,
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!("log file: {name}")),
-        "the path is echoed on stderr even at --log-level error:\n{stderr}"
-    );
-    let console = strip_ansi(&stderr);
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(format!("log file: {name}")));
+    // The level and target are coloured separately, with the escape between
+    // them, so the substring check needs the colour taken out first.
+    let console = strip_ansi(&String::from_utf8_lossy(&assert.get_output().stderr));
     assert!(
         !console.contains("INFO girpr::logging"),
         "a quiet console keeps the info record in the file only:\n{console}"

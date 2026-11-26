@@ -206,6 +206,12 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 tempfile = "3.27"
 
 [dev-dependencies]
+# Process-level CLI assertions capture stdout, stderr and the exit code and
+# compare them with predicates matchers instead of hand-built output tuples.
+# Only the synchronous binary cases use this; the mock-backed tests keep their
+# tokio process seam because they share the runtime with the mock server.
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
 # CLI help is snapshotted as the whole rendered output instead of parsing clap's
 # layout by hand. The binary is already built for the other integration tests;
 # trycmd runs it and compares the output byte for byte (with newlines and the
