@@ -79,10 +79,10 @@ pub fn render_markers(
 }
 
 /// First marker the active path scope hides, if any (C7(d)).
-pub fn first_out_of_scope_marker<'a>(
-    markers: &'a [MarkerSet],
+pub fn first_out_of_scope_marker(
+    markers: &[MarkerSet],
     visible: impl Fn(&str) -> bool,
-) -> Option<&'a str> {
+) -> Option<&str> {
     markers
         .iter()
         .find(|m| !visible(&m.path))
@@ -93,10 +93,10 @@ pub fn first_out_of_scope_marker<'a>(
 ///
 /// The post phase writes mirrors as well as markers, so the usage guard must
 /// cover every rel it publishes, not just the rendered marker paths.
-pub fn first_out_of_scope_mirror<'a>(
-    mirrors: &'a [(String, Vec<u8>)],
+pub fn first_out_of_scope_mirror(
+    mirrors: &[(String, Vec<u8>)],
     visible: impl Fn(&str) -> bool,
-) -> Option<&'a str> {
+) -> Option<&str> {
     mirrors
         .iter()
         .find(|(rel, _)| !visible(rel))
@@ -107,10 +107,10 @@ pub fn first_out_of_scope_mirror<'a>(
 ///
 /// A new-path row in `StreamingAssets` does not carry a revision claim, so it
 /// does not suppress the marker block; only forced-persistent paths do.
-pub fn first_out_of_scope_hotfix<'a>(
-    assets: &'a [PersistentAsset],
+pub fn first_out_of_scope_hotfix(
+    assets: &[PersistentAsset],
     visible: impl Fn(&str) -> bool,
-) -> Option<&'a str> {
+) -> Option<&str> {
     assets
         .iter()
         .find(|a| a.placement == BaseTree::Persistent && !visible(&a.rel))

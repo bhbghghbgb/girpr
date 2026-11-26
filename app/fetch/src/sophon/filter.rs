@@ -69,7 +69,7 @@ pub fn select_manifests<'a>(
 ///
 /// NOTE(starward-parity): Starward's `GetAvaliableGameSophonPatchManifests` is
 /// the same loop as its chunk-manifest counterpart, so both DTOs go through
-/// [`select_by`]. `diff_download` is never part of the selection.
+/// the private `select_by` helper. `diff_download` is never part of the selection.
 pub fn select_patch_manifests<'a>(
     build: &'a PatchBuild,
     audio_langs: &HashSet<String>,

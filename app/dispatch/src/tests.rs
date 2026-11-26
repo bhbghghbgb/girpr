@@ -214,7 +214,7 @@ fn descriptor_line(remote_name: &str, body: &str) -> String {
 
 fn synthetic_protobuf() -> Vec<u8> {
     let res = crate::RepoResVersionProperties {
-        res_revision: 9_900_000_1,
+        res_revision: 99_000_001,
         res_descriptor: descriptor_line("res_versions_external", RES_NDJSON),
         res_hash: "aabbccddeeff".into(),
         version: "7.2_live".into(),
@@ -225,8 +225,8 @@ fn synthetic_protobuf() -> Vec<u8> {
         repo_res_version_url: "https://mock.girpr.test/client_game_res/test".into(),
         repo_design_data_url: "https://mock.girpr.test/client_design_data/test".into(),
         game_version: "7.2_live".into(),
-        data_revision: 9_900_000_2,
-        silence_revision: 9_900_000_3,
+        data_revision: 99_000_002,
+        silence_revision: 99_000_003,
         data_descriptor: descriptor_line("data_versions", DATA_NDJSON),
         silence_descriptor: descriptor_line("silence_data_versions", SILENCE_NDJSON),
         res_version_properties: Some(res),
@@ -387,11 +387,10 @@ fn xml_key_ignores_inverse_q_and_tampered_components_fail() {
     let public_der = key.to_public_key().to_public_key_der().expect("public DER");
     assert_eq!(sha256_hex(public_der.as_bytes()), {
         let doc: Value = serde_json::from_str(FIXTURE_DOC).unwrap();
-        let expected = doc["test_key"]["sha256_public_der"]
+        doc["test_key"]["sha256_public_der"]
             .as_str()
             .unwrap()
-            .to_owned();
-        expected
+            .to_owned()
     });
     let tampered =
         TEST_KEY_XML.replacen("<Exponent>AQAB</Exponent>", "<Exponent>AQAD</Exponent>", 1);
@@ -435,10 +434,10 @@ fn committed_synthetic_dispatch_response_decrypts() {
     assert_eq!(props.game_version, "9.9_live");
     assert_eq!(props.codename, "hk4e_global");
     assert_eq!(props.properties_2, 22101);
-    assert_eq!(res.res_revision, 9_900_000_1);
+    assert_eq!(res.res_revision, 99_000_001);
     assert_eq!(res.res_hash, "aabbccddeeff");
-    assert_eq!(props.data_revision, 9_900_000_2);
-    assert_eq!(props.silence_revision, 9_900_000_3);
+    assert_eq!(props.data_revision, 99_000_002);
+    assert_eq!(props.silence_revision, 99_000_003);
     // Root 11/14 are opaque; field 37 in properties is unknown to the typed
     // schema but must survive the generic walk.
     assert_eq!(opaque.root, vec![(11, 16), (14, 8)]);
@@ -462,7 +461,7 @@ fn proto_field_numbers_match_recorded_dump() {
         let end = rest.find("=== ").unwrap_or(rest.len());
         rest[..end]
             .lines()
-            .filter_map(|line| line.trim().split_whitespace().next())
+            .filter_map(|line| line.split_whitespace().next())
             .filter_map(|token| token.parse::<u32>().ok())
             .collect()
     };
@@ -637,11 +636,11 @@ fn full_query_with_injected_transport_returns_dispatch_info() {
     assert_eq!(info.codename, "hk4e_global");
     assert_eq!(
         (info.res_revision, info.data_revision, info.silence_revision),
-        (9_900_000_1, 9_900_000_2, 9_900_000_3)
+        (99_000_001, 99_000_002, 99_000_003)
     );
     assert_eq!(
         (info.audio_revision, info.audio_hash.as_str()),
-        (9_900_000_4, "aabbccdd")
+        (99_000_004, "aabbccdd")
     );
     assert_eq!(info.res_hash, "aabbccddeeff");
     assert_eq!(info.data_hash, "112233445566");

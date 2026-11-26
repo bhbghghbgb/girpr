@@ -39,7 +39,7 @@ pub fn decrypt_pkcs1_blocks(
             key.size()
         )));
     }
-    if ciphertext.is_empty() || ciphertext.len() % block_bytes != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(block_bytes) {
         return Err(DispatchError::Crypto(format!(
             "ciphertext {} bytes is not aligned to {block_bytes}-byte blocks",
             ciphertext.len()

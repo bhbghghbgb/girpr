@@ -209,7 +209,7 @@ pub struct DescriptorRow {
 /// full manifest the query path mirrors. A blank line is skipped (Collapse's
 /// own parser throws on it).
 pub fn parse_descriptor(text: &str) -> Result<DescriptorRow> {
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
         let row: DescriptorRow = serde_json::from_str(line)
             .map_err(|e| DispatchError::Proto(format!("bad descriptor row: {e}")))?;
         if Md5::try_parse_hex(&row.md5).is_none() {

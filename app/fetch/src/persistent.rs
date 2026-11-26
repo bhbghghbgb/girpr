@@ -2,8 +2,8 @@
 //!
 //! Two additions, deliberately without product wiring (docs/03 §7.8, commit 5):
 //!
-//! - the three descriptors from [`DispatchInfo`] are fetched through the
-//!   shared reqwest client and retry policy, verified against their descriptor
+//! - the three descriptors from [`girpr_dispatch::DispatchInfo`] are fetched
+//!   through the shared reqwest client and retry policy, verified against their descriptor
 //!   (size, then MD5) **before** parsing, and kept as raw bytes in memory only.
 //!   The plan half never writes a mirror or a marker;
 //! - a full-file hotfix downloader streams a body to a temp sibling, gates it
@@ -183,14 +183,17 @@ pub async fn fetch_all_manifests(
 /// Blank lines are skipped and extra keys are ignored by the pure parser.
 pub fn parse_manifest(descriptor: &ManifestDescriptor, raw: &[u8]) -> Result<Vec<PersistentRow>> {
     verify_manifest_bytes(descriptor, raw).context("verify manifest before parse")?;
-    parse_rows(raw)
-        .context("parse manifest NDJSON")
-        .map_err(Into::into)
+    parse_rows(raw).context("parse manifest NDJSON")
 }
 
 // ---------------------------------------------------------------------------
 // Full-file downloader
 // ---------------------------------------------------------------------------
+
+/// Hook charging a publish just before the bytes land; `false` aborts it.
+pub type BeforePublishHook = Arc<dyn Fn(u64) -> bool + Send + Sync>;
+/// Test seam run after a publish, before the mandatory re-read.
+pub type AfterPublishHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
 /// The one injectable input of a hotfix download.
 pub struct DownloadRequest<'a> {
@@ -208,10 +211,10 @@ pub struct DownloadRequest<'a> {
     /// target cannot be opened). Returning `false` aborts with the typed
     /// [`WriteCeilingStopped`] signal. Production charges its write meters
     /// here so a ceiling cannot be crossed by a file that has already landed.
-    pub before_publish: Option<Arc<dyn Fn(u64) -> bool + Send + Sync>>,
+    pub before_publish: Option<BeforePublishHook>,
     /// Test seam: runs after the atomic publish, before the mandatory re-read.
     /// Production leaves this `None`.
-    pub after_publish: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
+    pub after_publish: Option<AfterPublishHook>,
 }
 
 impl<'a> DownloadRequest<'a> {
@@ -427,7 +430,12 @@ fn clear_readonly(path: &Path) {
         return;
     }
     let mut permissions = meta.permissions();
-    permissions.set_readonly(false);
+    // The file is already read-only and this one target must be overwritten;
+    // no unrelated file's permissions are touched.
+    #[allow(clippy::permissions_set_readonly_false)]
+    {
+        permissions.set_readonly(false);
+    }
     if let Err(e) = std::fs::set_permissions(path, permissions) {
         tracing::warn!(
             path = %path.display(),
@@ -452,18 +460,18 @@ fn publish_verified(
     row: &PersistentRow,
     target: &Path,
     fetched: FetchedTemp,
-    before_publish: Option<Arc<dyn Fn(u64) -> bool + Send + Sync>>,
-    after_publish: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
+    before_publish: Option<BeforePublishHook>,
+    after_publish: Option<AfterPublishHook>,
 ) -> Result<DownloadOutcome> {
     let bytes = fetched.digest.size;
     let mut temp = fetched.file;
     // Charge before the bytes land: in the normal path this is immediately
     // before `write_atomic_with`, and in the temp fallback it is before
     // `keep()` publishes at the sibling. A refusal leaves nothing published.
-    if let Some(charge) = before_publish {
-        if !charge(bytes) {
-            return Err(anyhow::Error::new(WriteCeilingStopped));
-        }
+    if let Some(charge) = before_publish
+        && !charge(bytes)
+    {
+        return Err(anyhow::Error::new(WriteCeilingStopped));
     }
     if target.exists() {
         clear_readonly(target);
@@ -842,7 +850,7 @@ mod tests {
         download(&server, &hash_row, &target(&dir), &BackoffPolicy::none())
             .await
             .unwrap();
-        assert_eq!(std::fs::read(&target(&dir)).unwrap(), HOTFIX_A);
+        assert_eq!(std::fs::read(target(&dir)).unwrap(), HOTFIX_A);
 
         // Correct MD5 with a wrong XXH64 fails; no fallback to MD5.
         let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
@@ -874,7 +882,7 @@ mod tests {
         download(&server, &md5_row, &target(&dir), &BackoffPolicy::none())
             .await
             .unwrap();
-        assert_eq!(std::fs::read(&target(&dir)).unwrap(), HOTFIX_A);
+        assert_eq!(std::fs::read(target(&dir)).unwrap(), HOTFIX_A);
     }
 
     #[tokio::test]

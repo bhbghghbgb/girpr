@@ -232,7 +232,6 @@ fn row_of(asset: &PersistentAsset) -> PersistentRow {
 fn target_of_checked(game_dir: &Path, asset: &PersistentAsset) -> anyhow::Result<PathBuf> {
     util::contained_join(game_dir, &asset.rel)
         .with_context(|| format!("resolve persistent rel {}", asset.rel))
-        .map_err(Into::into)
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +448,12 @@ fn clear_readonly(path: &Path) {
     };
     let mut permissions = meta.permissions();
     if permissions.readonly() {
-        permissions.set_readonly(false);
+        // The file is already read-only and is about to be replaced; this
+        // clears that one attribute, not a tree-wide permission change.
+        #[allow(clippy::permissions_set_readonly_false)]
+        {
+            permissions.set_readonly(false);
+        }
         if let Err(e) = std::fs::set_permissions(path, permissions) {
             tracing::warn!(
                 path = %path.display(),

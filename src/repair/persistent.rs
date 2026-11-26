@@ -34,6 +34,10 @@ use crate::config::{RunCtx, RunFailure};
 use crate::retry::BackoffPolicy;
 use crate::util;
 
+/// The closure behind [`DispatchOverride`].
+type DispatchOverrideFn =
+    Arc<dyn Fn(Region, &str) -> std::result::Result<DispatchInfo, String> + Send + Sync>;
+
 /// A test-only replacement for the dispatcher query.
 ///
 /// The product path always leaves this `None` and calls the real provider. A
@@ -42,9 +46,7 @@ use crate::util;
 /// decoder/transport failure. It is a value on `RunCtx` rather than global
 /// state, so a run's behaviour is fully determined by its own configuration.
 #[derive(Clone)]
-pub struct DispatchOverride(
-    Arc<dyn Fn(Region, &str) -> std::result::Result<DispatchInfo, String> + Send + Sync>,
-);
+pub struct DispatchOverride(DispatchOverrideFn);
 
 impl DispatchOverride {
     pub fn new(

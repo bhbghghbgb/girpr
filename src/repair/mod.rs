@@ -536,7 +536,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
     // to keep.
     let persistent_expected: Vec<String> = persistent
         .as_ref()
-        .map(|p| p.plan.expected_rels.iter().cloned().collect())
+        .map(|p| p.plan.expected_rels.to_vec())
         .unwrap_or_default();
 
     // A scoped run whose *only* selected files are persistent ones is not an
@@ -692,6 +692,9 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
 /// network work that follow. An unpurged run applies the include guard here,
 /// right after the plan is built: with no walk there can be no purge candidate
 /// to rescue an empty selection, so a typo must not pay for that walk.
+// The inputs are already split by phase: grouping them in a struct would add
+// an indirection used once, and the call site reads as the plan's own checklist.
+#[allow(clippy::too_many_arguments)]
 async fn plan_work_and_purge(
     ctx: &RunCtx,
     summary: &mut Summary,
@@ -1402,6 +1405,9 @@ async fn run_purge_before(
 }
 
 /// Step 5.5: verify only, then return. Nothing is written.
+// Check-only receives the plan's whole result set; bundling it into a struct
+// would only move this one call site's checklist into a throwaway type.
+#[allow(clippy::too_many_arguments)]
 async fn run_check_only(
     ctx: &RunCtx,
     game_dir: &Path,

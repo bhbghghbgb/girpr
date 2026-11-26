@@ -474,12 +474,11 @@ fn mock_latest(_mock: &MockServer) -> String {
 /// manifests carry the same row, so the plan dedupes it to a single asset and
 /// the tests can pin one HTTP exchange at a time.
 fn single_manifest() -> Vec<u8> {
-    format!(
-        "{{\"remoteName\":\"blocks/00/11111111.blk\",\
+    "{\"remoteName\":\"blocks/00/11111111.blk\",\
          \"md5\":\"b2d3f56bc197fd985d5965079b5e7148\",\
-         \"hash\":\"f7c67301db6713f0\",\"fileSize\":64}}\n"
-    )
-    .into_bytes()
+         \"hash\":\"f7c67301db6713f0\",\"fileSize\":64}\n"
+        .to_string()
+        .into_bytes()
 }
 
 /// A dispatcher whose manifests come from `manifest_server` and whose four CDN
@@ -577,7 +576,7 @@ async fn a_zero_write_ceiling_publishes_no_persistent_file() {
 
     let (summary, code) = run(ctx).await.expect("a ceiling is an exit code");
     assert_eq!(code, RunExit::Limit, "a runtime hard stop is exit 5");
-    assert_eq!(summary.flags.stopped.as_deref(), Some("--max-write-bytes"));
+    assert_eq!(summary.flags.stopped, Some("--max-write-bytes"));
     assert_eq!(summary.flags.persistent_repaired, Some(0));
     assert_eq!(
         summary.flags.persistent_failed,
@@ -618,10 +617,7 @@ async fn a_zero_verified_write_ceiling_publishes_no_persistent_file() {
 
     let (summary, code) = run(ctx).await.expect("a ceiling is an exit code");
     assert_eq!(code, RunExit::Limit);
-    assert_eq!(
-        summary.flags.stopped.as_deref(),
-        Some("--max-verified-write-bytes")
-    );
+    assert_eq!(summary.flags.stopped, Some("--max-verified-write-bytes"));
     assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
     assert!(
         !hotfix_path(&dir).exists(),
