@@ -21,7 +21,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T07 | Structured JSON log capture | completed | e990678b | Deliberate skip of repair_machinery.rs:318–342 — it reads the shipped file log (no level/token workaround); that report pointer is stale for this finding. |
 | T08 | INI parser/merger → rust-ini | completed | ff782018, 8578f13e | Decision: read_game_version stays a Starward-parity last-match raw line scan (Ini::get is first-match + trims whitespace — would break pinned behavior); later version-parsing work must keep it. rust-ini load_from_str_noescape (default escape corrupts Windows paths); policy layer does quote/comment pre-pass, last-wins duplicate keys, verbatim render. |
 | T09 | URL assembly & percent-encoding | completed | 22e7f073 | Decision recorded in Persistent context below: literal brackets + %20, exact AsciiSet. Deviation: query_pairs_mut().append_pair not used for the literal key; push_pair/with_param remain (now append library-encoded values). Report lines 822–823 pointer is stale (permissive versions, not host checks). |
-| T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | todo | | §APP-3 296–306, §APP-4 308–319, §APP-9 371–378, §APP-10 380–389 |
+| T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | in_progress | | §APP-3 296–306, §APP-4 308–319, §APP-9 371–378, §APP-10 380–389 |
 | T11 | FNV-1a hashing → fnv | todo | | §APP-7 lines 347–357, §CAP-5 lines 712–723, §X4 lines 127–134 |
 | T12 | Protobuf → prost decode + prost-build codegen | todo | | §APP-8 lines 359–369, §LEAF-4 lines 451–465; build-tooling and dump-key pins |
 | T13 | Junction creation → junction crate | todo | | §APP-6 lines 334–345, §LEAF-3 lines 441–449; Windows only |
