@@ -204,26 +204,31 @@ impl BundleVariant {
     }
 }
 
-/// FNV-1a 64 over a sequence of bytes. A few lines, no dependency, and enough
-/// spread to key a temp directory on. Only change detection matters here, not
-/// cryptographic use.
+/// 64-bit FNV-1a over a sequence of bytes, enough to key a temp directory on.
+/// Only change detection matters here, not cryptographic use. `fnv` owns the
+/// offset, prime and byte order; which bytes are hashed stays local.
 fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ byte as u64).wrapping_mul(0x0100_0000_01b3)
-    })
+    use std::hash::Hasher;
+    let mut hasher = fnv::FnvHasher::default();
+    for byte in bytes {
+        hasher.write(&[byte]);
+    }
+    hasher.finish()
 }
 
 /// Collect every Rust source file under `dir` (recursively) into `out`.
+///
+/// `WalkDir` owns the traversal. `sort_by_file_name` gives a depth-first,
+/// per-directory order so the fingerprint never depends on the filesystem's
+/// enumeration order.
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rs_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
+    for entry in walkdir::WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "rs") {
+            out.push(entry.into_path());
         }
     }
 }
@@ -270,8 +275,9 @@ fn capture_source_key(manifest_dir: &Path) -> u64 {
 /// either source.
 fn bundle_source_key() -> String {
     // Bumped when the fixture source moved from `tests/common/mod.rs` into this
-    // library, so a bundle published under the old key is not reused.
-    const FORMAT: u32 = 3;
+    // library, and again when the FNV hash behind both fingerprints became a
+    // library hasher, so a bundle published under an old key is not reused.
+    const FORMAT: u32 = 4;
     // This crate sits at `tools/capture/test-support`; the capture package root
     // is its parent. Deriving it here keeps the key identical in every test
     // process regardless of which binary reached the shim.
@@ -399,20 +405,18 @@ fn capture_ok(args: &[&str], http: Option<Arc<dyn HttpTransport>>) {
 }
 
 /// The one bundle under `dir`, whichever way the layout nests it.
+///
+/// `WalkDir` owns the traversal; `sort_by_file_name` keeps the same depth-first
+/// order as the old stack walk, so the chosen bundle is deterministic.
 fn find_bundle(dir: &Path) -> PathBuf {
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        if d.join("MANIFEST.json").is_file() {
-            return d;
-        }
-        if let Ok(rd) = std::fs::read_dir(&d) {
-            let mut subs: Vec<PathBuf> = rd
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            subs.sort();
-            stack.extend(subs.into_iter().rev());
+    for entry in walkdir::WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if entry.file_type().is_dir() && path.join("MANIFEST.json").is_file() {
+            return path.to_path_buf();
         }
     }
     panic!("no bundle under {}", dir.display());

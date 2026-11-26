@@ -13,6 +13,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# 64-bit FNV-1a for the lock key: a specified, stable algorithm, unlike
+# `DefaultHasher`. The byte selection and ASCII case folding stay local.
+fnv = "1.0.7"
 anyhow = "1.0.105"
 # The RFC 3339 `started` field in the lock body names the run to look at; the
 # spelling is one of the time leaf's named formats.

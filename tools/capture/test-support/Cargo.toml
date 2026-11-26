@@ -42,3 +42,7 @@ prost = "0.14.6"
 tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
 # Chunk and manifest bodies are zstd frames on the wire.
 zstd = "0.14.4"
+# 64-bit FNV-1a for the shared bundle cache key; only change detection matters.
+fnv = "1.0.7"
+# Recursive source/bundle discovery with deterministic per-directory ordering.
+walkdir = "2.5.1"

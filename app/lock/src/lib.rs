@@ -37,11 +37,6 @@ use anyhow::{Context, Result, bail};
 /// recognizes and preserves it; this module never creates it.
 pub const LOCK_FILE: &str = "girpr.lock";
 
-/// FNV-1a: small, stable, and specified — unlike `DefaultHasher`, whose
-/// algorithm is not promised across releases.
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
 /// A held lock. The open handle is what excludes; dropping it unlocks.
 #[derive(Debug)]
 pub struct Lock {
@@ -143,17 +138,26 @@ pub fn lock_path_for_canonical(game_dir: &Path) -> PathBuf {
 /// raw encoding is mixed in after a separator: apart from ASCII case it is
 /// injective, so the keys differ, while valid UTF-8 paths keep their old key.
 fn key_for(path: &Path) -> u64 {
-    let mut key = FNV_OFFSET;
+    use std::hash::Hasher;
+
+    // `FnvHasher` is 64-bit FNV-1a with the standard offset and prime, fed one
+    // byte at a time — exactly the sequence this key has always used, so a
+    // valid UTF-8 path keeps its existing lock filename. Which bytes are fed,
+    // and ASCII case folding on Windows, stay local policy: the hasher only
+    // mixes the bytes it is given.
+    let mut hasher = fnv::FnvHasher::default();
     for byte in path.as_os_str().to_string_lossy().bytes() {
-        key = fnv_step(key, byte);
+        #[cfg(windows)]
+        let byte = byte.to_ascii_lowercase();
+        hasher.write(&[byte]);
     }
     if path.to_str().is_none() {
-        key = fnv_step(key, 0xff);
+        hasher.write(&[0xff]);
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
             for &byte in path.as_os_str().as_bytes() {
-                key = fnv_mix(key, byte);
+                hasher.write(&[byte]);
             }
         }
         #[cfg(windows)]
@@ -168,25 +172,11 @@ fn key_for(path: &Path) -> u64 {
                 } else {
                     unit
                 };
-                key = fnv_mix(key, (unit & 0xff) as u8);
-                key = fnv_mix(key, (unit >> 8) as u8);
+                hasher.write(&[(unit & 0xff) as u8, (unit >> 8) as u8]);
             }
         }
     }
-    key
-}
-
-/// One FNV-1a step, with ASCII case folded on Windows because its filesystem
-/// is case-insensitive for ASCII.
-fn fnv_step(key: u64, byte: u8) -> u64 {
-    #[cfg(windows)]
-    let byte = byte.to_ascii_lowercase();
-    fnv_mix(key, byte)
-}
-
-/// One FNV-1a step with no folding, for input that has already been folded.
-fn fnv_mix(key: u64, byte: u8) -> u64 {
-    (key ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    hasher.finish()
 }
 
 impl Drop for Lock {
@@ -807,17 +797,17 @@ mod tests {
 
     /// The hash of the lossy spelling alone: the key every valid UTF-8 path
     /// had before raw bytes were mixed in for non-Unicode paths. Written out
-    /// rather than reusing `fnv_step`, so a change to the helper cannot silently
-    /// change both the key and its reference.
+    /// rather than calling `key_for`, so a path that wrongly mixes in its raw
+    /// bytes cannot silently change both the key and its reference.
     fn lossy_key(path: &Path) -> u64 {
-        let mut key = FNV_OFFSET;
+        use std::hash::Hasher;
+        let mut hasher = fnv::FnvHasher::default();
         for byte in path.as_os_str().to_string_lossy().bytes() {
             #[cfg(windows)]
             let byte = byte.to_ascii_lowercase();
-            key ^= u64::from(byte);
-            key = key.wrapping_mul(FNV_PRIME);
+            hasher.write(&[byte]);
         }
-        key
+        hasher.finish()
     }
 
     #[test]

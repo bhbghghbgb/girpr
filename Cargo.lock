@@ -921,6 +921,7 @@ dependencies = [
 name = "gircap-test-support"
 version = "0.1.0"
 dependencies = [
+ "fnv",
  "fs2",
  "gircap",
  "girpr-tempdir",
@@ -928,6 +929,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+ "walkdir",
  "zstd",
 ]
 
@@ -1119,6 +1121,7 @@ name = "girpr-lock"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fnv",
  "girpr-fs-identity",
  "girpr-tempdir",
  "girpr-time",
