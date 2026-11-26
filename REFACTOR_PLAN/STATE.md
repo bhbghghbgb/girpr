@@ -15,7 +15,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T01 | Purge parallel map → rayon | completed | aa091ace | Deviation: eight-thread ceiling dropped (unpinned perf heuristic); rayon global pool sizes itself. |
 | T02 | Repair futures combinators → futures-util | completed | 9af85115 | Deviation: added per-fan-out Semaphore (FuturesOrdered polls all; ManifestBudget caps at 4 only); both permits acquired inside each fetch. |
 | T03 | Salvage order → petgraph | skipped | | Byte-level safety proof tied to one global write direction + disjoint destinations; a graph order cannot re-establish it without changing correctness-critical src/repair/file/** byte movement (non-finding). Durable: temp.rs has no salvage-order consumption (R6 consumer list stale); disjointness premise fails in Tier::Ordered — latent risk if revisited. |
-| T04 | Root test origin server → axum | pending_review | e51d485c | Stale hints: manifest setup ~388–401 (not 554–865); metadata.rs tests are a second server user but needed no edits (API kept). Drop now sends a watch stop signal to cancel detached axum handlers. Removed only the accept-loop lifecycle test + wait_until_idle. Follow-up held for reviewer: type scripted statuses as axum StatusCode (optional cleanup). |
+| T04 | Root test origin server → axum | completed | e51d485c | Stale hints: manifest setup ~388–401 (not 554–865); metadata.rs tests are a second server user but needed no edits (API kept). Drop now sends a watch stop signal to cancel detached axum handlers. Removed only the accept-loop lifecycle test + wait_until_idle. |
 | T05 | CLI help snapshots → trycmd + strip-ansi | todo | | §R3 lines 172–184, §LEAF-2 lines 432–439, §X3 lines 110–125 |
 | T06 | Process assertions → assert_cmd | todo | | §R4 lines 186–196; keep the async process seam for mock-backed tests |
 | T07 | Structured JSON log capture | todo | | §R8 lines 244–257, §LEAF-10 lines 530–534; adds a surface to shared girpr-log |
@@ -50,6 +50,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
 | A | T01, T02 | done | Both completed; no fix or revert; endorsed F01, F02. |
+| C | T04 | done | Completed; no fix or revert; endorsed F03. Confirmed F02 race is pre-existing, not a T04 regression. |
 
 ## Follow-ups
 
@@ -60,7 +61,8 @@ A follow-up planning review batches the survivors only after every task is settl
 | ID | Description | State | Note |
 |----|-------------|-------|------|
 | F01 | Update docs/04-scope-limitation-spec.md:727 wording from "scoped worker" to "rayon worker" after purge delegate | open | Docs-only; endorsed by review A. |
-| F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing and unrelated to T02; needs repro evidence. Endorsed by review A. |
+| F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing, reproduced on pre-T04 parent and single-thread-clean; T04's extra tasks raise its frequency. Endorsed by reviews A and C. |
+| F03 | Type scripted statuses as axum::http::StatusCode instead of Reply::Status(&'static str) + local string-to-code conversion | open | Purely type-safety cleanup; behavior correct. Endorsed by review C. |
 
 ## Persistent context
 
