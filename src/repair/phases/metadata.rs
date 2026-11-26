@@ -16,6 +16,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Context, Result};
+use futures_util::future::{Either, select};
 use girpr_dispatch::DispatchInfo;
 use tokio::task::JoinError;
 
@@ -185,27 +186,17 @@ impl<F: Future> Settled<F> {
 /// caller can still use its answer when the primary succeeds. When the primary
 /// settles first the returned [`Settled::Running`] is dropped by an early
 /// return, which cancels the sibling's remaining retry schedule instead of
-/// waiting it out. The primary is never cancelled, so an authoritative result
+/// waiting it out. The primary is never cancelled — when the sibling settles
+/// first we still await it to completion — so an authoritative result
 /// (including this phase's exit-code precedence) is not lost.
 async fn settle_primary<P, S>(primary: P, sibling: S) -> (P::Output, Settled<S>)
 where
     P: Future,
     S: Future,
 {
-    tokio::pin!(primary);
-    let mut sibling = Box::pin(sibling);
-    let mut settled = None;
-    loop {
-        tokio::select! {
-            result = &mut primary => {
-                let sibling = match settled {
-                    Some(value) => Settled::Ready(value),
-                    None => Settled::Running(sibling),
-                };
-                return (result, sibling);
-            }
-            result = &mut sibling, if settled.is_none() => settled = Some(result),
-        }
+    match select(Box::pin(primary), Box::pin(sibling)).await {
+        Either::Left((result, sibling)) => (result, Settled::Running(sibling)),
+        Either::Right((value, primary)) => (primary.await, Settled::Ready(value)),
     }
 }
 

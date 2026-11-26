@@ -21,11 +21,12 @@
 //! first failure in selection order is settled, the remaining fetches are
 //! dropped instead of waited out.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Context;
-use futures_util::{Stream, StreamExt};
+use futures_util::stream::{FuturesOrdered, StreamExt};
 use girpr_repair_plan::LocalChunkMap;
 use reqwest::Client;
 use tokio::sync::Semaphore;
@@ -97,64 +98,21 @@ impl BuildKind {
     }
 }
 
-/// Results indexed by selection, drained left to right.
-///
-/// `buffer_unordered` yields in completion order; pushing each result into its
-/// slot lets a caller walk selection order without waiting for every fetch.
-/// A slot that is not filled yet leaves [`Self::take_next`] empty, while
-/// [`Self::has_next`] is still true, so "not yet" and "finished" stay distinct.
-struct OrderedResults<T> {
-    slots: Vec<Option<T>>,
-    next: usize,
-}
-
-impl<T> OrderedResults<T> {
-    fn new(len: usize) -> Self {
-        Self {
-            slots: (0..len).map(|_| None).collect(),
-            next: 0,
-        }
-    }
-
-    /// Whether a selection index is still waiting to be drained.
-    fn has_next(&self) -> bool {
-        self.next < self.slots.len()
-    }
-
-    /// Record a result that arrived for `index`; it is read once every earlier
-    /// selection has been drained.
-    ///
-    /// `index` is the selection index from the same `enumerate` that sized
-    /// `slots`, so `slots[index]` is in bounds by local invariant; no
-    /// server-derived value reaches it.
-    fn push(&mut self, index: usize, value: T) {
-        self.slots[index] = Some(value);
-    }
-
-    /// Take the next selection's result if it has arrived.
-    fn take_next(&mut self) -> Option<(usize, T)> {
-        if !self.has_next() {
-            return None;
-        }
-        let value = self.slots[self.next].take()?;
-        let index = self.next;
-        self.next += 1;
-        Some((index, value))
-    }
-}
-
 /// The outcome of fetching one selected manifest.
 type ManifestResult = anyhow::Result<Vec<SophonChunkFile>>;
 
-/// A completion-ordered stream of `(selection index, result)` pairs.
-type ManifestStream<'a> = Pin<Box<dyn Stream<Item = (usize, ManifestResult)> + 'a>>;
+/// A single manifest fetch, boxed so the tests can inject their own futures.
+type ManifestFuture<'a> = Pin<Box<dyn Future<Output = ManifestResult> + 'a>>;
 
 /// A bounded, concurrent fetch of the selected manifests of one build, read
 /// back in selection order.
 struct ManifestFetches<'a> {
     manifests: Vec<&'a ChunkManifestMeta>,
-    results: ManifestStream<'a>,
-    ordered: OrderedResults<ManifestResult>,
+    /// `FuturesOrdered` owns the ordering: results are yielded in push order
+    /// even though the fetches run concurrently and settle out of order.
+    results: FuturesOrdered<ManifestFuture<'a>>,
+    /// Which selection the next yielded result belongs to.
+    next: usize,
 }
 
 impl<'a> ManifestFetches<'a> {
@@ -175,59 +133,60 @@ impl<'a> ManifestFetches<'a> {
         let manifests = sophon::select_manifests(build, audio_langs, ignore);
         let limit = manifest_concurrency(jobs);
         tracing::info!("{} concurrency={limit}", kind.log_prefix());
-        // The stream owns its copy of the selection (plain references), so it
-        // does not borrow the vector the struct keeps for lookups. Each fetch
-        // holds a budget slot until it finishes, so two joined fan-outs cannot
-        // double the number of decoded manifests resident at once.
-        let results = futures_util::stream::iter(manifests.clone().into_iter().enumerate())
-            .map(move |(index, m)| {
+        // `FuturesOrdered` polls every fetch, so it does not bound concurrency
+        // on its own. Two semaphores preserve the old peaks: a per-fan-out cap
+        // of `limit` and the run-wide budget shared with the other fan-out.
+        // Each permit is held until the fetch and its decode finish, so two
+        // joined fan-outs cannot double the decoded manifests resident at once.
+        let local = Arc::new(Semaphore::new(limit));
+        let results = manifests
+            .iter()
+            .copied()
+            .map(|m| {
                 let budget = budget.clone();
-                async move {
-                    let _permit = budget.acquire().await;
-                    let files = sophon::fetch_manifest(http, backoff, m).await;
-                    (index, files)
-                }
+                let local = Arc::clone(&local);
+                Box::pin(async move {
+                    let _local = local.acquire().await.ok();
+                    let _budget = budget.acquire().await;
+                    sophon::fetch_manifest(http, backoff, m).await
+                }) as ManifestFuture<'a>
             })
-            .buffer_unordered(limit);
+            .collect::<FuturesOrdered<_>>();
         Self {
-            ordered: OrderedResults::new(manifests.len()),
             manifests,
-            results: Box::pin(results),
+            results,
+            next: 0,
         }
     }
 
-    /// Build the reader around a stream the test controls, so the ordering
-    /// logic can be driven by real completions rather than hand-fed results.
+    /// Build the reader around a futures stream the test controls, so the
+    /// ordering guarantee can be driven by real completions rather than
+    /// hand-fed results.
     #[cfg(test)]
-    fn from_stream(manifests: Vec<&'a ChunkManifestMeta>, results: ManifestStream<'a>) -> Self {
+    fn from_stream(
+        manifests: Vec<&'a ChunkManifestMeta>,
+        results: FuturesOrdered<ManifestFuture<'a>>,
+    ) -> Self {
         Self {
-            ordered: OrderedResults::new(manifests.len()),
             manifests,
             results,
+            next: 0,
         }
     }
 
     /// The next manifest in selection order with its result, waiting only for
     /// that selection's fetch.
     ///
-    /// An error result is returned as soon as every earlier selection has
-    /// succeeded, which is the first failure in selection order. A caller that
-    /// then stops iterating drops the fan-out, cancelling the fetches that
-    /// have not finished instead of waiting out a slow sibling.
-    #[allow(clippy::expect_used)] // every selected manifest is fetched once
+    /// `FuturesOrdered` yields in push order, so an error is returned as soon
+    /// as every earlier selection has succeeded: the first failure in
+    /// selection order. A caller that then stops iterating drops the fan-out,
+    /// cancelling the fetches that have not finished instead of waiting out a
+    /// slow sibling.
     async fn next_ordered(&mut self) -> Option<(&'a ChunkManifestMeta, ManifestResult)> {
-        while self.ordered.has_next() {
-            if let Some((index, result)) = self.ordered.take_next() {
-                return Some((self.manifests[index], result));
-            }
-            let (index, result) = self
-                .results
-                .next()
-                .await
-                .expect("every selected manifest is fetched once");
-            self.ordered.push(index, result);
-        }
-        None
+        let result = self.results.next().await?;
+        let index = self.next;
+        self.next += 1;
+        Some((self.manifests[index], result))
     }
 }
 
@@ -440,36 +399,6 @@ mod tests {
         })
         .await
     }
-    /// A result for a later selection is retained without unblocking the
-    /// caller, so the output is read in selection order even when the network
-    /// finishes out of order.
-    #[test]
-    fn results_are_reordered_incrementally_in_selection_order() {
-        let mut ordered = OrderedResults::new(3);
-        ordered.push(2, Ok::<_, &str>("third"));
-        assert!(
-            ordered.take_next().is_none(),
-            "a later selection does not unblock the first"
-        );
-        ordered.push(1, Err("second"));
-        assert!(
-            ordered.take_next().is_none(),
-            "the first selection is still missing"
-        );
-
-        ordered.push(0, Ok("first"));
-        assert_eq!(ordered.take_next(), Some((0, Ok("first"))));
-        let (index, result) = ordered.take_next().expect("the second is ready");
-        assert_eq!(index, 1);
-        assert_eq!(
-            result,
-            Err("second"),
-            "the first failure in selection order"
-        );
-        assert_eq!(ordered.take_next(), Some((2, Ok("third"))));
-        assert!(!ordered.has_next());
-    }
-
     /// Drive the reader with a stream that settles in reverse selection order:
     /// the last selection finishes first, then its predecessor, and the error
     /// at the first selection settles last. The output still follows selection
@@ -489,35 +418,33 @@ mod tests {
         let (release_first, wait_first) = tokio::sync::oneshot::channel();
 
         let log = completed.clone();
-        let third_result = async move {
+        let third_result: ManifestFuture<'_> = Box::pin(async move {
             let _ = wait_third.await;
             log.lock().expect("completion log").push(2);
             let _ = release_second.send(());
-            (2, Ok(Vec::new()))
-        };
+            Ok(Vec::new())
+        });
         let log = completed.clone();
-        let second_result = async move {
+        let second_result: ManifestFuture<'_> = Box::pin(async move {
             let _ = wait_second.await;
             log.lock().expect("completion log").push(1);
             let _ = release_first.send(());
-            (1, Ok(Vec::new()))
-        };
+            Ok(Vec::new())
+        });
         let log = completed.clone();
-        let first_result = async move {
+        let first_result: ManifestFuture<'_> = Box::pin(async move {
             let _ = wait_first.await;
             log.lock().expect("completion log").push(0);
-            (0, Err(anyhow::anyhow!("the first manifest is down")))
-        };
+            Err(anyhow::anyhow!("the first manifest is down"))
+        });
 
         release_third.send(()).expect("the third selection waits");
-        type ResultFuture = Pin<Box<dyn std::future::Future<Output = (usize, ManifestResult)>>>;
-        let futures: Vec<ResultFuture> = vec![
-            Box::pin(first_result),
-            Box::pin(second_result),
-            Box::pin(third_result),
-        ];
-        let results = futures_util::stream::iter(futures).buffer_unordered(3);
-        let mut fetches = ManifestFetches::from_stream(manifests, Box::pin(results));
+        // Pushed in selection order; `FuturesOrdered` yields in that order
+        // even though the gates make them settle last-to-first.
+        let results = [first_result, second_result, third_result]
+            .into_iter()
+            .collect::<FuturesOrdered<_>>();
+        let mut fetches = ManifestFetches::from_stream(manifests, results);
 
         let mut seen: Vec<(&str, Result<(), anyhow::Error>)> = Vec::new();
         while let Some((m, result)) = fetches.next_ordered().await {
