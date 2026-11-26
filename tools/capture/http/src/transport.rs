@@ -153,9 +153,10 @@ impl fmt::Debug for ResponseBody {
 ///
 /// The shape is chosen so the fetcher's byte-accounting, header recording and
 /// redirect detection are written **once** and shared by the live (`reqwest`)
-/// transport and any in-memory one. A response carries the exact header map the
-/// origin sent, so `resp_headers` in `api/requests.ndjson` is byte-identical on
-/// both paths.
+/// transport and any in-memory one. A response carries the header map its own
+/// path received, so `resp_headers` in `api/requests.ndjson` reflects that path:
+/// the in-memory helper's three headers, or the axum mock's set including the
+/// `date` hyper adds. The two paths are not byte-identical.
 pub struct HttpResponse {
     /// Status as received.
     pub status: u16,
@@ -196,12 +197,13 @@ impl HttpResponse {
         }
     }
 
-    /// Build a response in memory with the three headers the mock server sends.
+    /// Build a response in memory with the three headers this path supplies.
     ///
-    /// `connection: keep-alive`, `content-length` (the total of all chunks) and
-    /// `content-type` reproduce exactly what `write_response` in the test mock
-    /// puts on the wire, so a capture through an in-memory transport records the
-    /// same `resp_headers` as one through the TCP mock.
+    /// `connection: keep-alive` and `content-type` mirror the axum mock's
+    /// explicit headers, and `content-length` (the total of all chunks) matches
+    /// the length hyper computes for the TCP path. Hyper also adds its own
+    /// `date` there, so a capture through this in-memory transport records
+    /// these three headers rather than the TCP mock's full `resp_headers`.
     pub fn in_memory(
         status: u16,
         final_url: String,

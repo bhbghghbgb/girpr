@@ -10,10 +10,11 @@
 //! ## Skipping
 //!
 //! Windows without developer mode refuses `symlink_file` and `symlink_dir`;
-//! `mklink /J` creates a directory junction without elevation, so the directory
-//! cases still run there. A case that needs a refused primitive prints why and
-//! returns - a silent pass would read as coverage it never had. The file-link
-//! cases are skipped on such a host, and the note says so.
+//! `common::dir_link` falls back to `junction::create` for a directory junction
+//! without elevation, so the directory cases still run there. A case that needs
+//! a refused primitive prints why and returns - a silent pass would read as
+//! coverage it never had. The file-link cases are skipped on such a host, and
+//! the note says so.
 
 mod common;
 

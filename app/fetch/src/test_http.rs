@@ -6,7 +6,7 @@
 //! servers themselves, because that routing is the thing they exercise.
 //!
 //! The listener, response writer and request journal come from the
-//! dependency-free loopback leaf; these helpers only script the status/body
+//! wiremock-backed loopback leaf; these helpers only script the status/body
 //! sequence and read back the hit count. This contract stays local to fetch —
 //! the product's and both capture mocks script different replies and pin
 //! different parts of the journal.

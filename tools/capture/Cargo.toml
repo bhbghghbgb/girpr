@@ -49,7 +49,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # its `Endpoints` override seam and every URL builder in this crate) and
 # `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
-# projects), and `girpr-loopback-mock` (a dependency-free loopback HTTP server
+# projects), and `girpr-loopback-mock` (a wiremock-backed loopback HTTP server
 # for canned replies, a dev-dependency shared by the repair, fetch and both
 # capture test suites; it holds no program logic and each caller keeps its own
 # scripting contract on top of it).
@@ -291,7 +291,7 @@ gircap-test-support = { path = "test-support" }
 # workspace. A dev-dependency, because nothing that ships creates a scratch
 # directory.
 girpr-tempdir = { path = "../../crates/tempdir" }
-# Canned reply servers in the HTTP unit tests use the dependency-free loopback
+# Canned reply servers in the HTTP unit tests use the wiremock-backed loopback
 # leaf: it owns the listener, request journal and invocation counts, and these
 # tests script its statuses/bodies and assert on what it recorded. The
 # malformed-response tests keep a small raw-socket helper, because a

@@ -7,7 +7,7 @@
 //! This is deliberately a local helper, not a shared fixture: the fetch crate
 //! and both capture tools keep their own canned servers because each encodes
 //! a different contract. The listener, response writer and request journal
-//! come from the dependency-free loopback leaf; this helper only scripts the
+//! come from the wiremock-backed loopback leaf; this helper only scripts the
 //! body sequence.
 
 use girpr_loopback_mock::{Reply, ScriptedServer};

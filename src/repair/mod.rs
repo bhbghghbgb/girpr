@@ -782,7 +782,7 @@ async fn plan_work_and_purge(
             ))
         })?;
         // Surface the walk's own counters on the caller thread from the
-        // finished plan, never from a scoped worker (those carry a thread-local
+        // finished plan, never from a rayon worker (those carry a thread-local
         // dispatcher). They are independent of any ceiling: a lower-bound
         // delete total is worth a machine-readable warning even when no
         // `--max-delete-bytes` was asked for. Emitted only when non-zero, so a

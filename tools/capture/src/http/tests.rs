@@ -38,13 +38,13 @@ fn the_measured_global_urls_are_reproduced_exactly() {
 // Two test servers with deliberately different jobs.
 //
 // `canned` feeds `reqwest` a scripted status/body pair through the
-// dependency-free loopback leaf, which owns the listener, the invocation
+// wiremock-backed loopback leaf, which owns the listener, the invocation
 // counts and the request journal. `malformed` stays a small raw-socket
 // helper, because a well-behaved mock server cannot announce a
 // `Content-Length` larger than the body it sends, or omit the header
 // entirely — and those two shapes are the whole point of those tests.
 
-/// Canned replies, served on a dependency-free loopback server.
+/// Canned replies, served on a wiremock-backed loopback server.
 mod canned {
     use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 

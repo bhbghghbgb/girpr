@@ -262,7 +262,7 @@ girpr-util-hash = { path = "app/util-hash", features = ["test-support"] }
 # no test feature. Paused-time tests live in `girpr-report`, which declares its
 # own `test-util` dev feature; root tests never pause the clock.
 tokio = { version = "1.54.1", default-features = false, features = ["process", "net", "io-util"] }
-# The dependency-free loopback server behind the canned-reply unit tests. The
+# The wiremock-backed loopback server behind the canned-reply unit tests. The
 # local helper keeps this product's own body-scripting contract; the fetch and
 # capture tests script the same leaf with their own replies and assertions.
 girpr-loopback-mock = { path = "crates/loopback-mock" }

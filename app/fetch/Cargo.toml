@@ -68,7 +68,7 @@ tempfile = "3.27"
 girpr-util-path = { path = "../util-path" }
 
 [dev-dependencies]
-# The dependency-free loopback server the canned-reply helper scripts. This
+# The wiremock-backed loopback server the canned-reply helper scripts. This
 # fetch-side helper stays local and keeps its own contract: the product's and
 # both capture mocks script different replies and read different journals.
 girpr-loopback-mock = { path = "../../crates/loopback-mock" }
