@@ -1135,4 +1135,34 @@ mod tests {
         // wrong, and is also refused rather than reported as negative staleness.
         assert_eq!(p.staleness("6.7.0"), None);
     }
+
+    /// The dispatcher and other history endpoints accept loose spellings such
+    /// as bare `7` and `7.2_live`. `GamePackages` must not inherit that
+    /// permissiveness: a major parsed from a loose tag would silently feed the
+    /// caller's `legacy_behind = 0` fallback and report "not stale" for a
+    /// comparison that never happened. Refuse the whole comparison instead.
+    #[test]
+    fn staleness_refuses_non_strict_tags() {
+        let body = r#"{"retcode":0,"data":{"game_packages":[{"main":{"major":{"version":"5.5.0"}},"patches":[]}]}}"#;
+        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(body)
+            .unwrap()
+            .data;
+        assert_eq!(p.staleness("7"), None, "a bare major is not x.y.z");
+        assert_eq!(p.staleness("7.2_live"), None, "a live suffix is not x.y.z");
+        assert_eq!(p.staleness("v7.1.0"), None, "a prefix is not x.y.z");
+
+        // The legacy side is held to the same strict shape: `major_version()`
+        // may be a loose tag in an older body, and that must refuse too.
+        let loose = r#"{"retcode":0,"data":{"game_packages":[{"main":{"major":{"version":"5"}},"patches":[]}]}}"#;
+        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(loose)
+            .unwrap()
+            .data;
+        assert_eq!(p.staleness("7.1.0"), None);
+
+        let loose_live = r#"{"retcode":0,"data":{"game_packages":[{"main":{"major":{"version":"5.5_live"}},"patches":[]}]}}"#;
+        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(loose_live)
+            .unwrap()
+            .data;
+        assert_eq!(p.staleness("7.1.0"), None);
+    }
 }

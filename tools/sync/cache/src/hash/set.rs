@@ -19,6 +19,30 @@ bitflags! {
     }
 }
 
+/// **Compile-time pin of the bit vocabulary.** Each private mask must be the
+/// bit its [`HashAlg`] owns, and the two sides must cover the same algorithms.
+/// `AlgoSet` builds members with `from_bits_truncate`, so an algorithm added to
+/// `HashAlg` without a matching `AlgoBits` constant would be dropped silently
+/// at runtime; here that becomes a build error instead. Like the resolver pin
+/// in `super::algo`, this lives in the crate rather than its tests so a plain
+/// build holds it too.
+const _: () = {
+    assert!(AlgoBits::MD5.bits() == HashAlg::Md5.bit());
+    assert!(AlgoBits::SHA256.bits() == HashAlg::Sha256.bit());
+    assert!(AlgoBits::XXHASH64.bits() == HashAlg::Xxhash64.bit());
+
+    const fn every_hash_alg_bit() -> u16 {
+        let mut bits = 0u16;
+        let mut i = 0;
+        while i < HashAlg::ALL.len() {
+            bits |= HashAlg::ALL[i].bit();
+            i += 1;
+        }
+        bits
+    }
+    assert!(every_hash_alg_bit() == AlgoBits::all().bits());
+};
+
 /// A set of algorithms, as a bitfield: two bytes, no allocations, no order.
 ///
 /// ## Why a set and not a list

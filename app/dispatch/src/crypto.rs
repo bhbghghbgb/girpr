@@ -54,3 +54,24 @@ pub fn decrypt_pkcs1_blocks(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decode_base64;
+
+    /// The one seam where checked-in key XML (padded) and dispatcher bodies
+    /// (often unpadded, sometimes wrapped across lines) meet. The `STANDARD`
+    /// fallback is load-bearing: dropping it breaks the padded XML components
+    /// even though the unpadded `STANDARD_NO_PAD` path still works.
+    #[test]
+    fn decode_base64_accepts_padded_unpadded_and_whitespace() {
+        let expected = b"foobar!".to_vec();
+        // Padded: `STANDARD_NO_PAD` rejects `=`, so the fallback runs.
+        assert_eq!(decode_base64("Zm9vYmFyIQ==").unwrap(), expected);
+        // Unpadded: the first engine succeeds; no fallback involved.
+        assert_eq!(decode_base64("Zm9vYmFyIQ").unwrap(), expected);
+        // Whitespace is dropped before either shape is tried.
+        assert_eq!(decode_base64(" Zm9v\nYmFy\r\nIQ==\t").unwrap(), expected);
+        assert_eq!(decode_base64(" Zm9v\nYmFy\r\nIQ\t").unwrap(), expected);
+    }
+}

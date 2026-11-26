@@ -40,6 +40,7 @@ pub use generated::*;
 mod tests {
     use super::*;
     use prost::Message as _;
+    use std::collections::BTreeSet;
 
     /// Tag 6 encodes as `0x30` (field 6, wire type 0). Pin it so a re-tag would
     /// change the wire bytes and the passthrough would silently stop matching.
@@ -142,5 +143,78 @@ mod tests {
             chunk.get("unknown").is_none(),
             "upstream name must not leak"
         );
+    }
+
+    /// Every generated message contributes keys to the frozen full-decode
+    /// dump. Compare *names only*, as an order-independent set: values, key
+    /// order and JSON spacing are not contracts. The listing is deliberate —
+    /// a message added to the vendored schema needs a row here.
+    #[test]
+    fn every_generated_message_has_a_frozen_serde_key_set() {
+        fn key_set<T: serde::Serialize>(message: &T) -> BTreeSet<String> {
+            let value = serde_json::to_value(message).expect("serialize generated message");
+            value
+                .as_object()
+                .expect("a generated message is a JSON object")
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        fn assert_keys<T: serde::Serialize>(message: &T, expected: &[&str]) {
+            let expected: BTreeSet<String> = expected.iter().map(|key| (*key).into()).collect();
+            assert_eq!(key_set(message), expected);
+        }
+
+        assert_keys(&SophonChunkManifest::default(), &["chuncks"]);
+        assert_keys(
+            &SophonChunkFile::default(),
+            &["file", "chunks", "is_folder", "size", "md5"],
+        );
+        assert_keys(
+            &SophonChunk::default(),
+            &[
+                "id",
+                "uncompressed_md5",
+                "offset",
+                "compressed_size",
+                "uncompressed_size",
+                "unknown_field6",
+                "compressed_md5",
+            ],
+        );
+        assert_keys(
+            &SophonPatchManifest::default(),
+            &["patches", "delete_tags", "compress_mode"],
+        );
+        assert_keys(
+            &SophonPatchFile::default(),
+            &["file", "size", "md5", "patches"],
+        );
+        assert_keys(&SophonPatchInfo::default(), &["tag", "patch"]);
+        assert_keys(
+            &SophonPatch::default(),
+            &[
+                "id",
+                "tag",
+                "build_id",
+                "patch_file_size",
+                "patch_file_md5",
+                "patch_offset",
+                "patch_length",
+                "original_file_name",
+                "original_file_size",
+                "original_file_md5",
+            ],
+        );
+        assert_keys(
+            &SophonPatchDeleteTag::default(),
+            &["tag", "delete_collection"],
+        );
+        assert_keys(
+            &SophonPatchDeleteFileCollection::default(),
+            &["delete_files"],
+        );
+        assert_keys(&SophonPatchDeleteFile::default(), &["file", "size", "md5"]);
     }
 }
