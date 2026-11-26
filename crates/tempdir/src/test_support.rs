@@ -25,7 +25,7 @@
 // crate-level lint gate (which exists for code a user runs) out of this module.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // The scratch-directory helper this crate already owns, so the tree a test
 // writes into is named and removed exactly the way it is everywhere else in
@@ -111,10 +111,11 @@ pub fn file_link(target: &Path, link: &Path) -> std::io::Result<()> {
 
 /// Create a link to a directory, falling back to a junction on Windows.
 ///
-/// `cmd /c mklink /J` creates a directory reparse point without elevation, and
+/// `junction::create` creates a directory reparse point without a shell, and
 /// the walk and the deletion guard treat it as a link either way
-/// (`girsync::link::try_is_link`). If both calls fail, the original error is
-/// returned so the caller can report why it skipped.
+/// (`girsync::link::try_is_link`). It takes the target first and the junction
+/// path second. If both calls fail, the original symlink error is kept as the
+/// context of the junction error so the caller can report why it skipped.
 pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -126,29 +127,12 @@ pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
-        // a target like `dst/sub` would fail with "Invalid switch". std accepts
-        // either separator on Windows, so hand the command native ones.
-        let native = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
-        let created = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(native(link))
-            .arg(native(target))
-            .output();
-        match created {
-            Ok(out) if out.status.success() => Ok(()),
-            Ok(out) => Err(std::io::Error::new(
-                first.kind(),
-                format!(
-                    "{first}; junction fallback failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
-            )),
-            Err(e) => Err(std::io::Error::new(
+        junction::create(target, link).map_err(|e| {
+            std::io::Error::new(
                 first.kind(),
                 format!("{first}; junction fallback failed: {e}"),
-            )),
-        }
+            )
+        })
     }
     #[cfg(not(any(unix, windows)))]
     {

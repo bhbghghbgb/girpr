@@ -33,6 +33,14 @@ girpr-path-shape = { path = "../../crates/path-shape" }
 # Temp-sibling-then-rename publishing for every artifact the product writes.
 tempfile = "3.27"
 
+[target.'cfg(windows)'.dependencies]
+# The junction fixture delegates the reparse-point mechanics to this crate.
+# It is Windows-only and only reached from the `test-support` module, which is
+# compiled out of shipped targets. Default features are off: the crate's
+# `unstable_admin` default would request backup/restore privileges, while an
+# ordinary junction fixture needs no elevation.
+junction = { version = "2.1.0", default-features = false }
+
 [dev-dependencies]
 # The scratch directories the file and containment tests write into.
 girpr-tempdir = { path = "../../crates/tempdir" }

@@ -26,3 +26,9 @@ tempfile = "3.27.0"
 # program that took this crate as a dev-dependency inherit girsync's rebuilds.
 # Those fixtures now live in `girsync-test-support`, taken only by the two
 # programs that already depend on girsync. This crate stays a girsync-free leaf.
+
+[target.'cfg(windows)'.dependencies]
+# The `dir_link` junction fallback delegates the reparse-point mechanics to
+# this Windows-only crate; default features are off so it does not request
+# backup/restore privileges for an ordinary test fixture.
+junction = { version = "2.1.0", default-features = false }
