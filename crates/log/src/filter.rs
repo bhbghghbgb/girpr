@@ -128,9 +128,9 @@ mod tests {
         }
     }
 
-    /// The console's spec is built as `"{rust_log},{project}={level}"`, and
-    /// this pins the two `EnvFilter` rules that make that order mean what the
-    /// policy says it means.
+    /// `console_filter` parses `RUST_LOG` on its own and appends each fixed
+    /// directive with `add_directive`; this pins the two `EnvFilter` rules
+    /// that make "the last appended directive wins" mean what the policy says.
     ///
     /// They are upstream's rules, not ours, so they are worth a test: if
     /// `EnvFilter` ever changed them, the console would quietly stop obeying

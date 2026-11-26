@@ -65,9 +65,10 @@ pub mod install;
 pub mod level;
 pub mod plan;
 
-/// Test-only log-capture helpers (the one `logs_of` implementation).
+/// Test-only log-capture helpers (the shared `logs_of` implementation and its
+/// JSON-formatted counterpart).
 ///
-/// Public so every test binary can reach it under nextest's one-process-per-
+/// Public so every test binary can reach them under nextest's one-process-per-
 /// test model; off in shipped builds, enabled by each consumer's
 /// dev-dependencies. Each consumer keeps a thin `logs_of` shim of its own.
 #[cfg(feature = "test-support")]

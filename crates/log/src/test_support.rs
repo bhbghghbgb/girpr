@@ -13,15 +13,27 @@
 //! Each consumer keeps a thin `logs_of` shim (a re-export or a one-line
 //! delegate) so every call site is unchanged.
 //!
-//! The two entry points differ only in how they scope the subscriber, and are
-//! gated by separate features so a sync-only consumer never compiles tokio:
+//! Each surface comes in a synchronous and an async form; the forms differ
+//! only in how they scope the subscriber, and the async ones are gated by a
+//! separate feature so a sync-only consumer never compiles tokio:
 //!
-//! - [`logs_of`](crate::test_support::logs_of) uses `with_default` for a synchronous closure and
-//!   needs nothing but the `test-support` feature;
-//! - [`logs_of_async`](crate::test_support::logs_of_async) uses `set_default` across an `.await` and asserts a
-//!   current-thread runtime on every build — a multi-thread runtime would
-//!   move spawned work onto threads with no subscriber and silently lose its
-//!   lines. It is behind `test-support-async`, which implies `test-support`.
+//! - [`logs_of`](crate::test_support::logs_of) and [`logs_of_json`](crate::test_support::logs_of_json)
+//!   use `with_default` for a synchronous closure and need nothing but the
+//!   `test-support` feature;
+//! - [`logs_of_async`](crate::test_support::logs_of_async) and
+//!   [`logs_of_async_json`](crate::test_support::logs_of_async_json) use `set_default` across an
+//!   `.await` and assert a current-thread runtime on every build — a multi-thread
+//!   runtime would move spawned work onto threads with no subscriber and
+//!   silently lose its events. They are behind `test-support-async`, which
+//!   implies `test-support`.
+//!
+//! The text helpers keep their original subscriber and output for consumers
+//! that assert on rendered lines. The JSON helpers install a JSON-formatted
+//! subscriber and return one `serde_json::Value` per event, with the event's
+//! fields (including `message`) flattened to the top level. Assertions can
+//! then name the documented `level` and `message` fields directly instead of
+//! re-implementing the text formatter's prefix. No shipped program installs
+//! either subscriber.
 
 // Test helpers assert their invariants with `expect`; the lint is for code a
 // user runs.
@@ -108,6 +120,46 @@ fn subscriber(buffer: CaptureBuffer) -> impl tracing::Subscriber {
         .finish()
 }
 
+/// The JSON counterpart of [`subscriber`]: one object per event, with the
+/// event's fields flattened to the top level so `message` is a documented
+/// sibling of `level` rather than buried in a rendered line.
+fn json_subscriber(buffer: CaptureBuffer) -> impl tracing::Subscriber {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .json()
+        .flatten_event(true)
+        .with_writer(move || buffer.clone())
+        .finish()
+}
+
+/// Split the JSON subscriber's NDJSON output into one `Value` per event.
+///
+/// The JSON formatter escapes newlines inside strings, so one event is always
+/// one line and a multi-line message stays a single record. Blank lines are
+/// ignored; anything else must be the object the formatter promised to write.
+fn json_records(bytes: &[u8]) -> Vec<serde_json::Value> {
+    std::str::from_utf8(bytes)
+        .expect("the JSON subscriber writes UTF-8")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line).expect("the JSON subscriber writes one object per line")
+        })
+        .collect()
+}
+
+/// Run `f` with a JSON-formatted subscriber and return its events as records.
+///
+/// Each record carries the documented `level` and `message` fields (plus the
+/// event's own fields and the formatter's `timestamp`/`target`). This is the
+/// surface for assertions that would otherwise parse rendered log lines.
+pub fn logs_of_json(f: impl FnOnce()) -> Vec<serde_json::Value> {
+    let buffer = CaptureBuffer::default();
+    tracing::subscriber::with_default(json_subscriber(buffer.clone()), f);
+    json_records(&buffer.snapshot())
+}
+
 /// Run `f` with a debug-level subscriber whose lines are captured and return
 /// the rendered lines as text.
 ///
@@ -138,12 +190,17 @@ pub fn logs_of(f: impl FnOnce()) -> String {
 /// site already carries the subscriber; the dispatcher is taken at *spawn
 /// time*, so one spawned from another spawned task captures the worker's.
 #[cfg(feature = "test-support-async")]
-pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
+fn assert_current_thread_runtime() {
     assert_eq!(
         tokio::runtime::Handle::current().runtime_flavor(),
         tokio::runtime::RuntimeFlavor::CurrentThread,
         "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
     );
+}
+
+#[cfg(feature = "test-support-async")]
+pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
+    assert_current_thread_runtime();
 
     let buffer = CaptureBuffer::default();
     let guard = tracing::subscriber::set_default(subscriber(buffer.clone()));
@@ -153,6 +210,19 @@ pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
         out,
         String::from_utf8(buffer.snapshot()).expect("tracing writes UTF-8"),
     )
+}
+
+/// The async counterpart of [`logs_of_json`], with the same runtime
+/// precondition as [`logs_of_async`].
+#[cfg(feature = "test-support-async")]
+pub async fn logs_of_async_json<F: Future>(f: F) -> (F::Output, Vec<serde_json::Value>) {
+    assert_current_thread_runtime();
+
+    let buffer = CaptureBuffer::default();
+    let guard = tracing::subscriber::set_default(json_subscriber(buffer.clone()));
+    let out = f.await;
+    drop(guard);
+    (out, json_records(&buffer.snapshot()))
 }
 
 #[cfg(all(test, feature = "test-support-async"))]
@@ -167,5 +237,64 @@ mod tests {
     #[should_panic(expected = "logs_of requires a current-thread runtime")]
     async fn a_multi_thread_runtime_is_rejected() {
         let _ = logs_of_async(async {}).await;
+    }
+
+    /// The JSON surface shares the precondition: a multi-thread runtime would
+    /// leave spawned events out of the capture.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic(expected = "logs_of requires a current-thread runtime")]
+    async fn a_multi_thread_runtime_is_rejected_by_json_capture() {
+        let _ = logs_of_async_json(async {}).await;
+    }
+}
+
+#[cfg(test)]
+mod json_capture_tests {
+    use super::*;
+
+    /// The documented `level` and `message` fields come back by name, alongside
+    /// the event's own fields, without any text parsing by the caller.
+    #[test]
+    fn json_capture_exposes_level_message_and_event_fields() {
+        let records = logs_of_json(|| {
+            tracing::warn!(file = "a.dat", "CHECK fail: md5");
+            tracing::info!("check-only: total=1 bad=0 damaged_chunks=0");
+        });
+
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records[0]["level"], "WARN");
+        assert_eq!(records[0]["message"], "CHECK fail: md5");
+        assert_eq!(records[0]["file"], "a.dat");
+        assert_eq!(records[1]["level"], "INFO");
+        assert_eq!(
+            records[1]["message"],
+            "check-only: total=1 bad=0 damaged_chunks=0"
+        );
+    }
+
+    /// A message that begins with a number, or that looks like a whole rendered
+    /// line, cannot displace the level: the level is read from its own field.
+    #[test]
+    fn a_numeric_or_prefixed_message_does_not_displace_the_level() {
+        let records = logs_of_json(|| {
+            tracing::info!("2 INFO girpr::check: CHECK fail: md5 file=a.dat");
+        });
+
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["level"], "INFO");
+        assert_eq!(
+            records[0]["message"],
+            "2 INFO girpr::check: CHECK fail: md5 file=a.dat"
+        );
+    }
+
+    /// A newline in the message stays inside one record's `message` field; the
+    /// JSON formatter escapes it, so it is not read as a second event.
+    #[test]
+    fn a_multiline_message_is_one_record() {
+        let records = logs_of_json(|| tracing::warn!("first line\nsecond line"));
+
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["message"], "first line\nsecond line");
     }
 }

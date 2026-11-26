@@ -535,6 +535,7 @@ fn check_one_with(
 mod tests {
     use super::*;
     use crate::util::Md5;
+    use serde_json::{Value, json};
     use std::time::{Duration, Instant};
     use tracing::Level;
 
@@ -584,84 +585,93 @@ mod tests {
         }
     }
 
-    /// The level a captured line was logged at, read from its place in the
-    /// record prefix rather than by searching for the first token that parses.
+    /// The documented `level` field of a captured JSON record.
     ///
-    /// The subscriber writes `<timestamp> <LEVEL> <target>: <message>`, so the
-    /// level is the token immediately before the target. That matters because
-    /// `tracing::Level` also parses bare numbers (`"2"` is `WARN`): a numeric
-    /// token anywhere earlier in the record must not be taken for the level.
-    fn logged_level(line: &str) -> Result<Level, String> {
-        let (prefix, _) = line
-            .split_once(": ")
-            .ok_or_else(|| format!("the log line has no `<target>: ` prefix: {line:?}"))?;
-        let mut tokens = prefix.split_whitespace().rev();
-        let target = tokens
-            .next()
-            .ok_or_else(|| format!("the log line has no target: {line:?}"))?;
-        let level = tokens
-            .next()
-            .ok_or_else(|| format!("the log line has no level before {target:?}: {line:?}"))?;
-        tokens
-            .next()
-            .ok_or_else(|| format!("the log line has no timestamp before its level: {line:?}"))?;
-        level
-            .parse()
-            .map_err(|_| format!("the log line has no level before {target:?}: {line:?}"))
+    /// The JSON subscriber writes the level as its own named field, so there is
+    /// no rendered prefix to scan and no bare number that could be mistaken for
+    /// a level.
+    fn logged_level(record: &Value) -> Result<Level, String> {
+        let name = record["level"]
+            .as_str()
+            .ok_or_else(|| format!("captured record has no string `level`: {record}"))?;
+        name.parse()
+            .map_err(|_| format!("captured record has an unknown `level` {name:?}"))
     }
 
-    /// One captured record per line, as `(level, message)`.
-    ///
-    /// The subscriber writes every event as one line, with the fields inline
-    /// after the message. A message that itself contains a newline would be
-    /// printed as a second, level-less line; parsing every line means such a
-    /// continuation is an error instead of being silently dropped.
-    fn log_records(logs: &str) -> Result<Vec<(Level, &str)>, String> {
-        logs.lines()
-            .map(|line| Ok((logged_level(line)?, line)))
+    /// The documented `message` field of a captured JSON record.
+    fn logged_message(record: &Value) -> Result<&str, String> {
+        record["message"]
+            .as_str()
+            .ok_or_else(|| format!("captured record has no string `message`: {record}"))
+    }
+
+    /// One captured event per record, as `(level, message)` read straight from
+    /// the two documented fields. A record missing either field fails instead
+    /// of silently shrinking the set of events under assertion.
+    fn log_records(logs: &[Value]) -> Result<Vec<(Level, &str)>, String> {
+        logs.iter()
+            .map(|record| Ok((logged_level(record)?, logged_message(record)?)))
             .collect()
     }
 
-    /// The `CHECK fail` records from a captured log, each with the level it
-    /// was logged at, so two runs can be compared for the same warning set and
-    /// order and a failure line that stops being a warning is caught too.
-    ///
-    /// A line that is not a record — one whose prefix holds no level, or the
-    /// continuation of a multi-line message — fails instead of shrinking the
-    /// list.
-    fn check_warnings(logs: &str) -> Result<Vec<(Level, &str)>, String> {
+    /// A captured event reduced to the fields a check assertion uses: the
+    /// documented `level` and `message` plus the event's own fields. The
+    /// formatter's `timestamp` and `target` are dropped so two runs over the
+    /// same plan compare equal; they are bookkeeping, not part of the decision.
+    fn check_fields(record: &Value) -> Value {
+        let mut fields = record
+            .as_object()
+            .expect("a captured record is a JSON object")
+            .clone();
+        fields.remove("timestamp");
+        fields.remove("target");
+        Value::Object(fields)
+    }
+
+    /// The `CHECK fail` events from a capture, with their documented fields,
+    /// so two runs can be compared for the same warning set and order and a
+    /// failure that stops being a warning is caught too.
+    fn check_warnings(logs: &[Value]) -> Result<Vec<(Level, Value)>, String> {
         Ok(log_records(logs)?
             .into_iter()
-            .filter_map(|(level, line)| {
-                let at = line.find("CHECK fail")?;
-                Some((level, &line[at..]))
-            })
+            .zip(logs)
+            .filter(|((_, message), _)| message.contains("CHECK fail"))
+            .map(|((level, _), record)| (level, check_fields(record)))
             .collect())
     }
 
-    /// The one `check-only: total=` record, with the level it was logged at.
-    fn check_summary(logs: &str) -> Result<(Level, &str), String> {
+    /// The one `check-only: total=` event, with the level it was logged at.
+    fn check_summary(logs: &[Value]) -> Result<(Level, Value), String> {
         let mut found = log_records(logs)?
             .into_iter()
-            .filter(|(_, line)| line.contains("check-only: total="));
+            .zip(logs)
+            .filter(|((_, message), _)| message.contains("check-only: total="));
         match (found.next(), found.next()) {
-            (Some(record), None) => Ok(record),
-            (None, _) => Err("the check summary line was not logged".to_string()),
-            (Some(_), Some(_)) => Err("the check summary line was logged twice".to_string()),
+            (Some(((level, _), record)), None) => Ok((level, check_fields(record))),
+            (None, _) => Err("the check summary was not logged".to_string()),
+            (Some(_), Some(_)) => Err("the check summary was logged twice".to_string()),
         }
     }
 
+    /// A capture missing either documented field is an error rather than a
+    /// silently dropped event: the warning set under assertion must be whole.
+    #[test]
+    fn a_capture_missing_a_documented_field_is_an_error() {
+        assert!(check_warnings(&[json!({ "message": "CHECK fail: md5" })]).is_err());
+        assert!(check_warnings(&[json!({ "level": "WARN" })]).is_err());
+    }
+
     /// Run one verify on a current-thread runtime and return its counters and
-    /// captured log. The check tasks use the blocking pool; only the ordered
-    /// fold logs, so the captured lines stay deterministic.
+    /// captured JSON records. The check tasks use the blocking pool; only the
+    /// ordered fold logs, so the captured events stay deterministic.
     async fn run_verify(
         base: &Path,
         plan: &Arc<RepairPlan>,
         scan: &Option<Arc<ScanReport>>,
         jobs: usize,
-    ) -> (u64, u64, u64, u64, String) {
+    ) -> (u64, u64, u64, u64, Vec<Value>) {
         let summary = Arc::new(Summary::default());
-        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan(
+        let (bad, logs) = girpr_log::test_support::logs_of_async_json(verify_plan(
             base,
             None,
             Arc::clone(plan),
@@ -720,39 +730,33 @@ mod tests {
         );
         assert_eq!((one.0, one.1, one.2, one.3), (2, 1, 2, 2));
         let one_warnings =
-            check_warnings(&one.4).expect("every captured line is a record with a level");
+            check_warnings(&one.4).expect("every captured record has a level and a message");
         assert_eq!(
             one_warnings,
-            check_warnings(&many.4).expect("every captured line is a record with a level"),
+            check_warnings(&many.4).expect("every captured record has a level and a message"),
             "the warning set and its plan order are jobs-independent"
         );
-        assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
+        assert_eq!(one_warnings.len(), 2, "{one_warnings:?}");
         assert!(
             one_warnings.iter().all(|(level, _)| *level == Level::WARN),
-            "every check failure is a warning: {:?}",
-            one_warnings
+            "every check failure is a warning: {one_warnings:?}"
         );
-        let messages: Vec<&str> = one_warnings.iter().map(|(_, message)| *message).collect();
-        assert!(
-            messages[0].contains("b.dat") && messages[0].contains("CHECK fail: md5"),
-            "{:?}",
-            one_warnings
-        );
-        assert!(
-            messages[1].contains("c.dat") && messages[1].contains("CHECK fail: size"),
-            "{:?}",
-            one_warnings
-        );
-        let (summary_level, summary_line) =
-            check_summary(&one.4).expect("the check summary line is logged once");
+        assert_eq!(one_warnings[0].1["level"], "WARN");
+        assert_eq!(one_warnings[0].1["message"], "CHECK fail: md5");
+        assert_eq!(one_warnings[0].1["file"], "b.dat");
+        assert_eq!(one_warnings[1].1["level"], "WARN");
+        assert_eq!(one_warnings[1].1["message"], "CHECK fail: size");
+        assert_eq!(one_warnings[1].1["file"], "c.dat");
+        let (summary_level, summary) =
+            check_summary(&one.4).expect("the check summary is logged once");
         assert_eq!(
             summary_level,
             Level::INFO,
             "the check summary is informational"
         );
-        assert!(
-            summary_line.contains("damaged_chunks=2"),
-            "the scan's damaged-chunk total is folded once: {summary_line}"
+        assert_eq!(
+            summary["message"], "check-only: total=3 bad=2 damaged_chunks=2",
+            "the scan's damaged-chunk total is folded once: {summary}"
         );
     }
 
@@ -831,7 +835,7 @@ mod tests {
         let summary = Arc::new(Summary::default());
         let why = "injected gate expiry";
 
-        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan_with(
+        let (bad, logs) = girpr_log::test_support::logs_of_async_json(verify_plan_with(
             base,
             None,
             plan,
@@ -852,12 +856,17 @@ mod tests {
         assert_eq!(bad, 1, "the injected failure is counted as damage");
 
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
-        let expected = format!("CHECK fail: test double: {why} file={rel}");
+        let expected = format!("CHECK fail: test double: {why}");
+        let warnings =
+            check_warnings(&logs).expect("every captured record has a level and a message");
         assert_eq!(
-            check_warnings(&logs).expect("every captured line is a record with a level"),
-            vec![(Level::WARN, expected.as_str())],
+            warnings.len(),
+            1,
             "the expired gate is logged once, through the one warn site"
         );
+        assert_eq!(warnings[0].0, Level::WARN);
+        assert_eq!(warnings[0].1["message"].as_str(), Some(expected.as_str()));
+        assert_eq!(warnings[0].1["file"].as_str(), Some(rel));
     }
 
     /// The failure shape one planned file reports, keyed by its rel.
@@ -908,7 +917,7 @@ mod tests {
         ]));
         let summary = Arc::new(Summary::default());
 
-        let (bad, logs) = girpr_log::test_support::logs_of_async(verify_plan_with(
+        let (bad, logs) = girpr_log::test_support::logs_of_async_json(verify_plan_with(
             base,
             None,
             plan,
@@ -934,39 +943,79 @@ mod tests {
         let bad = bad.expect("the check tasks finish");
         assert_eq!(bad, 7, "every injected failure counts as damage");
 
+        let expected_warnings = vec![
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: path escapes the game dir",
+                    "file": "escaped.dat",
+                    "error": "the rel escapes the game dir",
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: unreadable",
+                    "file": "unreadable.dat",
+                    "error": "the file could not be statted",
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: size",
+                    "file": "absent.dat",
+                    "expect_size": 13,
+                    "actual_size": "None",
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: size",
+                    "file": "sized.dat",
+                    "expect_size": 17,
+                    "actual_size": "Some(19)",
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: md5",
+                    "file": "md5.dat",
+                    "expect_md5": "55555555555555555555555555555555",
+                    "actual_md5": "66666666666666666666666666666666",
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: md5",
+                    "file": "scanned_md5.dat",
+                    "expect_md5": "77777777777777777777777777777777",
+                    "actual_md5": "88888888888888888888888888888888",
+                    "damaged_chunks": 2,
+                }),
+            ),
+            (
+                Level::WARN,
+                json!({
+                    "level": "WARN",
+                    "message": "CHECK fail: unreadable: the digest read failed",
+                    "file": "read.dat",
+                }),
+            ),
+        ];
         assert_eq!(
-            check_warnings(&logs).expect("every captured line is a record with a level"),
-            vec![
-                (
-                    Level::WARN,
-                    "CHECK fail: path escapes the game dir file=escaped.dat error=the rel escapes the game dir",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: unreadable file=unreadable.dat error=the file could not be statted",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: size file=absent.dat expect_size=13 actual_size=None",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: size file=sized.dat expect_size=17 actual_size=Some(19)",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: md5 file=md5.dat expect_md5=55555555555555555555555555555555 actual_md5=66666666666666666666666666666666",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: md5 file=scanned_md5.dat expect_md5=77777777777777777777777777777777 actual_md5=88888888888888888888888888888888 damaged_chunks=2",
-                ),
-                (
-                    Level::WARN,
-                    "CHECK fail: unreadable: the digest read failed file=read.dat",
-                ),
-            ],
-            "each failure shape has its own line, in plan order, at the warn level"
+            check_warnings(&logs).expect("every captured record has a level and a message"),
+            expected_warnings,
+            "each failure shape has its own fields, in plan order, at the warn level"
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 7);
         assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
@@ -1050,31 +1099,6 @@ mod tests {
             Some(CheckFailure::Read(ref e)) if e == "the digest read failed"
         ));
         assert_eq!(outcome.damaged_chunks, None);
-    }
-
-    /// The extractor reads the level from its place in the record, not from
-    /// the first token that happens to parse as one: a bare numeric token
-    /// earlier in the prefix is not the level. A record with no level, and a
-    /// continuation line from a multi-line message, are errors rather than
-    /// silently dropped lines.
-    #[test]
-    fn the_log_extractor_reads_the_level_by_position() {
-        let numeric_before_level =
-            "2026-01-01T00:00:00.000000Z 2 INFO girpr::check: CHECK fail: md5 file=a";
-        assert_eq!(logged_level(numeric_before_level), Ok(Level::INFO));
-
-        let no_level = "2026-01-01T00:00:00.000000Z girpr::check: CHECK fail: md5 file=a";
-        assert!(
-            check_warnings(no_level).is_err(),
-            "a record without a level must not be dropped"
-        );
-
-        let continued =
-            "2026-01-01T00:00:00.000000Z WARN girpr::check: CHECK fail: md5 file=a\ncontinuation";
-        assert!(
-            check_warnings(continued).is_err(),
-            "a continuation line is not a record"
-        );
     }
 
     /// The ticker reads the counters while the pass is still running, so a

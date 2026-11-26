@@ -56,21 +56,22 @@
 //!
 //! # `RUST_LOG` adds; it does not replace
 //!
-//! The console's spec is this project's own directive — `girpr=info` — with
-//! `RUST_LOG`'s directives *in front of it*:
+//! The console's filter is built from directives, not from one joined spec.
+//! `RUST_LOG` is parsed on its own first, then this project's own directive —
+//! `girpr=info` — is appended last with `EnvFilter::add_directive`:
 //!
 //! ```text
 //! RUST_LOG unset          ->  girpr=info
-//! RUST_LOG=reqwest=debug  ->  reqwest=debug,girpr=info
+//! RUST_LOG=reqwest=debug  ->  reqwest=debug, girpr=info
 //! ```
 //!
 //! Two things follow, and both of them are the point.
 //!
 //! **The program's own level is exactly what `--log-level` says.** The
-//! project's directive is always present, so a `RUST_LOG` that names some
+//! project's directive is always appended, so a `RUST_LOG` that names some
 //! unrelated crate cannot silence the program — the difference between "a user
 //! has an environment variable exported" and "a user cannot see the program at
-//! all". The flag is last in the spec because `EnvFilter` gives a tie on the
+//! all". The flag's directive goes last because `EnvFilter` gives a tie on the
 //! same target to the *last* directive, and the flag is what the person
 //! running the tool typed.
 //!
@@ -86,6 +87,9 @@
 //! that, and a flag is a thing a person typed on purpose. A *more specific*
 //! directive still applies — `RUST_LOG=girpr::http=trace` turns up that one
 //! module — because `EnvFilter` gives the most specific match the last word.
+//!
+//! A broken `RUST_LOG` is warned about and dropped; it is never concatenated
+//! with the fixed directives into a spec that would have to be parsed again.
 //!
 //! # What is *not* here
 //!

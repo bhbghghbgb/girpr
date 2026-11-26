@@ -13,15 +13,21 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-# The `test_support` module holds the one shared `logs_of` implementation. It
-# is a dev/test surface only: no shipped program links against it, and each
-# consumer opts in through a dev-dependency. The synchronous `logs_of` needs no
-# runtime at all; only the async variant reads the current runtime's flavor.
-test-support = []
-# `logs_of_async` and its always-on current-thread runtime assertion are
-# optional on top of the sync surface. Consumers that only capture synchronous
-# logs enable `test-support` alone and never compile tokio; the two callers
-# that capture across an `.await` enable this feature instead.
+# The `test_support` module holds the shared `logs_of` implementation and its
+# JSON-formatted counterpart. It is a dev/test surface only: no shipped program
+# links against it, and each consumer opts in through a dev-dependency. The
+# synchronous helpers need no runtime at all; only the async variants read the
+# current runtime's flavor.
+#
+# The JSON capture surface is where `serde_json` and `tracing-subscriber`'s
+# `json` formatter are pulled in. Both stay out of shipped builds: they are
+# activated by this feature alone, which every consumer enables only as a
+# dev-dependency.
+test-support = ["dep:serde_json", "tracing-subscriber/json"]
+# `logs_of_async` / `logs_of_async_json` and their always-on current-thread
+# runtime assertion are optional on top of the sync surface. Consumers that
+# only capture synchronous logs enable `test-support` alone and never compile
+# tokio; the callers that capture across an `.await` enable this feature instead.
 test-support-async = ["test-support", "dep:tokio"]
 
 [dev-dependencies]
@@ -41,6 +47,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # For the non-blocking file writer shared by the three installations. The
 # guard it returns is stored by each project, not by this crate.
 tracing-appender = "0.2.5"
-# Only the async `logs_of_async` test helper reads the current runtime's
-# flavor. Optional so shipped builds of this policy crate stay dependency-free.
+# Only the JSON capture surface parses `serde_json::Value`s. Optional so
+# shipped builds of this policy crate stay dependency-free; no feature that
+# changes `Value` key ordering is enabled.
+serde_json = { version = "1.0.154", optional = true }
+# Only the async test helpers read the current runtime's flavor. Optional so
+# shipped builds of this policy crate stay dependency-free.
 tokio = { version = "1.54.1", default-features = false, features = ["rt"], optional = true }

@@ -1091,6 +1091,7 @@ name = "girpr-log"
 version = "0.1.0"
 dependencies = [
  "girpr-time",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-appender",
