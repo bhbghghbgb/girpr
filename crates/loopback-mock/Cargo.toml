@@ -3,7 +3,7 @@ name = "girpr-loopback-mock"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "A dependency-free loopback HTTP server for canned test replies and request journals"
+description = "A wiremock-backed loopback HTTP server for canned test replies and request journals"
 
 [lib]
 name = "girpr_loopback_mock"
@@ -12,7 +12,13 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-# Deliberately dependency-free. This crate is a test-only leaf: the repair
-# facade, its fetch crate, the test fixtures and both capture programs can all
-# link it without creating a cycle or pulling in a product crate. There is no
-# `[dependencies]` section and there never should be one.
+# Test-only leaf: the repair facade, its fetch crate, the test fixtures and
+# both capture programs can all link it without creating a cycle or pulling in
+# a product crate. wiremock owns the listener, HTTP parsing and shutdown; the
+# leaf only scripts replies and translates the request journal. These are
+# regular dependencies (not dev-dependencies) because the leaf is compiled as
+# a normal dependency of its consumers' test targets, where its public API
+# must resolve.
+[dependencies]
+wiremock = "0.6.5"
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time"] }

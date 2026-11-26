@@ -1,10 +1,11 @@
-//! A dependency-free loopback HTTP server for canned test replies.
+//! A wiremock-backed loopback HTTP server for canned test replies.
 //!
-//! Each [`ScriptedServer`] binds its own ephemeral loopback port, answers a
-//! scripted sequence of replies (the last one repeats) and records the requests
-//! it saw. There is no route logic and no runtime dependency: the listener,
-//! the reply writer and the request journal are all in this crate, using only
-//! `std`.
+//! Each [`ScriptedServer`] owns a `wiremock` `MockServer` on its own ephemeral
+//! loopback port, answers a scripted sequence of replies (the last one repeats)
+//! and records the requests it saw. Listener, HTTP parsing, keep-alive, header
+//! writing and shutdown all belong to the library; this crate keeps only the
+//! small scripting contract its callers share: reply order, the invocation
+//! count and the request journal.
 //!
 //! The server deliberately knows nothing about what a reply or a request means
 //! to any program that uses it. Each caller keeps its own canned-server
@@ -17,15 +18,17 @@
 //! other fixture helpers applies to this crate too.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
+
+use wiremock::http::HeaderMap;
+use wiremock::matchers::any;
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 /// One scripted reply: a status, a body and the response headers to send with
 /// it. Header names are lowercased when they are added, so every caller spells
-/// the same header the same way on the wire.
+/// the same header the same way on the wire. Repeating a name appends another
+/// header line, in the order the values were added.
 #[derive(Clone, Debug)]
 pub struct Reply {
     pub status: u16,
@@ -57,53 +60,62 @@ impl Reply {
 pub struct RecordedRequest {
     pub method: String,
     pub target: String,
-    pub headers: Headers,
+    pub headers: HeaderMap,
 }
 
-/// The request headers of one [`RecordedRequest`], keyed case-insensitively.
-#[derive(Clone, Debug, Default)]
-pub struct Headers(Vec<(String, HeaderValue)>);
+/// Turns a scripted reply into a wiremock response and records the incoming
+/// request synchronously. wiremock's own journal is async to read; recording in
+/// the responder keeps `hits()` and `requests()` on the same synchronous API the
+/// callers already use, and counts exactly the requests that a mock answered.
+struct RecordingRespond {
+    template: ResponseTemplate,
+    journal: Arc<Mutex<Vec<RecordedRequest>>>,
+}
 
-impl Headers {
-    /// The first value recorded for `name`, if any.
-    pub fn get(&self, name: &str) -> Option<&HeaderValue> {
-        self.0
-            .iter()
-            .find(|(recorded, _)| recorded.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value)
-    }
-
-    /// Whether a header with `name` was recorded.
-    pub fn contains_key(&self, name: &str) -> bool {
-        self.get(name).is_some()
+impl Respond for RecordingRespond {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let target = format!(
+            "{}{}",
+            request.url.path(),
+            request
+                .url
+                .query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default()
+        );
+        self.journal.lock().unwrap().push(RecordedRequest {
+            method: request.method.as_str().to_owned(),
+            target,
+            headers: request.headers.clone(),
+        });
+        self.template.clone()
     }
 }
 
-/// One recorded header value. `to_str` mirrors the accessor callers use to
-/// compare a value with the string they expect on the wire.
-#[derive(Clone, Debug)]
-pub struct HeaderValue(String);
-
-impl HeaderValue {
-    pub fn to_str(&self) -> Result<&str, std::str::Utf8Error> {
-        Ok(&self.0)
+impl Reply {
+    /// The reply's bytes as a wiremock response. An empty mime leaves the
+    /// caller's own `content-type` headers (if any) untouched.
+    fn into_template(self) -> ResponseTemplate {
+        let mut template = ResponseTemplate::new(self.status);
+        for (name, value) in self.headers {
+            template = template.append_header(name, value);
+        }
+        template.set_body_raw(self.body, "")
     }
 }
 
 /// A canned server on its own ephemeral loopback port.
 ///
-/// Dropping it stops the accept loop before returning: a wake-up connection
-/// releases a blocked `accept`, the in-flight connection (if any) is shut down
-/// so a stalled request read cannot keep the driver alive, and the driver
-/// thread is joined. No listener or thread outlives the test that started it.
+/// Dropping it stops the underlying wiremock server before returning: no
+/// listener or background task outlives the test that started it. A server
+/// built by [`ScriptedServer::start_expecting`] also verifies its exact hit
+/// count on drop.
 pub struct ScriptedServer {
     base: String,
-    addr: SocketAddr,
-    stop: Arc<AtomicBool>,
-    driver: Option<JoinHandle<()>>,
+    // Kept for its `Drop`: wiremock shuts the server down and verifies its
+    // (empty) expectation set when this field is dropped.
+    _server: MockServer,
     journal: Arc<Mutex<Vec<RecordedRequest>>>,
-    hits: Arc<AtomicUsize>,
-    active: Arc<Mutex<Option<TcpStream>>>,
     expected: Option<u64>,
 }
 
@@ -125,54 +137,49 @@ impl ScriptedServer {
             !replies.is_empty(),
             "a canned server needs at least one reply"
         );
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let addr = listener.local_addr().expect("local addr");
-        let base = format!("http://{addr}");
-
-        let stop = Arc::new(AtomicBool::new(false));
         let journal = Arc::new(Mutex::new(Vec::new()));
-        let hits = Arc::new(AtomicUsize::new(0));
-        // The connection currently being served, if any. `Drop` shuts its
-        // socket down so a client that never finishes a request cannot stall
-        // `driver.join()` in a read (or write) that has no other wake-up.
-        let active = Arc::new(Mutex::new(None));
+        let last = replies.len() - 1;
+        let templates: Vec<ResponseTemplate> =
+            replies.into_iter().map(Reply::into_template).collect();
 
-        let driver_stop = Arc::clone(&stop);
-        let driver_journal = Arc::clone(&journal);
-        let driver_hits = Arc::clone(&hits);
-        let driver_active = Arc::clone(&active);
-        let driver = thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else {
-                    break;
-                };
-                // Publish the connection before serving it so `Drop` can always
-                // reach it, then read the stop flag under the same lock `Drop`
-                // uses to take the slot. Either we register before `Drop` takes
-                // it (and `Drop` shuts the socket down), or we see the flag and
-                // skip serving — so a connection accepted around a concurrent
-                // `Drop` cannot slip into a blocking read untracked.
-                {
-                    let mut guard = driver_active.lock().unwrap();
-                    *guard = Some(stream.try_clone().expect("clone stream"));
-                    if driver_stop.load(Ordering::SeqCst) {
-                        *guard = None;
-                        break;
-                    }
-                }
-                serve_one(&mut stream, &replies, &driver_journal, &driver_hits);
-                *driver_active.lock().unwrap() = None;
-            }
+        // wiremock's constructors are async and need a Tokio reactor. The
+        // leaf's API is synchronous and is frequently called from inside an
+        // existing runtime, so drive a fresh runtime on a short-lived helper
+        // thread instead of nesting a `Runtime::block_on`.
+        let thread_journal = Arc::clone(&journal);
+        let server = thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("build tokio runtime");
+                    runtime.block_on(async {
+                        let server = MockServer::start().await;
+                        for (index, template) in templates.into_iter().enumerate() {
+                            let mut mock = Mock::given(any()).respond_with(RecordingRespond {
+                                template,
+                                journal: Arc::clone(&thread_journal),
+                            });
+                            // Equal-priority mocks are tried in registration
+                            // order. Every reply answers once except the last,
+                            // which has no cap — that is "last reply repeats".
+                            if index != last {
+                                mock = mock.up_to_n_times(1);
+                            }
+                            mock.mount(&server).await;
+                        }
+                        server
+                    })
+                })
+                .join()
+                .expect("mock server start thread panicked")
         });
 
         Self {
-            base,
-            addr,
-            stop,
-            driver: Some(driver),
+            base: server.uri(),
+            _server: server,
             journal,
-            hits,
-            active,
             expected,
         }
     }
@@ -189,7 +196,7 @@ impl ScriptedServer {
 
     /// How many requests reached this server.
     pub fn hits(&self) -> usize {
-        self.hits.load(Ordering::SeqCst)
+        self.journal.lock().unwrap().len()
     }
 
     /// Every request recorded so far, in arrival order.
@@ -200,21 +207,6 @@ impl ScriptedServer {
 
 impl Drop for ScriptedServer {
     fn drop(&mut self) {
-        if !self.stop.swap(true, Ordering::SeqCst) {
-            // A connection releases an `accept` that is already blocked; the
-            // driver sees the stop flag before it can answer it.
-            let _ = TcpStream::connect(self.addr);
-        }
-        // If a connection is being served, its read (or write) may be blocked
-        // on a client that never finishes or reads the request. Shutting the
-        // shared socket down unblocks it so the driver can observe the stop
-        // flag and exit, and `join` always returns.
-        if let Some(stream) = self.active.lock().unwrap().take() {
-            let _ = stream.shutdown(Shutdown::Both);
-        }
-        if let Some(driver) = self.driver.take() {
-            let _ = driver.join();
-        }
         if let Some(expected) = self.expected {
             let got = self.hits() as u64;
             assert_eq!(
@@ -222,144 +214,77 @@ impl Drop for ScriptedServer {
                 "unexpected number of requests reached the mock"
             );
         }
-    }
-}
-
-/// Read one request, record it, then answer it and close the connection.
-fn serve_one(
-    stream: &mut TcpStream,
-    replies: &[Reply],
-    journal: &Mutex<Vec<RecordedRequest>>,
-    hits: &AtomicUsize,
-) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-    let mut request_line = String::new();
-    let Ok(n) = reader.read_line(&mut request_line) else {
-        return;
-    };
-    if n == 0 {
-        return;
-    }
-
-    let mut headers = Vec::new();
-    loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
-        if line == "\r\n" || line == "\n" {
-            break;
-        }
-        if let Some((name, value)) = line.trim_end_matches(['\r', '\n']).split_once(':') {
-            headers.push((
-                name.trim().to_ascii_lowercase(),
-                HeaderValue(value.trim().to_owned()),
-            ));
-        }
-    }
-
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_owned();
-    let target = parts.next().unwrap_or_default().to_owned();
-
-    let index = hits.fetch_add(1, Ordering::SeqCst).min(replies.len() - 1);
-    journal.lock().unwrap().push(RecordedRequest {
-        method,
-        target,
-        headers: Headers(headers),
-    });
-
-    let reply = &replies[index];
-    let mut head = format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status));
-    for (name, value) in &reply.headers {
-        head.push_str(name);
-        head.push_str(": ");
-        head.push_str(value);
-        head.push_str("\r\n");
-    }
-    head.push_str(&format!(
-        "Content-Length: {}\r\nConnection: close\r\n\r\n",
-        reply.body.len()
-    ));
-    let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(&reply.body);
-    let _ = stream.flush();
-}
-
-/// The reason phrase for the statuses the canned servers script. A caller
-/// never reads it (every response is parsed by numeric status), but keeping
-/// the usual spelling makes the reply line look like the real origin's.
-fn reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        206 => "Partial Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        409 => "Conflict",
-        415 => "Unsupported Media Type",
-        429 => "Too Many Requests",
-        500 => "Internal Server Error",
-        501 => "Not Implemented",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        504 => "Gateway Timeout",
-        _ => "Status",
+        // `self.server` is dropped next: wiremock shuts the server down and
+        // verifies its own expectations (none are registered here).
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
 
-    /// A client that connects, starts a request line and never finishes it
-    /// must not keep `Drop` stuck in `driver.join()`.
+    fn port_of(server: &ScriptedServer) -> u16 {
+        server
+            .base()
+            .rsplit(':')
+            .next()
+            .expect("base has a port")
+            .parse()
+            .expect("numeric port")
+    }
+
+    /// Status and body of one raw GET, so the script can be pinned without
+    /// taking a dependency on an HTTP client in this leaf.
+    fn get(base_port: u16) -> (u16, String) {
+        let mut stream = TcpStream::connect(("127.0.0.1", base_port)).expect("connect");
+        stream
+            .write_all(b"GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .expect("write request");
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).expect("read response");
+        let text = String::from_utf8_lossy(&bytes);
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .expect("status line")
+            .parse()
+            .expect("numeric status");
+        let body = text
+            .split_once("\r\n\r\n")
+            .expect("end of headers")
+            .1
+            .trim()
+            .to_owned();
+        (status, body)
+    }
+
+    /// Replies are consumed in script order, then the last one repeats.
     #[test]
-    fn drop_does_not_hang_on_an_unfinished_request_line() {
-        let server = ScriptedServer::start(vec![Reply::new(200, "ok")]);
-        let addr = server.addr;
-
-        let client = thread::spawn(move || {
-            let mut stream = TcpStream::connect(addr).expect("connect");
-            // No line terminator, so `serve_one` blocks in `read_line`. Then
-            // block waiting for a reply that cannot arrive until the line ends.
-            stream.write_all(b"GET / HTTP/1.").expect("write");
-            let mut byte = [0u8; 1];
-            let _ = stream.read(&mut byte);
-        });
-
-        // Wait for the driver to publish the accepted connection without
-        // sleeping: yield until the slot fills or the deadline passes.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && server.active.lock().unwrap().is_none() {
-            thread::yield_now();
-        }
-        assert!(
-            server.active.lock().unwrap().is_some(),
-            "server never accepted the stalled connection"
+    fn scripted_replies_run_in_order_and_the_last_repeats() {
+        let server =
+            ScriptedServer::start(vec![Reply::new(201, "first"), Reply::new(202, "second")]);
+        let port = port_of(&server);
+        let seen: Vec<_> = (0..4).map(|_| get(port)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                (201, "first".to_owned()),
+                (202, "second".to_owned()),
+                (202, "second".to_owned()),
+                (202, "second".to_owned()),
+            ]
         );
+        assert_eq!(server.hits(), 4);
+        assert_eq!(server.requests().len(), 4);
+    }
 
-        let (done_tx, done_rx) = mpsc::channel();
-        thread::spawn(move || {
-            drop(server);
-            let _ = done_tx.send(());
-        });
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("ScriptedServer::drop blocked on the stalled read");
-
-        // The shutdown also releases the client's blocking read.
-        client.join().expect("client thread panicked");
+    /// A scripted answer that was never consumed fails the pinned count on drop.
+    #[test]
+    #[should_panic(expected = "unexpected number of requests reached the mock")]
+    fn start_expecting_asserts_hit_count_on_drop() {
+        let server = ScriptedServer::start_expecting(vec![Reply::new(200, "ok")], 1);
+        assert_eq!(server.hits(), 0);
     }
 }
