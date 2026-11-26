@@ -480,7 +480,7 @@ flowchart TD
     classDef plan fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
     classDef data fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
 
-    START["plan_purge(game_dir, PurgeKeys, PathScope)<br/>purge.rs:132"] --> WALK["walk_and_classify — WalkDir follow_links(false)<br/>parallel stat of candidates, at most 8 scoped threads<br/>collect files, all_dirs, kept_dirs, hidden, errors"]
+    START["plan_purge(game_dir, PurgeKeys, PathScope)<br/>purge.rs:132"] --> WALK["walk_and_classify — WalkDir follow_links(false)<br/>parallel stat of candidates on rayon workers<br/>collect files, all_dirs, kept_dirs, hidden, errors"]
     WALK --> RULES{"classify_purge_path_visible — ordered rules"}
     RULES -->|"0. out of path scope"| KEEP["KEEP — out-of-scope paths do not exist"]
     RULES -->|"1. in live manifest expected set"| KEEP
@@ -495,7 +495,7 @@ flowchart TD
     PP --> CEIL{"--max-delete-bytes active?"}
     CEIL -->|incomplete plan: errors greater than 0| REFUSE["exit 5 — refuse to delete against a lower bound"]
     CEIL -->|"greater than N"| REFUSE
-    CEIL -->|ok| APPLY["apply_purge(plan, dry_run)<br/>dry run: log 'would purge extra ...', return 0<br/>real: remove_file on scoped threads,<br/>then remove_emptied_dirs deepest-first"]
+    CEIL -->|ok| APPLY["apply_purge(plan, dry_run)<br/>dry run: log 'would purge extra ...', return 0<br/>real: remove_file on rayon workers,<br/>then remove_emptied_dirs deepest-first"]
     APPLY --> BYTES["summary.add_deleted_bytes — shared with stale sweep"]
 
     class WALK,RULES,FIN plan
