@@ -1,8 +1,23 @@
 //! [`AlgoSet`] and the `--hash-all-of` / `--hash-any-of` parsers.
 
 use anyhow::{Result, anyhow, bail};
+use bitflags::bitflags;
 
 use super::algo::HashAlg;
+
+bitflags! {
+    /// The bitfield behind [`AlgoSet`]. `bitflags` owns the masks and the set
+    /// arithmetic; the public wrapper keeps the log-facing `iter` and `Debug`.
+    ///
+    /// The bits are the `HashAlg` discriminants (`1 << (a as u8)`), so this stays
+    /// the two-byte layout the cache's per-path maps rely on.
+    #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
+    struct AlgoBits: u16 {
+        const MD5 = 1u16 << 0;
+        const SHA256 = 1u16 << 1;
+        const XXHASH64 = 1u16 << 2;
+    }
+}
 
 /// A set of algorithms, as a bitfield: two bytes, no allocations, no order.
 ///
@@ -30,34 +45,34 @@ use super::algo::HashAlg;
 /// in a coverage error, a space in a remedy — so callers iterate and join with
 /// what they need. One `Display` would force the other two to split it back apart.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub struct AlgoSet(u16);
+pub struct AlgoSet(AlgoBits);
 
 impl AlgoSet {
     /// No algorithms at all: `--hash-all-of none`, or a path that needs no read.
-    pub const NONE: AlgoSet = AlgoSet(0);
+    pub const NONE: AlgoSet = AlgoSet(AlgoBits::empty());
 
     /// A one-algorithm set. `girsync::planner::HashMode::AnyOf` settles every pair
     /// with exactly one, so this is what the planner's pick becomes.
     pub const fn one(a: HashAlg) -> AlgoSet {
-        AlgoSet(a.bit())
+        AlgoSet(AlgoBits::from_bits_truncate(a.bit()))
     }
 
     pub const fn is_empty(self) -> bool {
-        self.0 == 0
+        self.0.is_empty()
     }
 
     /// How many algorithms are in the set. The count of bits, so it cannot
     /// disagree with [`Self::iter`] — there is no second list to fall out of step.
     pub const fn len(self) -> usize {
-        self.0.count_ones() as usize
+        self.0.bits().count_ones() as usize
     }
 
     pub fn insert(&mut self, a: HashAlg) {
-        self.0 |= a.bit();
+        self.0.insert(AlgoBits::from_bits_truncate(a.bit()));
     }
 
     pub const fn contains(self, a: HashAlg) -> bool {
-        self.0 & a.bit() != 0
+        self.0.contains(AlgoBits::from_bits_truncate(a.bit()))
     }
 
     /// `self` minus `other`: what this side still owes.
@@ -67,7 +82,7 @@ impl AlgoSet {
     /// compute. An `other` holding an algorithm outside `self` cannot widen the
     /// result, so a caller need not pre-intersect.
     pub const fn difference(self, other: AlgoSet) -> AlgoSet {
-        AlgoSet(self.0 & !other.0)
+        AlgoSet(self.0.difference(other.0))
     }
 
     /// Canonical order — [`HashAlg::ALL`] order, always. The order every

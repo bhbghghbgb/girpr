@@ -1445,6 +1445,7 @@ name = "girsync-cache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags",
  "girpr-digest",
  "girpr-fs-identity",
  "girpr-tempdir",
