@@ -61,12 +61,19 @@ impl Host {
 /// for these same values. Each keeps its own clap-facing enum and its help
 /// bytes; only the values come from this leaf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// The id spellings live in exactly one place: strum owns them, and `as_str`
+// below is the thin const seam that exposes them without an allocation.
+#[derive(strum::Display, strum::EnumIter, strum::IntoStaticStr)]
+#[strum(const_into_str)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Region {
+    #[strum(serialize = "hk4e_cn")]
     #[cfg_attr(feature = "clap", value(name = "hk4e_cn"))]
     Hk4eCn,
+    #[strum(serialize = "hk4e_global")]
     #[cfg_attr(feature = "clap", value(name = "hk4e_global"))]
     Hk4eGlobal,
+    #[strum(serialize = "hk4e_bilibili")]
     #[cfg_attr(feature = "clap", value(name = "hk4e_bilibili"))]
     Hk4eBilibili,
 }
@@ -74,11 +81,7 @@ pub enum Region {
 impl Region {
     /// The id as the APIs and the flag spell it.
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Region::Hk4eCn => "hk4e_cn",
-            Region::Hk4eGlobal => "hk4e_global",
-            Region::Hk4eBilibili => "hk4e_bilibili",
-        }
+        self.into_str()
     }
 
     /// `(host key, launcher_id, game_id)`.
@@ -134,12 +137,6 @@ impl Region {
             Region::Hk4eGlobal => ("1", "0", "hyp_hoyoverse"),
             Region::Hk4eBilibili => ("14", "0", "hyp_mihoyo"),
         }
-    }
-}
-
-impl std::fmt::Display for Region {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 

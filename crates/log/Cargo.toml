@@ -39,6 +39,9 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 # The one compact stamp in a default log file name. The format lives in the
 # time leaf; this crate only asks it to stamp "now".
 girpr-time = { path = "../time" }
+# Owns the five filter spellings and their declaration-order iteration; the
+# wrapper `parse` keeps the `warning` alias and the custom error text. No serde.
+strum = { version = "0.28.0", features = ["derive"] }
 # For building the console's filter from `--log-level` or `RUST_LOG`, for the
 # one place a broken spec is turned into a warning, and for the `info!` that
 # announces where the log file went.

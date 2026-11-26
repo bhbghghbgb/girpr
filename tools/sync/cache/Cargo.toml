@@ -36,6 +36,9 @@ anyhow = "1.0.105"
 # `FileRec` and `Meta` derive their serde impls; the hash vocabulary's own
 # serde impl is the cache wire format and must not change.
 serde = { version = "1.0.229", features = ["derive"] }
+# Owns the command-line algorithm names and their parsing; the derived helpers
+# never touch serde, so the postcard wire spelling stays byte-identical.
+strum = { version = "0.28.0", features = ["derive"] }
 # Backup and snapshot names use the workspace's one compact stamp format.
 girpr-time = { path = "../../../crates/time" }
 # The cache's name-claim identity is the same handle-backed identity the plan

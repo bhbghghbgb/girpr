@@ -10,25 +10,37 @@
 //! `--log-level` capable of things no flag documentation describes. A level is
 //! a level.
 
-use std::fmt;
 use std::str::FromStr;
+
+use strum::IntoEnumIterator;
 
 /// How verbose one sink is.
 ///
 /// Ordered from quietest to loudest, so `Level::Error <= Level::Trace` is the
 /// comparison a filter is asking about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+// strum owns the filter spellings; `as_str` is the thin const seam over them.
+// No `EnumString` derive: `FromStr` must keep accepting a trimmed, mixed-case
+// name and report the same normalized spelling in its error, which is this
+// wrapper's policy rather than a property of strum's generated parser.
+#[derive(strum::Display, strum::EnumIter, strum::IntoStaticStr)]
+#[strum(const_into_str)]
 pub enum Level {
     /// Only failures.
+    #[strum(serialize = "error")]
     Error,
     /// Failures and things that look like them.
+    #[strum(serialize = "warn")]
     Warn,
     /// The run's own milestones. The **console** default.
+    #[strum(serialize = "info")]
     #[default]
     Info,
     /// The detail behind the milestones. The **log file** default.
+    #[strum(serialize = "debug")]
     Debug,
     /// Everything, including the per-entry chatter.
+    #[strum(serialize = "trace")]
     Trace,
 }
 
@@ -38,13 +50,7 @@ impl Level {
     /// The same word in every filter spec this workspace builds, so a reader
     /// who knows one knows all three.
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Level::Error => "error",
-            Level::Warn => "warn",
-            Level::Info => "info",
-            Level::Debug => "debug",
-            Level::Trace => "trace",
-        }
+        self.into_str()
     }
 
     /// Parse a level name, case-insensitively.
@@ -53,23 +59,25 @@ impl Level {
     /// people type. The error names the whole set, so a typo is fixable from
     /// the message alone.
     pub fn parse(s: &str) -> Result<Self, String> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "error" => Ok(Level::Error),
-            "warn" | "warning" => Ok(Level::Warn),
-            "info" => Ok(Level::Info),
-            "debug" => Ok(Level::Debug),
-            "trace" => Ok(Level::Trace),
-            other => Err(format!(
-                "unknown log level {other:?}; expected one of \
-                 error, warn, info, debug, trace"
-            )),
+        let normalized = s.trim().to_ascii_lowercase();
+        // The alias is this wrapper's policy, not a second spelling of `warn`
+        // in the vocabulary: strum's `Warn` stays `warn` for Display and logs.
+        if normalized == "warning" {
+            return Ok(Level::Warn);
         }
-    }
-}
-
-impl fmt::Display for Level {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        // The canonical names come from strum's iteration over the enum, so
+        // there is no second list of spellings here to fall out of step.
+        Level::iter()
+            .find(|level| level.as_str() == normalized)
+            .ok_or_else(|| {
+                format!(
+                    "unknown log level {normalized:?}; expected one of {}",
+                    Level::iter()
+                        .map(|level| level.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
     }
 }
 

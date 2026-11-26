@@ -22,12 +22,40 @@
 /// Derived, so it is declaration order — which **is** [`Self::ALL`] order and is
 /// the one order every canonical iteration in this crate uses. A new algorithm
 /// gets a canonical slot at the end of the enum and nothing else has to change.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// strum owns the command-line spellings (one `serialize` per variant) and the
+/// allocation-free `FromStr`; `as_str` below is the thin `const` seam over them.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    strum::EnumIter,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(const_into_str, ascii_case_insensitive)]
+#[strum(parse_err_ty = UnknownHash, parse_err_fn = unknown_hash)]
 #[repr(u8)]
 pub enum HashAlg {
+    #[strum(serialize = "md5")]
     Md5,
+    #[strum(serialize = "sha256")]
     Sha256,
+    #[strum(serialize = "xxhash64")]
     Xxhash64,
+}
+
+/// The refusal strum's generated `FromStr` builds for an unrecognised name.
+///
+/// Same type and same text as the hand-written parser had: the offending
+/// spelling is kept verbatim, and the supported list stays the caller's to add
+/// in `--hash-all-of`'s message.
+fn unknown_hash(s: &str) -> UnknownHash {
+    UnknownHash { name: s.to_owned() }
 }
 
 impl HashAlg {
@@ -39,11 +67,7 @@ impl HashAlg {
 
     /// The command-line spelling. Also the cache key, verbatim.
     pub const fn as_str(self) -> &'static str {
-        match self {
-            HashAlg::Md5 => "md5",
-            HashAlg::Sha256 => "sha256",
-            HashAlg::Xxhash64 => "xxhash64",
-        }
+        self.into_str()
     }
 
     /// The algorithm this name means, if it names one.
@@ -244,27 +268,9 @@ impl std::fmt::Display for HashAlg {
     }
 }
 
-impl std::str::FromStr for HashAlg {
-    type Err = UnknownHash;
-
-    /// Case-insensitive **on its own**, not because a caller remembered to
-    /// lowercase first. `--hash-all-of MD5` works today for a reason that lives in
-    /// `parse_hash_list`, which is one caller's private detail; a parser whose
-    /// contract depends on someone else having normalised the input first is a
-    /// parser every new caller gets wrong. ASCII case only, which is all an
-    /// algorithm name can be.
-    ///
-    /// The match is `HashAlg::from_name`'s, so this parser and the lookups
-    /// that resolve a *stored* name cannot drift apart. Only the refusal is
-    /// this function's own: only a refusal has to name the spelling, and only
-    /// a refusal may allocate to keep it.
-    ///
-    /// The resolver is named in plain text rather than linked: it is private to
-    /// the module tree, and a public doc that links to a private item is a
-    /// warning, not a link.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        HashAlg::from_name(s).ok_or_else(|| UnknownHash {
-            name: s.to_string(),
-        })
-    }
-}
+// `FromStr` is now strum's: `ascii_case_insensitive` keeps `--hash-all-of MD5`
+// working on its own (not because `parse_hash_list` lowercased first), and
+// `parse_err_fn` above builds the same `UnknownHash` the hand-written parser
+// did. `from_name` stays `const` below for the row lookups that cannot call a
+// generated trait method; both compare with `eq_ignore_ascii_case` against the
+// one set of strum spellings, so they cannot drift apart.
