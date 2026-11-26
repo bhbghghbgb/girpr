@@ -25,7 +25,7 @@ cat cache.ndjson | .\target\debug\cache-json from-json - <NEW_CACHE> --force
 `to-json` opens the cache read-only: no rebuild, no backup, no `meta` rewrite.
 `from-json` writes a fresh cache and refuses to replace an existing file unless
 `--force` is given. A usage error, a bad stream and a cache failure all exit
-`3`, the same failure code `girsync` and `sled2redb` use for fatal errors. There
+`3`, the same failure code `girsync` uses for fatal errors. There
 is no `--version` flag.
 
 **stdout is data, stderr is narration.** By default `to-json` writes the NDJSON

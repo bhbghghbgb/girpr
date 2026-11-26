@@ -6,9 +6,9 @@
 //! cache-json from-json <NDJSON|-> <CACHE> [--force] # `-` means stdin
 //! ```
 //!
-//! Exit `0` on success, `3` on failure — including a usage error, like the
-//! sibling `sled2redb` converter. There is no `--version`: the command
-//! declares none, so the flag is a usage failure like any other.
+//! Exit `0` on success, `3` on failure — including a usage error. There is no
+//! `--version`: the command declares none, so the flag is a usage failure like
+//! any other.
 //!
 //! The NDJSON goes to stdout by default, so the summary goes to stderr and
 //! stdout always stays parseable. All conversion logic lives in the library;

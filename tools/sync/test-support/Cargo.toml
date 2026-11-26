@@ -23,8 +23,8 @@ all = "warn"
 # read the NDJSON the tool emits. They live here rather than in girpr-tempdir so
 # that the scratch-directory policy stays a girsync-free leaf: programs that do
 # not otherwise use girsync (the repair binary and gircap) keep their test builds
-# out of girsync's rebuild cascade. Only girsync and sled2redb, which already
-# depend on girsync, take this crate as a dev-dependency.
+# out of girsync's rebuild cascade. Only girsync takes this crate as a
+# dev-dependency.
 girsync = { path = ".." }
 serde_json = "1.0.154"
 # The in-process CLI runner glue parses argv through clap's `Parser` trait.

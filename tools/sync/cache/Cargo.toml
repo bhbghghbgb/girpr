@@ -3,7 +3,7 @@ name = "girsync-cache"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The girsync-owned redb-backed hash cache that the girsync mirror and its sled converter read with"
+description = "The girsync-owned redb-backed hash cache that the girsync mirror reads and writes with"
 
 [lib]
 name = "girsync_cache"

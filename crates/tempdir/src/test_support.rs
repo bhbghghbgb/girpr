@@ -2,8 +2,8 @@
 //!
 //! This is **test support**, not part of the scratch-directory API the shipped
 //! programs rely on. It holds the file/link/cache-path helpers that need no
-//! program's types — the ones `girsync`, `sled2redb` and the repair binary used to
-//! keep as byte-identical copies in their own `tests/` directories. Each tool
+//! program's types — the ones `girsync` and the repair binary used to keep as
+//! byte-identical copies in their own `tests/` directories. Each tool
 //! reaches them through a thin `tests/common/mod.rs` re-export, so every call
 //! site (`common::helper(..)`, `use common::*`, and the two exported macros)
 //! keeps working unchanged.

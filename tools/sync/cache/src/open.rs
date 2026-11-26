@@ -15,10 +15,9 @@
 //! not a member of any list — which is what makes the bound safe to apply at
 //! any moment: it can only ever select a copy that is whole.
 //!
-//! A copy that cannot be linked into place — a directory copy, and a file
-//! copy on a filesystem that cannot link one — is renamed onto a name it
-//! claims first, and the name is briefly empty until the rename lands: an
-//! empty file, or an empty directory for a directory copy. The claim is what
+//! A copy that cannot be linked into place — a file copy on a filesystem
+//! that cannot link one — is renamed onto a name it claims first, and the
+//! name is briefly an empty file until the rename lands. The claim is what
 //! keeps two runs off one name, and a bound cannot tell a claim from a
 //! published copy, so the publish checks that the name still holds *its own*
 //! claim before the copy lands on it and fails loudly when it does not: the
@@ -33,28 +32,11 @@
 //! needs no claim, and with a lock the record below keeps a bound off the
 //! claim until the run opens the folder's cache.
 //!
-//! A directory copy is renamed onto its claim, and a rename cannot replace a
-//! directory on every platform, so the claim is dropped and the rename tried
-//! again. The claim is asked about **again** before it is dropped: dropping
-//! it takes whatever is at the name with it, and a name another run has
-//! taken over holds that run's copy — a copy of an empty legacy cache is an
-//! empty directory, and that is the one shape a published copy could have
-//! been dropped for. A name that is no longer this run's claim fails the
-//! publish rather than taking another run's copy away from under the run that
-//! is about to report it.
-//!
 //! **The drop is best-effort.** The error of the removal is ignored, so a
-//! removal that fails leaves the claim behind — an empty name under a
+//! removal that fails leaves the claim behind — an empty file under a
 //! published prefix — and the bound reads that name as a published copy: it
 //! counts towards the bound, and it may be the one the bound keeps in place
 //! of a whole copy.
-//!
-//! **The drop and the rename are two calls.** Where the removal succeeded the
-//! name is free between them, so another run can take it in that window — and
-//! the rename fails then too, since a platform that cannot replace a
-//! directory cannot replace the claim another run holds either. The gap is
-//! one syscall wide and cannot be closed, and it is reachable only where the
-//! filesystem cannot lock a file.
 //!
 //! **The ask and the removal are two calls as well**, and there is no
 //! portable call that removes a claim by what it is rather than by what it
@@ -149,9 +131,8 @@ pub(super) use super::backup::copy_aside;
 
 #[cfg(test)]
 pub(super) use super::backup::{
-    LINKING_UNAVAILABLE, NameClaim, PublishError, REMOVAL_UNAVAILABLE, RENAME_UNAVAILABLE,
-    WORK_PREFIX, arm_publish_gate, candidate_name, claim_sibling, drop_the_claim, identity_at,
-    publish_dir, publish_gate, publish_onto_the_claimed_name,
+    LINKING_UNAVAILABLE, NameClaim, REMOVAL_UNAVAILABLE, RENAME_UNAVAILABLE, WORK_PREFIX,
+    arm_publish_gate, candidate_name, claim_sibling, drop_the_claim, publish_gate,
 };
 
 /// The cross-process half of a publish, seen by the filesystem mechanics
@@ -287,11 +268,11 @@ pub enum CacheOpen {
 /// lock of its own that a filesystem might not support.
 ///
 /// A cache that does **not** open is bounded as well, under the sidecar the
-/// open took before trying: a corrupt cache, or a legacy sled directory the
-/// open refuses, must not leave the copies beside it to accumulate until
-/// `--ignore-cache` rebuilds the cache. The sidecar is independent of what the
-/// cache file can be opened for, so a cache that is not writable is locked
-/// too; only a filesystem that cannot lock a file at all has no lock to take.
+/// open took before trying: a corrupt cache the open refuses must not leave
+/// the copies beside it to accumulate until `--ignore-cache` rebuilds the
+/// cache. The sidecar is independent of what the cache file can be opened
+/// for, so a cache that is not writable is locked too; only a filesystem that
+/// cannot lock a file at all has no lock to take.
 ///
 /// That bound spares the copies that are waiting for an open — its own are
 /// among them, and it cannot tell them from an earlier run's in the same
@@ -349,11 +330,10 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
                 Ok(db) => db,
                 Err(e) => {
                     // The cache did not open, so the bound below does not
-                    // run — and a corrupt cache, or a legacy sled directory
-                    // the open refuses, would leave the copies beside it to
-                    // accumulate until --ignore-cache rebuilt the cache. The
-                    // folder is bounded here instead, under the sidecar this
-                    // run already holds.
+                    // run — and a corrupt cache the open refuses would leave
+                    // the copies beside it to accumulate until
+                    // --ignore-cache rebuilt the cache. The folder is bounded
+                    // here instead, under the sidecar this run already holds.
                     //
                     // The open is the boundary, and this one did not happen:
                     // the copies waiting for an open keep waiting, and the
@@ -454,8 +434,7 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
     }
 }
 
-/// Remove a cache path regardless of whether it is a redb file or a legacy
-/// sled directory.
+/// Remove the cache file at `db_path`, if it is there.
 ///
 /// A path that is already gone is not a failure: two runs bounding one
 /// folder can pick the same sibling, and the second one to reach it finds
@@ -465,7 +444,6 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 }
 
 /// Copy an existing cache to `<parent>/girpr-cache-backup-<ts>`.
-/// Works for redb files and legacy sled directories alike.
 /// Returns the backup path, or `None` when there was nothing to copy.
 ///
 /// The copy is **published**: it is written under a working name and
@@ -1144,9 +1122,9 @@ fn reclaim_records(folder: &[(std::ffi::OsString, PathBuf)]) -> Result<()> {
 /// The sibling names carry a timestamp that sorts lexicographically, so the
 /// age of a copy is read from its name (see [`published_age`]), and the
 /// copies are walked from the oldest to the newest. The bound removes the
-/// oldest copies it may remove — a directory recursively, a file outright —
-/// because the user asked for a bound and a bound that does not remove
-/// anything is not a bound. A copy that is spoken for by a live run is not
+/// oldest copies it may remove, because the user asked for a bound and a
+/// bound that does not remove anything is not a bound. A copy that is spoken
+/// for by a live run is not
 /// removed at all, and it does not spend the removal budget either: the
 /// bound walks on to the next copy in age order, and the count is made up
 /// from there. That next copy can be one of the newest ones, so the bound
@@ -1297,7 +1275,7 @@ pub(super) fn read_meta(db: &impl ReadableCache) -> Result<Option<Meta>> {
 pub(super) fn require_current_version(version: u32, db_path: &Path, label: &str) -> Result<()> {
     if version != CACHE_VERSION {
         bail!(
-            "unsupported {label} version {} in {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+            "unsupported {label} version {} in {} (want {CACHE_VERSION}; use --ignore-cache to rebuild)",
             version,
             db_path.display()
         );
@@ -1353,21 +1331,21 @@ mod tests {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "claim");
         let dir = t.subdir("w");
 
-        let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP).unwrap();
         assert_eq!(
             first.file_name().unwrap().to_string_lossy(),
             format!("girpr-cache-backup-{STAMP}"),
             "the first claim takes the plain name"
         );
 
-        let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP).unwrap();
         assert_eq!(
             second.file_name().unwrap().to_string_lossy(),
             format!("girpr-cache-backup-{STAMP}_2"),
             "the second claim takes the next name"
         );
 
-        let third = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        let third = claim_sibling(&dir, "girpr-cache-backup-", STAMP).unwrap();
         assert_eq!(
             third.file_name().unwrap().to_string_lossy(),
             format!("girpr-cache-backup-{STAMP}_3"),
@@ -1376,28 +1354,6 @@ mod tests {
 
         assert_ne!(first, second, "the two claims are two names");
         assert_ne!(second, third, "and the third is a name of its own");
-    }
-
-    /// The same for a directory claim: a legacy sled cache is a directory, and
-    /// so is the copy of one.
-    #[test]
-    fn a_directory_claim_steps_over_a_taken_name() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim_dir");
-        let dir = t.subdir("w");
-
-        let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP, true).unwrap();
-        assert!(first.is_dir(), "a directory claim leaves a directory");
-        let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP, true).unwrap();
-        assert!(second.is_dir(), "and so does the next one");
-        assert_ne!(first, second);
-        assert!(
-            second
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with("_2"),
-            "the second claim takes the next name"
-        );
     }
 
     /// Concurrent claims of one name each end up with a name of their own.
@@ -1412,7 +1368,7 @@ mod tests {
             .map(|_| {
                 let dir = dir.clone();
                 std::thread::spawn(move || {
-                    claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap()
+                    claim_sibling(&dir, "girpr-cache-backup-", STAMP).unwrap()
                 })
             })
             .collect();
@@ -1622,121 +1578,6 @@ mod tests {
         panic!("the publish did not create a name");
     }
 
-    /// A published directory name is claimed, not renamed onto.
-    ///
-    /// A POSIX rename onto an existing empty directory succeeds, so a rename
-    /// on its own would let a second run replace what the first one
-    /// published. The name is claimed with an exclusive create instead, so
-    /// the second publish is told the name is taken and the copy that is
-    /// there is left alone.
-    #[test]
-    fn a_published_directory_name_is_claimed_and_the_copy_left_alone() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_dir_claim");
-        let dir = t.subdir("w");
-
-        // A name that is already there.
-        let cand = dir.join(format!("{BACKUP_PREFIX}{STAMP}"));
-        std::fs::create_dir(&cand).unwrap();
-
-        // The copy that wants to be published under it.
-        let work = dir.join("work");
-        std::fs::create_dir(&work).unwrap();
-        std::fs::write(work.join("a"), b"the copy").unwrap();
-
-        assert!(
-            matches!(publish_dir(&work, &cand), Err(PublishError::Taken)),
-            "the name that is there is not published onto"
-        );
-        assert!(
-            std::fs::read_dir(&cand).unwrap().next().is_none(),
-            "and what is under that name is left as it is"
-        );
-        assert!(
-            work.join("a").exists(),
-            "the copy that wanted the name still has its own"
-        );
-    }
-
-    /// A legacy sled cache is copied aside as a directory, and published
-    /// whole.
-    ///
-    /// A sled cache is a directory, so its copy is a directory too: it is
-    /// published by being renamed onto a name it claims first.
-    #[test]
-    fn a_directory_copy_is_published_whole() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_dir");
-        let dir = t.subdir("w");
-        let db = dir.join("girpr-cache");
-        std::fs::create_dir(&db).unwrap();
-        std::fs::write(db.join("a"), b"the cache bytes").unwrap();
-
-        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
-
-        assert!(
-            published.is_dir(),
-            "the copy of a legacy sled cache is a directory"
-        );
-        assert_eq!(
-            std::fs::read(published.join("a")).unwrap(),
-            b"the cache bytes",
-            "and it holds the cache"
-        );
-    }
-
-    /// A publish whose claim was taken away fails loudly.
-    ///
-    /// The claim is what keeps two runs off one name. A bound that meets a
-    /// claim cannot tell it from a published copy — it is an empty directory
-    /// under a published name — and on a filesystem that cannot lock a file
-    /// there is no record beside the name to say it is being claimed, so the
-    /// bound can take the claim away. The publish has to notice: landing the
-    /// copy on a name this run no longer holds would publish it over whatever
-    /// holds it now.
-    #[test]
-    fn a_publish_whose_claim_was_taken_away_fails_loudly() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim_gone");
-        let dir = t.subdir("w");
-        let db = dir.join("girpr-cache");
-        // A legacy sled cache is a directory, and a directory copy is
-        // published by being renamed onto a name it claims first.
-        std::fs::create_dir(&db).unwrap();
-        std::fs::write(db.join("a"), b"the cache bytes").unwrap();
-
-        let (rx, mut gate) = publish_gate();
-        let handle = std::thread::spawn(move || {
-            // A filesystem that cannot lock a file: there is no record to
-            // say the name is being claimed.
-            LOCKING_UNAVAILABLE.with(|f| f.set(true));
-            arm_publish_gate(rx);
-            backup_db(&db)
-        });
-
-        // The claim: an empty directory under a published name. The publish
-        // is paused here, so the claim is removed while it is still the
-        // publisher's before it is released to check the claim.
-        let claim = wait_for_published(&dir);
-        assert!(claim.is_dir(), "the claim is an empty directory");
-        std::fs::remove_dir(&claim).unwrap();
-
-        gate.release();
-        let err = handle
-            .join()
-            .unwrap()
-            .expect_err("a publish whose claim was taken away fails");
-        assert!(
-            format!("{err:#}").contains("claimed name"),
-            "the failure says the claim was taken away: {err:#}"
-        );
-        assert!(
-            published_under(&dir).is_empty(),
-            "and nothing was published under a name the run no longer held"
-        );
-        assert!(
-            working_under(&dir).is_empty(),
-            "and the working copy does not sit there looking like a backup"
-        );
-    }
-
     /// A working copy that cannot be removed is left behind, and the run
     /// carries on.
     ///
@@ -1880,65 +1721,6 @@ mod tests {
         );
     }
 
-    /// A publish does not drop the copy of another run to make room for its
-    /// own.
-    ///
-    /// The claim is what keeps two runs off one name, and the name it holds
-    /// is empty — the same shape a bound cannot tell from a published copy.
-    /// So the claim can be taken away, and another run can take the name and
-    /// publish there. A copy of an empty legacy cache is an empty directory,
-    /// and that is the one shape a published copy can be dropped for: the
-    /// claim is dropped and the rename tried again, and an empty directory
-    /// is the one a removal takes.
-    ///
-    /// The publish has to notice that the name no longer holds its own
-    /// claim and fail, rather than dropping that run's copy: the copy is
-    /// the one its run is about to report.
-    #[test]
-    fn a_publish_does_not_drop_the_copy_of_another_run() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "drop_not_ours");
-        let dir = t.subdir("w");
-
-        // The claim: an empty directory under a published name.
-        let cand = dir.join(format!("{BACKUP_PREFIX}{STAMP}"));
-        std::fs::create_dir(&cand).unwrap();
-        let claim = NameClaim {
-            id: identity_at(&cand).expect("the claim can be named"),
-            is_dir: true,
-            _file: None,
-        };
-
-        // Another run takes the name and publishes there: the copy of an
-        // empty legacy cache is an empty directory too.
-        std::fs::remove_dir(&cand).unwrap();
-        std::fs::create_dir(&cand).unwrap();
-        let theirs = identity_at(&cand).expect("the other run's copy can be named");
-
-        // The copy that wants to be published under it.
-        let work = dir.join("work");
-        std::fs::create_dir(&work).unwrap();
-        std::fs::write(work.join("a"), b"the copy").unwrap();
-
-        let err = publish_onto_the_claimed_name(&work, &cand, &claim)
-            .expect_err("a publish whose claim was taken over fails");
-        let PublishError::Io(e) = err else {
-            panic!("the publish fails on the claim, not on the name");
-        };
-        assert!(
-            e.to_string().contains("claimed name"),
-            "the failure says the claim was taken away: {e}"
-        );
-        assert_eq!(
-            identity_at(&cand),
-            Some(theirs),
-            "the copy of the run that took the name is left alone"
-        );
-        assert!(
-            work.join("a").exists(),
-            "and the copy that wanted the name still has its own"
-        );
-    }
-
     /// A publish that does not land on its claim does not drop the copy of
     /// another run either.
     ///
@@ -1960,8 +1742,7 @@ mod tests {
         let file = std::fs::File::open(&cand).unwrap();
         let claim = NameClaim {
             id: helpers::identity_of(&file).expect("the claim can be named"),
-            is_dir: false,
-            _file: Some(file),
+            _file: file,
         };
 
         // Another run takes the name and publishes its copy there.
@@ -2018,47 +1799,6 @@ mod tests {
             working_under(&dir).is_empty(),
             "and the working copy does not sit there looking like a backup"
         );
-    }
-
-    /// The folder of a cache that did not open is bounded just the same.
-    ///
-    /// A legacy sled directory the open refuses must not leave the copies
-    /// beside it to accumulate until `--ignore-cache` rebuilds the cache.
-    #[test]
-    fn the_folder_of_a_legacy_sled_cache_is_bounded() {
-        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_sled");
-        let dir = t.subdir("w");
-        let db = dir.join("girpr-cache");
-        // A legacy sled cache is a directory, and the open refuses it.
-        std::fs::create_dir(&db).unwrap();
-
-        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
-        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
-        std::fs::write(&older, b"old").unwrap();
-        std::fs::write(&newer, b"newer").unwrap();
-
-        let err = match open_db(
-            &db,
-            true,
-            CacheOpen::ReadWrite {
-                ignore_cache: false,
-                backup_first: false,
-                retain: NonZeroUsize::new(1),
-            },
-        ) {
-            Ok(_) => panic!("a legacy sled directory is refused"),
-            Err(e) => e,
-        };
-        assert!(
-            err.to_string().contains("sled"),
-            "the open refuses a legacy sled directory: {err}"
-        );
-
-        assert!(
-            !older.exists(),
-            "the oldest copy is gone: the folder is bounded even though the cache did not open"
-        );
-        assert!(newer.exists(), "the newest copy is kept");
     }
 
     /// The folder of a corrupt cache is bounded just the same.
@@ -2500,8 +2240,8 @@ mod tests {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "failed_open_waits");
         let dir = t.subdir("w");
         let db = dir.join("girpr-cache");
-        // A legacy sled cache is a directory, and the open refuses it.
-        std::fs::create_dir(&db).unwrap();
+        // A cache file the open refuses: the bytes are not a cache.
+        std::fs::write(&db, b"this is not a cache").unwrap();
 
         // A run publishes a copy of it and never opens the folder's cache.
         let published = backup_db(&db).unwrap().expect("the cache was copied aside");
@@ -2523,11 +2263,11 @@ mod tests {
                 },
             )
             .is_err(),
-            "a legacy sled directory is refused"
+            "a corrupt cache is refused"
         );
 
         // The folder's cache is a cache again, so the next run can open it.
-        std::fs::remove_dir_all(&db).unwrap();
+        std::fs::remove_file(&db).unwrap();
 
         // The next run opens the folder's cache: it adopts the copy that was
         // waiting, and its bound spares it.
@@ -2565,8 +2305,8 @@ mod tests {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "failed_open_spares");
         let dir = t.subdir("w");
         let db = dir.join("girpr-cache");
-        // A legacy sled cache is a directory, and the open refuses it.
-        std::fs::create_dir(&db).unwrap();
+        // A cache file the open refuses: the bytes are not a cache.
+        std::fs::write(&db, b"this is not a cache").unwrap();
 
         // A filesystem that cannot lock a file: the copy is published without
         // a record, so nothing but the bound speaks for it.
@@ -2590,7 +2330,7 @@ mod tests {
                 },
             )
             .is_err(),
-            "a legacy sled directory is refused"
+            "a corrupt cache is refused"
         );
 
         assert!(

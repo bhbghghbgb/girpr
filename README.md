@@ -47,8 +47,8 @@ machine rather than the code.
 | `app/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `app/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
-| `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
-| `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync`, `sled2redb` and `girsync-cache-json`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `CacheDb::visit_entries`, `CacheDb::meta`, `hash::DigestSet`, `hash::HashAlg` |
+| `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
+| `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `girsync-cache-json`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `CacheDb::visit_entries`, `CacheDb::meta`, `hash::DigestSet`, `hash::HashAlg` |
 | `tools/sync/cache-json/` | the standalone cache ⇄ NDJSON converter (`cache-json`): one meta line then one line per row, current schema only, with atomic cache replacement on import; reaches the cache crate directly, not through girsync's facade | `export_cache`, `import_cache`, `ndjson::Line`, `Args` |
 | `tools/sync/leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
 | `app/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
@@ -357,7 +357,7 @@ the completed `*_tmp` prefix and continuing it.
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
 `cargo build` and `cargo test` at the workspace root build the product
-(`girpr`). The dev tools (`gircap`, `girsync`, `sled2redb`, `cache-json`)
+(`girpr`). The dev tools (`gircap`, `girsync`, `girsync-cache-json`)
 are workspace members but not default members, so a root command does not
 compile them; check them explicitly when working on them. `--workspace` is the
 everything command.
@@ -372,13 +372,12 @@ cargo nextest run --workspace --all-features
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
-copy; `tools/sled2redb/` (`sled2redb`) converts a legacy sled cache to redb;
-`tools/sync/cache-json/` (`cache-json`) converts a current-schema redb cache to
+copy; `tools/sync/cache-json/` (`cache-json`) converts a current-schema redb cache to
 NDJSON and back. All are development-only and are not part of the shipped
 product. They share the workspace lockfile but are built on request:
 
 ```powershell
-cargo check -p girsync -p gircap -p sled2redb -p girsync-cache-json
+cargo check -p girsync -p gircap -p girsync-cache-json
 cargo build --workspace
 ```
 
@@ -466,7 +465,7 @@ plane always carries each string value as a quoted string.
 ## Logging
 
 One policy, shared by this binary and the dev tools (`gircap`, `girsync`,
-`sled2redb`). It lives in `crates/log/` and is the only *policy* they
+`girsync-cache-json`). It lives in `crates/log/` and is the only *policy* they
 share that ships. It is a logic-free leaf, as is `crates/report-core/`, which
 supplies ordered-JSON and line-writing mechanics to all of them: each tool keeps
 its own key order, event placement, value types, escaping and boolean spelling,
@@ -475,8 +474,8 @@ formats used to stamp file names, ids, request logs and lock bodies: the compact
 sortable stamp, two RFC 3339 spellings and chrono's default, each kept distinct
 and byte-pinned; callers pass the instant, so no stamping policy crosses between
 the programs. `crates/digest/` supplies hex spelling and
-fixed-width digest mechanics to this binary, `gircap`,
-`sled2redb` and `cache-json`, and `crates/fs-names/`, which supplies the Windows path-name and
+fixed-width digest mechanics to this binary, `gircap`
+and `cache-json`, and `crates/fs-names/`, which supplies the Windows path-name and
 canonical-path mechanics — device names, trailing dot/space, ASCII case fold,
 forward slash and verbatim-free canonicalization — to this binary, `gircap` and
 `girsync`; each caller passes its own reserved set and rule flags, so no program
@@ -498,7 +497,7 @@ neither retry policy is shared. `crates/exit/` supplies the exit-table generatio
 mechanism to this binary and `gircap`: the enum/`ALL`/code/pin pattern is shared,
 but each supplies its own codes, meanings and helper methods, so no exit-code
 contract is shared. `crates/cli/` supplies the clap-error to usage-code mapping
-to this binary, `gircap`, `sled2redb` and `cache-json`: help/version map to `0` and every
+to this binary, `gircap` and `cache-json`: help/version map to `0` and every
 other error to the usage code each caller passes in, so no exit code or exit
 table is shared. `crates/audio-language/` supplies the lower + `_`→`-` token
 primitive and the code/display-name pairs to this binary and `gircap`;
@@ -589,7 +588,7 @@ leaf, so no capture logic crosses the boundary. `tools/sync/cache/` holds
 girsync's redb hash cache: the schema, the
 positional `postcard` codec, the open/backup/publish protocol and the digest
 vocabulary that codec stores. `girsync` consumes it directly under a module
-alias, the sled converter and the NDJSON converter name it directly too, so an
+alias, and the NDJSON converter names it directly too, so an
 edit to a planner, command or other girsync subsystem leaves the cache and its
 `redb`/`postcard`/`tempfile` tree cached; the cache wire format is pinned by
 literal-byte tests.
@@ -600,8 +599,7 @@ tools never take it, so a repair edit leaves the lock cached. All share the
 test-only scratch-directory policy in `crates/tempdir/`, whose `test_support`
 holds only program-free
 fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
-`tools/sync/test-support/` and are taken only by `girsync` and `sled2redb`,
-which already depend on girsync — so a scratch directory never drags girsync
+`tools/sync/test-support/` and are taken only by `girsync` itself — so a scratch directory never drags girsync
 into the repair binary's or `gircap`'s test builds. girsync's own acyclic
 production leaves — the rw limiter, the include/exclude filter policy, the link
 classifier and the hardlink facts — live in `tools/sync/leaves/` and are taken
@@ -664,11 +662,11 @@ defaults.
 ```powershell
 cargo nextest run             # this package's offline suite (ignored tests excluded)
 cargo nextest run --workspace # the whole workspace
-cargo check -p girsync -p gircap -p sled2redb -p girsync-cache-json # the dev tools, which a root command does not build
+cargo check -p girsync -p gircap -p girsync-cache-json # the dev tools, which a root command does not build
 cargo nextest run --test repair                       # the consolidated repair binary
 cargo nextest run -E 'test(repair_offline::)'          # one module's cases within it
 cargo clippy -p girpr --all-targets -- -D warnings
-cargo clippy -p girsync -p gircap -p sled2redb -p girsync-cache-json --all-targets -- -D warnings
+cargo clippy -p girsync -p gircap -p girsync-cache-json --all-targets -- -D warnings
 
 # girpr-log's default-file policy is a `cfg!(debug_assertions)` branch. The
 # dev-profile runs above exercise "no default file"; this release run exercises
@@ -719,7 +717,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   before moving these allowances to a config file.
 
 - **The dev tools and their project-owned crates opt into a smaller lint subset.**
-  `girsync`, `gircap`, `sled2redb` and `girsync-cache-json`, plus the crates they own (`girsync-cache`,
+  `girsync`, `gircap` and `girsync-cache-json`, plus the crates they own (`girsync-cache`,
   `girsync-leaves`, `girsync-test-support`, `gircap-http`, `gircap-hash`,
   `gircap-test-support`), set `[lints.rust] unsafe_code = "deny"` and
   `[lints.clippy] all = "warn"` themselves instead of inheriting the workspace

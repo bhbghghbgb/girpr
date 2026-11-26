@@ -200,9 +200,8 @@ The two look inconsistent and are not. Do not "fix" the asymmetry, and do not
 convert `kind` to an enum on the strength of `HashAlg` being one — the enum is what
 makes the *request* cheap to hold; inline names are what make the *cache* survive.
 
-**Enforced by:** the codec's preservation of unknown algorithms, checked both in
-a round trip and — through the separate `sled2redb` converter — across a
-conversion and a whole scan; the `merge_row` case where the rule has to be
+**Enforced by:** the codec's preservation of unknown algorithms, checked in a
+round trip and across a whole scan; the `merge_row` case where the rule has to be
 visible to `merge` after a stat change; and
 `a_digest_set_is_eighty_bytes_and_allocates_nothing`, which fails if a later
 edit puts a map back — a map passes every other test here and adds allocations
@@ -445,9 +444,9 @@ keeps a half-written one in place of a good one.
 
 The one name in a list that can hold no copy at all is a **claim left
 behind**: dropping a claim is best-effort, so a removal that fails leaves an
-empty file — or an empty directory, for a directory copy — under a published
-prefix, and the bound reads that name as a published copy. It counts towards
-the bound, and it may be the one the bound keeps in place of a whole copy.
+empty file under a published prefix, and the bound reads that name as a
+published copy. It counts towards the bound, and it may be the one the bound
+keeps in place of a whole copy.
 
 **The working name is scratch, and it goes.** A file copy is linked into
 place, so the published name and the working name are two names for one copy,
@@ -468,18 +467,12 @@ a name. Where it cannot, the copy never lands there: the publish fails
 loudly, the claim is dropped and the name left free, and the run reports the
 failure rather than a backup that is not on disk. The drop is best-effort:
 its error is ignored, so a removal that fails leaves the claim behind, and
-the name is then not free after all. A **file** copy does not drop its claim
-and try again the way a directory copy does: a rename of a file replaces
-whatever is at the name, so a second try could put the copy over another
-run's published copy — and the only platform whose rename cannot replace
-anything at all is the one where the copy never lands, so there is nowhere a
-second try would be worth making. A directory copy cannot be linked at all,
-so its name is claimed with an exclusive create and the copy is renamed onto
-that claim: a POSIX rename onto an existing **empty** directory succeeds, so
-a rename on its own would let a second run publish onto a name the first run
-has and replace the copy that is there. The name is briefly an empty
-directory instead, which is the price of an exclusive claim on a filesystem
-whose rename replaces a directory.
+the name is then not free after all. A file copy does not drop its claim
+and try again: a rename of a file replaces whatever is at the name, so a
+second try could put the copy over another run's published copy — and the
+only platform whose rename cannot replace anything at all is the one where
+the copy never lands, so there is nowhere a second try would be worth
+making.
 
 **A claim that is taken away fails the publish.** A bound cannot tell a claim
 from a published copy — both are a name under a list's prefix — and on a
@@ -499,10 +492,7 @@ keeps two runs off one name, so the run whose claim was taken away has to
 notice that the name is no longer its own. The identity of a file claim is
 read from the **handle** the claim was created with, not from the name: a
 handle names the object it was opened on even after the name has gone, so the
-answer cannot be another run's file. A directory claim has no portable
-handle, and its identity is read from the name — which is enough, because the
-name is asked about **again** before the claim is dropped, and the claim is
-dropped only while the name still holds it.
+answer cannot be another run's file.
 
 **The check is a check-then-act, and the gap is a narrow one.** The
 check and the rename that follows it are two calls, and a claim taken away
@@ -513,43 +503,16 @@ a file: with a link the publish is atomic and needs no claim at all, and
 with a lock the record beside the name keeps a bound off the claim until the
 run opens the folder's cache.
 
-**A directory claim is dropped, and dropping it takes what is at the name
-with it.** A rename cannot replace a directory on every platform, so the
-claim is dropped and the rename is tried again. Only an empty directory goes,
-so a copy another run has published *with content in it* was never in reach —
-but a copy of an empty legacy cache is an empty directory, and that is the
-one shape a published copy could have been dropped for. So the claim is asked
-about before it goes, and a name that has been taken over fails the publish
-loudly rather than dropping that run's copy: the copy is the one its run is
-about to report, and it is not this run's to remove.
-
-The drop is best-effort here as it is everywhere else, so a removal that
-fails leaves the claim behind: the rename fails with it — the name is still
-taken — and the publish moves on to the next name. The leftover is an empty
-directory under a published prefix, and the bound reads that name as a
-published copy.
-
 **The ask is a check-then-act too.** The name is read, and the claim is
 removed in the next call, so a claim taken away in between is still removed.
 No portable call removes a claim by what it is rather than by what it is
-called — a directory claim has no portable handle at all, and the handle a
-file claim keeps does not name it for a removal — so this gap cannot be
-closed either. It is reachable only where the filesystem cannot lock a
-file, since a record a live run holds keeps a bound off the name until the
+called — the handle a file claim keeps does not name it for a removal — so
+this gap cannot be closed either. It is reachable only where the filesystem
+cannot lock a file, since a record a live run holds keeps a bound off the name until the
 run opens the folder's cache. The same goes for the claim a **file** copy
 drops when its rename does not land: the name is asked about again before
 the claim goes, so another run's published copy is left alone, and the gap
 between the ask and the removal is still there.
-
-**The drop and the rename are two calls as well, and that is the window a
-directory copy is published in.** Where the removal succeeded the claim is
-gone and the name is free, and the rename is the next call, so another run
-can take the name in between. The rename then fails: a platform that cannot
-replace a directory cannot replace the claim another run holds either, so
-the name is taken and the publish moves on to the next name. The gap is narrow
-and cannot be closed. It is reachable only where the filesystem
-cannot lock a file: the record the publishing run holds keeps another run
-off the name, and a bound off it, until the run opens the folder's cache.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
@@ -604,10 +567,8 @@ the folder and not about the open. The bound runs under the cache's own lock
 there too — taken for the bound, since the open did not take it — and a lock
 another run holds says that run is in its run phase for the folder and bounds
 it itself, so that run's copies are not touched. Without this, a corrupt
-cache or a legacy sled directory the open refuses would leave the copies
-beside it to accumulate until `--ignore-cache` rebuilt the cache. A cache
-that is a directory has no lock to take and nothing opens one, so the bound
-runs without one there.
+cache that the open refuses would leave the copies beside it to accumulate
+until `--ignore-cache` rebuilt the cache.
 
 **A cache file that cannot be opened for writing is still locked.** The lock
 is taken on the cache file, and it is what says that no other run is in its
@@ -724,8 +685,7 @@ loudly, rather than leaving a run reporting a backup that is not there.
 **Enforced by:** the enforcement tests cover the publish — a copy still being
 written is out of the bound's reach, a published name holds the whole copy, a
 failed removal leaves the working name behind, and the copy is published whole
-under a claimed name, including on a filesystem that cannot link and for
-directory copies. They cover a claim that went away or was taken over by another
+under a claimed name, including on a filesystem that cannot link. They cover a claim that went away or was taken over by another
 run failing the publish loudly, a publish that fails when its rename does not
 land, and a publish not dropping another run's copy. They pin that the bound
 orders copies by age and not by name (the name says when a copy became whole),
@@ -854,24 +814,20 @@ either acts only when the distrusted field is the *only* difference — and
 digest back into the row. The row looks healthy — right size, right mtime — which
 is what makes it worth stating.
 
-**A conversion a killed run left behind stays in the folder.** The converter
-writes the new cache into a temporary beside the destination and moves it onto
-the destination only once it is whole, so a conversion that is killed leaves
+**A converter's temporary left by a killed run stays in the folder.** A
+converter writes the new cache into a temporary beside the destination and
+moves it onto the destination only once it is whole, so a killed run leaves
 that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or the numbered
 spellings of that name when the plain one is taken. That family of names is
 bounded as well: the plain name and its numbered variants up to a generous
-limit, and a conversion that finds every one of them taken fails rather than
+limit, and a converter that finds every one of them taken fails rather than
 trying forever. Nothing reclaims any of them: the retention bound
 ranges over a cache's published copies and not over these names, so a leftover
 stays in the folder until it is removed by hand.
 That is the same trade as the working copy a killed backup leaves, and for the
 same reason: a temporary is the file a live run is writing, and a sweep that
 could not tell a live one from a dead one would take the copy a running
-conversion is making. The name carries the process id, so a leftover says which
-run left it — which is for the reader, not for the tool: the tool cannot use it
-to decide that a temporary is stale, because a process id is reused and a
-folder can be shared between hosts whose process ids mean nothing to each
-other. Stated in `README.md`, where a user meets it.
+converter is making. Stated in `README.md`, where a user meets it.
 
 **Host coverage of the link cases.** Some end-to-end cases need primitives a
 regular user cannot always create: Windows without developer mode refuses

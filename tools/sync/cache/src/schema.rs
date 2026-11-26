@@ -11,8 +11,8 @@ use crate::hash::DigestSet;
 /// (backups and `old-*` snapshots share it).
 pub const CACHE_PREFIX: &str = "girpr-cache";
 
-/// Cache schema version. Old sled directories (and any unknown version) are
-/// rejected; rebuild with `--ignore-cache` or convert with `sled2redb`.
+/// Cache schema version. An unknown version is rejected; rebuild with
+/// `--ignore-cache`.
 ///
 /// Bumped when the row's schema changes — either the positional `postcard`
 /// layout (`postcard` writes fields in declaration order, with no field names),

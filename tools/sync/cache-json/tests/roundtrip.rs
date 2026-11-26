@@ -254,15 +254,15 @@ fn import_needs_force_to_replace_a_cache_and_then_replaces_it_atomically() {
 #[test]
 fn import_refuses_a_directory_destination() {
     let dir = TempDir::new("girsync_cache_json", "dir_destination");
-    let dst = dir.join("legacy-sled-cache");
+    let dst = dir.join("not-a-file");
     std::fs::create_dir(&dst).unwrap();
     let stream = format!(
         "{{\"type\":\"meta\",\"version\":{},\"case_sensitive\":true}}\n",
         girsync_cache::CACHE_VERSION
     );
     let err = import_cache(Cursor::new(stream), &dst, true)
-        .expect_err("a legacy sled directory is not a redb destination");
-    assert!(format!("{err:#}").contains("is a directory"));
+        .expect_err("a directory is not a valid cache destination");
+    assert!(format!("{err:#}").contains("is not a file"));
     assert!(dst.is_dir(), "the refused destination was left alone");
 }
 

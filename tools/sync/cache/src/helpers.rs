@@ -5,14 +5,12 @@
 //! here, inside the cache crate, so the crate has no dependency on girsync's
 //! lib: that is what lets an edit elsewhere in girsync leave the whole cache
 //! (and its native dependency tree) cached. Each helper is the same rule it was
-//! before the move — the timestamp format, the recursive copy, the file
-//! identity and the ASCII fold are unchanged.
+//! before the move — the timestamp format, the file identity and the ASCII
+//! fold are unchanged.
 
 use std::fs::File;
 use std::io;
 use std::path::Path;
-
-use anyhow::{Context, Result};
 
 /// The identity of a file, for comparing a cache name claim with the file that
 /// is actually at that name.
@@ -29,25 +27,6 @@ pub use girpr_fs_identity::Identity as FileId;
 /// sites short while leaving one definition of the stamp.
 pub fn ts_now() -> String {
     girpr_time::compact_stamp_now()
-}
-
-/// Recursive plain-file copy, used only for legacy sled-directory cache
-/// backups/snapshots. Live redb caches are single files copied with
-/// `std::fs::copy`.
-pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
-    for ent in std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {
-        let ent = ent?;
-        let ft = ent.file_type()?;
-        let d = dst.join(ent.file_name());
-        if ft.is_dir() {
-            copy_dir_all(&ent.path(), &d)?;
-        } else {
-            std::fs::copy(ent.path(), &d)
-                .with_context(|| format!("copy {} -> {}", ent.path().display(), d.display()))?;
-        }
-    }
-    Ok(())
 }
 
 /// The identity of the file at `path`, following links.

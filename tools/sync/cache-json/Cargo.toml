@@ -30,7 +30,7 @@ serde_json = "1.0.154"
 # The import writes into a random sibling of the destination and publishes the
 # whole cache in one rename, so a failed import leaves the old cache intact.
 tempfile = "3.27"
-# The clap-error to usage-code mapping, shared with girsync and sled2redb. The
+# The clap-error to usage-code mapping, shared with girsync. The
 # leaf decides only help/version -> 0; this binary owns its failure code.
 girpr-cli = { path = "../../../crates/cli" }
 # Digest spelling at the JSON boundary, shared with the other tools. The cache

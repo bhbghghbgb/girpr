@@ -1,5 +1,5 @@
-//! The shared redb-backed hash cache that girsync (and its sled converter) read
-//! with: schema, open/rebuild, and backup snapshots.
+//! The shared redb-backed hash cache that girsync reads and writes with:
+//! schema, open/rebuild, and backup snapshots.
 //!
 //! This is its own crate so the cache, its byte codec and its native dependency
 //! tree are an acyclic leaf below girsync. An edit to girsync's planner,
@@ -144,7 +144,7 @@ pub use write::{COMMIT_BATCH, COMMIT_BYTES, COMMIT_INTERVAL, CacheWrite, CommitL
 /// the sidecar is named after the path, so a new cache at that path creates a
 /// fresh one, and a sidecar left from the old one would be an orphan in the
 /// user's tree. This is only for a cache path that is private to the caller —
-/// the converter's temporary — never for a live cache another run may lock.
+/// a caller-private temporary — never for a live cache another run may lock.
 pub fn remove_lock_sidecar(db_path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(lock::path_for(db_path)) {
         Ok(()) => Ok(()),

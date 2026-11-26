@@ -5,7 +5,7 @@
 # `girpr-path-shape`,
 # `girpr-util-hash`, `girpr-util-ini`, `girpr-util-counter`, `girpr-log`,
 # `girpr-report`, `girpr-tempdir`, `girsync-cache`, `girsync-leaves`,
-# `gircap`, `gircap-http`, `gircap-hash`, `girsync` and `sled2redb`.
+# `gircap`, `gircap-http`, `gircap-hash` and `girsync`.
 # This file is where the
 # runner's defaults live, so the behaviour is the same whoever typed the
 # command and whichever crate the command names.

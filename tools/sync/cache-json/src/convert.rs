@@ -100,7 +100,7 @@ pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Res
 
     if cache_path.is_dir() {
         bail!(
-            "destination {} is a directory (legacy sled format); only the current redb cache is supported",
+            "destination {} is not a file; only the redb cache format is supported",
             cache_path.display()
         );
     }

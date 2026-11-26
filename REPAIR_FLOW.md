@@ -932,8 +932,8 @@ conditional `repair_mode=`, `inplace=`, `temp=`, `kept_bytes=` group only when
 ## 20. L4 — Module / crate dependency map
 
 The binary depends on acyclic leaves; no report key or exit code is shared between
-programs. `girpr` is the only default workspace member; `gircap`, `girsync`,
-`sled2redb`, `cache-json` are dev tools.
+programs. `girpr` is the only default workspace member; `gircap`, `girsync`
+and `girsync-cache-json` are dev tools.
 
 ```mermaid
 flowchart TB

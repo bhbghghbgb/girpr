@@ -346,9 +346,8 @@ mod tests {
 
     /// Trust is **not** part of availability. `--no-trust-cached-hashes src` on a
     /// record asks it to re-read, which it cannot do, so it changes nothing it
-    /// owes. Folding trust in would make the flag fatal for every record - and
-    /// `tools/sled2redb/tests/convert.rs` passes that flag against a record, so
-    /// this is live.
+    /// owes. Folding trust in would make the flag fatal for every record that
+    /// already holds the requested digest.
     ///
     /// And the two halves stay independent: distrusting the *record* changes
     /// nothing, while distrusting the folder side still makes it re-read.
@@ -410,9 +409,8 @@ mod tests {
     }
 
     /// An unrequested algorithm is neither a shortfall nor a substitute. A record
-    /// carrying `blake3` that this crate has never heard of covers `md5`
-    /// perfectly well - which is `tools/sled2redb/tests/convert.rs`'s shape,
-    /// and the reason availability is a set membership test rather than a count.
+    /// that tolerates an unknown algorithm alongside `md5` covers `md5` perfectly
+    /// well, which is why availability is a set membership test rather than a count.
     #[test]
     fn an_unrequested_algorithm_is_neither_a_shortfall_nor_a_substitute() {
         let s = map(vec![("a.txt", cached_entry(&["md5", "blake3"]))]);

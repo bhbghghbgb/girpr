@@ -4,9 +4,8 @@
 //! This is **test support**, not a shipped surface. It holds the helpers that
 //! construct girsync's own types, so it depends on girsync directly. Keeping
 //! that dependency here — rather than in the scratch-directory crate — is the
-//! point of the split: `girpr-tempdir` stays a girsync-free leaf, and only the
-//! two programs that already depend on girsync (`girsync` itself and
-//! `sled2redb`) take this crate as a dev-dependency. The repair binary and
+//! point of the split: `girpr-tempdir` stays a girsync-free leaf, so only
+//! `girsync` itself takes this crate as a dev-dependency. The repair binary and
 //! `gircap` therefore no longer inherit girsync through their scratch dirs.
 //!
 //! The girsync-free helpers (temp dirs, file/link fixtures, NDJSON-free file

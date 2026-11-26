@@ -114,7 +114,7 @@ fn preflight(db: &Database) -> Result<Preflight> {
 fn require_current_version_for_write(version: u32) -> Result<()> {
     if version != CACHE_VERSION {
         bail!(
-            "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+            "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild)",
             version
         );
     }
@@ -406,12 +406,6 @@ impl CacheDb {
     }
 
     pub(crate) fn open_file(db_path: &Path) -> Result<Database> {
-        if db_path.is_dir() {
-            bail!(
-                "cache {} is a directory (sled format): use --ignore-cache to rebuild or sled2redb to convert",
-                db_path.display()
-            );
-        }
         match redb_builder().create(db_path) {
             Ok(db) => Ok(db),
             // A lock is not corruption, and `--ignore-cache` would *delete* the
@@ -520,15 +514,9 @@ impl CacheDb {
         if !db_path.exists() {
             bail!("record {} not found", db_path.display());
         }
-        if db_path.is_dir() {
-            bail!(
-                "record {} is a directory (sled format): convert it with sled2redb first",
-                db_path.display()
-            );
-        }
         let db = open_read_only(db_path).with_context(|| {
             format!(
-                "open record {} (corrupt? use --ignore-cache to rebuild or sled2redb to convert)",
+                "open record {} (corrupt? use --ignore-cache to rebuild)",
                 db_path.display()
             )
         })?;
@@ -1674,7 +1662,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+                "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild)",
                 CACHE_VERSION + 1
             ),
             "the refusal says what it always said, remedy included"

@@ -67,8 +67,6 @@ girsync-leaves = { path = "leaves" }
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.
 dunce = "1.0.5"
-# No `sled`: the legacy-format converter moved out to the standalone
-# `tools/sled2redb` crate, so this package's graph is sled-free.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # The digest vocabulary and streaming sink live in `girsync-cache` (above),

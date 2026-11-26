@@ -23,7 +23,6 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use tracing::{info, trace, warn};
 
-use crate::helpers::copy_dir_all;
 use crate::helpers::{self, FileId};
 
 use super::super::open::{CacheHooks, Claim, PublishHooks};
@@ -50,9 +49,8 @@ use super::super::open::{CacheHooks, Claim, PublishHooks};
 pub(crate) const WORK_PREFIX: &str = "girpr-cache-partial-";
 
 impl<H: PublishHooks> FsPublisher<H> {
-    /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
-    /// cache) is copied recursively; a redb file is copied in one call. The
-    /// destination never replaces an existing sibling.
+    /// Copy `db_path` beside itself as `<prefix><ts>`. The destination never
+    /// replaces an existing sibling.
     ///
     /// **The copy is published, not written in place.** It is written under a
     /// working name ([`WORK_PREFIX`]) and published under its own name once it
@@ -85,17 +83,11 @@ impl<H: PublishHooks> FsPublisher<H> {
             return Ok(None);
         }
         let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-        let is_dir = db_path.is_dir();
-        let work = working_name(parent, is_dir, &stamp())?;
+        let work = working_name(parent, &stamp())?;
         info!(src = %db_path.display(), dst = %work.display(), "{label} start");
-        let copied: Result<()> = if is_dir {
-            copy_dir_all(db_path, &work)
-        } else {
-            std::fs::copy(db_path, &work)
-                .with_context(|| format!("copy {} -> {}", db_path.display(), work.display()))
-                .map(|_| ())
-        };
-        if let Err(e) = copied {
+        if let Err(e) = std::fs::copy(db_path, &work)
+            .with_context(|| format!("copy {} -> {}", db_path.display(), work.display()))
+        {
             // The working copy is ours and the copy did not land. A half-written
             // file is not a backup, and leaving it would be a file a later run
             // reads as one — so it goes, and the failure is reported either way.
@@ -105,11 +97,11 @@ impl<H: PublishHooks> FsPublisher<H> {
         // The published name is only ever a whole copy, so the bytes behind it
         // have to be on disk before the name appears: the name can reach the disk
         // before the data it names does.
-        if let Err(e) = flush_copy(&work, is_dir) {
+        if let Err(e) = flush_copy(&work) {
             let _ = remove_cache_path(&work);
             return Err(e);
         }
-        match self.publish_copy(&work, parent, prefix, &stamp(), is_dir) {
+        match self.publish_copy(&work, parent, prefix, &stamp()) {
             Ok(dest) => {
                 self.hooks.remember(&dest);
                 info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
@@ -128,14 +120,8 @@ impl<H: PublishHooks> FsPublisher<H> {
 /// Flush a finished copy before its name is published.
 ///
 /// The publish puts the name on the copy, and the name can be durable before
-/// the data it names is, so the bytes are flushed first. A legacy sled
-/// directory is copied file by file and is left as it is: the live cache is a
-/// file, and the directory case is a migration path rather than the one that
-/// runs.
-fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
-    if is_dir {
-        return Ok(());
-    }
+/// the data it names is, so the bytes are flushed first.
+fn flush_copy(work: &Path) -> Result<()> {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .open(work)
@@ -146,16 +132,10 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 
 /// Publish a finished copy under a name of the bounded lists.
 ///
-/// A file copy is published by **linking** it into place, so the name is
-/// created with the copy's bytes in it: the name appears whole, and it
-/// appears *with* the copy rather than a moment before it. The link is also
-/// the claim — it fails when the name is taken — so two runs cannot publish
-/// onto one name.
-///
-/// A directory cannot be linked, so its name is claimed with an exclusive
-/// create and the copy is renamed onto the claim: a POSIX rename onto an
-/// existing empty directory succeeds, so the claim is what keeps two runs
-/// from publishing onto one name.
+/// The copy is published by **linking** it into place, so the name is created
+/// with the copy's bytes in it: the name appears whole, and it appears *with*
+/// the copy rather than a moment before it. The link is also the claim — it
+/// fails when the name is taken — so two runs cannot publish onto one name.
 ///
 /// **The record of the copy is taken before the name is claimed.** The record
 /// says the copy is in use by the run that is about to publish it, and a
@@ -171,11 +151,11 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// a record nobody holds and nobody can lock reads as "a live run holds it"
 /// to a bound, which would spare the copy for good.
 ///
-/// **A claim that is taken away fails the publish.** A bound cannot tell a
-/// claim from a published copy, and on a filesystem that cannot lock a file
-/// there is no record beside the name to say the name is being claimed, so
-/// the claim can go. The publish checks that the name still holds *its own*
-/// claim before the copy lands on it — the same object, and not merely
+/// **A claim that is taken away fails the publish.** On a filesystem that can
+/// neither link nor lock a file, the claim can go: a bound cannot tell a claim
+/// from a published copy, and there is no record beside the name to say the
+/// name is being claimed. The publish checks that the name still holds *its
+/// own* claim before the copy lands on it — the same file, and not merely
 /// something at the name — and fails loudly when it does not: landing the
 /// copy on a name this run no longer holds would publish it over whatever
 /// holds it now, which is the one thing the claim exists to prevent.
@@ -185,7 +165,7 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// is one syscall wide: a claim taken away in it is still landed on. Only a
 /// filesystem that can neither link nor lock a file gets there — with a link
 /// the publish is atomic, and with a lock the record beside the name keeps a
-/// bound off the claim until the run opens the folder's cache.
+/// bound off the claim until the run opens its cache.
 impl<H: PublishHooks> FsPublisher<H> {
     fn publish_copy(
         &self,
@@ -193,15 +173,13 @@ impl<H: PublishHooks> FsPublisher<H> {
         parent: &Path,
         prefix: &str,
         stamp: &str,
-        is_dir: bool,
     ) -> Result<PathBuf> {
         for n in 1..=MAX_CLAIM_ATTEMPTS {
             let name = candidate_name(prefix, stamp, n);
             let cand = parent.join(&name);
-            // Ask first whether the name is taken: `create_new` on an existing
-            // *directory* reports `Access is denied` rather than `AlreadyExists`,
-            // so the error kind alone cannot distinguish "occupied" from "cannot
-            // write here".
+            // Ask first whether the name is taken: the error kind of an
+            // exclusive create alone cannot tell an occupied name from one that
+            // cannot be written here.
             match std::fs::symlink_metadata(&cand) {
                 Ok(_) => continue,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -220,12 +198,7 @@ impl<H: PublishHooks> FsPublisher<H> {
                 // registry.
                 Claim::Unusable => None,
             };
-            let published = if is_dir {
-                publish_dir(work, &cand)
-            } else {
-                publish_file(work, &cand)
-            };
-            match published {
+            match publish_file(work, &cand) {
                 Ok(()) => {
                     self.hooks.keep_record(hold);
                     return Ok(cand);
@@ -336,11 +309,7 @@ fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
             // been taken away since, so the answer cannot be another run's
             // file.
             let claim = match helpers::identity_of(&file) {
-                Ok(id) => NameClaim {
-                    id,
-                    is_dir: false,
-                    _file: Some(file),
-                },
+                Ok(id) => NameClaim { id, _file: file },
                 Err(e) => return Err(PublishError::Io(e)),
             };
             // The publish is held still for a moment, so a test can look at
@@ -381,124 +350,6 @@ fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other("this filesystem cannot link a file"));
     }
     std::fs::hard_link(src, dst)
-}
-
-/// Publish a finished directory copy under its published name.
-///
-/// A directory cannot be linked, so the name is **claimed** with an
-/// exclusive create and the copy is renamed onto the claim. The claim is
-/// what decides: a POSIX rename onto an existing **empty** directory
-/// succeeds, so a rename on its own would let a second run publish onto a
-/// name the first run has, and replace the copy that is there.
-///
-/// The rename replaces the claim where the platform allows it, so the name
-/// is briefly an empty directory. Where a rename refuses to replace a
-/// directory, the claim is dropped and the rename tried again: a name taken
-/// in the meantime makes that rename fail — a rename that cannot replace a
-/// directory cannot replace the claim another run holds either — so the
-/// publish moves on to the next name.
-///
-/// The drop and the rename are two calls, and where the removal succeeded the
-/// name is free in between, so another run can take it in that window. The
-/// gap is one syscall wide and cannot be closed; it is reachable only where
-/// the filesystem cannot lock a file, since the record the publishing run
-/// holds keeps another run off the name until the run opens the folder's
-/// cache.
-///
-/// The claim is checked before the copy lands on it, so a claim that was
-/// taken away — a bound cannot tell a claim from a published copy — fails
-/// the publish rather than landing the copy on a name this run no longer
-/// holds. It is checked again before the claim is dropped, because dropping
-/// it takes whatever is at the name with it: a name another run has taken
-/// over holds that run's copy, and that copy is not this run's to remove.
-pub(crate) fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
-    match std::fs::create_dir(cand) {
-        Ok(()) => {}
-        // The name is taken: it is another run's.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(PublishError::Taken),
-        Err(e) => return Err(PublishError::Io(e)),
-    }
-    // The identity of the claim, read from the name: a directory has no
-    // portable handle, and the name is what the copy is renamed onto. The
-    // claim is gone if the name cannot be read at all.
-    let Some(id) = identity_at(cand) else {
-        return Err(PublishError::Io(claim_taken_away()));
-    };
-    let claim = NameClaim {
-        id,
-        is_dir: true,
-        _file: std::fs::File::open(cand).ok(),
-    };
-    // The publish is held still for a moment, so a test can look at the
-    // folder in the middle of one: the claim is there, empty, under a
-    // published name.
-    #[cfg(test)]
-    pause_publish();
-    // The claim has to still be ours when the copy lands on it.
-    if !claim_is_in_place(cand, &claim) {
-        return Err(PublishError::Io(claim_taken_away()));
-    }
-    match rename_onto(work, cand) {
-        Ok(()) => Ok(()),
-        Err(_) => publish_onto_the_claimed_name(work, cand, &claim),
-    }
-}
-
-/// Publish the copy onto a name whose claim is in the way of the rename.
-///
-/// A rename cannot replace a directory on every platform, so the claim is
-/// dropped and the rename is tried again.
-///
-/// The drop is best-effort, as it is everywhere else: its error is ignored,
-/// so a removal that fails leaves the claim behind, and the rename then
-/// fails with it — the name is still taken — and the publish moves on to the
-/// next name.
-///
-/// **The drop and the rename are two calls.** Where the removal succeeded the
-/// name is free between them, so another run can take it in that window — and
-/// the rename fails then too, since a platform that cannot replace a
-/// directory cannot replace the claim another run holds either: the name is
-/// taken, and the publish moves on to the next name. The gap is one syscall
-/// wide and cannot be closed; it is reachable only where the filesystem
-/// cannot lock a file, since the record the publishing run holds keeps
-/// another run off the name until the run opens the folder's cache.
-///
-/// **The claim is dropped only while the name still holds it.** A name that
-/// holds something else — another run's claim, or another run's published
-/// copy — is not ours to drop: dropping it would take that run's copy away
-/// from under the run that is about to report it, and the copy is not landed
-/// on it either. Only an empty directory goes, so a copy another run has
-/// published with content in it is never dropped either.
-///
-/// The ask and the removal are two calls, and there is no portable call that
-/// removes a claim by what it is rather than by what it is called, so a
-/// claim taken away in the gap is still removed. The gap is one syscall wide
-/// and cannot be closed; it is reachable only where the filesystem cannot
-/// lock a file, since a record a live run holds keeps a bound off the name
-/// until the run opens the folder's cache.
-///
-/// A claim that was taken away fails the publish, like every other claim
-/// that is no longer this run's: the copy is not landed on a name this run
-/// no longer holds.
-pub(crate) fn publish_onto_the_claimed_name(
-    work: &Path,
-    cand: &Path,
-    claim: &NameClaim,
-) -> Result<(), PublishError> {
-    if !drop_the_claim(cand, claim) {
-        return Err(PublishError::Io(claim_taken_away()));
-    }
-    match rename_onto(work, cand) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // The name is there, so another run has it.
-            if cand.exists() {
-                Err(PublishError::Taken)
-            } else {
-                Err(PublishError::Io(e))
-            }
-        }
-    }
 }
 
 /// Rename the copy onto the name it has claimed.
@@ -614,36 +465,25 @@ fn claim_name(path: &Path) -> std::io::Result<File> {
 
 /// The claim this run holds on a published name.
 ///
-/// A claim is the name the run has taken for itself: an empty file for a file
-/// copy, an empty directory for a directory copy. The copy is renamed onto it,
-/// so the claim has to be **this run's** when the copy lands on it.
+/// A claim is an empty file the run created under a published name. The copy
+/// is renamed onto it, so the claim has to be **this run's** when the copy
+/// lands on it.
 ///
-/// The identity is what says so. The name has to name the object this run
+/// The identity is what says so. The name has to name the file this run
 /// created — not merely hold *something*, which is a weaker question with a
 /// weaker answer: a bound cannot tell a claim from a published copy, so on a
 /// filesystem that cannot lock a file the claim can be taken away, and
 /// another run can take the name and publish there.
 pub(crate) struct NameClaim {
-    /// The identity of the object the claim created.
+    /// The identity of the file the claim created.
     pub(crate) id: FileId,
-    /// Whether the claim is a directory.
-    ///
-    /// A file copy is claimed with an empty file and a directory copy with
-    /// an empty directory, and the two are dropped with different calls.
-    pub(crate) is_dir: bool,
     /// The handle on the claim, kept open while the publish is in flight.
     ///
-    /// It names the object even after the name has gone, so the identity
-    /// cannot be freed and reused for another file while the publish decides
-    /// whether the claim is still in place. A directory claim has no portable
-    /// handle — `File::open` refuses a directory on Windows — and is named by
-    /// the path alone there.
-    pub(crate) _file: Option<File>,
-}
-
-/// The identity of the object at `path`, if the platform can name it.
-pub(crate) fn identity_at(path: &Path) -> Option<FileId> {
-    helpers::identity_at(path).ok()
+    /// It names the file even after the name has gone, so the identity cannot
+    /// be freed and reused for another file while the publish decides whether
+    /// the claim is still in place. A file claim always has a handle: it is the
+    /// one the exclusive create returned.
+    pub(crate) _file: File,
 }
 
 /// Whether the claim on a published name is still this run's.
@@ -671,27 +511,21 @@ fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
 /// **The removal is best-effort.** The answer is about the name and not
 /// about the removal: the error of the removal is ignored, and the claim is
 /// reported as dropped either way. A removal that fails therefore leaves
-/// the claim behind — an empty file under a published prefix for a file
-/// claim, an empty directory for a directory one — and the bound reads that
-/// name as a published copy: it counts towards the bound, and it may be the
-/// one the bound keeps in place of a whole copy.
+/// the claim behind — an empty file under a published prefix — and the bound
+/// reads that name as a published copy: it counts towards the bound, and it
+/// may be the one the bound keeps in place of a whole copy.
 ///
 /// The ask and the removal are two calls, so a takeover in between is still
-/// in reach: a claim has no portable handle to be removed by identity, and a
-/// directory cannot be removed by what it is rather than by what it is
-/// called. The gap is therefore one syscall wide, and it cannot be closed.
-/// It is reachable only where the filesystem cannot lock a file: a record a
-/// live run holds keeps a bound off the name until the run opens the
-/// folder's cache.
+/// in reach: there is no portable call that removes a claim by what it is
+/// rather than by what it is called. The gap is therefore one syscall wide,
+/// and it cannot be closed. It is reachable only where the filesystem cannot
+/// lock a file: a record a live run holds keeps a bound off the name until
+/// the run opens its cache.
 pub(crate) fn drop_the_claim(cand: &Path, claim: &NameClaim) -> bool {
     if !claim_is_in_place(cand, claim) {
         return false;
     }
-    let _ = if claim.is_dir {
-        std::fs::remove_dir(cand)
-    } else {
-        std::fs::remove_file(cand)
-    };
+    let _ = std::fs::remove_file(cand);
     true
 }
 
@@ -728,17 +562,16 @@ fn name_is_taken(e: &std::io::Error) -> bool {
 ///
 /// The `_2`, `_3` … spellings mean a candidate is only ever taken by a run
 /// that collided on the same microsecond, so the bound is generous on
-/// purpose: it is there so a pathological directory cannot spin the loop
-/// forever, not because the number is expected to be reached.
+/// purpose: it is there so a pathological run of collisions cannot spin the
+/// loop forever, not because the number is expected to be reached.
 pub(crate) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 
 /// Claim a free `<parent>/<prefix><ts>` sibling and return it.
 ///
-/// The name is **claimed**, not chosen: `create_new` for a file and
-/// `create_dir` for a legacy sled directory are what take it, so two runs
-/// against one root cannot pick the same sibling. Probing for a free name
-/// and then creating it has a window between the two, and that window is
-/// exactly where two concurrent runs would collide.
+/// The name is **claimed**, not chosen: the exclusive create is what takes
+/// it, so two runs against one root cannot pick the same sibling. Probing
+/// for a free name and then creating it has a window between the two, and
+/// that window is exactly where two concurrent runs would collide.
 ///
 /// The fallback names are the `_2`, `_3` … spellings the tool has always
 /// used, so a run that collides on the timestamp still leaves a
@@ -751,32 +584,22 @@ pub(crate) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 /// the published name itself is still claimed by [`publish_copy`], once the
 /// copy is complete.
 #[cfg(test)]
-pub(crate) fn claim_sibling(
-    parent: &Path,
-    prefix: &str,
-    stamp: &str,
-    is_dir: bool,
-) -> Result<PathBuf> {
+pub(crate) fn claim_sibling(parent: &Path, prefix: &str, stamp: &str) -> Result<PathBuf> {
     for n in 1..=MAX_CLAIM_ATTEMPTS {
         let cand = parent.join(candidate_name(prefix, stamp, n));
-        // Ask first whether the name is taken: `create_new` on an existing
-        // *directory* reports `Access is denied` rather than `AlreadyExists`,
-        // so the error kind alone cannot distinguish "occupied" from "cannot
-        // write here".
+        // Ask first whether the name is taken: the error kind of an exclusive
+        // create alone cannot tell an occupied name from one that cannot be
+        // written here.
         match std::fs::symlink_metadata(&cand) {
             Ok(_) => continue,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("stat {}", cand.display())),
         }
-        let claimed = if is_dir {
-            std::fs::create_dir(&cand).map(drop)
-        } else {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&cand)
-                .map(drop)
-        };
+        let claimed = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&cand)
+            .map(drop);
         match claimed {
             Ok(()) => return Ok(cand),
             Err(e) => {
@@ -848,7 +671,7 @@ impl<H: PublishHooks> Publisher for FsPublisher<H> {
     }
 }
 
-/// Remove a path that is either a cache file or a legacy sled directory.
+/// Remove a cache file.
 ///
 /// A path that is already gone is not a failure: two runs bounding one
 /// folder can pick the same sibling, and the second one to reach it finds
@@ -856,18 +679,10 @@ impl<H: PublishHooks> Publisher for FsPublisher<H> {
 /// cache layer re-exports, so the publish mechanics do not depend on the
 /// registries' module.
 pub(crate) fn remove_cache_path(db_path: &Path) -> Result<()> {
-    if db_path.is_dir() {
-        match std::fs::remove_dir_all(db_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("remove {}", db_path.display())),
-        }
-    } else if db_path.is_file() {
-        match std::fs::remove_file(db_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("remove {}", db_path.display())),
-        }
+    match std::fs::remove_file(db_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("remove {}", db_path.display())),
     }
     Ok(())
 }
@@ -881,24 +696,17 @@ pub(crate) fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// name. The returned path is kept — its removal is the publish's business,
 /// and the working-copy failure seam has to stay under the publisher's
 /// control — so no temporary object is dropped here.
-fn working_name(parent: &Path, is_dir: bool, stamp: &str) -> Result<PathBuf> {
+fn working_name(parent: &Path, stamp: &str) -> Result<PathBuf> {
     let prefix = format!("{WORK_PREFIX}{stamp}");
     let mut builder = tempfile::Builder::new();
     builder.prefix(&prefix);
-    if is_dir {
-        builder
-            .tempdir_in(parent)
-            .map(|dir| dir.keep())
-            .with_context(|| format!("create working directory in {}", parent.display()))
-    } else {
-        builder
-            .tempfile_in(parent)
-            .and_then(|file| {
-                let (_handle, path) = file.into_parts();
-                path.keep().map_err(Into::into)
-            })
-            .with_context(|| format!("create working file in {}", parent.display()))
-    }
+    builder
+        .tempfile_in(parent)
+        .and_then(|file| {
+            let (_handle, path) = file.into_parts();
+            path.keep().map_err(Into::into)
+        })
+        .with_context(|| format!("create working file in {}", parent.display()))
 }
 
 /// The production entry point for a backup or snapshot copy.

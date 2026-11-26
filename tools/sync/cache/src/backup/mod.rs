@@ -18,7 +18,6 @@ pub(super) use publish::{copy_aside, remove_cache_path};
 
 #[cfg(test)]
 pub(super) use publish::{
-    LINKING_UNAVAILABLE, NameClaim, PublishError, REMOVAL_UNAVAILABLE, RENAME_UNAVAILABLE,
-    WORK_PREFIX, arm_publish_gate, candidate_name, claim_sibling, drop_the_claim, identity_at,
-    publish_dir, publish_gate, publish_onto_the_claimed_name,
+    LINKING_UNAVAILABLE, NameClaim, REMOVAL_UNAVAILABLE, RENAME_UNAVAILABLE, WORK_PREFIX,
+    arm_publish_gate, candidate_name, claim_sibling, drop_the_claim, publish_gate,
 };

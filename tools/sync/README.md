@@ -7,7 +7,7 @@
 
 Workspace member (`tools/sync`, binary `girsync`) for testing version upgrades/downgrades:
 snapshot a game folder's state, diff two folders/records, and restore `dst` to `src` content.
-Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-report-core` (ordered-JSON/line-writing mechanics — this tool keeps its own alphabetical key order, `serde_json::Value` fields and record layouts), `girpr-filter` (the shared `--include`/`--exclude` glob rules — one glob version and one set of matching rules for both tools), `girpr-fs-names` (Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — parameterised by this tool's own host policy for folding and backslash rewriting), and, for tests, `girpr-tempdir` (the scratch-directory names and cleanup) and `girsync-test-support` (the girsync-coupled option/cache/planner fixtures, kept in that crate so the scratch-directory policy stays girsync-free). Its cache lives in the separate `girsync-cache` crate (with `redb`, `postcard` and `tempfile`), which this tool and `sled2redb` consume directly so an edit to a planner, command or other subsystem here leaves the whole cache cached; that crate also owns the hash vocabulary the wire format pins. Its acyclic leaves — the rw limiter, the include/exclude filter, the link classifier and the hardlink facts — live in `girsync-leaves`, which this tool depends on directly and whose own integration tests reach without the facade, so a high-level edit here leaves them cached too. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets, nor the retry schedule and sleep driver that those two parameterise with their own delay and jitter policies, nor `girpr-exit`, the exit-table generation mechanism shared by the repair binary and `gircap` (each supplies its own codes and meanings; this tool keeps its own literals), nor `girpr-audio-language`, the audio-token and display-name mechanics shared by the repair binary and `gircap` (each keeps its own alias map, sentinel and validation; this tool has no audio selection), nor `girpr-proto`, the Sophon protobuf wire types shared by the repair binary and `gircap` (this tool never decodes a chunk manifest), nor `girpr-model`, the region identity, ids, channel tuples and base URLs shared by the repair binary and `gircap` (this tool has no region selector), nor `girpr-cli`, the clap-error to usage-code mapping shared by the repair binary, `gircap` and `sled2redb` (each passes its own usage code; this tool keeps clap's default exit status).
+Separate from the `girpr` binary; shares no flags, no exit-code contract and no program logic. The shared crates are logic-free leaves: `girpr-log` (log policy), `girpr-report-core` (ordered-JSON/line-writing mechanics — this tool keeps its own alphabetical key order, `serde_json::Value` fields and record layouts), `girpr-filter` (the shared `--include`/`--exclude` glob rules — one glob version and one set of matching rules for both tools), `girpr-fs-names` (Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — parameterised by this tool's own host policy for folding and backslash rewriting), and, for tests, `girpr-tempdir` (the scratch-directory names and cleanup) and `girsync-test-support` (the girsync-coupled option/cache/planner fixtures, kept in that crate so the scratch-directory policy stays girsync-free). Its cache lives in the separate `girsync-cache` crate (with `redb`, `postcard` and `tempfile`), which this tool consumes directly so an edit to a planner, command or other subsystem here leaves the whole cache cached; that crate also owns the hash vocabulary the wire format pins. Its acyclic leaves — the rw limiter, the include/exclude filter, the link classifier and the hardlink facts — live in `girsync-leaves`, which this tool depends on directly and whose own integration tests reach without the facade, so a high-level edit here leaves them cached too. It does not share the digest mechanics: its cache keeps raw bytes and verbatim foreign algorithm names, nor the device-name predicate rule that the repair binary and `gircap` parameterise with their own reserved sets, nor the retry schedule and sleep driver that those two parameterise with their own delay and jitter policies, nor `girpr-exit`, the exit-table generation mechanism shared by the repair binary and `gircap` (each supplies its own codes and meanings; this tool keeps its own literals), nor `girpr-audio-language`, the audio-token and display-name mechanics shared by the repair binary and `gircap` (each keeps its own alias map, sentinel and validation; this tool has no audio selection), nor `girpr-proto`, the Sophon protobuf wire types shared by the repair binary and `gircap` (this tool never decodes a chunk manifest), nor `girpr-model`, the region identity, ids, channel tuples and base URLs shared by the repair binary and `gircap` (this tool has no region selector), nor `girpr-cli`, the clap-error to usage-code mapping shared by the repair binary and `gircap` (each passes its own usage code; this tool keeps clap's default exit status).
 
 ## Source layout
 
@@ -103,17 +103,6 @@ Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
 
-### Legacy sled caches
-
-girsync itself is redb-only: a legacy sled cache directory is rejected with a
-message telling you to rebuild with `--ignore-cache` or convert it first. The
-one-shot converter is now a **separate tool** — `sled2redb` in `tools/sled2redb`
-— built and tested with `cargo build -p sled2redb` and `cargo nextest run -p
-sled2redb`. Its command is `sled2redb <SLED_DIR> <REDB_PATH>` with `--force` and
-`--output text|json`; the flags go on either side of the two paths, a usage
-error exits `3`, and there is no `--version`. The full behaviour and rationale
-live in [`tools/sled2redb/README.md`](../sled2redb/README.md).
-
 ### NDJSON cache export/import
 
 A second standalone tool, `cache-json` in `tools/sync/cache-json`, converts a
@@ -159,10 +148,6 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   and cannot change *its* level either, because `--log-level` is what the
   person running the tool typed.
 - **A log file that cannot be opened is a warning, never a failure.**
-- **`sled2redb` writes one too**, and names it `girsync_<timestamp>.log`: the
-  policy names log files after the *project*, and the converter — now a
-  separate tool — is a one-shot migration for this one. A migration that fails
-  should leave a record of how far it got.
 - **The log events name what produced them.** The walk reports itself in
   `scan start`, `scan progress: walk` and `scan done`. A **folder** side's
   effective map is built in phases — one that walks the tree and consults
@@ -975,9 +960,9 @@ runs under that cache's own lock. While one run holds it, no other run is in
 its run phase for that folder's cache.
 
 A cache that does **not** open is bounded as well, because the bound is about
-the folder and not about the open: a corrupt cache, or a legacy sled
-directory the open refuses, would otherwise leave the copies beside it to
-accumulate until `--ignore-cache` rebuilt the cache. The bound runs under the
+the folder and not about the open: a corrupt cache that the open refuses would
+otherwise leave the copies beside it to accumulate until `--ignore-cache`
+rebuilt the cache. The bound runs under the
 cache's own lock there too, taken for the bound; a lock another run holds
 means that run is in its run phase for the folder and bounds it itself, so
 that run's copies are left alone. The lock is taken on the cache file
@@ -996,10 +981,7 @@ publish: the copy is renamed onto a name it claims first, and the name is
 briefly empty until the rename lands. The rename has to be able to replace
 the claim for the copy to land at all; where it cannot, the publish fails
 loudly and the run reports the failure rather than a backup that is not
-there. A directory copy — a legacy sled cache is a directory — cannot be
-linked either, so its name is claimed with an exclusive create and the copy
-is renamed onto the claim: the name is briefly an *empty directory* until the
-rename lands.
+there.
 
 **A name of that shape that is taken is stepped over, not reused.** The copy
 is published under the next name of the family instead: `girpr-cache-backup-<ts>`
@@ -1023,8 +1005,8 @@ copy is left alone.
 
 Dropping a claim is **best-effort**: the error of the removal is ignored, so
 a removal that fails leaves the claim behind — an empty file under
-`girpr-cache-backup-<ts>`, or an empty directory for a legacy sled cache —
-and the name is one the bound reads as a published copy. It counts towards
+`girpr-cache-backup-<ts>` — and the name is one the bound reads as a
+published copy. It counts towards
 the bound, and it can be the one the bound keeps in place of a whole copy.
 
 That check and the rename that follows it are two calls, and there is no
@@ -1035,30 +1017,14 @@ that can neither link nor lock a file — with a link the publish is atomic,
 and with a lock the record below keeps a bound off the claim until the run
 opens the folder's cache.
 
-A directory copy is renamed onto its claim, and a rename cannot replace a
-directory on every platform, so the claim is dropped and the rename is tried
-again. Dropping it takes whatever is at the name with it, so the claim is
-asked about again first: a name another run has taken over holds that run's
-copy, and the publish fails loudly rather than dropping it. Only an empty
-directory goes, so the one published copy that was ever in reach is the copy
-of an empty legacy cache — an empty directory — and the check is what stops
-it.
-
-The drop and the rename are two calls: where the removal succeeded the name is
-free in between, and another run can take it in that window. The rename then
-fails: a platform that cannot replace a directory cannot replace the claim
-another run holds either, so the name is taken and the publish moves on to
-the next name. The gap is narrow and cannot be closed.
-
-The ask and the removal are two calls as well, and no portable call removes a
-claim by what it is rather than by what it is called, so a claim taken away
-in between is still removed: that gap cannot be closed either. The same goes
-for the claim a file copy drops when its rename does not land — the name is
-asked about again first, so another run's published copy is left alone, and
-the gap between the ask and the removal is still there. All of these gaps are
-only reachable on a filesystem that cannot lock a file, because the record
-below keeps a bound — and another publisher — off the name until the run
-opens the folder's cache.
+The ask and the removal are two calls: no portable call removes a claim by
+what it is rather than by what it is called, so a claim taken away in between
+is still removed. The same goes for the claim a file copy drops when its
+rename does not land — the name is asked about again first, so another run's
+published copy is left alone, and the gap between the ask and the removal
+cannot be closed. These gaps are only reachable on a filesystem that cannot
+lock a file, because the record below keeps a bound — and another publisher —
+off the name until the run opens the folder's cache.
 
 A copy that is still being written is not one of the copies the bound ranges
 over: a run that merely opens a folder cannot remove the copy another run is
@@ -1137,8 +1103,7 @@ run. That is the one combination where the removal has no safety net.
 
 A copy that fails is not left behind — the working file is removed rather than
 sitting there looking like a backup — and the run fails rather than report a
-backup it does not have. A sibling's name is *claimed* — the link that
-publishes a file copy, and `create_dir` for a legacy sled directory — so two
+backup it does not have. A sibling's name is *claimed* — the link that publishes a file copy — so two
 runs against one root cannot end up writing the same file.
 
 A run that is killed mid-copy can leave the working file behind —
@@ -1152,7 +1117,7 @@ name**: the bound ranges over the published copies — the `girpr-cache-backup-*
 copies and the `girpr-cache-old-*` snapshots — and a working name is a copy
 that is still being made, so a bound that could select it could take away the
 copy another run is making there. Nothing reclaims a working name, so remove
-it by hand. That is the same answer the converter's temporary gets, and for the
+it by hand. That is the same answer a converter's temporary gets, and for the
 same reason: a name a live run is writing is not the tool's to sweep away —
 see [Commands](#commands).
 
@@ -1163,9 +1128,9 @@ says nothing: the next bound takes the copy like any other copy and reclaims
 the record with it.
 
 A publish that could not land its copy can leave the **claim** behind — an
-empty file under `girpr-cache-backup-<ts>`, or an empty directory for a
-legacy sled cache — because dropping a claim is best-effort and the removal
-can fail. It is tool state and is never mirrored as content. The bound reads
+empty file under `girpr-cache-backup-<ts>` — because dropping a claim is
+best-effort and the removal can fail. It is tool state and is never mirrored
+as content. The bound reads
 the name as a published copy, so it counts towards the bound and the bound
 reclaims it like any other copy once the folder is over its bound.
 
@@ -1279,14 +1244,12 @@ fixture is guarded so neither equality can pass vacuously by hashing nothing.
   a followed link can bring its own cache into the walk, and it is tool state
   rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
-  file; POSIX spellings stay exact. The converter's temporary is one of them
+  file; POSIX spellings stay exact. A converter's temporary is one of them
   (`girpr-cache-convert-<pid>-<ts>.redb`, or the numbered spellings of the
   same name when that one is taken), so a conversion that was killed
   leaves the tool's own residue behind rather than a file that looks like
   content. The family of those spellings is bounded by a generous limit.
-  Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
-  convert once with `sled2redb <old-dir> <new-file>` — the standalone converter
-  in `tools/sled2redb`).
+  Unsupported cache versions are rejected; rebuild with `--ignore-cache`.
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
@@ -1495,19 +1458,13 @@ cargo build -p girsync
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
-### Build and the legacy converter
+### Build
 
-girsync has no optional features and no `sled` in its dependency graph. The
-one-shot legacy-format converter moved out to its own workspace member:
+girsync has no optional features and depends only on redb:
 
 ```powershell
-cargo build -p girsync                 # no sled, no converter
-cargo build -p sled2redb               # the standalone converter
-cargo nextest run -p sled2redb         # its end-to-end cases
+cargo build -p girsync
 ```
-
-A default `cargo nextest run -p girsync` does not touch the legacy format at
-all; see [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
 Same, machine-readable — `--output json` on stdout, logs still on stderr:
 
@@ -1543,9 +1500,6 @@ The number of cases is not written down here, because it moves every time one
 is added. `cargo nextest list -p girsync` prints them all, one per line, and
 `cargo nextest list -p girsync --run-ignored only` prints the `#[ignore]`d ones
 on their own.
-
-The converter's cases are not in that run either: they live with the separate
-tool, and `cargo nextest run -p sled2redb` runs them.
 
 **A green run is not full link coverage.** Some end-to-end cases need
 primitives a regular user cannot always create: Windows without developer mode
@@ -1750,12 +1704,11 @@ them; `--dry-run` costs the same again.
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
   narrates on stderr), `public_surface.rs` (what a caller reaches without a
   dependency of its own), `symlink.rs` (links in the walk, in the copy and in
-  the deletion plan), `migration_lock.rs` (a backend-agnostic behaviour lock for
+  the deletion plan), `migration_lock.rs` (a behaviour lock for
   the cache layer), with shared fixtures in `girsync-test-support` — reached
   through the thin `tests/common/mod.rs` shim, so the girsync-coupled builders
-  stay out of `girpr-tempdir`. The
-  converter's own cases moved with it to `tools/sled2redb/tests/convert.rs`.
-  They run against the public API, so anything they touch must stay `pub`.
+  stay out of `girpr-tempdir`. The tests run against the public API, so
+  anything they touch must stay `pub`.
 
   The largest are **directories**: each is a test target at
   `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`
