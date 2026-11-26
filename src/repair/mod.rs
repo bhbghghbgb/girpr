@@ -1432,7 +1432,7 @@ async fn run_check_only(
         ctx.jobs,
     )
     .await?;
-    // C5: with the flag, the persistent tier is part of "intact". Without it
+    // With the flag, the persistent tier is part of "intact". Without it
     // `persistent` is `None`, so this is a no-op and the unflagged check stays
     // byte-identical (plan, counters, exit code).
     if let Some(state) = persistent {

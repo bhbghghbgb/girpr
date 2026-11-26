@@ -62,7 +62,7 @@ impl ManifestKind {
 }
 
 /// One mirrored manifest: its fetch URL and the MD5/size gate from the
-/// descriptor NDJSON, exactly as published in docs/03 §7.4.1.
+/// descriptor NDJSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestDescriptor {
     pub kind: ManifestKind,
@@ -97,7 +97,7 @@ pub struct DispatchInfo {
 /// The two inputs that are not values from the metadata leaf.
 pub struct DispatchQuery<'a> {
     pub biz: Region,
-    /// `meta.latest`, e.g. `7.2.0`. Never the pre-repair local version (B9(a)).
+    /// `meta.latest`, e.g. `7.2.0`. Never the pre-repair local version.
     pub latest: &'a str,
 }
 
@@ -117,7 +117,7 @@ pub fn minor_version(version: &str) -> Option<(u64, u64)> {
     Some((major, minor))
 }
 
-/// B9(a): a real minor-version disagreement is a metadata failure.
+/// A real minor-version disagreement is a metadata failure.
 pub fn check_minor_version(queried: &str, response: &str) -> Result<()> {
     let want = minor_version(queried).ok_or_else(|| {
         DispatchError::Metadata(format!("queried version {queried:?} has no minor number"))
@@ -136,9 +136,9 @@ pub fn check_minor_version(queried: &str, response: &str) -> Result<()> {
 
 /// Codename and channel authority.
 ///
-/// Bilibili is the caveat from `CHANNELS.md`: its dispatcher answers codename
-/// `hk4e_cn`, so the codename alone must not reject it. `properties_2=22102`
-/// (CN is 22101) or a `cnqd` host is the strict channel assertion.
+/// Bilibili's dispatcher answers codename `hk4e_cn`, so the codename alone
+/// must not reject it. `properties_2=22102` (CN is 22101) or a `cnqd` host is
+/// the strict channel assertion.
 pub fn check_response_channel(
     biz: Region,
     codename: &str,

@@ -7,7 +7,7 @@
 //! `meta.config.exe_file_name`, never a hardcoded string.
 //!
 //! This module deliberately publishes no marker and no mirror: that is the
-//! post phase's job (commit 8). A failed hotfix counts as a failed file so the
+//! post phase's job. A failed hotfix counts as a failed file so the
 //! run exits 3 and skips the post phase, which is the all-or-nothing gate.
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ pub(crate) async fn repair(
     state: &PersistentState,
     mut summary: Summary,
 ) -> Summary {
-    // C4: a read-only run lists the work, spends no byte and touches no tree.
+    // A read-only run lists the work, spends no byte and touches no tree.
     // `--check-only` returned before this call; `--dry-run` reaches it.
     if ctx.readonly() {
         for asset in &state.plan.assets {
@@ -235,7 +235,7 @@ fn target_of_checked(game_dir: &Path, asset: &PersistentAsset) -> anyhow::Result
 }
 
 // ---------------------------------------------------------------------------
-// Cheap prerequisites (docs/03 §7.5.2 item 1, gap rows 9-11)
+// Cheap prerequisites
 // ---------------------------------------------------------------------------
 
 /// Create both base trees, drop stale/duplicate state and restore the
@@ -441,7 +441,7 @@ fn move_file(source: &Path, dest: &Path) -> anyhow::Result<bool> {
 
 /// Clear the read-only bit on this one prerequisite before deleting it.
 /// Tree-wide stripping is never done; only the file about to be removed is
-/// touched (C17(b)'s per-path discipline, applied to the stale launcher state).
+/// touched (the same per-path discipline, applied to the stale launcher state).
 fn clear_readonly(path: &Path) {
     let Ok(meta) = std::fs::metadata(path) else {
         return;

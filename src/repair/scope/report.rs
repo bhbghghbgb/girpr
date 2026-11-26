@@ -255,8 +255,8 @@ pub struct PlanTotals {
     /// the key is then absent: the figure is the scan's own, and a run that
     /// did not scan has none to report.
     pub scan_bytes: Option<u64>,
-    /// Flag-only persistent totals (C13). `None` on an unflagged run, so the
-    /// `PLAN` line and `--plan-out` keep their old bytes exactly.
+    /// Flag-only persistent totals. `None` on an unflagged run, so the `PLAN`
+    /// line and `--plan-out` keep their bytes exactly.
     pub persistent: Option<PersistentPlanTotals>,
 }
 
@@ -267,7 +267,7 @@ pub struct PersistentPlanTotals {
     pub bytes: u64,
     /// `--scan` reads only base files; their full-file digest gate is the
     /// check. This says so on the data plane instead of leaving the omission
-    /// implicit (C13).
+    /// implicit.
     pub scan_excludes_persistent: bool,
     /// The same status word the `SUMMARY persistent=` key carries.
     pub status: &'static str,
@@ -370,7 +370,7 @@ pub struct PlanDocument<'a> {
     pub persistent: Option<PersistentDocument>,
 }
 
-/// The `--plan-out` persistent section (C13). It is a listing: no marker,
+/// The `--plan-out` persistent section. It is a listing: no marker,
 /// mirror or hotfix byte is written by this half of the run.
 #[derive(Debug, Serialize, Default, PartialEq, Eq)]
 pub struct PersistentDocument {

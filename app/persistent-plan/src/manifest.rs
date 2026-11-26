@@ -4,7 +4,7 @@
 //! with `remoteName`, `md5`, `fileSize` and an optional XXH64 `hash`. Extra keys
 //! (`isPatch`, `category`, `localName`, …) are parsed-but-ignored — the server
 //! does send `isPatch` on some rows — and **blank lines are skipped**, unlike
-//! Collapse's own parser, which throws on them (docs/01 §6.4.4).
+//! Collapse's own parser, which throws on them.
 //!
 //! Nothing here touches the network or the filesystem: the fetch module
 //! supplies verified bytes, and this module turns them into values or a typed

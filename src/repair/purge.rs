@@ -435,8 +435,8 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// `pkg_version` is the HoYoPlay launcher's verification list. It is a
 /// Sophon-tracked base file today, but an install restored by other means may
 /// carry one that is not in the current plan; deleting it invites a
-/// launcher-side re-check (docs/01 §6.4.3, C2). It is kept for **all** runs, not
-/// only persistent ones.
+/// launcher-side re-check (docs/01 §6). It is kept for **all** runs, not only
+/// persistent ones.
 ///
 /// The rest of the verification state (`*_persist`, `*_revision`, the marker
 /// names, `cache_versions_*`, `ctable*`, `audio_lang_*`,
@@ -477,7 +477,7 @@ pub fn keep_set() -> &'static HashSet<String> {
             // preserves the legacy file without carrying its exclusion.
             girpr_lock::LOCK_FILE.to_string(),
             // The launcher's verification list. Kept at the root only: a
-            // nested file with the same name is not that list (docs/01 §6 C2).
+            // nested file with the same name is not that list (docs/01 §6).
             "pkg_version".to_string(),
         ])
     })
@@ -537,8 +537,7 @@ pub fn classify_purge_path(
 ///    `base_res_version_hash`, `cache_versions_*`, `ctable*`). Matched by
 ///    filename because their parent dir varies by channel and exe stem.
 ///    `*versions_remote*` and `VideoAssets/*.tmp` are explicitly NOT kept:
-///    they are stale game-generated download state (docs/01 §6.4.3,
-///    GenshinSlimmer issue 19).
+///    they are stale game-generated download state (docs/01 §6).
 ///
 ///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
 ///    `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
@@ -595,7 +594,7 @@ pub fn classify_purge_path_visible(
 /// The rejection from [`is_verification_state_file`] is repeated here because
 /// this rule runs first: `VideoAssets/*.tmp` and `*versions_remote*` are stale
 /// game-generated download state and must stay purge candidates even when an
-/// audio-style name would otherwise keep them (docs/01 §6.4.3).
+/// audio-style name would otherwise keep them (docs/01 §6).
 fn is_audio_version_file(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     if lower.contains("versions_remote") || lower.ends_with(".tmp") {
@@ -611,8 +610,7 @@ fn is_audio_version_file(file_name: &str) -> bool {
 /// moves with the game's exe stem, and the same `*_revision` / `*_persist`
 /// names occur in both the base and hotfix trees. Without this rule a marker
 /// absent from the live Sophon manifest is deleted by `--purge-after` /
-/// `--purge-only`, and the game re-verifies at next launch (docs/01 §6.4.3,
-/// C1/C12/B5).
+/// `--purge-only`, and the game re-verifies at next launch (docs/01 §6).
 ///
 /// `*versions_remote*` and `*.tmp` are rejected first: they are stale
 /// game-generated download state and must stay purge candidates even when
@@ -1153,7 +1151,7 @@ mod tests {
                 PurgeVerdict::Keep,
             ),
             // Negative: game-generated partial-download state stays purgeable
-            // even when its name contains a protected token (docs/01 §6.4.3).
+            // even when its name contains a protected token (docs/01 §6).
             (
                 "GenshinImpact_Data/Persistent/res_versions_remote",
                 &open,

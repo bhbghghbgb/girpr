@@ -321,7 +321,7 @@ pub struct SummaryFlags {
     /// Persistent assets that failed this run.
     pub persistent_failed: Option<u64>,
     /// `omitted` only when `res_versions_streaming` was absent, so no
-    /// `base_res_version_hash` marker could be rendered (C16).
+    /// `base_res_version_hash` marker could be rendered.
     pub persistent_base_hash: Option<&'static str>,
 }
 

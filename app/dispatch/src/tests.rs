@@ -567,7 +567,7 @@ fn codename_and_channel_authority_accept_bili_cn_codename() {
     check_response_channel(Region::Hk4eCn, "hk4e_cn", 22_101, "cngfdispatch").expect("cn");
     // Bili answers codename hk4e_cn; 22102 and the cnqd host are authoritative.
     check_response_channel(Region::Hk4eBilibili, "hk4e_cn", 22_102, "cnqddispatch")
-        .expect("bili codename caveat");
+        .expect("bili accepted by properties/host");
     check_response_channel(Region::Hk4eBilibili, "hk4e_cn", 22_101, "cnqddispatch")
         .expect("bili via host");
     check_response_channel(

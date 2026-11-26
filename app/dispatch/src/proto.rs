@@ -18,8 +18,8 @@ pub struct DispatchResponse {
     pub properties: Option<GatewayProperties>,
 }
 
-/// `GatewayProperties` (root tag 3). The tags mirror `GenshinGateway.proto`;
-/// the names are the ones docs/01 §6.3 Step 3 uses.
+/// `GatewayProperties` (root tag 3). The tags and names mirror
+/// `GenshinGateway.proto`.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GatewayProperties {
     /// Channel discriminator: 22101 (global/CN), 22102 (Bilibili).

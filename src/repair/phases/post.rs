@@ -106,7 +106,7 @@ async fn run_inner(
     {
         return Ok(outcome);
     }
-    // C9: the persistent state is published here — after every repair and
+    // The persistent state is published here — after every repair and
     // cleanup step, and before the `config.ini` bump below. A delete ceiling
     // returned above, so it publishes nothing. A failed marker or mirror is a
     // write failure, which skips the bump: the version must never advance over
@@ -156,7 +156,7 @@ async fn run_inner(
 /// Publish the persistent verification state: mirrors first, then the full
 /// marker block, so the revision claim is the last persistent bytes written.
 ///
-/// The gates are the ones the plan half decided (C4, C7(f), C20). A read-only
+/// The gates are the ones the plan half decided. A read-only
 /// run lists one line per file and touches nothing; a suppressed scope withholds
 /// the whole block; `--purge-only` has no state, but the guard here keeps the
 /// invariant local: no bytes in place means no revision claim. Every write is
@@ -192,7 +192,7 @@ fn publish_persistent(
     let (markers, omitted) =
         persistent::refresh_markers_after_repair(game_dir, exe_file_name, state)?;
     if omitted != state.base_hash_omitted {
-        // C16's omit status is only decided now: a source that was absent at
+        // The omit status is only decided now: a source that was absent at
         // plan time can have been created by the repair (and vice versa).
         summary.flags.persistent_base_hash = omitted.then_some("omitted");
     }
@@ -204,7 +204,7 @@ fn publish_persistent(
             tracing::info!("dry run: would write mirror {rel}");
         }
     } else {
-        // C19: the full block is written on every clean run, even when no
+        // The full block is written on every clean run, even when no
         // persistent file needed repair this time. Mirror values are the
         // verified raw manifests; marker values are the freshly re-read block.
         for (rel, bytes) in &state.plan.mirrors {

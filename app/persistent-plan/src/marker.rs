@@ -1,4 +1,4 @@
-//! Marker bytes and the C7 scope predicates (docs/03 §7.4.3, §7.5.1 item 4).
+//! Marker bytes and the path-scope predicates.
 //!
 //! Every value is plain text with **no trailing newline**. The whole block is
 //! written last, after a successful execute pass, by the post phase; this
@@ -32,8 +32,8 @@ pub fn base_res_version_hash_marker(
 
 /// Render the full marker block in its pinned order.
 ///
-/// `res_versions_streaming: None` is the C16 omit branch: `base_res_version_hash`
-/// is left out entirely rather than written with a placeholder digest.
+/// `res_versions_streaming: None` omits `base_res_version_hash` entirely rather
+/// than writing it with a placeholder digest.
 pub fn render_markers(
     exe_file_name: &str,
     dispatch: &DispatchInfo,
@@ -78,7 +78,7 @@ pub fn render_markers(
     Ok(out)
 }
 
-/// First marker the active path scope hides, if any (C7(d)).
+/// First marker the active path scope hides, if any.
 pub fn first_out_of_scope_marker(
     markers: &[MarkerSet],
     visible: impl Fn(&str) -> bool,
@@ -89,7 +89,7 @@ pub fn first_out_of_scope_marker(
         .map(|m| m.path.as_str())
 }
 
-/// First **mirror** the active path scope hides, if any (C7(d)).
+/// First **mirror** the active path scope hides, if any.
 ///
 /// The post phase writes mirrors as well as markers, so the usage guard must
 /// cover every rel it publishes, not just the rendered marker paths.
@@ -103,7 +103,7 @@ pub fn first_out_of_scope_mirror(
         .map(|(rel, _)| rel.as_str())
 }
 
-/// First **hotfix** asset the active path scope hides, if any (C7(f)).
+/// First **hotfix** asset the active path scope hides, if any.
 ///
 /// A new-path row in `StreamingAssets` does not carry a revision claim, so it
 /// does not suppress the marker block; only forced-persistent paths do.
@@ -117,9 +117,9 @@ pub fn first_out_of_scope_hotfix(
         .map(|a| a.rel.as_str())
 }
 
-/// The combined C7 decision: a marker or mirror outside the scope is a usage
-/// error, because the post phase writes both; a hotfix path outside the scope
-/// suppresses markers and mirrors while the in-scope files are still repaired.
+/// A marker or mirror outside the scope is a usage error, because the post
+/// phase writes both; a hotfix path outside the scope suppresses markers and
+/// mirrors while the in-scope files are still repaired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeDecision<'a> {
     Proceed,

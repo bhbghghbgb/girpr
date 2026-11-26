@@ -1,6 +1,6 @@
 //! The digest gate, as a pure decision over values.
 //!
-//! Collapse prefers the manifest's XXH64 `hash` over `md5` (docs/03 §7.4.2), and
+//! Collapse prefers the manifest's XXH64 `hash` over `md5`, and
 //! girpr checks the **size first**: a short body is a size failure even when a
 //! digest happens to agree. The same verdict is used for the download gate and
 //! for the mandatory re-read after the atomic publish, so the two cannot drift.

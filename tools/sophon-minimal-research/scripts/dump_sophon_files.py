@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Dump the EXACT file set advertised by the live Sophon getBuild manifests.
 
-Wraps the re-runnable helpers in tools/persistent-sophon-research (same live
-snapshot methodology as docs/01 §6.4.5) and writes the full, unabridged file list
-to generated/ (gitignored). Also prints a targeted check for the *_streaming /
-metadata files the minimal-install question hinges on.
+Wraps the re-runnable helpers in tools/persistent-sophon-research and writes the
+full, unabridged file list to generated/ (gitignored). Also prints a targeted
+check for the *_streaming / metadata files the minimal-install question hinges
+on.
 
 Only MANIFESTS are downloaded (a few MB), never game bytes.
 

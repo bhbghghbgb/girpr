@@ -293,9 +293,9 @@ pub fn rsa_key_from_xml(xml: &str) -> Result<PrivateKey> {
     Ok(key)
 }
 
-/// Versioned seed table (non-user-facing fallback / pin). Both keys recorded
-/// in docs/03 §7.4.4 and the three live seeds from `CHANNELS.md` are here; a
-/// version not in the table fails closed, never reuses an older seed.
+/// Versioned seed table (non-user-facing fallback / pin). Both keys and the
+/// three versioned seeds are pinned here; a version not in the table fails
+/// closed, never reuses an older seed.
 pub fn pinned_seed(biz: Region, version: &str) -> Result<&'static str> {
     let components: Vec<&str> = version
         .split(['.', '_', '-'])

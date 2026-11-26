@@ -1298,7 +1298,7 @@ mod tests {
         );
     }
 
-    /// B3: the in-place scan must not invent a source at offset 0 for a chunk
+    /// The in-place scan must not invent a source at offset 0 for a chunk
     /// that has none. The same content sits at the head of the file under a
     /// different layout, so a coerced source range would verify there and the
     /// writer would believe it can copy the chunk instead of downloading it.
@@ -1332,7 +1332,7 @@ mod tests {
         );
     }
 
-    /// B3: `--repair-mode discard` replaces a real scan with `Scan::absent`
+    /// `--repair-mode discard` replaces a real scan with `Scan::absent`
     /// over the range lists `scan_ranges` built, so its `source_ok` is per
     /// **range**, not per chunk. The remap has to land each verdict on the
     /// chunk that owns the range, and a source-less chunk stays false.

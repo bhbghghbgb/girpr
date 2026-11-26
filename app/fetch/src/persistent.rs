@@ -1,6 +1,6 @@
 //! Persistent manifests and full-file hotfix downloads.
 //!
-//! Two additions, deliberately without product wiring (docs/03 §7.8, commit 5):
+//! Two additions:
 //!
 //! - the three descriptors from [`girpr_dispatch::DispatchInfo`] are fetched
 //!   through the shared reqwest client and retry policy, verified against their descriptor
@@ -420,7 +420,7 @@ fn verify_path(row: &PersistentRow, path: &Path) -> Result<bool> {
     Ok(verify_observed(row, &observed).is_ok())
 }
 
-/// C17(b): strip the read-only attribute on this one target immediately
+/// Strip the read-only attribute on this one target immediately
 /// before overwriting it. No tree-wide walk, no mutation of unrelated files.
 fn clear_readonly(path: &Path) {
     let Ok(meta) = std::fs::metadata(path) else {
@@ -447,7 +447,7 @@ fn clear_readonly(path: &Path) {
 
 /// Could this target be opened for writing? A directory or a locked file
 /// answers no; that is when the verified temp sibling becomes the deliverable
-/// rather than an error (docs/03 §7.5.2 item 4).
+/// rather than an error.
 fn can_open_for_write(path: &Path) -> bool {
     std::fs::OpenOptions::new().write(true).open(path).is_ok()
 }

@@ -3,7 +3,7 @@
 //! This module owns the product-side wiring around three acyclic leaves:
 //! `girpr-dispatch` (the query), `girpr-fetch::persistent` (the required
 //! manifest fetches and gates) and `girpr-persistent-plan` (the pure plan and
-//! the C7 scope predicates). Nothing here writes a marker or a mirror, spends
+//! the path-scope predicates). Nothing here writes a marker or a mirror, spends
 //! a hotfix byte, or decides a new exit code: every failure is mapped onto the
 //! existing metadata/usage codes at the raise site.
 //!
@@ -169,7 +169,7 @@ pub async fn query(
 ///
 /// A failure here is fatal (`RunFailure::metadata`), never the best-effort
 /// degradation the base manifest fan-out uses. The raw bytes stay in memory:
-/// mirroring them belongs to the execute/post half (commit 8).
+/// mirroring them belongs to the execute/post half.
 pub async fn fetch_manifests(
     http: &Client,
     backoff: &BackoffPolicy,
@@ -197,7 +197,7 @@ pub async fn fetch_manifests(
 // ---------------------------------------------------------------------------
 
 /// The scope outcome the post phase needs: a suppressed run still repairs
-/// in-scope files but publishes no marker block and no mirror (C8).
+/// in-scope files but publishes no marker block and no mirror.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Suppression {
     Proceed,
@@ -205,22 +205,22 @@ pub enum Suppression {
 }
 
 /// Everything the execute and post halves read about the persistent tier.
-/// The dispatcher values and rendered marker bytes are carried here so
-/// commits 7/8 can publish from the same decisions the plan made; the plan
-/// half itself only lists them.
+/// The dispatcher values and rendered marker bytes are carried here so the
+/// later halves publish from the same decisions the plan made; the plan half
+/// itself only lists them.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PersistentState {
     pub dispatch: DispatchInfo,
     pub plan: PersistentPlan,
-    /// The exact marker bytes, rendered once here so the C7(d) guard and the
-    /// later publish cannot disagree about which paths are install-wide.
+    /// The exact marker bytes, rendered once here so the path-scope guard and
+    /// the later publish cannot disagree about which paths are install-wide.
     pub markers: Vec<MarkerSet>,
     pub suppression: Suppression,
     /// The `SUMMARY persistent=` word: read-only modes only list, purge-only
     /// does no work, and a suppressed scope withholds the revision claim.
     pub status: &'static str,
-    /// C16: `true` when `res_versions_streaming` was absent, so no
+    /// `true` when `res_versions_streaming` was absent, so no
     /// `base_res_version_hash` marker was rendered.
     pub base_hash_omitted: bool,
 }
@@ -244,7 +244,7 @@ pub fn base_md5_map(
     map
 }
 
-/// Read the base marker's source, if it exists. Only `NotFound` is the C16
+/// Read the base marker's source, if it exists. Only `NotFound` is an
 /// omission; an unreadable file is a metadata failure rather than a silently
 /// wrong hash.
 pub fn read_base_hash_source(
@@ -274,10 +274,10 @@ pub fn read_base_hash_source(
 /// the exact case where the game wipes its Persistent state. Post and check
 /// both call this one helper, so they cannot disagree about the marker block.
 ///
-/// Returns the marker block to use and whether the source is genuinely absent
-/// (C16). A marker rendered here replaces the stale one at the same, pinned
-/// position; an absent source drops it entirely, and a source first created by
-/// repair adds it back.
+/// Returns the marker block to use and whether the source is genuinely absent.
+/// A marker rendered here replaces the stale one at the same, pinned position;
+/// an absent source drops it entirely, and a source first created by repair adds
+/// it back.
 pub fn refresh_markers_after_repair(
     game_dir: &Path,
     exe_file_name: &str,
@@ -309,7 +309,7 @@ pub fn refresh_markers_after_repair(
     }
 }
 
-/// C14: the audio list the base tier read (`getGameConfigs.audio_pkg_scan_dir`)
+/// The audio list the base tier read (`getGameConfigs.audio_pkg_scan_dir`)
 /// must name the same file the persistent tier would read. An empty config
 /// value has no path to compare and is not a disagreement.
 pub fn audio_scan_is_persistent(exe_file_name: &str, scan_dir: &str) -> bool {
@@ -324,12 +324,12 @@ pub fn audio_scan_is_persistent(exe_file_name: &str, scan_dir: &str) -> bool {
     }
 }
 
-/// Build the plan and apply the two C7 scope guards.
+/// Build the plan and apply the two path-scope guards.
 ///
 /// The byte for `base_res_version_hash` is read once here and reused for the
 /// marker render, so the guard sees exactly the marker the post phase would
 /// publish. `meta.audio` is reused as-is: this tier never writes a second
-/// `audio_lang_14` (C14).
+/// `audio_lang_14`.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     ctx: &RunCtx,
@@ -341,7 +341,7 @@ pub fn build(
     base_md5: &HashMap<String, String>,
     base_hash_source: Option<&[u8]>,
 ) -> std::result::Result<PersistentState, RunFailure> {
-    // C14: verify the two paths name one file before assuming parity. The
+    // Verify the two paths name one file before assuming parity. The
     // selection itself is `meta.audio`, read-only; nothing is written here.
     if !audio_scan_is_persistent(exe_file_name, audio_scan_dir) {
         tracing::warn!(
@@ -362,7 +362,7 @@ pub fn build(
     let markers = render_markers(exe_file_name, dispatch, base_hash_source)
         .map_err(|e| RunFailure::metadata(anyhow!("persistent plan: {e}")))?;
 
-    // The C7 guards inspect the **unfiltered** dispatcher set: a hotfix the
+    // The path-scope guards inspect the **unfiltered** dispatcher set: a hotfix the
     // scope hides still makes a revision claim false even though the work list
     // will not contain it. Only after the verdict do we drop hidden assets
     // from the work list ("filtered-out paths do not exist").
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(body.expect("the GET succeeds"), "99000004 aabbccdd\n");
     }
 
-    /// C14: one source of truth for the audio list. The path comes from the
+    /// One source of truth for the audio list. The path comes from the
     /// game config and is compared with the `<exe>_Data` name derived from the
     /// same config, never hardcoded.
     #[test]
@@ -559,7 +559,7 @@ mod tests {
         );
     }
 
-    /// C16 on a fresh install: the plan omitted the marker because the source
+    /// On a fresh install the plan omits the marker because the source
     /// was absent, but base repair created it, so post adds the marker back.
     #[test]
     fn a_source_created_by_the_repair_adds_the_omitted_marker() {
@@ -581,7 +581,7 @@ mod tests {
         );
     }
 
-    /// A genuinely absent source keeps C16's omission: no marker is published
+    /// A genuinely absent source keeps the omission: no marker is published
     /// or checked, even if the plan had rendered one from stale bytes.
     #[test]
     fn a_genuinely_absent_source_keeps_the_omission() {

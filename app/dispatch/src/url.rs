@@ -1,8 +1,8 @@
 //! Dispatcher URL values: host, region id, channel prefix and query version.
 //!
 //! The template itself comes from the unwrapped metadata; this module holds
-//! only the per-biz constants recorded in `CHANNELS.md` and the tiny rewrite
-//! used to force the selected host into a template that pins a different one.
+//! only the per-biz constants and the tiny rewrite used to force the selected
+//! host into a template that pins a different one.
 //! The query string parameters are checked against those constants after
 //! formatting, so a template change is a loud error rather than a silent
 //! request to the wrong channel.
@@ -10,9 +10,9 @@
 use crate::{DispatchError, Result};
 use girpr_model::Region;
 
-/// The global template from docs/03 §7.11 and `metadata_summary.json`. The CN
-/// and Bilibili templates are recorded in full as well; all three are used by
-/// the offline tests as the fail-closed defaults when a template is missing.
+/// The global template from `metadata_summary.json`. The CN and Bilibili
+/// templates are recorded in full as well; all three are used by the offline
+/// tests as the fail-closed defaults when a template is missing.
 pub const DEFAULT_URL_TEMPLATES: [(Region, &str); 3] = [
     (
         Region::Hk4eGlobal,
@@ -31,9 +31,8 @@ pub const DEFAULT_URL_TEMPLATES: [(Region, &str); 3] = [
     ),
 ];
 
-/// Collapse `PresetConfig.cs:815-823` + `DispatchHelper.cs:173-194` and the
-/// live probe: global's region id is the registry default (USA = 0), CN is 4
-/// and Bilibili is 5.
+/// Collapse `PresetConfig.cs:815-823` + `DispatchHelper.cs:173-194`: global's
+/// region id is the registry default (USA = 0), CN is 4 and Bilibili is 5.
 pub const fn region_id(biz: Region) -> u8 {
     match biz {
         Region::Hk4eGlobal => 0,
@@ -60,7 +59,7 @@ pub const fn dispatch_host(biz: Region) -> &'static str {
 }
 
 /// `(ChannelID, SubChannelID)` from the preset; global has no fixed tuple, so
-/// `(1, 0)` records the live probe's registry-default channel.
+/// `(1, 0)` records its registry-default channel.
 pub const fn preset_channel_tuple(biz: Region) -> (u8, u8) {
     match biz {
         Region::Hk4eGlobal => (1, 0),
@@ -96,15 +95,15 @@ pub const fn query_channel_tuple(biz: Region) -> (u8, u8, u8) {
     }
 }
 
-/// The dispatcher query version is the channel prefix plus `meta.latest`
-/// (B9(a)) — e.g. `OSRELWin7.2.0`, never the pre-repair local version.
+/// The dispatcher query version is the channel prefix plus `meta.latest` —
+/// e.g. `OSRELWin7.2.0`, never the pre-repair local version.
 pub fn query_version(biz: Region, latest: &str) -> String {
     format!("{}{}", channel_prefix(biz), latest)
 }
 
 /// Substitute `{0}` host, `{1}` version and `{2}` seed in the metadata
 /// template. A template that pins a different authority is rewritten to the
-/// selected host, matching the research script's host sweep.
+/// selected host.
 pub fn build_dispatcher_url(
     template: &str,
     host: &str,

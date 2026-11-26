@@ -42,11 +42,11 @@ pub struct Preflight<'a> {
     /// trivially satisfies.
     pub purge: Option<&'a PurgePlan>,
     /// Persistent asset count, after the path scope. Joined to the filtered
-    /// plan's count for `--max-files` (C11/B7). Zero on an unflagged run, which
-    /// is why no existing ceiling verdict changes.
+    /// plan's count for `--max-files`. Zero on an unflagged run, which is why
+    /// no existing ceiling verdict changes.
     pub persistent_files: u64,
     /// Full persistent file sizes, joined to the filtered plan's download
-    /// estimate for `--max-download-bytes` (C11/B7). Zero on an unflagged run.
+    /// estimate for `--max-download-bytes`. Zero on an unflagged run.
     pub persistent_bytes: u64,
 }
 
@@ -549,8 +549,8 @@ mod tests {
         );
     }
 
-    /// C11/B7: neither addend crosses a ceiling on its own — only their sum
-    /// does. These are the two shapes the old independent checks let through.
+    /// Neither addend crosses a ceiling on its own — only their sum does.
+    /// These are the two shapes a joined pre-flight check must catch.
     #[test]
     fn a_ceiling_refuses_when_base_and_persistent_totals_join_past_it() {
         let p = plan(8);

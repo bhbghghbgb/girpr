@@ -13,10 +13,10 @@
 //! - [`placement`] — suffix → folder, force-persistent, cleaned rels and CDN
 //!   URL assembly;
 //! - [`digest`] — which digest a row requires and the size-first gate;
-//! - [`marker`] — the exact marker bytes and the C7 scope predicates;
+//! - [`marker`] — the exact marker bytes and the path-scope predicates;
 //! - [`plan`] — the fold that produces [`PersistentPlan`] from the inputs.
 //!
-//! docs/03 §7.4.1–7.4.3 is the authority for the shapes and the constants.
+//! docs/03 §7 is the authority for the shapes and the constants.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 

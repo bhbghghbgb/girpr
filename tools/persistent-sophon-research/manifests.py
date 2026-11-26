@@ -4,9 +4,8 @@ Reads the per-biz ``dispatch_summary.json`` for the derived URLs, verifies each
 manifest's size + MD5 against the dispatcher's own NDJSON descriptor, and saves
 only small samples (never the full blob) to ``samples/``.
 
-All three manifests are fetched: res, data and silence. The live 2026-11-23
-probe fetched only res+data; the silence descriptor (proto root 3 -> 20) is
-captured here as required by docs/03 §7.2 step 3.
+All three manifests are fetched: res, data and silence. The silence descriptor
+(proto root 3 -> 20) is captured here as the tier requires.
 """
 from __future__ import annotations
 

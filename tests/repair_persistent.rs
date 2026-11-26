@@ -1,4 +1,4 @@
-//! Offline contract cases for the plan half of `--with-persistent` (commit 6).
+//! Offline contract cases for the plan half of `--with-persistent`.
 //!
 //! The dispatcher is replaced by the `DispatchOverride` seam; the three
 //! manifests come from the committed synthetic fixtures served on a loopback
@@ -109,7 +109,7 @@ async fn a_dispatcher_failure_exits_two_without_fetching_manifests() {
     mock.stop();
 }
 
-/// B9: a version disagreement is the same exit-2 class, not a degraded run.
+/// A version disagreement is the same exit-2 class, not a degraded run.
 #[tokio::test]
 async fn a_version_disagreement_exits_two() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
@@ -300,7 +300,7 @@ async fn an_unflagged_run_never_calls_the_provider_and_adds_no_keys() {
 // scope guards and ceilings
 // ---------------------------------------------------------------------------
 
-/// C7(d): a marker file outside an active scope is a usage error, in the
+/// A marker file outside an active scope is a usage error, in the
 /// wording style of the existing `--audio` scan-file guard.
 #[tokio::test]
 async fn a_marker_file_out_of_scope_exits_one() {
@@ -319,7 +319,7 @@ async fn a_marker_file_out_of_scope_exits_one() {
     mock.stop();
 }
 
-/// C7(f): a base collision forces a dispatcher row into `Persistent/`. Hiding
+/// A base collision forces a dispatcher row into `Persistent/`. Hiding
 /// that hotfix path while admitting every marker still repairs the in-scope
 /// work, but suppresses the marker block and reports it.
 #[tokio::test]
@@ -353,7 +353,7 @@ async fn a_hotfix_path_out_of_scope_suppresses_markers() {
     mock.stop();
 }
 
-/// C11/B7: persistent full sizes are part of the pre-flight byte ceiling, so
+/// Persistent full sizes are part of the pre-flight byte ceiling, so
 /// a zero download budget refuses before any write.
 #[tokio::test]
 async fn persistent_bytes_are_counted_by_the_download_ceiling() {
@@ -375,7 +375,7 @@ async fn persistent_bytes_are_counted_by_the_download_ceiling() {
     mock.stop();
 }
 
-/// C11/B7: `--max-files` joins the filtered base plan and the persistent plan.
+/// `--max-files` joins the filtered base plan and the persistent plan.
 /// Both halves fit under 5 on their own (2 base, 5 persistent is equal, not
 /// over); the joined 7 does not. The separate checks let this run through.
 #[tokio::test]
@@ -412,7 +412,7 @@ async fn max_files_joins_base_and_persistent_files() {
     mock.stop();
 }
 
-/// C13: `--scan` reads only base files. The plan-out section says so instead
+/// `--scan` reads only base files. The plan-out section says so instead
 /// of leaving the exclusion implicit.
 #[tokio::test]
 async fn scan_exclusion_is_visible_in_plan_out() {
@@ -539,7 +539,7 @@ async fn a_hotfix_download_falls_back_to_the_alternate_on_404() {
     assert!(summary.download.settled() >= 64, "the hotfix bytes settled");
     assert!(summary.write.settled() >= 64, "the hotfix bytes landed");
     assert!(line(&summary).contains("persistent=published"));
-    // C19: a clean run publishes the whole block and all three mirrors, even
+    // A clean run publishes the whole block and all three mirrors, even
     // though the hotfix needed a download (the alternate delivered it here).
     let persistent = dir.join("GenshinImpact_Data/Persistent");
     assert!(persistent.join("PatchDone").is_file());
@@ -557,7 +557,7 @@ async fn a_hotfix_download_falls_back_to_the_alternate_on_404() {
     mock.stop();
 }
 
-/// B3: the write ceiling is charged before the downloader publishes, so a zero
+/// The write ceiling is charged before the downloader publishes, so a zero
 /// budget leaves no hotfix behind and the run stops with exit 5 rather than
 /// counting a failed file (which would exit 3).
 #[tokio::test]
@@ -687,9 +687,9 @@ async fn a_corrupt_hotfix_fails_the_gate_and_publishes_nothing() {
     mock.stop();
 }
 
-/// Gap rows 9-11: both trees, stale `ctable.dat`, `DXSETUP/` and the copy-back
-/// of `ctable.dat` → `ctable_streaming.dat`; plus the Collapse move of a
-/// stranded non-patch `.pck` out of `Persistent/`.
+/// Both trees, stale `ctable.dat`, `DXSETUP/` and the copy-back of
+/// `ctable.dat` → `ctable_streaming.dat`; plus the Collapse move of a stranded
+/// non-patch `.pck` out of `Persistent/`.
 #[tokio::test]
 async fn prerequisites_clean_stale_state_and_restore_ctable_streaming() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
@@ -823,7 +823,7 @@ async fn a_missing_ctable_source_leaves_the_verified_target_alone() {
     mock.stop();
 }
 
-/// C17(b): a read-only hotfix target is cleared on that one path immediately
+/// A read-only hotfix target is cleared on that one path immediately
 /// before publish, not stripped tree-wide. The verified bytes land at the
 /// target itself, with write permission restored.
 #[tokio::test]
@@ -852,7 +852,7 @@ async fn a_read_only_hotfix_target_is_overwritten() {
     mock.stop();
 }
 
-/// C4: `--dry-run` and `--check-only` list the persistent work but open no
+/// `--dry-run` and `--check-only` list the persistent work but open no
 /// hotfix request and create no tree.
 #[tokio::test]
 async fn read_only_modes_list_without_a_single_hotfix_request() {
@@ -876,7 +876,7 @@ async fn read_only_modes_list_without_a_single_hotfix_request() {
 }
 
 // ---------------------------------------------------------------------------
-// post phase: publish the full state last, then bump the version (C9)
+// post phase: publish the full state last, then bump the version
 // ---------------------------------------------------------------------------
 
 fn persistent_file(dir: &Path, name: &str) -> PathBuf {
@@ -884,7 +884,7 @@ fn persistent_file(dir: &Path, name: &str) -> PathBuf {
 }
 
 /// A flagged run whose single hotfix is already intact: the post phase must
-/// publish the whole block (C19) without spending a download byte.
+/// publish the whole block without spending a download byte.
 async fn publish_clean(
     dir: &Path,
     mock: &MockServer,
@@ -981,7 +981,7 @@ async fn markers_and_all_three_mirrors_are_published_byte_exact() {
     mock.stop();
 }
 
-/// C16: the absent streaming source leaves exactly one marker out, and the
+/// An absent streaming source leaves exactly one marker out, and the
 /// omission is visible in `SUMMARY` rather than failing the run.
 #[tokio::test]
 async fn a_missing_base_hash_source_omits_only_that_marker() {
@@ -1002,7 +1002,7 @@ async fn a_missing_base_hash_source_omits_only_that_marker() {
     );
     assert!(
         !persistent_file(&dir, "base_res_version_hash").exists(),
-        "C16 omits the marker entirely"
+        "an absent source omits the marker entirely"
     );
     for name in [
         "res_revision",
@@ -1022,7 +1022,7 @@ async fn a_missing_base_hash_source_omits_only_that_marker() {
     mock.stop();
 }
 
-/// C4: a dry run logs one listing line per marker, writes no marker or mirror,
+/// A dry run logs one listing line per marker, writes no marker or mirror,
 /// and leaves the launcher version untouched.
 #[tokio::test]
 async fn a_dry_run_lists_every_marker_and_writes_nothing() {
@@ -1129,7 +1129,7 @@ async fn a_failed_marker_publish_exits_three_without_bumping_the_version() {
     mock.stop();
 }
 
-/// C5: with the flag, a clean check of a published install exits 0 and still
+/// With the flag, a clean check of a published install exits 0 and still
 /// reports `persistent=listed`.
 #[tokio::test]
 async fn a_persistent_check_of_an_intact_install_succeeds() {
@@ -1150,7 +1150,7 @@ async fn a_persistent_check_of_an_intact_install_succeeds() {
     mock.stop();
 }
 
-/// C5(a): a damaged persistent file is damage, even though it is not part of
+/// A damaged persistent file is damage, even though it is not part of
 /// the Sophon plan.
 #[tokio::test]
 async fn a_damaged_persistent_file_makes_check_only_exit_four() {
@@ -1171,7 +1171,7 @@ async fn a_damaged_persistent_file_makes_check_only_exit_four() {
     mock.stop();
 }
 
-/// C5(b): a replaced mirror is damage, even with every hotfix byte intact.
+/// A replaced mirror is damage, even with every hotfix byte intact.
 #[tokio::test]
 async fn a_damaged_mirror_makes_check_only_exit_four() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
@@ -1195,7 +1195,7 @@ async fn a_damaged_mirror_makes_check_only_exit_four() {
     mock.stop();
 }
 
-/// C5(c): a wrong marker value is damage, including a missing newline or an
+/// A wrong marker value is damage, including a missing newline or an
 /// old revision left behind by a previous run.
 #[tokio::test]
 async fn a_damaged_marker_makes_check_only_exit_four() {
@@ -1217,11 +1217,12 @@ async fn a_damaged_marker_makes_check_only_exit_four() {
 }
 
 // ---------------------------------------------------------------------------
-// review fixes: post-repair base hash, mirror scope, exit precedence
+// post-repair base hash, mirror scope, exit precedence
 // ---------------------------------------------------------------------------
 
-/// C7(d) also covers the mirrors post writes: excluding a mirror while all
-/// markers remain in scope is a usage error (exit 1), not an out-of-scope write.
+/// The path-scope guard also covers the mirrors post writes: excluding a
+/// mirror while all markers remain in scope is a usage error (exit 1), not an
+/// out-of-scope write.
 #[tokio::test]
 async fn a_mirror_file_out_of_scope_exits_one() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
@@ -1310,7 +1311,7 @@ async fn a_repaired_streaming_source_publishes_the_fresh_base_hash() {
     mock.stop();
 }
 
-/// On a fresh install the plan omits the base hash marker (C16), but the base
+/// On a fresh install the plan omits the base hash marker, but the base
 /// repair creates the source. Post adds the marker and clears the omit flag.
 #[tokio::test]
 async fn a_streaming_source_created_by_repair_adds_the_base_hash_marker() {
@@ -1321,7 +1322,7 @@ async fn a_streaming_source_created_by_repair_adds_the_base_hash_marker() {
     let hotfix = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
     let dir = temp_dir("persistent_fresh_hash_created_source");
     write_game_file(&dir, &hotfix_rel(), HOTFIX_A);
-    // No streaming source on disk: the plan renders only the eight C16 markers.
+    // No streaming source on disk: the plan renders only the eight markers.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     flagged(&mut ctx, single_asset_dispatch(&manifests, hotfix.base()));
 
@@ -1335,7 +1336,7 @@ async fn a_streaming_source_created_by_repair_adds_the_base_hash_marker() {
     assert_eq!(
         std::fs::read(persistent_file(&dir, "base_res_version_hash")).unwrap(),
         md5hex(source).as_bytes(),
-        "the marker that C16 omitted at plan time is published"
+        "the marker omitted at plan time is published"
     );
     assert_eq!(
         summary.flags.persistent_base_hash, None,

@@ -259,7 +259,7 @@ fn record_check(summary: &Summary, outcome: &CheckOutcome) {
     }
 }
 
-/// C5: with `--with-persistent`, "intact" also covers the persistent tier.
+/// With `--with-persistent`, "intact" also covers the persistent tier.
 ///
 /// Three independent checks, all read-only and all against the decisions the
 /// plan half already made:
@@ -269,7 +269,7 @@ fn record_check(summary: &Summary, outcome: &CheckOutcome) {
 ///    a truncated or replaced `*_versions_persist` is damage even when the
 ///    hotfix files themselves are intact;
 /// 3. every marker's presence and exact bytes, with the base hash source
-///    re-read here so the block is the one publish would write — a C16 omission
+///    re-read here so the block is the one publish would write — an omission
 ///    is expected, not damage.
 ///
 /// Each bad item increments `files_failed` and the returned count, so the
@@ -282,7 +282,7 @@ pub fn verify_persistent(
     summary: &Summary,
 ) -> u64 {
     let mut bad = 0u64;
-    // C5 must answer about the marker block publish would write, not the one
+    // The check must answer about the marker block publish would write, not the one
     // the plan rendered from pre-repair bytes. The same helper post uses
     // re-reads the base hash source here, so check and publish cannot disagree.
     let markers = match persistent::refresh_markers_after_repair(game_dir, exe_file_name, state) {
