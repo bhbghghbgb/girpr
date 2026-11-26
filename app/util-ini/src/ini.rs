@@ -3,6 +3,7 @@ use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use ini::Ini;
 
 use girpr_util_path::atomic::write_atomic;
 use girpr_util_path::clean_rel;
@@ -381,56 +382,54 @@ pub fn write_config_ini(
             return Err(e.into());
         }
     };
-    let mut sections = parse_ini(&text);
+    let mut sections = collect_sections(&parse_ini(&text)?);
     merge_ini(&mut sections, latest, biz, channel);
     let out = render_ini(&mut sections);
     publish_ini(&path, out.as_bytes())
 }
 
-/// One `[section]` of a `config.ini`, in first-seen order.
-struct Section {
-    /// First-seen spelling (e.g. `General`); `General` when created.
+/// One `[section]` in the launcher's save shape, in first-seen order.
+struct SectionOut {
+    /// First-seen spelling (`General` for headerless keys and `[General]`).
     name: String,
-    lower: String,
-    /// (first-seen spelling, lowercase key, value).
-    keys: Vec<(String, String, String)>,
+    /// (first-seen key spelling, value). Duplicate keys are collapsed
+    /// last-wins when the library's storage is folded into this shape.
+    keys: Vec<(String, String)>,
 }
 
-impl Section {
-    fn find_key(&self, lower: &str) -> Option<usize> {
-        self.keys.iter().position(|(_, l, _)| l == lower)
-    }
-    /// Last-wins insert: update value, keep first-seen spelling.
+impl SectionOut {
+    /// Last-wins upsert that keeps the first-seen key spelling.
     fn insert(&mut self, key: &str, value: &str) {
-        let lower = key.to_ascii_lowercase();
-        match self.find_key(&lower) {
-            Some(i) => self.keys[i].2 = value.to_string(),
-            None => self.keys.push((key.to_string(), lower, value.to_string())),
+        if let Some(slot) = self
+            .keys
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        {
+            slot.1 = value.to_string();
+        } else {
+            self.keys.push((key.to_string(), value.to_string()));
         }
     }
-    /// Forced-key upsert in `[General]`: overwrite value, keep first-seen
-    /// spelling when the key already exists (matches Collapse's
-    /// case-insensitive indexer); create with canonical spelling otherwise.
-    fn force(&mut self, key: &str, value: &str) {
-        self.insert(key, value);
-        // `insert` keeps the existing spelling on overwrite and uses the
-        // canonical spelling on create — exactly the two cases needed.
+
+    fn has_key(&self, key: &str) -> bool {
+        self.keys.iter().any(|(k, _)| k.eq_ignore_ascii_case(key))
     }
 }
 
-/// The index of the first section with this lowercase name.
-fn find_section(sections: &[Section], lower: &str) -> Option<usize> {
-    sections.iter().position(|s| s.lower == lower)
+/// The index of the first section with this name, case-insensitively.
+fn find_section(sections: &[SectionOut], name: &str) -> Option<usize> {
+    sections
+        .iter()
+        .position(|s| s.name.eq_ignore_ascii_case(name))
 }
 
 /// The `[General]` index, created when it is not there yet.
-fn ensure_general(sections: &mut Vec<Section>) -> usize {
-    match find_section(sections, "general") {
+fn ensure_general(sections: &mut Vec<SectionOut>) -> usize {
+    match find_section(sections, "General") {
         Some(i) => i,
         None => {
-            sections.push(Section {
+            sections.push(SectionOut {
                 name: "General".to_string(),
-                lower: "general".to_string(),
                 keys: Vec::new(),
             });
             sections.len() - 1
@@ -438,58 +437,81 @@ fn ensure_general(sections: &mut Vec<Section>) -> usize {
     }
 }
 
-/// Load the existing text into sections, preserving every `[section]` and
-/// merging duplicates by their case-insensitive name.
-///
-/// Comment (`;` / `#`, no-`=` lines) and blank lines are dropped on load;
-/// header-less keys land in `[General]` (a deliberate deviation from
-/// Collapse's generic `[default]` bucket, since game-dir files are
-/// `[General]`-scoped).
-fn parse_ini(text: &str) -> Vec<Section> {
-    let mut sections: Vec<Section> = Vec::new();
-    let mut current: Option<usize> = None;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+/// Drop the lines the launcher's INI layer ignores but that `rust-ini` would
+/// otherwise fold into the following key: blank lines, `;`/`#` comments at
+/// any indentation, and lines with no usable `key=` boundary. The library
+/// only recognises column-zero comments and treats a keyless line as the
+/// start of a multi-line key, so this keeps the old fail-closed shape while
+/// leaving section/key/value tokenisation to the library.
+fn strip_ignored_lines(text: &str) -> String {
+    let mut kept = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
             continue;
         }
-        if line.starts_with('[') && line.ends_with(']') && line.len() >= 2 {
-            let inner = line[1..line.len() - 1].trim();
-            if inner.is_empty() {
-                continue;
-            }
-            let lower = inner.to_ascii_lowercase();
-            match find_section(&sections, &lower) {
-                Some(i) => current = Some(i),
-                None => {
-                    sections.push(Section {
-                        name: inner.to_string(),
-                        lower,
-                        keys: Vec::new(),
-                    });
-                    current = Some(sections.len() - 1);
-                }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // An empty `[]` header is ignored by the launcher's loader too.
+            if trimmed.len() > 2 {
+                kept.push_str(line);
+                kept.push('\n');
             }
             continue;
         }
-        let Some((key, rest)) = split_first_eq(line) else {
+        let Some((key, _)) = trimmed.split_once('=') else {
             continue;
         };
-        let key = key.trim_end();
-        if key.is_empty() {
+        if key.trim_end().is_empty() {
             continue;
         }
-        // Collapse: value is trimmed, surrounding `"` stripped.
-        let value = rest.trim().trim_matches('"');
-        let target = match current {
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    kept
+}
+
+/// Load the existing text with `rust-ini` owning tokenisation and duplicate
+/// folding. The no-escape loader is deliberate: `rust-ini`'s default escape
+/// mode would turn a Windows path such as `C:\games` into `C:games`.
+///
+/// With the `case-insensitive` feature, section names and keys keep their
+/// first-seen spelling while matching case-insensitively. Headerless keys
+/// land in `[General]` (a deliberate deviation from Collapse's generic
+/// `[default]` bucket, since game-dir files are `[General]`-scoped).
+fn parse_ini(text: &str) -> Result<Ini> {
+    let kept = strip_ignored_lines(text);
+    Ini::load_from_str_noescape(&kept).context("parse config.ini")
+}
+
+/// Fold the library's storage into the launcher's save shape: one entry per
+/// section in first-seen order, headerless keys merged into `[General]`,
+/// duplicate sections merged into the first-seen spelling and duplicate keys
+/// collapsed last-wins. `rust-ini` stores every parsed occurrence and `get`
+/// returns the *first*, which would otherwise keep a stale channel/version.
+fn collect_sections(ini: &Ini) -> Vec<SectionOut> {
+    let names: Vec<Option<String>> = ini.sections().map(|s| s.map(str::to_string)).collect();
+    let mut sections: Vec<SectionOut> = Vec::new();
+    for name in names {
+        // Headerless keys are the `General` created by `ensure_general`; a
+        // spelled `[General]` (in any case) keeps its first-seen spelling.
+        let spelling = name.as_deref().unwrap_or("General");
+        let idx = match find_section(&sections, spelling) {
             Some(i) => i,
             None => {
-                let g = ensure_general(&mut sections);
-                current = Some(g);
-                g
+                sections.push(SectionOut {
+                    name: spelling.to_string(),
+                    keys: Vec::new(),
+                });
+                sections.len() - 1
             }
         };
-        sections[target].insert(key, value);
+        // Duplicate `[section]` headers are separate `Properties` in the
+        // library; fold them in file order so a later key wins.
+        for props in ini.section_all(name.as_deref()) {
+            for (key, value) in props.iter() {
+                sections[idx].insert(key, value);
+            }
+        }
     }
     sections
 }
@@ -503,36 +525,36 @@ fn parse_ini(text: &str) -> Vec<Section> {
 /// created empty when missing (Collapse only ever holds the empty
 /// `DefaultIniVersion` default; the real SDK version lives in
 /// `plugin_sdk_version`, which girpr never touches).
-fn merge_ini(sections: &mut Vec<Section>, latest: &str, biz: &str, channel: (&str, &str, &str)) {
+fn merge_ini(sections: &mut Vec<SectionOut>, latest: &str, biz: &str, channel: (&str, &str, &str)) {
     let g = ensure_general(sections);
-    sections[g].force("game_version", latest);
-    sections[g].force("channel", channel.0);
-    sections[g].force("sub_channel", channel.1);
-    sections[g].force("cps", channel.2);
-    sections[g].force("game_biz", biz);
-    if sections[g].find_key("sdk_version").is_none() {
-        sections[g].keys.push((
-            "sdk_version".to_string(),
-            "sdk_version".to_string(),
-            String::new(),
-        ));
+    sections[g].insert("game_version", latest);
+    sections[g].insert("channel", channel.0);
+    sections[g].insert("sub_channel", channel.1);
+    sections[g].insert("cps", channel.2);
+    sections[g].insert("game_biz", biz);
+    if !sections[g].has_key("sdk_version") {
+        sections[g]
+            .keys
+            .push(("sdk_version".to_string(), String::new()));
     }
 }
 
 /// Render the loaded and merged sections in Collapse `SaveInner`'s save shape:
 /// sections in first-seen order, keys sorted alphabetically
-/// (case-insensitive), and a blank line after each section.
-fn render_ini(sections: &mut [Section]) -> String {
+/// (case-insensitive), and a blank line after each section. Values are
+/// written verbatim rather than through the library's writer so the launcher
+/// sees the same spelling it wrote (and so non-ASCII stays unescaped).
+fn render_ini(sections: &mut [SectionOut]) -> String {
     let mut out = String::new();
     for s in sections.iter_mut() {
-        s.keys.sort_by(|a, b| a.1.cmp(&b.1));
+        s.keys.sort_by_key(|a| a.0.to_ascii_lowercase());
     }
     // Writing to a `String` is infallible, so the `fmt::Result` is ignored;
     // the blank line after each section is still pushed by hand.
     for s in sections.iter() {
         let _ = writeln!(out, "[{}]", s.name);
-        for (k, _, v) in &s.keys {
-            let _ = writeln!(out, "{k}={v}");
+        for (key, value) in &s.keys {
+            let _ = writeln!(out, "{key}={value}");
         }
         out.push('\n');
     }
@@ -1059,6 +1081,31 @@ mod tests {
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
     }
 
+    /// `rust-ini`'s default escape mode would eat backslashes in a Windows
+    /// path (`C:\games` becomes `C:games`), and its writer would render
+    /// non-ASCII as `\x…`. The loader must keep values verbatim so a bump
+    /// leaves a launcher-written path and a non-ASCII value untouched.
+    #[test]
+    fn config_bump_keeps_backslashes_and_non_ascii_verbatim() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "verbatim_values");
+        std::fs::write(
+            dir.join("config.ini"),
+            "[General]\n\
+             game_install_path=C:\\games\\Genshin\n\
+             game_version=1.0.0\n\
+             remark=café\n",
+        )
+        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
+        let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
+        assert!(
+            text.contains("game_install_path=C:\\games\\Genshin"),
+            "{text}"
+        );
+        assert!(text.contains("remark=café"), "{text}");
+        assert!(text.contains("game_version=5.1.0"), "{text}");
+    }
+
     /// The writer updates an existing install: an absent `config.ini` inside an
     /// existing game dir is the fresh-install input and is created, but an
     /// absent game dir is an error and must not be created by the shared atomic
@@ -1350,13 +1397,16 @@ mod tests {
     /// empty value allowed), while the version scan stays anchored.
     #[test]
     fn readers_split_on_the_first_equals() {
-        let sections = parse_ini(
-            "k e y= raw = value \n\
-             empty=\n\
-             quoted=  \"a=b\"  \n\
-             =value\n\
-                =value\n\
-             spaced   =1\n",
+        let sections = collect_sections(
+            &parse_ini(
+                "k e y= raw = value \n\
+                 empty=\n\
+                 quoted=  \"a=b\"  \n\
+                 =value\n\
+                    =value\n\
+                 spaced   =1\n",
+            )
+            .unwrap(),
         );
         assert_eq!(sections.len(), 1, "header-less keys land in [General]");
         let general = &sections[0];
@@ -1364,7 +1414,7 @@ mod tests {
         let keys: Vec<(&str, &str)> = general
             .keys
             .iter()
-            .map(|(k, _, v)| (k.as_str(), v.as_str()))
+            .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         assert_eq!(
             keys,
@@ -1399,16 +1449,19 @@ mod tests {
     /// `sdk_version` is created empty, and keys sort per section.
     #[test]
     fn parse_merge_and_render_pin_the_section_rules() {
-        let mut sections = parse_ini(
-            "; leading comment\n\
-             fps=60\n\
-             [Launcher]\n\
-             log_level=3\n\
-             [launcher]\n\
-             game_install_path=C:/g\n\
-             [General]\n\
-             FPS=120\n\
-             channel=5\n",
+        let mut sections = collect_sections(
+            &parse_ini(
+                "; leading comment\n\
+                 fps=60\n\
+                 [Launcher]\n\
+                 log_level=3\n\
+                 [launcher]\n\
+                 game_install_path=C:/g\n\
+                 [General]\n\
+                 FPS=120\n\
+                 channel=5\n",
+            )
+            .unwrap(),
         );
         merge_ini(
             &mut sections,
@@ -1436,6 +1489,31 @@ mod tests {
         assert!(
             !text.contains("[launcher]"),
             "the duplicate section merges into the first-seen spelling: {text}"
+        );
+    }
+
+    /// `rust-ini` keeps every parsed occurrence of a key (its `get` returns
+    /// the *first*), so the policy layer must collapse duplicates last-wins
+    /// like the launcher's case-insensitive indexer — including across
+    /// duplicate sections and differing key case.
+    #[test]
+    fn duplicate_keys_collapse_last_wins_across_sections() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "duplicate_keys");
+        std::fs::write(
+            dir.join("config.ini"),
+            "[Launcher]\nFps=100\n[launcher]\nfps=130\n",
+        )
+        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
+        let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
+        assert_eq!(
+            text.to_ascii_lowercase().matches("fps=").count(),
+            1,
+            "{text}"
+        );
+        assert!(
+            text.contains("Fps=130"),
+            "the last value wins and the first-seen key spelling is kept: {text}"
         );
     }
 }

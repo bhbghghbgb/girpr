@@ -17,6 +17,10 @@ workspace = true
 # wrappers every I/O error carries.
 anyhow = "1.0.105"
 serde_json = "1.0.154"
+# Section/key tokenisation and duplicate folding for config.ini. The loader
+# runs in no-escape mode via the crate's own API so Windows paths keep their
+# backslashes; the launcher-specific policy stays in `ini.rs`.
+rust-ini = { version = "0.21.3", features = ["case-insensitive"] }
 # The malformed-entry warning the config-list readers emit.
 tracing = "0.1.44"
 # The containment check and the atomic publish the config writer bumps through.
