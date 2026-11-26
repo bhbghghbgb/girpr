@@ -71,28 +71,34 @@ Follow-ups are non-blocking suggestions from review sessions; the orchestrator r
 them here. Reviewers decide which are worth doing and may prune them to avoid run-away.
 A follow-up planning review batches the survivors only after every task is settled.
 
+Planning review outcome: approved batch [A] doc/comment wording (F01, F09, F10, F17),
+batch [B] additive contract pins (F07, F08, F12, F20) and batch [C] cross-product URL
+invariant (F06); dropped F02, F03, F04, F05, F11, F13, F14, F15, F16, F18 and F19.
+Batches run one at a time: one implementation session for the whole batch, then one
+review session. No new follow-ups proposed.
+
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| F01 | Update docs/04-scope-limitation-spec.md:727 wording from "scoped worker" to "rayon worker" after purge delegate | open | Docs-only; endorsed by review A. |
-| F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing, reproduced on pre-T04 parent and single-thread-clean; T04's extra tasks raise its frequency. Endorsed by reviews A and C. |
-| F03 | Type scripted statuses as axum::http::StatusCode instead of Reply::Status(&'static str) + local string-to-code conversion | open | Purely type-safety cleanup; behavior correct. Endorsed by review C. |
-| F04 | Add a trycmd case for short -h output (distinct clap rendering path from --help) | open | Low priority, non-blocking. Endorsed by review D. |
-| F05 | Add a typed CapturedLogRecord wrapper over the JSON capture Value surface | open | Low priority, non-blocking; removes stringly-typed field assertions. Endorsed by review E1. |
-| F06 | Consolidate duplicated QUERY_VALUE_SET (fetch/hyp.rs, capture/biz/mod.rs) into a shared leaf | open | Non-blocking; prevents fetch/capture drift against the standing game_ids[]/%20 decision. Endorsed by review G. |
-| F07 | Add a focused crypto.rs unit test for decode_base64 covering padded, unpadded and whitespace-containing inputs | open | Non-blocking; directly pins the CRITICAL STANDARD fallback and whitespace filter. Endorsed by review H1. |
-| F08 | Add a serde JSON key-set golden for every generated girpr-proto message, not only chuncks/unknown_field6 | open | Low priority, non-blocking; key-name-only golden closes frozen-dump key drift without pinning formatting (§A12). Endorsed by review H2. |
-| F09 | Update tools/sync/tests/symlink.rs:12-16 doc wording from `mklink /J` to the junction::create mechanism | open | Doc-only; the common::dir_link re-export is now junction::create-driven. Other tools/sync mklink /J helpers are accurate and out of scope. Endorsed by review H2. |
-| F10 | Update stale "dependency-free loopback server" wording after T15 | open | Doc-only, zero-risk; sites: docs/06-artifact-bridge-spec.md:767, tools/capture/docs/00-spec.md:42, app/fetch/Cargo.toml:71, tools/capture/Cargo.toml:286, plus root Cargo.toml:265, tools/capture/Cargo.toml:52, tools/capture/src/http/tests.rs:41,47. Endorsed by review I (widened site list). |
-| F11 | Add a focused filter-crate test pinning that case-insensitive matching still folds ASCII only (e.g. Ä* does not match ärger) | open | Non-blocking, additive, zero behavior change; guards the documented (?-u)(?i) globset guarantee used by the cross-product policy in path_scope.rs. Endorsed by review J. |
-| F12 | Add a compile-time (const) assertion or doc note tying each private AlgoBits constant to HashAlg::bit() | open | Non-blocking; from_bits_truncate would silently drop a future algorithm's bit (contains(empty) is true), so a const pin is cheap insurance beyond the HashAlg::ALL runtime tests. Endorsed by review K. |
-| F13 | Replace the deprecated filetime setters with std File::set_times / std::fs::FileTimes, keeping filetime for the nanosecond representation | open | Low priority, non-blocking; rustc 1.100 cfg(rust_199) deprecates filetime's setters in favour of std (which filetime forwards to), so this removes four #[allow(deprecated)] attributes with no behavior change. Endorsed by review K. |
-| F14 | Add one focused, platform-gated integration case for a real junction/symlink target containing `..` through read_link -> absolute_alias in the full plan | open | Low priority, non-blocking; complements the direct unit-level escape tests that the implementer deliberately kept out of the whole-run tables. Proposed by review K. |
-| F15 | Relax import_cache from R: BufRead to R: Read | open | Low priority, non-blocking; the BufRead bound is no longer needed (LineReader needs only Read; serde_json::from_reader takes any Read) and broadening it is source-compatible. Endorsed by review L. |
-| F16 | Add a comment or small guard pinning the analytically derived benchmark throughput counts against builder shape changes | open | Non-blocking, cheap insurance; the many-tiny/few-large/deep counts are duplicated from builder constants and could silently drift, though all three were verified correct at review. Endorsed by review L. |
-| F17 | Fix stale production doc comment at tools/capture/http/src/transport.rs:157-158,199-204 claiming byte-identical resp_headers on both paths | open | Doc-only, non-blocking; hyper adds a date header on the TCP path and yields connection: keep-alive, close when the client asks to close, and line 202 still names the deleted write_response. Widen to both stale statements. Endorsed by review N. |
-| F18 | Drop the redundant manual Connection: keep-alive header from the axum answer handler and let hyper own it | open | Low priority, non-blocking; avoids the keep-alive, close concatenation on client-close. In-memory golden unaffected. Proposed by review N. |
-| F19 | Simplify JoinOutcome::Lost.why from Option<String> to String and drop the unreachable None arms in fetcher.rs, blobs/mod.rs and tasks.rs | open | Non-blocking cleanup; join_ordered now always recovers a per-slot payload, so the Option vocabulary is obsolete. Endorsed by review O. |
-| F20 | Add a focused test that GamePackages::staleness returns None for non-strict tags (bare 7, 7.2_live) | open | Low priority, non-blocking; pins gircap's own strict-tag policy and documents the silent legacy_behind = 0 fallback. Proposed by review P. |
+| F01 | Update docs/04-scope-limitation-spec.md:727 wording from "scoped worker" to "rayon worker" after purge delegate | batched | [A] Docs-only wording fix; endorsed by review A. |
+| F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | dropped | Pre-existing flake reproduced on pre-T04 parent; outside the refactor's scope. |
+| F03 | Type scripted statuses as axum::http::StatusCode instead of Reply::Status(&'static str) + local string-to-code conversion | dropped | Purely cosmetic type-safety cleanup; behavior already correct. |
+| F04 | Add a trycmd case for short -h output (distinct clap rendering path from --help) | dropped | Re-tests clap's documented rendering (§A12); --help trycmd case already covers CLI help. |
+| F05 | Add a typed CapturedLogRecord wrapper over the JSON capture Value surface | dropped | Cosmetic test-readability refactor; no coverage or behavior change. |
+| F06 | Consolidate duplicated QUERY_VALUE_SET (fetch/hyp.rs, capture/biz/mod.rs) into a shared leaf | batched | [C] Highest priority; only follow-up guarding the standing game_ids[]/%20 decision against fetch/capture drift. Endorsed by review G. |
+| F07 | Add a focused crypto.rs unit test for decode_base64 covering padded, unpadded and whitespace-containing inputs | batched | [B] Pins the CRITICAL STANDARD base64 fallback recorded in T10. Endorsed by review H1. |
+| F08 | Add a serde JSON key-set golden for every generated girpr-proto message, not only chuncks/unknown_field6 | batched | [B] Key-name-only golden closes frozen-dump key drift without pinning formatting (§A12). Endorsed by review H2. |
+| F09 | Update tools/sync/tests/symlink.rs:12-16 doc wording from `mklink /J` to the junction::create mechanism | batched | [A] Doc-only; common::dir_link is now junction::create-driven, other mklink /J helpers accurate. Endorsed by review H2. |
+| F10 | Update stale "dependency-free loopback server" wording after T15 | batched | [A] Doc-only zero-risk sweep of seven named sites. Endorsed by review I. |
+| F11 | Add a focused filter-crate test pinning that case-insensitive matching still folds ASCII only (e.g. Ä* does not match ärger) | dropped | Re-tests a documented globset guarantee (§A12). |
+| F12 | Add a compile-time (const) assertion or doc note tying each private AlgoBits constant to HashAlg::bit() | batched | [B] Cheap additive insurance for the pinned two-byte AlgoSet bit contract. Endorsed by review K. |
+| F13 | Replace the deprecated filetime setters with std File::set_times / std::fs::FileTimes, keeping filetime for the nanosecond representation | dropped | Low-value behavior-preserving churn removing four #[allow(deprecated)] attributes. |
+| F14 | Add one focused, platform-gated integration case for a real junction/symlink target containing `..` through read_link -> absolute_alias in the full plan | dropped | Low value; direct unit-level escape tests already pin the local refusal policy. |
+| F15 | Relax import_cache from R: BufRead to R: Read | dropped | Low-value bound widening; no caller needs R: Read. |
+| F16 | Add a comment or small guard pinning the analytically derived benchmark throughput counts against builder shape changes | dropped | Counts verified correct at review; a comment enforces nothing. |
+| F17 | Fix stale production doc comment at tools/capture/http/src/transport.rs:157-158,199-204 claiming byte-identical resp_headers on both paths | batched | [A] Doc-only fix of two stale statements naming a deleted function. Endorsed by review N. |
+| F18 | Drop the redundant manual Connection: keep-alive header from the axum answer handler and let hyper own it | dropped | Low-priority change in a test-only mock server; harmless as-is. |
+| F19 | Simplify JoinOutcome::Lost.why from Option<String> to String and drop the unreachable None arms in fetcher.rs, blobs/mod.rs and tasks.rs | dropped | Low-value vocabulary cleanup; no behavior at stake. |
+| F20 | Add a focused test that GamePackages::staleness returns None for non-strict tags (bare 7, 7.2_live) | batched | [B] Pins gircap's own strict-tag policy and documents the silent legacy_behind = 0 fallback. Proposed by review P. |
 
 ## Persistent context
 
