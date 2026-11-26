@@ -13,7 +13,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
 | T01 | Purge parallel map → rayon | pending_review | aa091ace | Deviation: eight-thread ceiling dropped (unpinned perf heuristic); rayon global pool sizes itself. Follow-up suggestion held for reviewer: docs/04-scope-limitation-spec.md:727 "scoped worker" wording. |
-| T02 | Repair futures combinators → futures-util | todo | | §R5 lines 198–210, §R7 lines 229–242; never cancel the primary; keep bounded concurrency |
+| T02 | Repair futures combinators → futures-util | in_progress | | §R5 lines 198–210, §R7 lines 229–242; never cancel the primary; keep bounded concurrency |
 | T03 | Salvage order → petgraph | todo | | §R6 lines 212–227; high risk, §A1 lines 15–16 — stop if the safety argument cannot be re-established |
 | T04 | Root test origin server → axum | todo | | §R2 lines 157–170, §X1 lines 56–89; large test blast radius |
 | T05 | CLI help snapshots → trycmd + strip-ansi | todo | | §R3 lines 172–184, §LEAF-2 lines 432–439, §X3 lines 110–125 |
