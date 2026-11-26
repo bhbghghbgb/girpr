@@ -33,6 +33,10 @@ girpr-tempdir = { path = "../../../crates/tempdir" }
 # process must agree on the one on-disk tree.
 fs2 = "0.4.3"
 serde_json = "1.0.154"
+# The ordered fixture value implements `serde::Serialize` itself so keys keep
+# insertion order without `serde_json/preserve_order` (which would reorder
+# `Value` objects for unrelated consumers in this workspace).
+serde = "1.0.229"
 # Request queries are decoded with the standard form parser rather than a local
 # `%XX`/`+` loop; `url` re-exports `form_urlencoded` (already in the lockfile).
 url = "2.5.9"

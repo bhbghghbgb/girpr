@@ -70,6 +70,7 @@ use gircap::http::{HttpRequest, HttpResponse, HttpTransport, SendFuture};
 use gircap::report::Record;
 use gircap::run::{self, Failure, Outcome};
 use girpr_tempdir::TempDir;
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 // ------------------------------------------------- in-process command dispatch
 
@@ -1536,13 +1537,14 @@ const BIZ: &str = "hk4e_global";
 /// a `BTreeMap`, and a `BTreeMap` sorts. That is invisible to the tool and fatal
 /// to the claim this mock exists to support - "the body is stored exactly as
 /// served" is only checkable if the server had an order to preserve. So the mock
-/// renders its own bodies, in the measured key order, and
-/// `the_api_bodies_are_byte_exact_and_the_generated_one_is_marked` compares them
-/// against what the tool wrote.
+/// keeps object entries in a `Vec<(String, J)>` and writes them through a local
+/// `Serialize` impl that calls `serialize_map` in insertion order; `serde_json`
+/// only renders the result.
 ///
-/// Forty lines is the right price for removing a whole class of "the fixture is
-/// malformed" debugging, and it is why these bodies are not string literals with
-/// hand-counted braces.
+/// No `serde_json/preserve_order` is enabled: that is a workspace-wide feature
+/// which would reorder `Value` objects for unrelated consumers. Escaping is the
+/// serializer's job too, so the bodies are not string literals with hand-counted
+/// braces or a hand-written escaper that could disagree with it.
 #[derive(Debug, Clone)]
 pub enum J {
     /// `true` / `false`.
@@ -1569,63 +1571,40 @@ impl J {
     }
 
     /// Render compactly, the way a server sends a response body.
-    pub fn render(&self) -> String {
-        let mut out = String::new();
-        self.write(&mut out);
-        out
-    }
-
-    fn write(&self, out: &mut String) {
-        match self {
-            J::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            J::Num(n) => out.push_str(&n.to_string()),
-            J::Str(s) => write_string(s, out),
-            J::Arr(items) => {
-                out.push('[');
-                for (i, v) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    v.write(out);
-                }
-                out.push(']');
-            }
-            J::Obj(entries) => {
-                out.push('{');
-                for (i, (k, v)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write_string(k, out);
-                    out.push(':');
-                    v.write(out);
-                }
-                out.push('}');
-            }
-        }
+    ///
+    /// This value holds only primitives, arrays and string-keyed maps, so
+    /// serialization cannot fail; the expectation keeps a future change local to
+    /// the mock instead of surfacing as a confusing parse error downstream.
+    pub fn render(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("the mock's own body is valid JSON")
     }
 }
 
-/// A JSON string, escaped the way `serde_json` escapes one.
-///
-/// Hand-rolled rather than delegating, because the point is that this module does
-/// not depend on a serializer that would reorder things - and because a mock
-/// that silently mis-escapes a body would fail a byte-exactness test for the
-/// wrong reason.
-fn write_string(s: &str, out: &mut String) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
+impl Serialize for J {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            J::Bool(b) => serializer.serialize_bool(*b),
+            J::Num(n) => serializer.serialize_u64(*n),
+            J::Str(s) => serializer.serialize_str(s),
+            J::Arr(items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+                for item in items {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            J::Obj(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
         }
     }
-    out.push('"');
 }
 
 /// `{"retcode":0,"message":"OK","data":…}`, the wrapper every endpoint returns.
@@ -1640,14 +1619,6 @@ fn envelope(data: J) -> J {
 /// `data.game` - the game id, in the order the measured bodies carry it.
 fn game_ref() -> J {
     J::Obj(vec![("id".into(), J::s(GAME)), ("biz".into(), J::s(BIZ))])
-}
-
-/// The body as text, validated on the way out.
-/// A malformed literal then fails here, with the mock's own panic naming it,
-/// rather than three layers downstream as a confusing parse error from the tool.
-fn compact(text: String) -> Vec<u8> {
-    serde_json::from_str::<serde_json::Value>(&text).expect("the mock's own body is valid JSON");
-    text.into_bytes()
 }
 
 /// Render the world's responses.
@@ -1680,85 +1651,77 @@ fn build_table(world: &World, base: &str) -> Table {
     let mut hyp = BTreeMap::new();
     hyp.insert(
         "getGameConfigs",
-        compact(
-            envelope(J::Obj(vec![
-                ("game".into(), game_ref()),
-                (
-                    "launch_configs".into(),
-                    J::Arr(vec![J::Obj(vec![
-                        ("game".into(), game_ref()),
-                        ("exe_file_name".into(), J::s("GenshinImpact.exe")),
-                        ("installation_dir".into(), J::s("Genshin Impact")),
-                        (
-                            "audio_pkg_scan_dir".into(),
-                            J::s(world.audio_pkg_scan_dir.clone()),
-                        ),
-                        (
-                            "audio_pkg_res_dir".into(),
-                            J::s("GenshinImpact_Data/StreamingAssets/Audio"),
-                        ),
-                        // The one launcher-side value that can stop a capture.
-                        // See `GameConfigs::require_chunk_mode`.
-                        ("default_download_mode".into(), J::s("DOWNLOAD_MODE_CHUNK")),
-                        ("enable_audio_pkg_mgmt".into(), J::Bool(true)),
-                        ("enable_ldiff".into(), J::Bool(true)),
-                    ])]),
-                ),
-            ]))
-            .render(),
-        ),
+        envelope(J::Obj(vec![
+            ("game".into(), game_ref()),
+            (
+                "launch_configs".into(),
+                J::Arr(vec![J::Obj(vec![
+                    ("game".into(), game_ref()),
+                    ("exe_file_name".into(), J::s("GenshinImpact.exe")),
+                    ("installation_dir".into(), J::s("Genshin Impact")),
+                    (
+                        "audio_pkg_scan_dir".into(),
+                        J::s(world.audio_pkg_scan_dir.clone()),
+                    ),
+                    (
+                        "audio_pkg_res_dir".into(),
+                        J::s("GenshinImpact_Data/StreamingAssets/Audio"),
+                    ),
+                    // The one launcher-side value that can stop a capture.
+                    // See `GameConfigs::require_chunk_mode`.
+                    ("default_download_mode".into(), J::s("DOWNLOAD_MODE_CHUNK")),
+                    ("enable_audio_pkg_mgmt".into(), J::Bool(true)),
+                    ("enable_ldiff".into(), J::Bool(true)),
+                ])]),
+            ),
+        ]))
+        .render(),
     );
     hyp.insert(
         "getGameBranches",
-        compact(
-            envelope(J::Obj(vec![
-                ("game".into(), game_ref()),
-                (
-                    "game_branches".into(),
-                    J::Arr(vec![J::Obj(vec![
-                        ("game".into(), game_ref()),
-                        (
-                            "main".into(),
-                            J::Obj(vec![
-                                ("package_id".into(), J::s("ScSYQBFhu9")),
-                                ("branch".into(), J::s("main")),
-                                ("password".into(), J::s("sMOCKpassword")),
-                                ("tag".into(), J::s(world.new.tag.clone())),
-                                ("diff_tags".into(), J::strings(world.diff_tags())),
-                                ("categories".into(), J::Arr(categories)),
-                            ]),
-                        ),
-                    ])]),
-                ),
-            ]))
-            .render(),
-        ),
+        envelope(J::Obj(vec![
+            ("game".into(), game_ref()),
+            (
+                "game_branches".into(),
+                J::Arr(vec![J::Obj(vec![
+                    ("game".into(), game_ref()),
+                    (
+                        "main".into(),
+                        J::Obj(vec![
+                            ("package_id".into(), J::s("ScSYQBFhu9")),
+                            ("branch".into(), J::s("main")),
+                            ("password".into(), J::s("sMOCKpassword")),
+                            ("tag".into(), J::s(world.new.tag.clone())),
+                            ("diff_tags".into(), J::strings(world.diff_tags())),
+                            ("categories".into(), J::Arr(categories)),
+                        ]),
+                    ),
+                ])]),
+            ),
+        ]))
+        .render(),
     );
     hyp.insert(
         "getGameDeprecatedFileConfigs",
-        compact(
-            envelope(J::Obj(vec![
-                ("game".into(), game_ref()),
-                (
-                    "deprecated_file_configs".into(),
-                    J::Arr(vec![J::Obj(vec![
-                        ("game".into(), game_ref()),
-                        ("deprecated_files".into(), J::Arr(Vec::new())),
-                    ])]),
-                ),
-            ]))
-            .render(),
-        ),
+        envelope(J::Obj(vec![
+            ("game".into(), game_ref()),
+            (
+                "deprecated_file_configs".into(),
+                J::Arr(vec![J::Obj(vec![
+                    ("game".into(), game_ref()),
+                    ("deprecated_files".into(), J::Arr(Vec::new())),
+                ])]),
+            ),
+        ]))
+        .render(),
     );
     hyp.insert(
         "getGamePackages",
-        compact(
-            envelope(J::Obj(vec![
-                ("game".into(), game_ref()),
-                ("game_packages".into(), J::Arr(Vec::new())),
-            ]))
-            .render(),
-        ),
+        envelope(J::Obj(vec![
+            ("game".into(), game_ref()),
+            ("game_packages".into(), J::Arr(Vec::new())),
+        ]))
+        .render(),
     );
     let mut builds = BTreeMap::new();
     let mut archives = BTreeMap::new();
@@ -1843,14 +1806,12 @@ fn build_table(world: &World, base: &str) -> Table {
         }
         builds.insert(
             build.tag.clone(),
-            compact(
-                envelope(J::Obj(vec![
-                    ("build_id".into(), J::s(build.build_id.clone())),
-                    ("tag".into(), J::s(build.tag.clone())),
-                    ("manifests".into(), J::Arr(manifests)),
-                ]))
-                .render(),
-            ),
+            envelope(J::Obj(vec![
+                ("build_id".into(), J::s(build.build_id.clone())),
+                ("tag".into(), J::s(build.tag.clone())),
+                ("manifests".into(), J::Arr(manifests)),
+            ]))
+            .render(),
         );
     }
 
