@@ -20,7 +20,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T06 | Process assertions → assert_cmd | completed | e0e8aa96 | Async seams intentionally stay tuple-based (run_binary, run_binary_with_closed_stdout, run_data_plane_as, run_audio_refusal, repair_machinery inline spawn) — they share a mock-server runtime or need closed stdout. |
 | T07 | Structured JSON log capture | completed | e990678b | Deliberate skip of repair_machinery.rs:318–342 — it reads the shipped file log (no level/token workaround); that report pointer is stale for this finding. |
 | T08 | INI parser/merger → rust-ini | completed | ff782018, 8578f13e | Decision: read_game_version stays a Starward-parity last-match raw line scan (Ini::get is first-match + trims whitespace — would break pinned behavior); later version-parsing work must keep it. rust-ini load_from_str_noescape (default escape corrupts Windows paths); policy layer does quote/comment pre-pass, last-wins duplicate keys, verbatim render. |
-| T09 | URL assembly & percent-encoding | in_progress | | §X2 lines 90–109, §APP-2 281–294, §APP-5 321–332, §CAP-3 689–700, §CAP-4 702–710; records the `game_ids[]` decision below |
+| T09 | URL assembly & percent-encoding | pending_review | 22e7f073 | Decision recorded in Persistent context below: literal brackets + %20, exact AsciiSet. Deviation: query_pairs_mut().append_pair not used for the literal key; push_pair/with_param remain (now append library-encoded values). Report lines 822–823 pointer is stale (permissive versions, not host checks). Follow-up held for reviewer: consolidate duplicated QUERY_VALUE_SET into a shared leaf. |
 | T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | todo | | §APP-3 296–306, §APP-4 308–319, §APP-9 371–378, §APP-10 380–389 |
 | T11 | FNV-1a hashing → fnv | todo | | §APP-7 lines 347–357, §CAP-5 lines 712–723, §X4 lines 127–134 |
 | T12 | Protobuf → prost decode + prost-build codegen | todo | | §APP-8 lines 359–369, §LEAF-4 lines 451–465; build-tooling and dump-key pins |
@@ -89,9 +89,12 @@ relevant task's `note` instead of silently proceeding):
   pin internal formatting, header casing or iteration details beyond the documented API.
 - **Cross-cutting themes are distributed, not standalone (§X1–X4, lines 56–134).** X1 →
   T04/T14/T15/T27; X2 → T09; X3 → T05/T07; X4 → T11/T16/T21.
-- **`game_ids[]` spelling (§X2 lines 90–109, §APP-2 lines 281–294):** decide once in T09
-  (literal brackets vs `%5B%5D`) and record the decision here before any other URL task
-  (T27/T28 or follow-ups) is dispatched. Every URL task follows that pointer.
+- **`game_ids[]` spelling — DECIDED IN T09 (§X2 lines 90–109, §APP-2 lines 281–294):**
+  send `game_ids[]` literally (NOT `%5B%5D`) and spaces as `%20` (NOT `+`). Literal
+  spelling is byte-stable and observed by mock routing and recorded request fixtures;
+  use `percent-encoding` with an exact `AsciiSet`, not `Url`'s form serializer. Every
+  later URL task (T14/T15/T27/T28 and follow-ups) must follow this; fetch and capture
+  must not diverge.
 - **Pinned contracts that must survive unless a task says otherwise:** the two-byte
   `AlgoSet` layout, canonical hash order and Debug spelling (§SYNC-1 lines 540–549); the
   frozen protobuf dump keys `chuncks`/`unknown_field6` (§LEAF-4 lines 451–465); the
