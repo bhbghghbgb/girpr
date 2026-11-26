@@ -1,8 +1,8 @@
-# Does the server provide Sophon for Genshin `Persistent/`? — live research
+# Does the server provide Sophon for GI `Persistent/`? — live research
 
 **Headline answer: CONFIRMED NO — for the actual hotfix bytes.**
 The server does **not** advertise any Sophon chunk manifest containing the bytes
-of Genshin's in-game `Persistent/` hotfix files. It *does* advertise Sophon
+of GI's in-game `Persistent/` hotfix files. It *does* advertise Sophon
 chunks for the **base-install versions** of many files that also appear in the
 dispatcher's persistent manifests, but those files are byte-identical to the
 base install and are placed in `StreamingAssets/` by Collapse's MD5-diff rule —
@@ -257,7 +257,7 @@ Sophon remoteURL issue`; `"sophon" "persistent" Genshin hk4e chunk downloader
 hotfix`; plus GitHub issue search APIs.
 
 * <https://github.com/CollapseLauncher/Hi3Helper.Sophon> — defines Sophon as a
-  chunked download method for HoYoverse games; no mention of dispatcher
+  chunked download method for HYV games; no mention of dispatcher
   persistent/hotfix files. **(Fact, no supporting evidence for the hypothesis.)**
 * <https://github.com/CollapseLauncher/Collapse/pull/608> — changelog: "Fixed
   IODenied error in Genshin repair … caused by an asset wrongly marked as
@@ -285,7 +285,7 @@ not the basis of the conclusion — the live byte comparison is.
 
 * **Scope.** One region (`osusadispatch`), one client version (`OSRELWin7.2.0`),
   dispatcher res revision `49530578`, snapshot 2026-11-23 UTC. CN/Bili regions
-  use different keys/seeds and were not queried. HoYo can change the layout at
+  use different keys/seeds and were not queried. HYV can change the layout at
   any time; re-run the scripts to re-check.
 * **What is proven.** Across **all 15 Sophon chunk manifests advertised by the
   live API** (3 builds) and **all 5 patch manifests**, none contains any of the

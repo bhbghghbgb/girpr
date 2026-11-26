@@ -66,7 +66,7 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
   Repair/download chunk identity is MD5-only (`ChunkDecompressedHashMd5`); `xxh64` parsed from the
   chunk name is only a preload/diff-staging resume probe, not the repair hash.
 - GI glue (`RepairManagement/Genshin/Fetch.cs:BuildPrimaryManifest`) fakes the legacy `pkg_version`
-  from the Sophon manifest (HoYo removed scattered zips in a recent release): `SophonAssetDictRef` map +
+  from the Sophon manifest (HYV removed scattered zips in a recent release): `SophonAssetDictRef` map +
   `PkgVersionProperties{remoteName,fileSize,md5}` per asset + per-VO `Audio_*_pkg_version` from
   `audio_lang_14`. `Fetch.Persistent.cs` additionally queries the **game dispatcher**
   (`ClientGameResURL/.../res_versions_external`, `ClientDesignDataURL/.../data_versions`) and can

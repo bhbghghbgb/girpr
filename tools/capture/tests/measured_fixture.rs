@@ -11,7 +11,7 @@
 //!   one (paths, sizes, chunk identities) with the measured *proportions* where
 //!   the arithmetic has to close. A 2 744-entry fixture would be a megabyte of
 //!   checked-in JSON to re-derive the same handful of identities.
-//! - The test is named `measured_2026_10_14`. That is the point: when HoYo ships
+//! - The test is named `measured_2026_10_14`. That is the point: when HYV ships
 //!   7.2.0 these numbers drift, and the drift should be legible rather than
 //!   mysterious. **A failure here is information, not a bug** — re-measure and
 //!   update, or accept the new pair.

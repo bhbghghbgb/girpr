@@ -97,7 +97,7 @@ def resolve_config_paths(stamp: list[dict]) -> dict[str, str]:
         ]
         if len(matches) != 1:
             raise RuntimeError(
-                f"preset table has {len(matches)} Genshin Impact / {region} entries: {matches}"
+                f"preset table has {len(matches)} GI / {region} entries: {matches}"
             )
         out[biz] = matches[0]
     return out

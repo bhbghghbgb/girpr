@@ -319,7 +319,7 @@ otherwise MD5. The result is verified again after the atomic publish.
 |---|---|
 | `base_res_version_hash` | lowercase-hex MD5 of `<exe>_Data/StreamingAssets/res_versions_streaming`; omitted with a report if the source is absent |
 | `res_revision` | `res_revision` |
-| `res_revision_eternal` | `res_revision` (HoYo's "external" typo, checked by the game alongside `res_revision`) |
+| `res_revision_eternal` | `res_revision` (HYV's "external" typo, checked by the game alongside `res_revision`) |
 | `data_revision` | `data_revision` |
 | `silence_revision` | `silence_revision` |
 | `audio_revision` | `audio_revision` |

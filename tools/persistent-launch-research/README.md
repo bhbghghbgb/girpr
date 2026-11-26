@@ -4,7 +4,7 @@ Goal (see docs/01 §6 and docs/03 §7): determine empirically, on real game copi
 
 1. what the game needs to launch / to skip verification;
 2. what the game writes when it downloads hotfixes, and each file's purpose;
-3. which files are launcher-only extras (Collapse / Starward / HoYoPlay) that the
+3. which files are launcher-only extras (Collapse / Starward / HYP) that the
    game does not need;
 4. the minimum marker set a repair tool must write so the game trusts the install.
 

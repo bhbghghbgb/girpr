@@ -1,4 +1,4 @@
-"""Query the LIVE Genshin dispatcher (``query_cur_region``) and decode it.
+"""Query the LIVE GI dispatcher (``query_cur_region``) and decode it.
 
 Reuses the per-biz URL template, seed and RSA key unwrapped from Collapse's
 release metadata (``fetch_metadata.py``). The subdomain/channel tuple is pinned

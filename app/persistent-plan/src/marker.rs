@@ -55,7 +55,7 @@ pub fn render_markers(
         out.push(base_res_version_hash_marker(exe_file_name, bytes)?);
     }
     out.push(marker("res_revision", dispatch.res_revision.to_string())?);
-    // HoYo's own typo for "external": both files carry the same dispatcher
+    // HYV's own typo for "external": both files carry the same dispatcher
     // value. An external check reads them together, so writing one alone is
     // not enough.
     out.push(marker(

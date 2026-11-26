@@ -54,7 +54,7 @@ Small files, with values and mtimes captured verbatim under
 |---|---|---|
 | `base_res_version_hash` | 32 | `f5ceb98fd93b8c69603d7b5600d11a08`; base-install verify marker |
 | `res_revision` | 8 | `49530578` |
-| `res_revision_eternal` | 8 | `49530578` (HoYo's typo for "external"; checked alongside res_revision) |
+| `res_revision_eternal` | 8 | `49530578` (HYV's typo for "external"; checked alongside res_revision) |
 | `data_revision` | 8 | `49419538` |
 | `silence_revision` | 8 | `49291486` |
 | `audio_revision` | 8 | `49008628` |

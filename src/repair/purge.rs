@@ -432,7 +432,7 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 /// lives outside the install ([`girpr_lock`]), so a live run never depends on
 /// this rule; it exists only for the legacy file.
 ///
-/// `pkg_version` is the HoYoPlay launcher's verification list. It is a
+/// `pkg_version` is the HYP launcher's verification list. It is a
 /// Sophon-tracked base file today, but an install restored by other means may
 /// carry one that is not in the current plan; deleting it invites a
 /// launcher-side re-check (docs/01 §6). It is kept for **all** runs, not only
@@ -1072,7 +1072,7 @@ mod tests {
                 &open,
                 PurgeVerdict::Keep,
             ),
-            // Rule 5: the revision block, including HoYo's "eternal" twin.
+            // Rule 5: the revision block, including HYV's "eternal" twin.
             (
                 "GenshinImpact_Data/Persistent/res_revision",
                 &open,

@@ -16,7 +16,7 @@
 //!
 //! ## Forward-compatible by construction
 //!
-//! No type here carries `deny_unknown_fields`. HoYo adds fields without warning,
+//! No type here carries `deny_unknown_fields`. HYV adds fields without warning,
 //! and a capture that refused to parse the day they did would be a tool that
 //! stops working for a reason nobody chose. What *is* strict is the set of fields
 //! the run acts on: those are required, and their absence is an error naming the
