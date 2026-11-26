@@ -9,6 +9,7 @@
 use crate::{DispatchError, Result};
 use girpr_digest::Md5;
 use prost::Message as _;
+use prost::encoding::{WireType, decode_key, decode_varint};
 
 /// Root of the dispatcher protobuf. Only tag 3 is consumed; the other root
 /// tags are opaque to this crate.
@@ -86,36 +87,24 @@ impl WireValue<'_> {
     }
 }
 
-fn read_varint(bytes: &[u8]) -> Result<(u64, &[u8])> {
-    let mut value = 0u64;
-    for (index, byte) in bytes.iter().take(10).enumerate() {
-        value |= u64::from(byte & 0x7f) << (7 * index);
-        if byte & 0x80 == 0 {
-            return Ok((value, &bytes[index + 1..]));
-        }
-    }
-    Err(DispatchError::Proto("unterminated protobuf varint".into()))
-}
-
-/// Walk every field in a message without a schema. Unknown wire types are an
-/// error so a corrupt body cannot be silently "decoded" into a wrong revision.
+/// Walk every field in a message without a schema. prost's `decode_key` and
+/// `decode_varint` own the primitive decoding (including overlong-encoding
+/// rejection); groups are rejected here so a corrupt body cannot be silently
+/// "decoded" into a wrong revision. Values are only ever logged as opaque
+/// lengths — see `OpaqueFields`.
 pub fn walk_fields(mut bytes: &[u8]) -> Result<Vec<(u32, WireValue<'_>)>> {
     let mut out = Vec::new();
     while !bytes.is_empty() {
-        let (tag, rest) = read_varint(bytes)?;
-        let field = u32::try_from(tag >> 3)
-            .map_err(|_| DispatchError::Proto("protobuf field number overflow".into()))?;
-        if field == 0 {
-            return Err(DispatchError::Proto("protobuf field 0 is invalid".into()));
-        }
-        match tag & 7 {
-            0 => {
-                let (value, rest) = read_varint(rest)?;
+        let (field, wire_type) = decode_key(&mut bytes)
+            .map_err(|e| DispatchError::Proto(format!("bad protobuf key: {e}")))?;
+        match wire_type {
+            WireType::Varint => {
+                let value = decode_varint(&mut bytes)
+                    .map_err(|e| DispatchError::Proto(format!("bad protobuf varint: {e}")))?;
                 out.push((field, WireValue::Varint(value)));
-                bytes = rest;
             }
-            1 => {
-                let (lo, rest) = rest.split_at_checked(8).ok_or_else(|| {
+            WireType::SixtyFourBit => {
+                let (lo, rest) = bytes.split_at_checked(8).ok_or_else(|| {
                     DispatchError::Proto(format!("truncated fixed64 for field {field}"))
                 })?;
                 let value =
@@ -125,18 +114,19 @@ pub fn walk_fields(mut bytes: &[u8]) -> Result<Vec<(u32, WireValue<'_>)>> {
                 out.push((field, WireValue::Fixed64(value)));
                 bytes = rest;
             }
-            2 => {
-                let (len, rest) = read_varint(rest)?;
+            WireType::LengthDelimited => {
+                let len = decode_varint(&mut bytes)
+                    .map_err(|e| DispatchError::Proto(format!("bad protobuf length: {e}")))?;
                 let len = usize::try_from(len)
                     .map_err(|_| DispatchError::Proto(format!("field {field} length overflow")))?;
-                let (payload, rest) = rest.split_at_checked(len).ok_or_else(|| {
+                let (payload, rest) = bytes.split_at_checked(len).ok_or_else(|| {
                     DispatchError::Proto(format!("field {field} is truncated ({len} bytes)"))
                 })?;
                 out.push((field, WireValue::Bytes(payload)));
                 bytes = rest;
             }
-            5 => {
-                let (lo, rest) = rest.split_at_checked(4).ok_or_else(|| {
+            WireType::ThirtyTwoBit => {
+                let (lo, rest) = bytes.split_at_checked(4).ok_or_else(|| {
                     DispatchError::Proto(format!("truncated fixed32 for field {field}"))
                 })?;
                 let value =
@@ -146,9 +136,10 @@ pub fn walk_fields(mut bytes: &[u8]) -> Result<Vec<(u32, WireValue<'_>)>> {
                 out.push((field, WireValue::Fixed32(value)));
                 bytes = rest;
             }
-            other => {
+            WireType::StartGroup | WireType::EndGroup => {
                 return Err(DispatchError::Proto(format!(
-                    "unsupported protobuf wire type {other} on field {field}"
+                    "unsupported protobuf wire type {} on field {field}",
+                    wire_type as u8
                 )));
             }
         }

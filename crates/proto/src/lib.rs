@@ -8,12 +8,14 @@
 //!
 //! ## Mechanics, not program logic
 //!
-//! This crate declares both message families, their prost tags and their field
-//! names, and derives `prost::Message` and `serde::Serialize`. It holds no
-//! method, no policy and no logic of either program. `gircap` keeps its
-//! measurement, validation and normalisation helpers as extension impls in its
-//! own crate; `girpr` keeps its `WantedManifest` wrapper locally. Nothing here
-//! decides when a manifest is fetched, validated, dumped or assembled.
+//! This crate re-exports the message types generated at build time by
+//! `prost-build` from the vendored, pinned `proto/Sophon.proto`. prost owns the
+//! tags, field names and `alloc` Vec/String shapes; `serde::Serialize` is
+//! derived on every generated type. The crate holds no method, no policy and no
+//! logic of either program. `gircap` keeps its measurement, validation and
+//! normalisation helpers as extension impls in its own crate; `girpr` keeps its
+//! `WantedManifest` wrapper locally. Nothing here decides when a manifest is
+//! fetched, validated, dumped or assembled.
 //!
 //! ## Field names are byte-critical
 //!
@@ -22,148 +24,17 @@
 //! `int64` preserved for decode compatibility. Both Rust field names and the
 //! `serde` key names are observable: renaming `chuncks` or `unknown_field6`
 //! silently changes the bytes of a full-decode dump without changing any type
-//! on the wire. Neither may be "fixed".
+//! on the wire. Neither may be "fixed". The vendored `.proto` pins field 6 as
+//! `unknown_field6` (upstream calls it `unknown`) precisely for this reason;
+//! its tag and type are unchanged.
 //!
 //! See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30>
 
-/// `SophonChunkManifest`: the top-level message.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonChunkManifest {
-    /// Upstream's misspelling, preserved for parity and artifact stability.
-    #[prost(message, repeated, tag = "1")]
-    pub chuncks: ::prost::alloc::vec::Vec<SophonChunkFile>,
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/starward.rpc.game_install.rs"));
 }
 
-/// One file's entry: its path, its size, its whole-file MD5, and its chunk list.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonChunkFile {
-    #[prost(string, tag = "1")]
-    pub file: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub chunks: ::prost::alloc::vec::Vec<SophonChunk>,
-    #[prost(bool, tag = "3")]
-    pub is_folder: bool,
-    #[prost(int64, tag = "4")]
-    pub size: i64,
-    #[prost(string, tag = "5")]
-    pub md5: ::prost::alloc::string::String,
-}
-
-/// One chunk: where its bytes go in the file and how to check them.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonChunk {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub uncompressed_md5: ::prost::alloc::string::String,
-    #[prost(int64, tag = "3")]
-    pub offset: i64,
-    #[prost(int64, tag = "4")]
-    pub compressed_size: i64,
-    #[prost(int64, tag = "5")]
-    pub uncompressed_size: i64,
-    // NOTE(starward-parity): opaque upstream field, preserved for decode compat.
-    // It is named for what is observable about it — an `int64` on the wire — and
-    // the name is also the full-decode dump's JSON key, so it is load-bearing.
-    #[prost(int64, tag = "6")]
-    pub unknown_field6: i64,
-    #[prost(string, tag = "7")]
-    pub compressed_md5: ::prost::alloc::string::String,
-}
-
-// NOTE(starward-parity): the patch family below is Starward's second manifest
-// shape, for version upgrades rather than chunk repair. Field numbers and
-// names are copied verbatim from the pinned Sophon.proto; Collapse's copy
-// agrees on the numbers. See
-// <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L32-L92>
-
-/// `SophonPatchManifest`: the top-level patch message — new-version files,
-/// per-version deletions and the compression mode.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchManifest {
-    #[prost(message, repeated, tag = "1")]
-    pub patches: ::prost::alloc::vec::Vec<SophonPatchFile>,
-    #[prost(message, repeated, tag = "2")]
-    pub delete_tags: ::prost::alloc::vec::Vec<SophonPatchDeleteTag>,
-    #[prost(int32, tag = "3")]
-    pub compress_mode: i32,
-}
-
-/// One new-version file: its path, whole-file size/MD5 and its patches.
-/// An empty `patches` list means the file needs no patch.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchFile {
-    #[prost(string, tag = "1")]
-    pub file: ::prost::alloc::string::String,
-    #[prost(int64, tag = "2")]
-    pub size: i64,
-    #[prost(string, tag = "3")]
-    pub md5: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "4")]
-    pub patches: ::prost::alloc::vec::Vec<SophonPatchInfo>,
-}
-
-/// One patch source for a file, labelled with the version it upgrades from.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchInfo {
-    #[prost(string, tag = "1")]
-    pub tag: ::prost::alloc::string::String,
-    #[prost(message, tag = "2")]
-    pub patch: Option<SophonPatch>,
-}
-
-/// The patch itself: where its bytes go and what the result must hash to.
-/// An absent `original_file_name` means a new file, whose patch is the file.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatch {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub tag: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub build_id: ::prost::alloc::string::String,
-    #[prost(int64, tag = "4")]
-    pub patch_file_size: i64,
-    #[prost(string, tag = "5")]
-    pub patch_file_md5: ::prost::alloc::string::String,
-    #[prost(int64, tag = "6")]
-    pub patch_offset: i64,
-    #[prost(int64, tag = "7")]
-    pub patch_length: i64,
-    #[prost(string, tag = "8")]
-    pub original_file_name: ::prost::alloc::string::String,
-    #[prost(int64, tag = "9")]
-    pub original_file_size: i64,
-    #[prost(string, tag = "10")]
-    pub original_file_md5: ::prost::alloc::string::String,
-}
-
-/// Files to delete when upgrading from a given version.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchDeleteTag {
-    #[prost(string, tag = "1")]
-    pub tag: ::prost::alloc::string::String,
-    #[prost(message, tag = "2")]
-    pub delete_collection: Option<SophonPatchDeleteFileCollection>,
-}
-
-/// The delete list for one version, wrapped as upstream wraps it.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchDeleteFileCollection {
-    #[prost(message, repeated, tag = "1")]
-    pub delete_files: ::prost::alloc::vec::Vec<SophonPatchDeleteFile>,
-}
-
-/// One stale file and the size/MD5 it had in the old version.
-#[derive(Clone, PartialEq, ::prost::Message, serde::Serialize)]
-pub struct SophonPatchDeleteFile {
-    #[prost(string, tag = "1")]
-    pub file: ::prost::alloc::string::String,
-    #[prost(int64, tag = "2")]
-    pub size: i64,
-    #[prost(string, tag = "3")]
-    pub md5: ::prost::alloc::string::String,
-}
+pub use generated::*;
 
 #[cfg(test)]
 mod tests {
@@ -233,6 +104,43 @@ mod tests {
                 .delete_files[0]
                 .file,
             "assets/old.dat"
+        );
+    }
+
+    /// The two names frozen by the full-decode artifacts must survive codegen:
+    /// `chuncks` (upstream's misspelling) and `unknown_field6` (opaque tag 6).
+    /// The serde keys and the wire tag of `chuncks` are pinned together.
+    #[test]
+    fn dump_keys_chuncks_and_unknown_field6_are_frozen() {
+        let manifest = SophonChunkManifest {
+            chuncks: vec![SophonChunkFile {
+                file: "a.dat".into(),
+                chunks: vec![SophonChunk {
+                    id: String::new(),
+                    uncompressed_md5: String::new(),
+                    offset: 0,
+                    compressed_size: 0,
+                    uncompressed_size: 0,
+                    unknown_field6: 150,
+                    compressed_md5: String::new(),
+                }],
+                is_folder: false,
+                size: 0,
+                md5: String::new(),
+            }],
+        };
+
+        let bytes = manifest.encode_to_vec();
+        assert_eq!(bytes[0], 0x0a, "chuncks stays field 1, wire type 2");
+
+        let json = serde_json::to_value(&manifest).expect("serialize dump");
+        let chuncks = json.get("chuncks").expect("misspelled dump key");
+        assert!(json.get("chunks").is_none());
+        let chunk = &chuncks[0]["chunks"][0];
+        assert_eq!(chunk["unknown_field6"], serde_json::json!(150));
+        assert!(
+            chunk.get("unknown").is_none(),
+            "upstream name must not leak"
         );
     }
 }
