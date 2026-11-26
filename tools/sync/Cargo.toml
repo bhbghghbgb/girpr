@@ -73,7 +73,7 @@ serde_json = "1.0.154"
 # which pins them in its wire format; `md-5` remains a dev-dependency for the
 # tests that build digests by hand.
 # The shared --include/--exclude glob rules, used by this crate and by girpr.
-# Re-exported at the crate root so callers name the same `glob::Pattern` type.
+# Re-exported at the crate root so callers name the same `globset` matchers.
 girpr-filter = { path = "../../crates/filter" }
 # Ordered-JSON and line-writing mechanics for the stdout data plane. This
 # crate keeps its own alphabetical key order, `serde_json::Value` fields and

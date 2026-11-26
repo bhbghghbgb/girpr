@@ -195,17 +195,16 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
-`glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
+`globset` globs matched against the `/`-separated, game-dir-rooted rel path —
 the same string `girpr_repair_plan::build_plan` stores; `util::path::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The matching rules live in the shared `girpr-filter` crate so they
-cannot drift from `girsync`'s: `match_options(false)`, i.e.
-`MatchOptions { require_literal_separator: false, require_literal_leading_dot:
-false, case_sensitive: false }`.
+cannot drift from `girsync`'s: compiled with `literal_separator(false)` and
+globset's default leading dot unspecial, in case-insensitive mode.
 
 Some spec details worth stating rather than re-deriving:
 
-- **`*` crosses `/`.** With `require_literal_separator: false`, `--include
+- **`*` crosses `/`.** With `literal_separator(false)`, `--include
   "*.blk"` matches a path such as `GenshinImpact_Data/StreamingAssets/.../00/<name>.blk`. A
   user expecting `*.blk` to mean "in the current directory" will be surprised;
   the flag help must say so, because every `*.blk`-shaped include in a shell is
