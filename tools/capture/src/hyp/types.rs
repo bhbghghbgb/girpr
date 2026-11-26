@@ -435,19 +435,17 @@ impl GamePackages {
     ///
     /// Returns `(major_behind, patch_names)`, or `None` when the comparison
     /// itself is not meaningful — the branch is *behind* the legacy endpoint, or
-    /// either version does not start with a number. Only the leading component
-    /// is compared: `5` against `7` is a two-release gap, but the number of
-    /// releases between `5.9.0` and `7.1.0` cannot be derived from two strings,
-    /// and guessing a middle would put a fabricated number in the bundle.
+    /// either tag is not a strict `major.minor.patch` (the shape every captured
+    /// tag and legacy `major.version` uses). Only the major is compared: `5`
+    /// against `7` is a two-release gap, but the number of releases between
+    /// `5.9.0` and `7.1.0` cannot be derived from two strings, and guessing a
+    /// middle would put a fabricated number in the bundle. `semver` owns the
+    /// strict parse; gircap keeps the comparison and the return shape here.
     pub fn staleness(&self, branch_tag: &str) -> Option<(u64, Vec<String>)> {
-        let major = self
-            .major_version()
+        let major = semver::Version::parse(self.major_version().ok()?)
             .ok()?
-            .split('.')
-            .next()?
-            .parse::<u64>()
-            .ok()?;
-        let live = branch_tag.split('.').next()?.parse::<u64>().ok()?;
+            .major;
+        let live = semver::Version::parse(branch_tag).ok()?.major;
         // `checked_sub`, not `then_some(live - major)`: `then_some` evaluates its
         // argument eagerly, so the branch being behind would overflow before the
         // comparison could refuse it. A panic in a measurement is worse than a

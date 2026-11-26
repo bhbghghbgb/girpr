@@ -197,6 +197,11 @@ serde_json = "1.0.154"
 # TSV sidecars are written by `csv` with a tab delimiter: it owns field
 # quoting and the LF terminator, while the pinned headers and sort stay local.
 csv = "1.4.0"
+# Strict `major.minor.patch` parsing for the legacy staleness comparison. Already
+# in the lockfile through `rustc_version`; gircap only compares `.major`, keeps
+# `checked_sub` and the `(u64, Vec<String>)` return, and leaves the dispatcher's
+# permissive version spellings (which semver rejects) untouched.
+semver = "1.0.28"
 prost = "0.14.6"
 # The shared Sophon wire types: one byte layout for the three protobuf messages
 # both programs decode. The leaf owns tags and field names only; gircap's dump
