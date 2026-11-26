@@ -18,8 +18,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T04 | Root test origin server → axum | completed | e51d485c | Stale hints: manifest setup ~388–401 (not 554–865); metadata.rs tests are a second server user but needed no edits (API kept). Drop now sends a watch stop signal to cancel detached axum handlers. Removed only the accept-loop lifecycle test + wait_until_idle. |
 | T05 | CLI help snapshots → trycmd + strip-ansi | completed | c990d1bf | trycmd 1.2.1 inline snapshot at tests/cmd/help.trycmd (no .stdout sidecar needed); harness uses default_bin_path; --jobs test adapted to clap introspection. T06 seam untouched. |
 | T06 | Process assertions → assert_cmd | completed | e0e8aa96 | Async seams intentionally stay tuple-based (run_binary, run_binary_with_closed_stdout, run_data_plane_as, run_audio_refusal, repair_machinery inline spawn) — they share a mock-server runtime or need closed stdout. |
-| T07 | Structured JSON log capture | pending_review | e990678b | Deliberate skip of repair_machinery.rs:318–342 — it reads the shipped file log (no level/token workaround); that report pointer is stale for this finding. Follow-up held for reviewer: typed CapturedLogRecord wrapper; revisit downloaded_chunks only if shipped file-log format ever becomes JSON. |
-| T08 | INI parser/merger → rust-ini | pending_review | ff782018 | Decision: read_game_version stays a Starward-parity last-match raw line scan (Ini::get is first-match + trims whitespace — would break pinned behavior); later version-parsing work must keep it. rust-ini load_from_str_noescape (default escape corrupts Windows paths); policy layer does quote/comment pre-pass, last-wins duplicate keys, verbatim render. Follow-up held for reviewer: enabled_quote strips single quotes too. |
+| T07 | Structured JSON log capture | completed | e990678b | Deliberate skip of repair_machinery.rs:318–342 — it reads the shipped file log (no level/token workaround); that report pointer is stale for this finding. |
+| T08 | INI parser/merger → rust-ini | completed | ff782018, 8578f13e | Decision: read_game_version stays a Starward-parity last-match raw line scan (Ini::get is first-match + trims whitespace — would break pinned behavior); later version-parsing work must keep it. rust-ini load_from_str_noescape (default escape corrupts Windows paths); policy layer does quote/comment pre-pass, last-wins duplicate keys, verbatim render. |
 | T09 | URL assembly & percent-encoding | todo | | §X2 lines 90–109, §APP-2 281–294, §APP-5 321–332, §CAP-3 689–700, §CAP-4 702–710; records the `game_ids[]` decision below |
 | T10 | Small app wire helpers → serde-aux/quick-xml/base64/hex | todo | | §APP-3 296–306, §APP-4 308–319, §APP-9 371–378, §APP-10 380–389 |
 | T11 | FNV-1a hashing → fnv | todo | | §APP-7 lines 347–357, §CAP-5 lines 712–723, §X4 lines 127–134 |
@@ -52,6 +52,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | A | T01, T02 | done | Both completed; no fix or revert; endorsed F01, F02. |
 | C | T04 | done | Completed; no fix or revert; endorsed F03. Confirmed F02 race is pre-existing, not a T04 regression. |
 | D | T05, T06 | done | Both completed; no fix or revert; endorsed F04, dropped the async predicate-wrapper suggestion. |
+| E1 | T07, T08 | done | Both completed; one comment-only fix (8578f13e); endorsed F05, dropped the conditional downloaded_chunks and single-quote suggestions. |
 
 ## Follow-ups
 
@@ -65,6 +66,7 @@ A follow-up planning review batches the survivors only after every task is settl
 | F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing, reproduced on pre-T04 parent and single-thread-clean; T04's extra tasks raise its frequency. Endorsed by reviews A and C. |
 | F03 | Type scripted statuses as axum::http::StatusCode instead of Reply::Status(&'static str) + local string-to-code conversion | open | Purely type-safety cleanup; behavior correct. Endorsed by review C. |
 | F04 | Add a trycmd case for short -h output (distinct clap rendering path from --help) | open | Low priority, non-blocking. Endorsed by review D. |
+| F05 | Add a typed CapturedLogRecord wrapper over the JSON capture Value surface | open | Low priority, non-blocking; removes stringly-typed field assertions. Endorsed by review E1. |
 
 ## Persistent context
 
