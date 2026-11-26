@@ -209,6 +209,17 @@ fn assert_current_thread_runtime() {
 /// the registry instead of the emitting thread's default, so the levels these
 /// keepers enable stay enabled for callsites registered during concurrent tests.
 /// They are never installed as defaults, so they capture no events.
+///
+/// This is a known upstream `tracing` bug: [tokio-rs/tracing#3611](https://github.com/tokio-rs/tracing/issues/3611),
+/// [tokio-rs/tracing#2874](https://github.com/tokio-rs/tracing/issues/2874) (an
+/// older report of the same mechanism), and
+/// [tokio-rs/tracing#2400](https://github.com/tokio-rs/tracing/issues/2400)
+/// (registering from inside `dispatcher::get_default`). Candidate fixes are open
+/// PRs [tokio-rs/tracing#3614](https://github.com/tokio-rs/tracing/pull/3614) and
+/// [tokio-rs/tracing#3615](https://github.com/tokio-rs/tracing/pull/3615).
+/// The locked `tracing-core` is 0.1.36 and upstream `main` is still affected, so
+/// this workaround (the rebuild plus two registered no-op dispatchers) can be
+/// removed only once a fixed `tracing-core` is released and upgraded here.
 #[cfg(feature = "test-support-async")]
 fn keep_callsites_interested() {
     static KEEPERS: std::sync::OnceLock<(
