@@ -114,17 +114,16 @@ pub fn warn_subscriber_install(out: &mut dyn Write, error: impl std::fmt::Displa
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    /// A scratch path under the system temp dir, unique per test.
-    fn scratch_dir(label: &str) -> std::path::PathBuf {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "girpr-log-install-{label}-{}-{n}",
-            std::process::id()
-        ))
+    /// A scratch directory under the system temp dir, unique per test.
+    /// tempfile supplies the random name and its guard removes the tree when
+    /// the test ends, however it ends.
+    fn scratch_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("girpr-log-install-{label}-"))
+            .tempdir()
+            .expect("create scratch directory")
     }
 
     struct SharedVec(Arc<Mutex<Vec<u8>>>);
@@ -163,8 +162,8 @@ mod tests {
 
     #[test]
     fn open_log_file_creates_parents_and_appends() {
-        let path = scratch_dir("append").join("nested").join("run.log");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let dir = scratch_dir("append");
+        let path = dir.path().join("nested").join("run.log");
 
         let mut f = open_log_file(&path).expect("creates the parent directory");
         f.write_all(b"one\n").expect("writes the first line");
@@ -178,7 +177,6 @@ mod tests {
             std::fs::read_to_string(&path).expect("readable"),
             "one\ntwo\n"
         );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// The announcement must travel under the caller's target: each project

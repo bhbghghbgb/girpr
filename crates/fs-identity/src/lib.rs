@@ -185,33 +185,24 @@ pub fn facts_of_metadata(meta: &Metadata) -> Option<IdentityFacts> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT: AtomicU64 = AtomicU64::new(0);
 
     /// A private scratch directory. The leaf has no dependency on any program
     /// (including its test helper), so tests make their own unique directory.
-    struct Scratch(PathBuf);
+    /// tempfile supplies the random name and removes the tree in its own Drop,
+    /// which is the best-effort `remove_dir_all` this helper used to do here.
+    struct Scratch(tempfile::TempDir);
 
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let n = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "girpr-fs-identity-{tag}-{}-{n}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&path).expect("create scratch directory");
-            Self(path)
+            let dir = tempfile::Builder::new()
+                .prefix(&format!("girpr-fs-identity-{tag}-"))
+                .tempdir()
+                .expect("create scratch directory");
+            Self(dir)
         }
 
         fn join(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            self.0.path().join(name)
         }
     }
 

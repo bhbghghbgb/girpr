@@ -741,16 +741,16 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
-/// The two-step case rename must not reuse a predictable sibling path.
+/// The two-step case rename must not clobber a pre-existing lookalike sibling.
 ///
-/// The temporary is a **fixed short** name, `.girsync_case_tmp.<n>`, claimed
-/// before use, so an occupied candidate is stepped over and left exactly as it
-/// was. A name in the user's namespace would be replaced by step1 (silent
-/// loss) or make the pass abort on a directory. The fixed name also keeps a
-/// source near `NAME_MAX` renameable: a full-name suffix would push the
-/// temporary past the limit.
+/// The temporary is a short `.girsync_case_tmp.` name in the source's parent
+/// with a random suffix claimed by tempfile, so it is neither predictable nor
+/// derived from the source name. A name in the user's namespace would be
+/// replaced by step1 (silent loss) or make the pass abort on a directory, so
+/// entries that already look like tool residue must survive byte-for-byte.
+/// The short fixed-size name also keeps a source near `NAME_MAX` renameable.
 #[test]
-fn run_sync_case_rename_steps_over_occupied_temporaries() {
+fn run_sync_case_rename_keeps_preexisting_lookalikes() {
     let t = temp_root("case_tmp_collision");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
@@ -768,8 +768,8 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     wfile(&src, "Dir/nested.txt", b"nested");
     wfile(&dst, "dir/nested.txt", b"nested");
     sync_mtime(&src.join("Dir/nested.txt"), &dst.join("dir/nested.txt"));
-    // The name the first implementation used, then the first three candidates:
-    // a file, a directory, and another file. None is the tool's to overwrite.
+    // Lookalikes in the tool's namespace: a file, a directory and another file.
+    // None is the tool's to overwrite, whatever suffix the library picks.
     wfile(&dst, "data.girsync_case_tmp", b"OLD-NAME");
     wfile(&dst, ".girsync_case_tmp.0", b"PRECIOUS");
     wfile(&dst, ".girsync_case_tmp.1/keep.txt", b"KEEP");
@@ -813,22 +813,31 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     assert_eq!(
         rfile(&dst, ".girsync_case_tmp.0"),
         b"PRECIOUS",
-        "an occupied candidate is stepped over, not replaced"
+        "a pre-existing lookalike file is not replaced"
     );
     assert_eq!(
         rfile(&dst, ".girsync_case_tmp.1/keep.txt"),
         b"KEEP",
-        "a directory at a candidate is stepped over too"
+        "a pre-existing lookalike directory is not replaced either"
     );
     assert_eq!(
         rfile(&dst, ".girsync_case_tmp.2"),
         b"PRECIOUS-DIR",
-        "the third candidate is stepped over as well"
+        "every pre-existing sibling in the namespace survives"
     );
-    assert!(
-        !dst.join(".girsync_case_tmp.3").exists(),
-        "the claimed temporary is consumed by the rename: {:?}",
-        entry_names(&dst)
+    let leftovers: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| n.starts_with(".girsync_case_tmp."))
+        .collect();
+    assert_eq!(
+        leftovers,
+        vec![
+            ".girsync_case_tmp.0",
+            ".girsync_case_tmp.1",
+            ".girsync_case_tmp.2"
+        ],
+        "no fresh temporary sibling survives the rename: {names:?}"
     );
 }
 
@@ -928,9 +937,10 @@ fn a_nested_case_rename_rekeys_the_destination_map_and_cache() {
 /// A case-only rename of a name that is already near the platform's component
 /// limit must not fail because of the temporary's name.
 ///
-/// Appending `.girsync_case_tmp.<n>` to the full source name made a 244-byte
-/// name into a 262-byte sibling and step1 failed with `ENAMETOOLONG` (Windows:
-/// `os error 123`). The fixed short name has no such dependency.
+/// Appending a suffix to the full source name made a 244-byte name into a
+/// 262-byte sibling and step1 failed with `ENAMETOOLONG` (Windows:
+/// `os error 123`). The claim uses a short prefix in the parent instead, so its
+/// length does not depend on the source name at all.
 #[test]
 fn a_case_rename_of_a_very_long_name_succeeds() {
     let t = temp_root("case_tmp_long_name");
@@ -952,9 +962,13 @@ fn a_case_rename_of_a_very_long_name_succeeds() {
         .collect();
     assert_eq!(renames, [lower.as_str()], "{recs:?}");
     assert_eq!(rfile(&dst, &upper), b"payload");
+    let leftovers: Vec<String> = entry_names(&dst)
+        .into_iter()
+        .filter(|n| n.starts_with(".girsync_case_tmp."))
+        .collect();
     assert!(
-        !dst.join(".girsync_case_tmp.0").exists(),
-        "the claimed temporary is consumed: {:?}",
+        leftovers.is_empty(),
+        "no temporary sibling survives the rename: {:?}",
         entry_names(&dst)
     );
 }
@@ -1056,7 +1070,7 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
 ///
 /// The rename is injected between the two real moves, which is the only way to
 /// reach the rollback portably. Without it a failed second rename would leave
-/// dst holding `.girsync_case_tmp.<n>` under the wrong name.
+/// dst holding a `.girsync_case_tmp.` temporary under the wrong name.
 #[test]
 fn a_failed_case_rename_step2_rolls_back() {
     let t = temp_root("case_rename_fail_step2");

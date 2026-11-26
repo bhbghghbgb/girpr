@@ -1191,6 +1191,7 @@ name = "girpr-fs-identity"
 version = "0.1.0"
 dependencies = [
  "same-file",
+ "tempfile",
  "winapi-util",
 ]
 
@@ -1220,6 +1221,7 @@ dependencies = [
  "girpr-time",
  "serde_json",
  "strum",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -1431,6 +1433,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

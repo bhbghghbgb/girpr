@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tempfile::Builder;
 use tracing::info;
 
 use crate::config::TestHooks;
@@ -192,19 +193,19 @@ fn plan_steps(
 
 /// A unique sibling path for the two-step rename, claimed before it is used.
 ///
-/// The candidate is a **fixed short** name, `.girsync_case_tmp.<n>`, in the
-/// source's parent. It is deliberately not derived from the source name: the
-/// first version replaced the extension (`data.girsync_case_tmp`, silently
-/// overwriting a user file) and the full-name suffix
-/// (`<name>.girsync_case_tmp.<n>`) grew past `NAME_MAX` for a source whose own
-/// name was already close to the limit, so a legal case-only rename failed with
-/// `ENAMETOOLONG`. A fixed name cannot do that, whatever the source is called.
+/// The candidate is a **fixed short prefix**, `.girsync_case_tmp.`, plus a
+/// random suffix supplied by `tempfile`, in the source's parent. It is
+/// deliberately not derived from the source name: the first version replaced
+/// the extension (`data.girsync_case_tmp`, silently overwriting a user file)
+/// and the full-name suffix (`<name>.girsync_case_tmp.<n>`) grew past `NAME_MAX`
+/// for a source whose own name was already close to the limit, so a legal
+/// case-only rename failed with `ENAMETOOLONG`. A fixed-size name cannot do
+/// that, whatever the source is called.
 ///
-/// The name is still in the user's namespace, so `create_new`/`create_dir` is
-/// what claims it: an occupied candidate is stepped over and left exactly as it
-/// was, and a leftover from an interrupted run occupies one number and is
-/// skipped by the next run. Two runs over the same tree therefore cannot pick
-/// the same temporary.
+/// The name is still in the user's namespace, so `tempfile` claims it with an
+/// exclusive create: a pre-existing lookalike is never reused or modified, and
+/// two runs over the same tree cannot pick the same temporary. Only the name
+/// claim changed here — the two-step rename and its rollback are untouched.
 ///
 /// The placeholder is removed for a directory because Windows cannot rename a
 /// directory onto an existing entry; a file placeholder is left in place and the
@@ -212,50 +213,31 @@ fn plan_steps(
 /// step1 removes the file placeholder again.
 fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
     let parent = from.parent().context("case-fix path has no parent")?;
-    for n in 0..1000 {
-        let cand = parent.join(format!(".girsync_case_tmp.{n}"));
-        // Ask first whether the name is taken: `create_new` on an existing
-        // *directory* reports `Access is denied` rather than `AlreadyExists`, so
-        // the error kind alone cannot distinguish "occupied" from "cannot write
-        // here".
-        match std::fs::symlink_metadata(&cand) {
-            Ok(_) => continue,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e).with_context(|| format!("stat {}", cand.display()));
-            }
-        }
-        let claimed = if is_dir {
-            std::fs::create_dir(&cand)
-        } else {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&cand)
-                .map(drop)
-        };
-        match claimed {
-            Ok(()) => {
-                if is_dir {
-                    std::fs::remove_dir(&cand).with_context(|| {
-                        format!("remove case-fix placeholder {}", cand.display())
-                    })?;
-                }
-                return Ok(cand);
-            }
-            Err(e) => {
-                // A racing creator, or a candidate that appeared between the
-                // stat and the claim: the name is ours only if we created it.
-                match std::fs::symlink_metadata(&cand) {
-                    Ok(_) => continue,
-                    Err(_) => {
-                        return Err(e).with_context(|| format!("claim {}", cand.display()));
-                    }
-                }
-            }
-        }
+    let mut builder = Builder::new();
+    builder.prefix(".girsync_case_tmp.");
+    if is_dir {
+        let dir = builder
+            .tempdir_in(parent)
+            .with_context(|| format!("claim case-fix temporary beside {}", from.display()))?;
+        // Disarm tempfile's guard and free the name: step1 renames the source
+        // onto it, and Windows cannot rename onto an existing directory.
+        let tmp = dir.keep();
+        std::fs::remove_dir(&tmp)
+            .with_context(|| format!("remove case-fix placeholder {}", tmp.display()))?;
+        Ok(tmp)
+    } else {
+        // Keep the empty placeholder in place for step1 to replace. Closing our
+        // handle first keeps the rename portable to Windows.
+        let (file, path) = builder
+            .tempfile_in(parent)
+            .with_context(|| format!("claim case-fix temporary beside {}", from.display()))?
+            .into_parts();
+        drop(file);
+        let tmp = path
+            .keep()
+            .with_context(|| format!("keep case-fix placeholder beside {}", from.display()))?;
+        Ok(tmp)
     }
-    bail!("no free case-fix temporary beside {}", from.display())
 }
 
 /// The error a failed step 1 leaves behind, after removing the file placeholder.
@@ -837,6 +819,42 @@ mod tests {
         assert_eq!(out.renamed, 1);
         assert!(out.on_disk.is_none());
         assert!(dst.join("Data.txt").is_file(), "the real rename happened");
+    }
+
+    /// The claim itself: a fresh, short, prefixed sibling that never reuses or
+    /// modifies a pre-existing lookalike, with the directory placeholder freed
+    /// before step1. The random suffix is the library's business; the tool only
+    /// promises the prefix, the parent and uniqueness.
+    #[test]
+    fn a_case_tmp_claim_is_a_unique_prefixed_sibling() {
+        let root = girpr_tempdir::TempDir::new("girsync_rename", "claim");
+        let from = root.join("Data.txt");
+        let a = claim_case_tmp(&from, false).expect("claim a file temporary");
+        let b = claim_case_tmp(&from, false).expect("claim another file temporary");
+        assert_ne!(a, b, "two claims never share a name");
+        assert_eq!(a.parent(), Some(root.as_ref()), "a temporary is a sibling");
+
+        let precious = root.join(".girsync_case_tmp.PRECIOUS");
+        std::fs::write(&precious, b"keep").unwrap();
+        let c = claim_case_tmp(&from, false).unwrap();
+        assert_ne!(c, precious, "a pre-existing lookalike is not reused");
+        assert_eq!(std::fs::read(&precious).unwrap(), b"keep");
+
+        let d = claim_case_tmp(&from, true).unwrap();
+        assert!(
+            !d.exists(),
+            "the directory placeholder is gone before step1"
+        );
+
+        for path in [&a, &b, &c] {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("a utf-8 temporary name");
+            assert!(name.starts_with(".girsync_case_tmp."), "the name is {name}");
+            assert!(name.len() < 64, "the name stays short: {name}");
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// A directory rename moves its whole subtree, so a child that differed only

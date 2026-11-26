@@ -80,6 +80,10 @@ girpr-filter = { path = "../../crates/filter" }
 # record layouts; the leaf only writes the object in the order asked for.
 girpr-report-core = { path = "../../crates/report-core" }
 rayon = "1.12.0"
+# The case-fix rename claims its short temporary sibling with an exclusive
+# create and random name; tempfile owns that claim in the shipped pass too, so
+# this is a regular dependency rather than a test-only one.
+tempfile = "3.27"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2.5"
