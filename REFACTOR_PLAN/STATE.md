@@ -16,8 +16,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | Repair futures combinators → futures-util | completed | 9af85115 | Deviation: added per-fan-out Semaphore (FuturesOrdered polls all; ManifestBudget caps at 4 only); both permits acquired inside each fetch. |
 | T03 | Salvage order → petgraph | skipped | | Byte-level safety proof tied to one global write direction + disjoint destinations; a graph order cannot re-establish it without changing correctness-critical src/repair/file/** byte movement (non-finding). Durable: temp.rs has no salvage-order consumption (R6 consumer list stale); disjointness premise fails in Tier::Ordered — latent risk if revisited. |
 | T04 | Root test origin server → axum | completed | e51d485c | Stale hints: manifest setup ~388–401 (not 554–865); metadata.rs tests are a second server user but needed no edits (API kept). Drop now sends a watch stop signal to cancel detached axum handlers. Removed only the accept-loop lifecycle test + wait_until_idle. |
-| T05 | CLI help snapshots → trycmd + strip-ansi | pending_review | c990d1bf | trycmd 1.2.1 inline snapshot at tests/cmd/help.trycmd (no .stdout sidecar needed); harness uses default_bin_path; --jobs test adapted to clap introspection. T06 seam untouched. Follow-up held for reviewer: add a -h short-help trycmd case. |
-| T06 | Process assertions → assert_cmd | pending_review | e0e8aa96 | Async seams intentionally stay tuple-based (run_binary, run_binary_with_closed_stdout, run_data_plane_as, run_audio_refusal, repair_machinery inline spawn) — they share a mock-server runtime or need closed stdout. Follow-up held for reviewer: local predicate wrapper for Output to unify async-seam assertions. |
+| T05 | CLI help snapshots → trycmd + strip-ansi | completed | c990d1bf | trycmd 1.2.1 inline snapshot at tests/cmd/help.trycmd (no .stdout sidecar needed); harness uses default_bin_path; --jobs test adapted to clap introspection. T06 seam untouched. |
+| T06 | Process assertions → assert_cmd | completed | e0e8aa96 | Async seams intentionally stay tuple-based (run_binary, run_binary_with_closed_stdout, run_data_plane_as, run_audio_refusal, repair_machinery inline spawn) — they share a mock-server runtime or need closed stdout. |
 | T07 | Structured JSON log capture | todo | | §R8 lines 244–257, §LEAF-10 lines 530–534; adds a surface to shared girpr-log |
 | T08 | INI parser/merger → rust-ini | todo | | §APP-1 lines 262–279; byte-exact pins need adjustment, policy layer stays |
 | T09 | URL assembly & percent-encoding | todo | | §X2 lines 90–109, §APP-2 281–294, §APP-5 321–332, §CAP-3 689–700, §CAP-4 702–710; records the `game_ids[]` decision below |
@@ -51,6 +51,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 |----|------------------|-------|------|
 | A | T01, T02 | done | Both completed; no fix or revert; endorsed F01, F02. |
 | C | T04 | done | Completed; no fix or revert; endorsed F03. Confirmed F02 race is pre-existing, not a T04 regression. |
+| D | T05, T06 | done | Both completed; no fix or revert; endorsed F04, dropped the async predicate-wrapper suggestion. |
 
 ## Follow-ups
 
@@ -63,6 +64,7 @@ A follow-up planning review batches the survivors only after every task is settl
 | F01 | Update docs/04-scope-limitation-spec.md:727 wording from "scoped worker" to "rayon worker" after purge delegate | open | Docs-only; endorsed by review A. |
 | F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing, reproduced on pre-T04 parent and single-thread-clean; T04's extra tasks raise its frequency. Endorsed by reviews A and C. |
 | F03 | Type scripted statuses as axum::http::StatusCode instead of Reply::Status(&'static str) + local string-to-code conversion | open | Purely type-safety cleanup; behavior correct. Endorsed by review C. |
+| F04 | Add a trycmd case for short -h output (distinct clap rendering path from --help) | open | Low priority, non-blocking. Endorsed by review D. |
 
 ## Persistent context
 
