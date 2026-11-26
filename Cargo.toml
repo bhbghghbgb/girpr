@@ -156,6 +156,10 @@ anyhow = "1.0.105"
 # parameter, so its retry waits stay exactly as before.
 girpr-retry = { path = "crates/retry" }
 walkdir = "2.5.1"
+# Owns the purge stage's bounded parallel stat/delete: rayon's indexed collect
+# returns one result per candidate in input order, so the caller still emits
+# every purge line in plan order on its own tracing dispatcher.
+rayon = "1.12.0"
 # The shared --include/--exclude glob rules, used by this crate's repair scope
 # and by girsync. One glob version and one set of matching rules for both.
 girpr-filter = { path = "crates/filter" }

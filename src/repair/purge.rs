@@ -18,82 +18,13 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::Result;
+use rayon::prelude::*;
 use walkdir::WalkDir;
 
 #[cfg(windows)]
 use crate::util::path::path_key;
 use crate::util::path::rel_from_base;
 use girpr_repair_plan::{PathScope, PurgeCandidate, PurgeKeys, PurgePlan};
-
-/// Upper bound on the scoped workers a purge stat or delete stage opens. Enough
-/// to overlap thousands of independent per-path syscalls without tying one OS
-/// thread to each candidate.
-const MAX_PURGE_THREADS: usize = 8;
-
-/// Apply `f` to every item on at most [`MAX_PURGE_THREADS`] scoped threads and
-/// return one result per input, in input order.
-///
-/// The tree walk and the plan stay single-threaded; only the independent
-/// per-path syscalls are fanned out. Each worker owns a disjoint slice of
-/// `results`, so no lock is needed. `thread::scope` joins every worker before
-/// returning, which is what lets callers emit logs in plan order and run the
-/// empty-directory sweep only after all deletes have finished. Callers emit the
-/// lines themselves on the calling thread: the tracing dispatcher installed by
-/// `spawn_blocking_traced` is thread-local and does not reach scoped workers.
-fn parallel_map<T, R, F>(items: &[T], f: F) -> Vec<R>
-where
-    T: Sync,
-    R: Send,
-    F: Fn(&T) -> R + Sync,
-{
-    let len = items.len();
-    let mut results: Vec<Option<R>> = (0..len).map(|_| None).collect();
-    if len == 0 {
-        return Vec::new();
-    }
-
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, MAX_PURGE_THREADS)
-        .min(len);
-    if workers == 1 {
-        for (slot, item) in results.iter_mut().zip(items) {
-            *slot = Some(f(item));
-        }
-    } else {
-        let chunk = len / workers + usize::from(!len.is_multiple_of(workers));
-        std::thread::scope(|scope| {
-            let mut rest_items = items;
-            let mut rest_results = results.as_mut_slice();
-            for _ in 0..workers {
-                let take = chunk.min(rest_items.len());
-                if take == 0 {
-                    break;
-                }
-                let (item_chunk, item_tail) = rest_items.split_at(take);
-                rest_items = item_tail;
-                let (result_chunk, result_tail) = rest_results.split_at_mut(take);
-                rest_results = result_tail;
-                let worker_f = &f;
-                scope.spawn(move || {
-                    for (slot, item) in result_chunk.iter_mut().zip(item_chunk) {
-                        *slot = Some(worker_f(item));
-                    }
-                });
-            }
-        });
-    }
-    // Every slot was written by exactly one worker; the range covers all `len`
-    // inputs. Keeping the conversion here means callers never see an Option.
-    results
-        .into_iter()
-        .map(|slot| match slot {
-            Some(value) => value,
-            None => unreachable!("every parallel_map slot is filled by a worker"),
-        })
-        .collect()
-}
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
 /// See <https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263>
@@ -155,7 +86,7 @@ fn walk_and_classify(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> Wa
     // Keep the DirEntry with each candidate so the stat stage can call the
     // same `DirEntry::metadata()` the old inline path did: on Windows that is a
     // cached read from the walk (no syscall), on Unix an lstat. Both are safe to
-    // run on scoped threads, and only the latter is a real parallel syscall.
+    // run on rayon workers, and only the latter is a real parallel syscall.
     let mut pending: Vec<(PurgeCandidate, walkdir::DirEntry)> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
@@ -238,11 +169,14 @@ fn walk_and_classify(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> Wa
         }
     }
 
-    // Stat the candidates on bounded scoped threads. Sorting first makes the
-    // result slots — and the warnings emitted from them — follow the same
+    // Stat the candidates in parallel. Sorting first makes the collected results
+    // — and the warnings the caller emits from them — follow the same
     // deterministic path order the plan's delete list uses.
     pending.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    let stats = parallel_map(&pending, |(_, entry)| entry.metadata().map(|m| m.len()));
+    let stats = pending
+        .par_iter()
+        .map(|(_, entry)| entry.metadata().map(|m| m.len()))
+        .collect::<Vec<_>>();
     let mut files = Vec::with_capacity(pending.len());
     for ((candidate, _), stat) in pending.into_iter().zip(stats) {
         let bytes = match stat {
@@ -370,10 +304,14 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
     }
 
     // The candidates are distinct paths from one non-following walk, so their
-    // deletes are independent. Fan them out on bounded scoped threads and
-    // collect one outcome per index slot. `scope` joins every worker before the
-    // next line runs.
-    let outcomes = parallel_map(&plan.files, |c| std::fs::remove_file(&c.path));
+    // deletes are independent. Fan them out on rayon workers and collect one
+    // outcome per input, in plan order. `collect` joins the work before the next
+    // line runs.
+    let outcomes = plan
+        .files
+        .par_iter()
+        .map(|c| std::fs::remove_file(&c.path))
+        .collect::<Vec<_>>();
     // Emit in plan order, not completion order, so a rerun's log is comparable.
     // Logging here (not in a worker) also keeps it on the caller's dispatcher.
     let mut deleted_bytes = 0u64;
@@ -903,7 +841,7 @@ mod tests {
         assert!(dir.join("game.dat").exists());
     }
 
-    /// The delete stage fans syscalls out on scoped threads, but the purge log
+    /// The delete stage fans syscalls out on rayon workers, but the purge log
     /// lines must still be emitted in plan (sorted-path) order, not completion
     /// order. Enough candidates to populate more than one worker.
     #[test]
