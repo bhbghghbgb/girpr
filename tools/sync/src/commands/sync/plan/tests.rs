@@ -634,6 +634,86 @@ fn a_relative_target_keeps_its_alias_spelling() {
     );
 }
 
+/// Direct `..`-escape cases for the relative-target walk. `Path::clean()` keeps
+/// a leading `..` on a relative path, so the refusal is checked on the cleaned
+/// result rather than by popping while walking.
+#[test]
+fn a_relative_target_that_escapes_is_refused() {
+    // Exactly enough `..` to climb back to the root, then a name: stays in.
+    assert_eq!(
+        alias_target("a/b/c", Path::new("../../d")).as_deref(),
+        Some("d"),
+        "two `..` cancel the two parent components and stay under the root"
+    );
+    // One more `..` than there are parents: escapes, even though a later name
+    // would otherwise land back under the root. `clean()` keeps the leading
+    // `..`, so it is refused rather than silently recovered.
+    assert_eq!(
+        alias_target("a/b/c", Path::new("../../../d")).as_deref(),
+        None,
+        "the third `..` escapes; a following name does not bring it back"
+    );
+    // A target that collapses to the link's own directory is the root itself.
+    assert_eq!(
+        alias_target("d/a.bin", Path::new("..")).as_deref(),
+        None,
+        "a target that cleans to `.` names no entry under the root"
+    );
+    assert_eq!(
+        alias_target("d/a.bin", Path::new(".")).as_deref(),
+        Some("d"),
+        "an explicit `.` target names the link's own directory"
+    );
+}
+
+/// Absolute targets are not aliases under the root: the old walk refused a
+/// `Prefix`/`RootDir` component, and `PathBuf::push` would otherwise replace the
+/// base rather than append to it.
+#[cfg(unix)]
+#[test]
+fn an_absolute_relative_target_is_refused() {
+    assert_eq!(alias_target("a", Path::new("/abs")).as_deref(), None);
+}
+
+/// Windows counterpart of the absolute-target refusal, including a drive-relative
+/// prefix (`C:foo`) that has no root but is still not an in-root alias.
+#[cfg(windows)]
+#[test]
+fn an_absolute_relative_target_is_refused() {
+    assert_eq!(alias_target("a", Path::new(r"C:\abs")).as_deref(), None);
+    assert_eq!(alias_target("a", Path::new(r"\abs")).as_deref(), None);
+    assert_eq!(alias_target("a", Path::new("C:foo")).as_deref(), None);
+}
+
+/// Direct `..`-escape cases for an absolute junction target stripped against
+/// its canonical root. Uses relative synthetic paths so it runs on both platforms.
+#[test]
+fn an_absolute_alias_that_escapes_is_refused() {
+    // Inside: `clean()` cancels the `..`, giving the same spelling as before.
+    assert_eq!(
+        absolute_alias(Path::new("dst/a/../b"), Path::new("dst"), None).as_deref(),
+        Some("b"),
+        "a `..` that stays inside the root is resolved lexically"
+    );
+    // Escape: more `..` than names, so a leading `..` survives `clean()`.
+    assert_eq!(
+        absolute_alias(Path::new("dst/a/../../b"), Path::new("dst"), None).as_deref(),
+        None,
+        "the second `..` escapes the root and is refused"
+    );
+    assert_eq!(
+        absolute_alias(Path::new("dst/../../b"), Path::new("dst"), None).as_deref(),
+        None,
+        "a leading escape stays leading after cleaning"
+    );
+    // A target that cleans to the root itself is not an alias under it.
+    assert_eq!(
+        absolute_alias(Path::new("dst/a/.."), Path::new("dst"), None).as_deref(),
+        None,
+        "a path that cleans to `.` names no entry under the root"
+    );
+}
+
 /// Both canonicalization (`dunce`) and a junction's `read_link` spell a UNC
 /// root with its **two** leading backslashes — `\\server\share\dir` — and no
 /// verbatim prefix, so the alias comparison strips the root directly. The

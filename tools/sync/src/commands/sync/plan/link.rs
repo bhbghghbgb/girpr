@@ -24,6 +24,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use path_clean::PathClean;
 
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
@@ -133,6 +134,28 @@ pub(super) fn keep_ancestors(rel: &str, keep_dirs: &mut HashSet<String>) {
     }
 }
 
+/// Turn a lexically cleaned, root-relative `Path` into a slash-joined rel string.
+///
+/// [`PathClean::clean`] collapses `.` and `..` without asking the filesystem, but
+/// it deliberately keeps a `..` that has no preceding component to cancel on a
+/// relative path. That leading `..` is exactly the escape the hand-written
+/// component walk refused by popping an empty stack, so it is checked here —
+/// once, for both callers — and nowhere else. A cleaned path of `.` means the
+/// candidate denoted the root itself, which is likewise not an alias under it.
+fn cleaned_rel(cleaned: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for comp in cleaned.components() {
+        match comp {
+            Component::Normal(name) => parts.push(name.to_str()?),
+            // The only `CurDir` `clean()` leaves is the sole component of `.`.
+            Component::CurDir => {}
+            // A leading `..` (or any prefix/root) escaped the root. Refuse it.
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// The plan-relative spelling of an absolute link target under `canonical_dst`.
 ///
 /// A junction's `read_link` target is absolute and keeps the spelling the
@@ -150,18 +173,10 @@ pub(super) fn absolute_alias(
     // UNC root with two backslashes and a local drive path without a verbatim
     // prefix, so the two compare directly.
     let rel = target.strip_prefix(canonical_dst).ok()?;
-    let mut parts: Vec<&str> = Vec::new();
-    for comp in rel.components() {
-        match comp {
-            Component::Normal(name) => parts.push(name.to_str()?),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::Prefix(_) | Component::RootDir => return None,
-        }
-    }
-    (!parts.is_empty()).then(|| plan_rel(on_disk, parts.join("/")))
+    // `clean()` is purely lexical; a leading `..` it cannot resolve is kept and
+    // refused by `cleaned_rel`, preserving the old pop-on-empty escape refusal.
+    let rel = cleaned_rel(&rel.clean())?;
+    Some(plan_rel(on_disk, rel))
 }
 
 /// The plan-relative spelling of a link target as the link text names it.
@@ -171,20 +186,22 @@ pub(super) fn absolute_alias(
 /// real paths in `dm` and the delete plan may name either; sparing only one
 /// leaves the other free to remove the storage.
 pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
-    let mut parts: Vec<&str> = cur_alias.split('/').filter(|s| !s.is_empty()).collect();
-    // The target is relative to the directory holding the current link.
-    parts.pop()?;
-    for comp in target.components() {
-        match comp {
-            Component::Normal(name) => parts.push(name.to_str()?),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::Prefix(_) | Component::RootDir => return None,
-        }
+    // An absolute target is refused, as the old component walk refused a
+    // `Prefix`/`RootDir` component. `PathBuf::push` would otherwise replace the
+    // base with it, turning an escape into an alias under a different root.
+    if target
+        .components()
+        .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+    {
+        return None;
     }
-    (!parts.is_empty()).then(|| parts.join("/"))
+    let mut parts: Vec<&str> = cur_alias.split('/').filter(|s| !s.is_empty()).collect();
+    // The target is relative to the directory holding the current link. The
+    // base is a walk-reported rel path, so it has no `.` or `..` of its own for
+    // `clean()` to reinterpret; only the target's spelling is normalized.
+    parts.pop()?;
+    let base = parts.join("/");
+    cleaned_rel(&Path::new(&base).join(target).clean())
 }
 
 /// The on-disk spelling of the entry `name` in the canonical directory `parent`.

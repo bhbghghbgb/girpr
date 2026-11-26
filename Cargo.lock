@@ -1431,6 +1431,7 @@ dependencies = [
  "girsync-leaves",
  "girsync-test-support",
  "md-5",
+ "path-clean",
  "rayon",
  "serde",
  "serde_json",
@@ -2175,6 +2176,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "path-clean"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "pem-rfc7468"

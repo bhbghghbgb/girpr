@@ -84,6 +84,10 @@ rayon = "1.12.0"
 # create and random name; tempfile owns that claim in the shipped pass too, so
 # this is a regular dependency rather than a test-only one.
 tempfile = "3.27"
+# Lexical normalization of junction/symlink target text. `Path::clean()` collapses
+# `.`/`..` without asking the filesystem and keeps a leading `..`, which is what
+# lets the plan refuse a target that escapes the root. Dependency-free.
+path-clean = "1.0.1"
 # Timestamps in the cache are exact nanoseconds since the epoch; filetime owns
 # the seconds/nanos split and the platform-specific stamp mechanics (already a
 # transitive package, promoted here for the shipped library).
