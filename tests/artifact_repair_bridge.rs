@@ -1,4 +1,4 @@
-//! The cross-tool claim, against the real bundle.
+//! The REPAIR-ONLY cross-tool claim, against the real bundle.
 //!
 //! Spec: [`docs/06-artifact-bridge-spec.md`](../docs/06-artifact-bridge-spec.md).
 //!
@@ -33,7 +33,7 @@
 //! in a debug build (measured: 63 s wall for the whole six-test run — the
 //! cases run in parallel, so that is not the sum of their durations — and 67 s
 //! wall including the rebuild, on a 4-core Windows x86_64 host with
-//! `cargo nextest run -p girpr --test artifact_bridge --run-ignored only`
+//! `cargo nextest run -p girpr --test artifact_repair_bridge --run-ignored only`
 //! against one 7.0.0 → 7.1.0 bundle); the figure depends on the profile and
 //! host, and a release build was not measured here. That is a price worth
 //! paying **before a release that changes the repair spec** and *after
@@ -48,7 +48,7 @@
 //! ```text
 //! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 //! cargo build -p gircap
-//! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
+//! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
 //! ```
 //!
 //! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
@@ -104,7 +104,7 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "artifact_bridge/bundle.rs"]
+#[path = "artifact_repair_bridge/bundle.rs"]
 mod bundle;
 #[path = "common/run_lock.rs"]
 mod run_lock;
@@ -116,7 +116,7 @@ use bundle::{Capture, Patchmaps};
 use girpr_tempdir::TempDir;
 use girpr_test_fixtures::artifact_server as server;
 use girpr_test_fixtures::md5hex;
-use server::{Bridge, Bundle, Origins};
+use server::{Bridge, Bundle, HitKind, Origins};
 
 // ---------------------------------------------------------------------------
 // gate: locating a bundle
@@ -447,7 +447,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(bundle: &Bundle, capture: &Capture) -> Self {
-        let root = TempDir::new("girpr_artifact_bridge", "scratch");
+        let root = TempDir::new("girpr_artifact_repair_bridge", "scratch");
         let game = root.join("game");
         // The install's own state.
         copy_file(
@@ -858,7 +858,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_repair_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
             let run = suite_run().await;
             drive_named(&run, $id).await;
@@ -910,3 +910,119 @@ capture_test!(
     "`removed`: no repair, so no byte total — `totals: null`. It gets the \
      `--purge-only` run, and the file is gone afterwards."
 );
+
+// ---------------------------------------------------------------------------
+// the patch-build route (cheap: a synthetic bundle, no real girpr run)
+// ---------------------------------------------------------------------------
+
+/// The Sophon listener answers `getPatchBuild` with an **empty patch build**,
+/// not a `getBuild` body (misparsed) and not a 404 (retried). Captures carry no
+/// patch-build body, so this synthetic answer is the deliberate decision that
+/// keeps the artifact contracts — `SUMMARY`, `PLAN`, `PLAN` JSON and the hit
+/// expectations — byte-stable. The hit is recorded like any other API call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sophon_listener_serves_an_empty_patch_build_and_logs_it() {
+    let guard = TempDir::new("girpr_artifact_bridge", "patch-route");
+    let root = guard.to_path_buf();
+    std::fs::create_dir_all(root.join("api")).expect("create api/");
+    write_json(
+        &root.join("MANIFEST.json"),
+        &serde_json::json!({
+            "schema_version": 2,
+            "tool": "gircap",
+            "biz": {"id": "hk4e_global"},
+            "versions": {
+                "old": {"tag": "7.0.0", "build_id": "OLDbuild000001"},
+                "new": {"tag": "7.1.0", "build_id": "NEWbuild000001"},
+            },
+        }),
+    );
+    for (tag, build) in [("7.0.0", "OLDbuild000001"), ("7.1.0", "NEWbuild000001")] {
+        write_json(
+            &root.join("api").join(format!("getBuild.{tag}.json")),
+            &serde_json::json!({
+                "retcode": 0,
+                "message": "OK",
+                "data": {
+                    "build_id": build,
+                    "tag": tag,
+                    "manifests": [{
+                        "category_id": "10016",
+                        "matching_field": "game",
+                        "manifest": {
+                            "id": format!("manifest_test_{tag}"),
+                            "checksum": "00000000000000000000000000000000",
+                            "compressed_size": "1",
+                            "uncompressed_size": "1",
+                        },
+                        "chunk_download": {
+                            "url_prefix": "https://cdn.example/chunks",
+                            "url_suffix": ""
+                        },
+                        "manifest_download": {
+                            "url_prefix": "https://cdn.example/manifests",
+                            "url_suffix": ""
+                        },
+                    }],
+                },
+            }),
+        );
+    }
+
+    let bridge = Bridge::start(Bundle::open(&root)).await;
+    let sophon = bridge.origins().sophon_base.clone();
+    let client = reqwest::Client::new();
+
+    // The shape the product POSTs in the plan phase: query-only, no body.
+    let response = client
+        .post(format!(
+            "{sophon}/getPatchBuild?branch=main&package_id=pkg&password="
+        ))
+        .send()
+        .await
+        .expect("POST getPatchBuild");
+    assert_eq!(response.status().as_u16(), 200);
+    let patch: serde_json::Value = response.json().await.expect("patch-build JSON");
+    assert_eq!(patch["retcode"], 0);
+    assert_eq!(patch["message"], "OK");
+    assert_eq!(
+        patch["data"]["manifests"]
+            .as_array()
+            .expect("manifests[]")
+            .len(),
+        0,
+        "a capture has no patch-build body: the answer must carry no delete tags"
+    );
+
+    // The existing `getBuild` answer is untouched by the new branch.
+    let response = client
+        .get(format!(
+            "{sophon}/getBuild?branch=main&package_id=pkg&password=&tag=7.1.0"
+        ))
+        .send()
+        .await
+        .expect("GET getBuild");
+    assert_eq!(response.status().as_u16(), 200);
+    let build: serde_json::Value = response.json().await.expect("build JSON");
+    assert_eq!(build["data"]["build_id"], bridge.bundle().new_build);
+
+    let hits = bridge.hits();
+    assert!(
+        hits.iter()
+            .any(|h| h.kind == HitKind::Api && h.id == "getPatchBuild"),
+        "the empty answer must still be recorded: {hits:?}"
+    );
+    assert!(
+        hits.iter()
+            .any(|h| h.kind == HitKind::Build && h.id == "7.1.0"),
+        "a normal getBuild must still be a Build hit: {hits:?}"
+    );
+}
+
+fn write_json(path: &Path, value: &serde_json::Value) {
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(value).expect("serialize the body"),
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+}

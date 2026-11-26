@@ -48,7 +48,14 @@ girpr-proto = { path = "../../crates/proto" }
 # holds no index, collision policy or first-match order — those stay here.
 girpr-chunk-identity = { path = "../../crates/chunk-identity" }
 girpr-retry = { path = "../../crates/retry" }
+# The persistent plan's value types and pure rules. The manifest descriptors
+# are `girpr_dispatch` values; this crate owns only their fetch and the
+# full-file downloader, never the decisions made over the parsed rows.
+girpr-dispatch = { path = "../dispatch" }
+girpr-persistent-plan = { path = "../persistent-plan" }
 girpr-util-hash = { path = "../util-hash" }
+# The downloader writes a verified body to a temp sibling before publishing it.
+tempfile = "3.27"
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
 # not the config writer, so an ini edit leaves this fetch tree cached.
 girpr-util-path = { path = "../util-path" }
@@ -58,6 +65,8 @@ girpr-util-path = { path = "../util-path" }
 # fetch-side helper stays local and keeps its own contract: the product's and
 # both capture mocks script different replies and read different journals.
 girpr-loopback-mock = { path = "../../crates/loopback-mock" }
+# Download tests write into one scratch tree per case, under <temp>/girpr-test/.
+girpr-tempdir = { path = "../../crates/tempdir" }
 # The `#[tokio::test]` driver. `reqwest` enables the network surface in every
 # build; naming it here keeps the tests' own requirement explicit.
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }

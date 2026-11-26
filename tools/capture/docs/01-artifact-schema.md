@@ -166,7 +166,7 @@ is the completion proof.
 ```
 
 `matrix[].status` ∈ `captured` | `covered_by` | `over_budget` | `unavailable`.
-A class is never simply absent (assertion A17). All four states are acceptable
+A class is never simply absent (assertion A17). All recorded states are acceptable
 to A17: the assertion is about the matrix being *complete* — every class has a
 row and every row says what happened to it — and `over_budget` ("a candidate
 existed and this run's budget would not pay for it") is a complete answer. The
@@ -197,7 +197,7 @@ dependency runs both ways.
 
 `verify/checksums.json` is the complete inventory: `file_count` is one less than
 the number of files on disk (it cannot list the close-out documents it renders),
-and it covers all four.
+and it covers every state.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
@@ -335,9 +335,9 @@ two documents reconcilable.
 ## 5a. `api/error_shapes.json`
 
 What the API does with a request it will **not** serve, with no blob downloads.
-Seven shapes on every capture.
+The error shapes are recorded on every capture.
 
-The two route families disagree about what failure looks like, and a consumer
+The route families disagree about what failure looks like, and a consumer
 that replays a bundle has to reproduce both. Without this document it would have
 to invent them, and its claim that "the API 404s things" would be unfounded —
 a bundle recorded only successes contains no not-found evidence at all.
@@ -379,7 +379,7 @@ a bundle recorded only successes contains no not-found evidence at all.
 | `volatile_fields` | names that change per request, so the body **cannot** be replayed byte-for-byte |
 | `retryable` | **derived from the tool's own retry policy**: "would the fetcher have retried this status?" |
 
-The seven ids are `blob_missing`, `chunk_missing`, `blob_wrong_build`,
+The ids are `blob_missing`, `chunk_missing`, `blob_wrong_build`,
 `getbuild_unknown_tag`, `getbuild_bad_package`, `getgameconfigs_bad_game_id`,
 `getgamebranches_bad_game_id`.
 
@@ -465,7 +465,7 @@ failures" true of some bundles and not others, with nothing to say which.
 
 ## 5c. `diagnostics/`
 
-Two documents that keep what a capture refused or had to rename. Both are
+Documents that keep what a capture refused or had to rename. Each is
 written on every run, including a run that writes no other diagnostics: an empty
 list says "nothing was refused/escaped", which is a measurement, not a gap.
 
@@ -652,7 +652,7 @@ document's identity does not depend on how it was produced.
 
 `unknown_field6` is the wire's tag 6. Its meaning is unknown; it is preserved
 because the upstream schema carries it and dropping it would make this dump a
-lossy transform. *(measured)* it is stable across the two builds for the same
+lossy transform. It is preserved across builds for the same
 logical chunk even when content differs, which is exactly why it must not be
 guessed at.
 
@@ -784,7 +784,7 @@ simplification in the main tool; `gircap` never acts on it.
 ## 12. `chunks/index.json` and `chunks/blobs/`
 
 One blob per distinct `chunk_id`, byte-exact (zstd as served), stored once even
-when several files or both builds reference it.
+when several files or different builds reference it.
 
 ```jsonc
 { "schema_version": 3,
@@ -819,9 +819,9 @@ when several files or both builds reference it.
 `role` ∈ `materialize_old` | `materialize_new` | `patch_fetch`. `patch_fetch` is
 always a subset of `materialize_new` for the same file (assertion A12).
 
-### `verified` — four keys, not three
+### `verified` — the keys
 
-`verified` carries the **four** A6 checks, and the names are precise:
+`verified` carries the A6 checks, and the names are precise:
 
 | key | claim |
 |---|---|
@@ -830,7 +830,7 @@ always a subset of `materialize_new` for the same file (assertion A12).
 | `md5_decompressed_matches` | `md5(zstd(raw)) == uncompressed_md5` — it is the chunk the manifest named |
 | `decoded_size_matches` | `len(decoded) == uncompressed_size` |
 
-There is **no `size_matches` key**; the two size claims are named separately
+There is **no `size_matches` key**; the size claims are named separately
 because they are separate facts about different byte counts (the frame's length
 as served, and the length after decoding).
 
@@ -856,7 +856,7 @@ never fetched at all has a null `stored_path`, a null-ish row body and no
 
 ### `fetch_error`, `partial` and `measurement_error` — why a row is unusable
 
-Version 3 added three fields so that "this blob cannot be used" always has a
+Version 3 added fields so that "this blob cannot be used" always has a
 machine-readable cause and is never inferred from a null path alone.
 
 `fetch_error` is an object — `source`, `url`, `status`, `transport`, `attempts`,
@@ -941,7 +941,7 @@ A chunk's URL is `…/chunks/<series>/<build_id>/<16hex>_<32hex>`, so the build 
 is **where the bytes live**, not a label on them. The same chunk id under the
 other build's prefix answers `404` with an `application/xml` `NoSuchKey` body
 (measured against `autopatchhk.yuanshen.com`, `Server: AliyunOSS`) — see
-[`00-spec.md` §3.7](00-spec.md). `tag` does not determine `build_id`: two tags can
+[`00-spec.md` §3.7](00-spec.md). `tag` does not determine `build_id`: different tags can
 map to different build ids over time, so a consumer that has to build a chunk URL,
 or decide whether an observed request was namespaced correctly, cannot derive it
 from the tag.
@@ -1137,12 +1137,12 @@ This is the **complete** inventory of the bundle: every file except
 files on disk, and a bundle whose count disagrees with its tree fails A16.
 
 **`file_count` is a property of the shape and `total_bytes` is a property of the
-run.** The count does not move between two captures of the same pair — the same
-documents, the same tree — while the byte total moves by a few bytes, because
-the capture's own timestamp and id are in some of the documents and their
-lengths change with it. So a reader comparing two bundles of the same pair
-should expect the counts to agree and the byte totals to differ slightly, and
-should not read the difference as a different tree.
+run.** The count follows the tree's shape, which is the same for captures of the
+same pair — the same documents, the same tree — while the byte total moves with
+the capture's own timestamp and id, which appear in some of the documents and
+change their lengths. A reader comparing bundles of the same pair should expect
+the counts to agree and the byte totals to differ, and should not read the
+difference as a different tree.
 
 **`encoding: gzip` means the digest is of the _decompressed_ body**, and `bytes`
 is the decompressed length too. That is the only way a reader can check the
@@ -1152,20 +1152,20 @@ verifying a `.gz` entry means decompressing it first — which is what `gircap
 verify` does, and why A16 would fail if the rule and the implementation
 disagreed.
 
-A16 is deliberately **two independent passes**: one that writes the digests and
-one that re-reads the tree and compares. A single pass would make the assertion a
+A16 is deliberately **independent passes**: one that writes the digests and one
+that re-reads the tree and compares. A single pass would make the assertion a
 tautology. Because `checksums.json` must cover `selfcheck.json` — and `README.md`,
 which renders it — and `selfcheck.json` must carry the A16 row, the close-out
-writes those documents twice and the second scan is the one recorded. Two passes
-converge exactly: the second `checksums.json` is scanned after the final
+writes those documents again and the later scan is the one recorded. The passes
+converge exactly: the later `checksums.json` is scanned after the final
 `selfcheck.json` and `README.md`, and neither of those sizes depends on a digest,
-so a third pass would find nothing new.
+so another pass would find nothing new.
 
 **A16's row states a file count and not a byte total.** That is forced, not
 chosen: the row lives inside `selfcheck.json`, which is one of the files
 `total_bytes` sums, so the last version of that number to be written is the one in
 `checksums.json` — and any total in the row describes an earlier, smaller tree.
-The count is safe, because no file appears or disappears between the two passes.
+The count is safe, because no file appears or disappears between the passes.
 
 ## 16. `verify/selfcheck.json`
 

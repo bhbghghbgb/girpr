@@ -255,6 +255,28 @@ pub struct PlanTotals {
     /// the key is then absent: the figure is the scan's own, and a run that
     /// did not scan has none to report.
     pub scan_bytes: Option<u64>,
+    /// Flag-only persistent totals. `None` on an unflagged run, so the `PLAN`
+    /// line and `--plan-out` keep their bytes exactly.
+    pub persistent: Option<PersistentPlanTotals>,
+}
+
+/// The flag-only persistent part of a plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PersistentPlanTotals {
+    pub files: u64,
+    pub bytes: u64,
+    /// `--scan` reads only base files; their full-file digest gate is the
+    /// check. This says so on the data plane instead of leaving the omission
+    /// implicit.
+    pub scan_excludes_persistent: bool,
+    /// The same status word the `SUMMARY persistent=` key carries.
+    pub status: &'static str,
+    /// Cleaned rels of planned persistent assets, in plan order.
+    pub assets: Vec<String>,
+    /// Cleaned rels of the marker block.
+    pub markers: Vec<String>,
+    /// Cleaned rels of the three manifest mirrors.
+    pub mirrors: Vec<String>,
 }
 
 impl PlanTotals {
@@ -265,6 +287,7 @@ impl PlanTotals {
         scoped: bool,
         disk: &DiskPlan,
         scan_bytes: Option<u64>,
+        persistent: Option<PersistentPlanTotals>,
     ) -> Self {
         Self {
             files: plan.len() as u64,
@@ -286,6 +309,7 @@ impl PlanTotals {
             est_write_bytes: disk.est_write_bytes,
             est_extra_bytes: disk.est_extra_bytes,
             scan_bytes,
+            persistent,
         }
     }
 }
@@ -310,10 +334,21 @@ pub fn plan_record(t: &PlanTotals) -> Record {
         Some(n) => rec.put("scan_bytes", n),
         None => rec,
     };
-    rec.put("purge_files", t.purge_files)
+    let rec = rec
+        .put("purge_files", t.purge_files)
         .put("purge_bytes", t.purge_bytes)
         .put("max_chunk_bytes", t.max_chunk_bytes)
-        .put("scoped", u64::from(t.scoped))
+        .put("scoped", u64::from(t.scoped));
+    if let Some(p) = &t.persistent {
+        rec.put("persistent_files", p.files)
+            .put("persistent_bytes", p.bytes)
+            .put(
+                "scan_excludes_persistent",
+                u64::from(p.scan_excludes_persistent),
+            )
+    } else {
+        rec
+    }
 }
 
 /// The `--plan-out` document.
@@ -328,6 +363,28 @@ pub struct PlanDocument<'a> {
     pub repair: Vec<RepairEntry<'a>>,
     /// Every file the files-cleanup would delete.
     pub purge: Vec<PurgeEntry<'a>>,
+    /// The persistent tier, present only under `--with-persistent`. Skipped
+    /// by the serializer when absent, so an unflagged document has the old
+    /// shape and bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent: Option<PersistentDocument>,
+}
+
+/// The `--plan-out` persistent section. It is a listing: no marker,
+/// mirror or hotfix byte is written by this half of the run.
+#[derive(Debug, Serialize, Default, PartialEq, Eq)]
+pub struct PersistentDocument {
+    pub files: u64,
+    pub bytes: u64,
+    /// `--scan` does not read persistent files; the full-file digest gate is
+    /// the check, and this flag makes the exclusion visible to a reader.
+    pub scan_excludes_persistent: bool,
+    /// `suppressed` means an in-scope hotfix was out of scope, so the marker
+    /// block and mirrors will be withheld.
+    pub scope: &'static str,
+    pub assets: Vec<String>,
+    pub markers: Vec<String>,
+    pub mirrors: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -384,6 +441,7 @@ impl<'a> PlanDocument<'a> {
             "the disk plan covers every file in the plan"
         );
         Self {
+            persistent: None,
             repair: plan
                 .iter()
                 .map(|(id, f)| {
@@ -417,6 +475,12 @@ impl<'a> PlanDocument<'a> {
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    /// The flagged form: the same document with a persistent section.
+    pub fn with_persistent(mut self, section: PersistentDocument) -> Self {
+        self.persistent = Some(section);
+        self
     }
 
     /// Render to the file named by `--plan-out`.
@@ -555,6 +619,7 @@ mod tests {
             true,
             &DiskPlan::default(),
             None,
+            None,
         );
         let rec = plan_record(&t);
         assert_eq!(
@@ -563,7 +628,7 @@ mod tests {
              purge_files=1 purge_bytes=4096 max_chunk_bytes=30 scoped=1"
         );
         // No purge flag: the purge fields are zero, not absent.
-        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None, None);
         assert_eq!(
             plan_record(&t).text(),
             "PLAN files=3 est_download_bytes=60 est_write_bytes=0 est_extra_bytes=0 \
@@ -581,6 +646,7 @@ mod tests {
             60,
             true,
             &DiskPlan::default(),
+            None,
             None,
         );
         let rec = plan_record(&t);
@@ -603,17 +669,82 @@ mod tests {
 
     #[test]
     fn a_plan_that_is_not_scoped_reports_zero_not_a_boolean() {
-        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None, None);
         let v: serde_json::Value = serde_json::from_str(&plan_record(&t).json()).unwrap();
         assert_eq!(v["scoped"], 0);
         assert!(!v["scoped"].is_boolean(), "{v}");
+    }
+
+    /// The persistent keys are flag-only: an unflagged plan line is unchanged,
+    /// while a flagged one appends the two totals and the scan exclusion after
+    /// `scoped`, on both planes.
+    #[test]
+    fn persistent_totals_are_flag_only_on_the_plan_line_and_document() {
+        let plain = plan_record(&PlanTotals::new(
+            &plan(),
+            None,
+            60,
+            false,
+            &DiskPlan::default(),
+            None,
+            None,
+        ));
+        let line = plain.text();
+        assert!(!line.contains("persistent"), "{line}");
+        assert_eq!(plain.json().matches("persistent").count(), 0);
+
+        let section = PersistentPlanTotals {
+            files: 4,
+            bytes: 128,
+            scan_excludes_persistent: true,
+            status: "published",
+            assets: vec!["a.blk".into()],
+            markers: vec!["m".into()],
+            mirrors: vec!["r".into()],
+        };
+        let flagged = plan_record(&PlanTotals::new(
+            &plan(),
+            None,
+            60,
+            false,
+            &DiskPlan::default(),
+            None,
+            Some(section.clone()),
+        ));
+        assert!(flagged.text().ends_with(
+            "scoped=0 persistent_files=4 persistent_bytes=128 scan_excludes_persistent=1"
+        ));
+        let v: serde_json::Value = serde_json::from_str(&flagged.json()).unwrap();
+        assert_eq!(v["persistent_files"], 4);
+        assert_eq!(v["persistent_bytes"], 128);
+        assert_eq!(v["scan_excludes_persistent"], 1);
+
+        let plan = plan();
+        let disk = plain_disk(&plan);
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &disk).with_persistent(
+            PersistentDocument {
+                files: section.files,
+                bytes: section.bytes,
+                scan_excludes_persistent: true,
+                scope: "published",
+                assets: section.assets.clone(),
+                markers: section.markers.clone(),
+                mirrors: section.mirrors.clone(),
+            },
+        );
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("\"persistent\""), "{json}");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["persistent"]["files"], 4);
+        assert_eq!(v["persistent"]["assets"][0], "a.blk");
+        assert_eq!(v["persistent"]["scope"], "published");
     }
 
     #[test]
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
         // peak transient disk is jobs x that.
-        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None, None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
             &RepairPlan::from_files("9.9", vec![]),
@@ -621,6 +752,7 @@ mod tests {
             0,
             false,
             &DiskPlan::default(),
+            None,
             None,
         );
         assert_eq!(t.max_chunk_bytes, 0, "an empty plan has no chunks");

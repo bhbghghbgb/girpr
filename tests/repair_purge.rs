@@ -396,8 +396,8 @@ async fn purge_only_dry_run_deletes_and_moves_nothing(mock: &MockServer, root: &
     // `--dry-run` is documented as writing nothing. `post::run` has two call
     // sites: the repair run, which reaches it only through `if !readonly`, and
     // the `--purge-only` early return, which is not behind that gate — so the
-    // three destructive steps of the post-phase (deprecated deletes, the audio
-    // cache move, the cleanup pass) have to check the flag themselves.
+    // stale sweep (from the execute half) and the two destructive post-phase
+    // steps (the audio cache move and the cleanup pass) all check the flag.
     let dir = root.join("dry");
     let fx2 = build_fixture();
     for f in &fx2.files {
@@ -417,7 +417,7 @@ async fn purge_only_dry_run_deletes_and_moves_nothing(mock: &MockServer, root: &
     assert_eq!(
         read_game_file(&dir, "old/legacy.dll").unwrap(),
         &[0x7Eu8; 50],
-        "dry-run must not delete deprecated files"
+        "dry-run must not delete stale files"
     );
     assert!(
         read_game_file(&dir, "stray/orphan.dat").is_some(),

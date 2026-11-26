@@ -45,7 +45,7 @@ against `game/` would build its plan from the whole live manifest and fetch the
 entire game instead of the one captured file.
 
 The end-to-end check lives on `girpr`'s side, as
-`girpr`'s `tests/artifact_bridge.rs`. It is `#[ignore]`d because it needs a
+`girpr`'s `tests/artifact_repair_bridge.rs`. It is `#[ignore]`d because it needs a
 bundle and is expensive, and it is run by hand. That is
 also the only arrangement that keeps §2 of the spec honest: `gircap` does not
 invoke `girpr`, read its flags or share its exit codes, so the grep over
@@ -70,7 +70,7 @@ tools/capture/
 │   ├── encoding.rs       # shared percent-encoding (text + URL)
 │   ├── cli/mod.rs        # clap surface
 │   ├── exit/mod.rs       # ExitCode enum + the exit-code table
-│   ├── failure/mod.rs    # Failure, its four constructors, the failure summary
+│   ├── failure/mod.rs    # Failure, its constructors, the failure summary
 │   ├── config/
 │   │   ├── mod.rs        # the resolved run plan: tags, classes, budgets, paths
 │   │   └── tests.rs      # plan-resolution and validation tests
@@ -122,7 +122,7 @@ tools/capture/
 │   │   ├── plan.rs       # the retention plan, A12 and the byte ceiling, before any fetch
 │   │   ├── fill.rs       # execute the plan, or record that there is nothing to fill
 │   │   ├── props.rs      # container sniff, md5/sha256, streaming measurement
-│   │   ├── chunks.rs     # the three sets: materialize_old / _new / patch_fetch
+│   │   ├── chunks.rs     # the retention sets: materialize_old / _new / patch_fetch
 │   │   └── tests.rs      # store and measurement tests
 │   ├── assemble/
 │   │   ├── mod.rs        # the assembly facade and re-exports
@@ -137,7 +137,7 @@ tools/capture/
 │   │   ├── gamedir.rs    # config.ini + audio scan file + variant files
 │   │   ├── index.rs      # MANIFEST.json, checksums.json, the file entry, README rendering
 │   │   ├── selfcheck.rs  # the A1–A17, A19 and A21–A23 assertion log (A18/A20 are verify-only)
-│   │   └── closeout.rs   # the close-out documents with an ordering constraint, and A16's two passes
+│   │   └── closeout.rs   # the close-out documents with an ordering constraint, and A16's independent passes
 │   └── verify/
 │       ├── mod.rs        # `verify` / `materialize` / `list`, offline
 │       ├── bundle.rs     # opening a bundle and its recorded manifest
@@ -157,7 +157,7 @@ tools/capture/
     ├── measured_fixture.rs # the synthetic corpus the costs are measured against
     ├── offline_bundle.rs # build a bundle with the crate's own writers, read it back
     ├── schema.rs         # JSON schema stability, gzip rule, checksums coverage
-    └── bundle_diff.rs    # two captures of one fixture must agree
+    └── bundle_diff.rs    # captures of one fixture must agree
 ```
 
 The largest modules are `src/report/mod.rs`
@@ -220,7 +220,7 @@ no logic of any program, no dependency between programs (docs/00-spec.md §2).
   justifies the decision — never restate the code, and never narrate a change
   that is no longer in the tree.
 
-### Two channels
+### Output channels
 
 **stdout** is the answer: a stream of `report::Record`s, one per line, the
 terminal one last, or the same records as NDJSON objects under `--output json`.
@@ -245,8 +245,8 @@ log chatter mixed in.
 | `tests/bundle_consistency` | the matrix, patchmaps and bundle discovery describe the same bundle | never |
 | `tests/bundle_shapes` | expensive whole-capture shapes (metadata-only, lying manifest, mis-served chunk); ignored and gated behind the empty `manual-tests` feature, run with `--features manual-tests --test bundle_shapes --run-ignored only` | never |
 | `tests/case_coverage` | gates `tools/case_coverage.py` against the bundle it measures | never |
-| `tests/bundle_diff` | two captures of one fixture agree, once the never-deterministic fields are normalised | never |
-| live (manual) | a capture against the real API, and `girpr`'s `artifact_bridge` against the result | yes, deliberately |
+| `tests/bundle_diff` | captures of one fixture agree, once the never-deterministic fields are normalised | never |
+| live (manual) | a capture against the real API, and `girpr`'s `artifact_repair_bridge` against the result | yes, deliberately |
 
 **There is no stored decoded-manifest fixture, and that is a decision, not an
 oversight.** A checked-in fixture can only ever test what it happened to contain,
@@ -259,7 +259,7 @@ Further properties the suite holds deliberately, worth preserving through
 any change to it:
 
 - **no network** — every capture points at `127.0.0.1:0` via
-  `--hyp-base`/`--sophon-base`, and two tests read `api/requests.ndjson` back out
+  `--hyp-base`/`--sophon-base`, and tests read `api/requests.ndjson` back out
   of a captured bundle to check that *every* recorded URL, manifest and chunk CDN
   included, is a loopback address the mock owns. "Touches no network" is proven,
   not asserted.
@@ -280,14 +280,14 @@ world is built once per *test* rather than once per binary, and nothing one
 test does — a global, a temp directory, an environment variable — can reach the
 next one.
 
-### The gate that compares two captures, and what it cannot see
+### The gate that compares captures, and what it cannot see
 
-`tests/bundle_diff.rs` captures the same fixture twice and compares the two
+`tests/bundle_diff.rs` captures the same fixture and compares the
 trees byte-for-byte after normalising the fields that were never deterministic
 (timestamps, `elapsed_ms`, the capture id, the `--out` root). It is the gate for
 every change that must not move a bundle byte.
 
-It compares **two captures of one binary**, so it is blind by construction to a
+It compares **captures of one binary**, so it is blind by construction to a
 change applied **uniformly to every capture** — a field that starts being written
 where it was null, or a wording narrowed in every row. Closing that needs
 a *written expectation*, not a comparison, and that is what the per-document pins
@@ -337,7 +337,7 @@ nobody mistakes them for tidying.
 
 | | why |
 |---|---|
-| Renaming, renumbering or removing **A1–A23** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_bridge` and any recorded bundle refer to them. |
+| Renaming, renumbering or removing **A1–A23** | spec'd at [`00-spec.md` §6](00-spec.md). The ids are a published contract: `girpr`'s `artifact_repair_bridge` and any recorded bundle refer to them. |
 | Changing `SCHEMA_VERSION` or any document's required fields | [`01-artifact-schema.md`](01-artifact-schema.md); a reader must reject an unknown value rather than guess. |
 | Any dependency on `girpr`, or a `Command` against its binary | the independence invariant, spec §2. A grep over `tools/capture/src/` must keep returning doc comments only. |
 | Turning on `clippy::pedantic` crate-wide | clippy is clean today on the default lints, which is worth preserving. Enabling pedantic in one commit rewrites the whole crate. If wanted, adopt lint groups one at a time. |

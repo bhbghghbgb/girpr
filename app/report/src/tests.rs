@@ -266,6 +266,11 @@ fn every_conditional_key_has_a_known_name_and_typed_rendering() {
         damaged_chunks: Some(7),
         purge_errors: None,
         purge_hidden: None,
+        persistent: Some("published"),
+        persistent_files: Some(5),
+        persistent_repaired: Some(0),
+        persistent_failed: Some(0),
+        persistent_base_hash: None,
     };
     let rec = summary_record(&s, 5);
     assert_eq!(
@@ -274,7 +279,7 @@ fn every_conditional_key_has_a_known_name_and_typed_rendering() {
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
              download_bytes_spent=4300 write_bytes=77 write_bytes_spent=96 \
              repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
-             damaged_chunks=7 stopped=--max-write-bytes local_manifest=unavailable"
+             damaged_chunks=7 stopped=--max-write-bytes local_manifest=unavailable persistent=published persistent_files=5 persistent_repaired=0 persistent_failed=0"
     );
     // `stopped` and `local_manifest` are words, not numbers: the JSON plane
     // must say so.
@@ -291,6 +296,10 @@ fn every_conditional_key_has_a_known_name_and_typed_rendering() {
     assert_eq!(v["kept_bytes"], 900);
     assert_eq!(v["ram_bytes"], 4096);
     assert_eq!(v["damaged_chunks"], 7);
+    assert_eq!(v["persistent"], "published");
+    assert_eq!(v["persistent_files"], 5);
+    assert_eq!(v["persistent_repaired"], 0);
+    assert_eq!(v["persistent_failed"], 0);
     // Key order is fixed, so two runs' lines diff cleanly.
     let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
     assert_eq!(
@@ -311,9 +320,53 @@ fn every_conditional_key_has_a_known_name_and_typed_rendering() {
             "ram_bytes",
             "damaged_chunks",
             "stopped",
-            "local_manifest"
+            "local_manifest",
+            "persistent",
+            "persistent_files",
+            "persistent_repaired",
+            "persistent_failed"
         ]
     );
+}
+
+/// The persistent tail is flag-only: absent keys leave the old tail untouched,
+/// and the five keys keep their published order after `local_manifest`.
+#[test]
+fn persistent_keys_are_flag_only_and_follow_local_manifest() {
+    let clean = Summary::default();
+    let rec = summary_record(&clean, 0);
+    assert!(!rec.text().contains("persistent"), "{}", rec.text());
+    let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
+    for key in [
+        "persistent",
+        "persistent_files",
+        "persistent_repaired",
+        "persistent_failed",
+        "persistent_base_hash",
+    ] {
+        assert!(v.get(key).is_none(), "{key} leaked into an unflagged line");
+    }
+
+    let mut s = Summary {
+        files_total: 2,
+        ..Summary::default()
+    };
+    s.flags.local_manifest = Some("ok");
+    s.flags.persistent = Some("suppressed");
+    s.flags.persistent_files = Some(3);
+    s.flags.persistent_repaired = Some(1);
+    s.flags.persistent_failed = Some(0);
+    s.flags.persistent_base_hash = Some("omitted");
+    let text = summary_record(&s, 0).text();
+    assert!(
+        text.ends_with(
+            "local_manifest=ok persistent=suppressed persistent_files=3 persistent_repaired=1 \
+             persistent_failed=0 persistent_base_hash=omitted"
+        ),
+        "{text}"
+    );
+    let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
+    assert_eq!(keys.last(), Some(&"persistent_base_hash"));
 }
 
 /// `local_manifest` is about the run, not a verdict on it, so it must not

@@ -943,7 +943,7 @@ fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
 /// Only the length matters at the two sites that stat the handle: before the
 /// eager trim and for the salvage order. Keeping the error as its own state
 /// lets the failure arm be executed with an injected `io::Error`
-/// (`post::classify_deprecated`'s shape) instead of only being read, without a
+/// (`post::classify_stale`'s shape) instead of only being read, without a
 /// trait or an injection seam. [`handle_len`] turns it back into the exact
 /// `io::Result` from `handle.metadata()`, so production still propagates the
 /// error with the site's path context and fails the file (exit `3`).
@@ -959,7 +959,7 @@ enum InplaceLen {
 ///
 /// Split from [`handle_len`] so the error arm is unit-testable without a
 /// permission fixture, matching `util::classify_len` and
-/// `post::classify_deprecated`.
+/// `post::classify_stale`.
 fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> InplaceLen {
     match stat {
         Ok(m) => InplaceLen::Present(m.len()),
@@ -1298,7 +1298,7 @@ mod tests {
         );
     }
 
-    /// B3: the in-place scan must not invent a source at offset 0 for a chunk
+    /// The in-place scan must not invent a source at offset 0 for a chunk
     /// that has none. The same content sits at the head of the file under a
     /// different layout, so a coerced source range would verify there and the
     /// writer would believe it can copy the chunk instead of downloading it.
@@ -1332,7 +1332,7 @@ mod tests {
         );
     }
 
-    /// B3: `--repair-mode discard` replaces a real scan with `Scan::absent`
+    /// `--repair-mode discard` replaces a real scan with `Scan::absent`
     /// over the range lists `scan_ranges` built, so its `source_ok` is per
     /// **range**, not per chunk. The remap has to land each verdict on the
     /// chunk that owns the range, and a source-less chunk stays false.

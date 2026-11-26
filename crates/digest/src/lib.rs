@@ -51,6 +51,11 @@ pub const EMPTY_MD5: &str = "d41d8cd98f00b204e9800998ecf8427e";
 /// The SHA-256 of the empty file, in the same lowercase hex spelling.
 pub const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+/// The XXH64 (seed 0) of the empty file, in the same lowercase hex spelling.
+/// Eight bytes, printed as the big-endian bytes of the 64-bit value — the
+/// spelling every published XXH64 vector uses.
+pub const EMPTY_XXHASH64: &str = "ef46db3751d8e999";
+
 /// Lowercase hex, two characters per byte.
 pub fn encode_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
@@ -74,6 +79,11 @@ pub fn md5_hex(bytes: &[u8]) -> String {
 /// One-shot lowercase-hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     encode_hex(&sha2::Sha256::digest(bytes))
+}
+
+/// One-shot lowercase-hex XXH64 (seed 0) of `bytes`, big-endian bytes.
+pub fn xxhash64_hex(bytes: &[u8]) -> String {
+    encode_hex(&xxhash_rust::xxh64::xxh64(bytes, 0).to_be_bytes())
 }
 
 /// A 16-byte MD5 digest.
@@ -312,6 +322,26 @@ pub mod vectors {
             assert_eq!(hex_of(input), *want, "{input:?}");
         }
     }
+
+    /// XXH64 vectors at seed 0, spelled as the big-endian bytes of the 64-bit
+    /// value. The first is the empty-file oracle; the rest are the reference
+    /// values published with the algorithm.
+    pub const XXH64: &[(&[u8], &str)] = &[
+        (b"", super::EMPTY_XXHASH64),
+        (b"a", "d24ec4f1a98c6e5b"),
+        (b"abc", "44bc2cf5ad770999"),
+        (
+            b"The quick brown fox jumps over the lazy dog",
+            "0b242d361fda71bc",
+        ),
+    ];
+
+    /// Assert `hex_of` reproduces every shared XXH64 vector.
+    pub fn assert_xxhash64_vectors(hex_of: impl Fn(&[u8]) -> String) {
+        for (input, want) in XXH64 {
+            assert_eq!(hex_of(input), *want, "{input:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -324,6 +354,12 @@ mod tests {
         assert_eq!(Md5::EMPTY.to_string(), EMPTY_MD5);
         assert_eq!(Sha256::EMPTY.to_hex(), EMPTY_SHA256);
         assert_eq!(Sha256::EMPTY.to_string(), EMPTY_SHA256);
+        assert_eq!(xxhash64_hex(b""), EMPTY_XXHASH64);
+    }
+
+    #[test]
+    fn xxhash64_matches_the_shared_vectors() {
+        vectors::assert_xxhash64_vectors(xxhash64_hex);
     }
 
     #[test]

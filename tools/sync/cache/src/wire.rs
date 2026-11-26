@@ -179,6 +179,30 @@ mod tests {
         );
     }
 
+    /// XXH64 is a known, eight-byte slot: it round-trips in canonical order —
+    /// after the two older algorithms, before any foreign name — and does not
+    /// take a foreign entry's place.
+    #[test]
+    fn xxhash64_roundtrips_as_a_known_eight_byte_digest() {
+        let mut rec = file_rec();
+        rec.hashes.insert_named("xxhash64", &[3u8; 8]);
+        rec.hashes.insert_named("blake3", &[7u8; 32]);
+        let bytes = encode_rec(&rec).unwrap();
+        let back = decode_rec(&bytes).unwrap();
+
+        assert_eq!(back, rec);
+        assert_eq!(back.hashes.get(HashAlg::Xxhash64), Some(&[3u8; 8][..]));
+        let (sha_at, xx_at, foreign_at) = (
+            find(&bytes, b"sha256"),
+            find(&bytes, b"xxhash64"),
+            find(&bytes, b"blake3"),
+        );
+        assert!(
+            sha_at < xx_at && xx_at < foreign_at,
+            "canonical order first, then foreign: {sha_at} {xx_at} {foreign_at}"
+        );
+    }
+
     /// **A decoded row holds no room beyond its entries.** A vector grows in
     /// steps, so a row that carries one unknown name would hold room for
     /// four — and the rows a record keeps are decoded rows, so the room is

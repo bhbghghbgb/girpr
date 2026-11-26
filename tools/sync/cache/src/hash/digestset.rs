@@ -60,9 +60,10 @@ fn same_spelling(a: &str, b: &str) -> bool {
 ///
 /// The map version was five allocations per row — the table, two `String` keys, two
 /// `Vec<u8>` digests — and a row is allocated once per file in phase A and held twice
-/// during phase C. This is **80 bytes and zero allocations** for a normal row: two
-/// fixed-size optional arrays, plus a vector that is empty and allocates nothing
-/// unless something needs carrying. `size_of` is asserted in this module's tests.
+/// during phase C. This is **88 bytes and zero allocations** for a normal row: three
+/// fixed-size optional arrays (16, 32 and 8 bytes of digest), plus a vector that is
+/// empty and allocates nothing unless something needs carrying. `size_of` is asserted
+/// in this module's tests.
 ///
 /// ## The foreign arm is not optional
 ///
@@ -98,6 +99,8 @@ fn same_spelling(a: &str, b: &str) -> bool {
 pub struct DigestSet {
     pub(super) md5: Option<[u8; 16]>,
     pub(super) sha256: Option<[u8; 32]>,
+    /// XXH64's 8 raw bytes, in the big-endian order its hex spelling uses.
+    pub(super) xxhash64: Option<[u8; 8]>,
     /// Algorithms this build does not know, carried verbatim. Empty in practice.
     /// See the type's docs.
     ///
@@ -126,6 +129,7 @@ impl Clone for DigestSet {
         Self {
             md5: self.md5,
             sha256: self.sha256,
+            xxhash64: self.xxhash64,
             // Collected rather than cloned entry by entry: the iterator knows
             // how many entries there are, so the vector is sized for exactly
             // that many.
@@ -145,7 +149,10 @@ impl DigestSet {
     /// the arm, and a count that silently ignored it would be wrong for exactly the
     /// rows forward compatibility exists to preserve.
     pub fn len(&self) -> usize {
-        self.md5.is_some() as usize + self.sha256.is_some() as usize + self.foreign.len()
+        self.md5.is_some() as usize
+            + self.sha256.is_some() as usize
+            + self.xxhash64.is_some() as usize
+            + self.foreign.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -184,6 +191,7 @@ impl DigestSet {
         match a {
             HashAlg::Md5 => self.md5.as_ref().map(|d| &d[..]),
             HashAlg::Sha256 => self.sha256.as_ref().map(|d| &d[..]),
+            HashAlg::Xxhash64 => self.xxhash64.as_ref().map(|d| &d[..]),
         }
     }
 
@@ -300,6 +308,12 @@ impl DigestSet {
             self.sha256 = Some(d);
             return;
         }
+        if known == Some(HashAlg::Xxhash64)
+            && let Ok(d) = <[u8; 8]>::try_from(digest)
+        {
+            self.xxhash64 = Some(d);
+            return;
+        }
         // The arm is a vector, so the entry is changed where it stands: a
         // repeat of a spelling replaces that entry, and a spelling that is
         // not there yet is appended. Nothing is copied around it.
@@ -348,6 +362,9 @@ impl DigestSet {
         }
         if let Some(d) = other.sha256 {
             self.sha256 = Some(d);
+        }
+        if let Some(d) = other.xxhash64 {
+            self.xxhash64 = Some(d);
         }
         // The arm is a vector, so each entry of `other` is written where it
         // belongs: over the entry of the same name when the arm holds one,

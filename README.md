@@ -7,7 +7,7 @@ args in, exit code + `REPORT`/`SUMMARY` stdout lines out, no UI.
 Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file repair that
 writes only the bytes that are wrong, verified local-chunk reuse, a whole-file MD5
 gate) **+ Collapse's extra-file purge** as a pre/post phase.
-**Docs are several series.** The `repair-` prefix is load-bearing:
+**Docs are organized into series.** The `repair-` prefix is load-bearing:
 
 | series | docs | describes |
 |---|---|---|
@@ -43,12 +43,13 @@ machine rather than the code.
 | `src/config.rs` | validated run config (scope, limits, repair mode value from `app/repair-policy/`); failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `flush_log`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
-| `crates/time/` | the named UTC timestamp formats shared by the byte contracts: the compact sortable stamp, two RFC 3339 spellings and chrono's default, each with its own pinned spelling; no program policy | `compact_stamp`, `compact_stamp_now`, `rfc3339_millis_z`, `rfc3339_millis_z_now`, `rfc3339_secs_z`, `rfc3339`, `rfc3339_now` |
+| `crates/time/` | the named UTC timestamp formats shared by the byte contracts: the compact sortable stamp, the RFC 3339 spellings and chrono's default, each with its own pinned spelling; no program policy | `compact_stamp`, `compact_stamp_now`, `rfc3339_millis_z`, `rfc3339_millis_z_now`, `rfc3339_secs_z`, `rfc3339`, `rfc3339_now` |
 | `app/lock/` | the single-writer run lock, its FNV key and the no-follow body guard; used by the repair and its lock-only test targets, never by the dev tools | `Lock`, `lock_path`, `takes_lock`, `LOCK_FILE` |
 | `app/audio/` | the audio scan-file read/write and effective-selection boundary; an acyclic leaf the repair depends on directly and its own narrow tests link without the facade | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test; program-free test fixtures live in its `test_support` | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `tools/sync/test-support/` | the girsync-owned test fixtures (option/cache/planner builders) shared by `girsync` and `sled2redb`; keeps `crates/tempdir/` girsync-free | `opts`, `log`, `pair`, `recs_of`, `parse_ndjson`, `resolve_both` |
-| `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync` and `sled2redb`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `hash::DigestSet`, `hash::HashAlg` |
+| `tools/sync/cache/` | the redb-backed hash cache, its positional `postcard` byte codec and the digest vocabulary the codec pins; consumed directly by `girsync`, `sled2redb` and `girsync-cache-json`, so an edit elsewhere leaves the cache and its native dependency tree cached | `CacheDb`, `CacheWrite`, `CacheOpen`, `FileRec`, `Meta`, `CACHE_PREFIX`, `open_db`, `CacheDb::visit_entries`, `CacheDb::meta`, `hash::DigestSet`, `hash::HashAlg` |
+| `tools/sync/cache-json/` | the standalone cache ⇄ NDJSON converter (`cache-json`): one meta line then one line per row, current schema only, with atomic cache replacement on import; reaches the cache crate directly, not through girsync's facade | `export_cache`, `import_cache`, `ndjson::Line`, `Args` |
 | `tools/sync/leaves/` | girsync's acyclic production leaves (rw limiter, include/exclude filter policy, link classifier, hardlink facts), consumed directly by `girsync` and its own integration tests so a high-level edit leaves them cached; no program policy is shared through it | `rw`, `filter`, `link`, `hardlink` |
 | `app/test-fixtures/` | the facade-free offline HYP/Sophon mock, the distinct artifact-bundle replay server, and fixture builders for this package's integration binaries; reached through thin per-consumer shims so the mechanics compile once | `MockServer`, `MockOpts`, `BranchFailure`, `GameFixture`, `FixtureSpec`, `ChunkSpec`, `build_fixture`, `build_fixture_spec`, `lay_out`, `md5hex`, `temp_dir`, `logs_of`, `remove_run_lock`, `artifact_server` |
 | `app/test-support/` | the small facade-coupled run glue (RunCtx construction, pipeline driver, counter reader) shared by this package's integration binaries; a test-only inversion reached through the thin `tests/common/` shim so it compiles once | `ctx_for`, `ctx_for_biz`, `scope`, `run`, `load_counters` |
@@ -65,14 +66,14 @@ machine rather than the code.
 | `app/repair-policy/` | the write-mode values and the one resolve rule: the requested mode, the decided mode, and the path/injected-target decision shared by the writer, the disk estimate and the download estimate; an acyclic leaf that re-exports nothing from the binary | `RepairMode`, `Mode`, `resolve_mode`, `resolve_mode_from_target` |
 | `app/repair-plan/` | the repair-plan values and their pure decisions: work list, cleanup-plan values and path scope in one acyclic leaf so the scope tier consumes both plans without a back-edge; the facade keeps the fetch, walk, publish and byte-emitting policies | `RepairPlan`, `PlannedFile`, `Layout`, `FileId`, `build_plan`, `PurgePlan`, `PurgeCandidate`, `PurgeKeys`, `PathScope`, `LocalChunkMap`, `DownloadEstimate`, `PlanSummaryValues`, `check_scope_selection` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
-| `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
-| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3); the map's alias lives in `app/repair-plan/` | `fetch_latest`, `local_reuse_map` |
-| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply; consumes the plan values from `app/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
-| `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6); consumes the mode from `app/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
+| `src/repair/phases/metadata.rs` | local state + server metadata | `fetch`, `Meta` |
+| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map; the map's alias lives in `app/repair-plan/` | `fetch_latest`, `local_reuse_map` |
+| `src/repair/purge.rs` | Collapse files-cleanup: plan + apply; consumes the plan values from `app/repair-plan/` | `plan_purge`, `apply_purge`, `keep_set`, `classify_purge_path_visible` (`classify_purge_path` is the test-facing pure form), `PurgeVerdict` |
+| `src/repair/phases/check.rs` | `--check-only` verification | `verify_plan` |
+| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download; consumes the mode from `app/repair-policy/` | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers; consumes the verdict and remap from `app/chunk-verify/` | `scan_plan`, `ScanReport` |
-| `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
+| `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: the ceiling tier; the path-scope value lives in `app/repair-plan/` | `Limits`, `LimitHit` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates over the two plan values (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
@@ -83,16 +84,16 @@ machine rather than the code.
 | `app/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
 | `app/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
 | `app/util-counter/` | the saturating atomic byte counter | `add_saturating` |
-| `tests/repair_offline.rs` | offline integration/e2e (mock API) | a case per behavior |
-| `tests/cli_contract.rs` | binary-level arg handling + exit codes | a case per usage error class |
-| `tests/common/mod.rs` | thin shims over the two shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
-| `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | a case per decision |
-| `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, a test per capture |
-| `tests/artifact_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
+| `tests/repair_offline.rs` | offline integration/e2e (mock API) | the repair behaviors |
+| `tests/cli_contract.rs` | binary-level arg handling + exit codes | the usage-error classes |
+| `tests/common/mod.rs` | thin shims over the shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
+| `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | the per-file decisions |
+| `tests/artifact_repair_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture` and the capture cases |
+| `tests/artifact_repair_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
 | `app/test-fixtures/src/artifact_server.rs` | the loopback replay server, a module distinct from the offline mock and reached through one-line `use` shims | `Bridge`, `Bundle`, `Hit` |
-| `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | a case per route family |
+| `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | the route families |
 
-**Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
+**Action graph** — what one `repair::run(ctx)` does:
 
 ```mermaid
 flowchart TD
@@ -102,7 +103,7 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["phases::manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["girpr_repair_plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
+    D --> E["girpr_repair_plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan (+ persistent plan under --with-persistent)"]
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
@@ -125,13 +126,13 @@ flowchart TD
         J5 -->|mismatch| J5b["redo only the chunks the verdicts name"]
         J5b --> J5
         J5 -->|ok| J3b["in place: done, no _tmp<br/>temp: rename _tmp → final"]
-        J5 -->|mismatch after 5 tries| J4["count failed, continue"]
+        J5 -->|mismatch after the retry budget| J4["count failed, continue"]
         J2a -->|"the target cannot be opened"| J2b["write it the temp way<br/>(the target is never modified)"]
     end
     J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
     J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=--max-download-bytes\|--max-write-bytes<br/>exit 5, the next run re-verifies"]
-    K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
+    K -->|no| M["post::run (skipped when readonly)<br/>audio cache→res move → purge-after?<br/>→ persistent mirrors + markers → config.ini bump"]
     M -->|"delete ceiling hit"| X6["SUMMARY stopped=--max-delete-bytes<br/>exit 5, that pass deleted nothing"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
     M --> N["SUMMARY to stdout+log<br/>exit 0"]
@@ -141,7 +142,7 @@ flowchart TD
 
 - stdout is a **record stream: one record per event**, and the order is fixed —
   `REPORT …` once after metadata, then `PLAN …` when `--print-plan` asked for it,
-  then zero or more `PROGRESS …` ticks (a single ticker, every 10 s), then
+  then zero or more `PROGRESS …` ticks (a single periodic ticker), then
   `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`
   last. No phase emits `SUMMARY`; only the caller does, once, and a run that
   fails fatally prints `FATAL` instead and has no `SUMMARY` (see the flow above).
@@ -150,7 +151,22 @@ flowchart TD
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
-  byte-identical to one that never passes them.
+  byte-identical to one that never passes them. That promise is about **flags**,
+  not about installs whose contents changed: verification-state files
+  (`Persistent/*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`,
+  `PatchDone`, `base_res_version_hash`, `cache_versions_*`, `ctable*` and the
+  root `pkg_version`) are kept for every run, so they never appear in
+  `deleted_extra_bytes`. No flag is involved.
+  An **always-on stale-file sweep** runs in the prerequisite phase: it
+  deletes the union of the `getGameDeprecatedFileConfigs` names and every
+  delete tag in the selected `getPatchBuild` patch manifests, minus any path
+  still present in the live chunk manifests. The patch-build fetch is
+  best-effort — a failed fetch only warns — and the sweep is skipped by
+  `--check-only` and `--print-plan`, listed under `--dry-run`, and also run
+  under `--purge-only`. Its bytes count into `deleted_extra_bytes` but stay
+  outside `--max-delete-bytes`. No new flag or version key is
+  involved: the artifact bridge captures deliberately serve an empty patch
+  build, so their `SUMMARY`, `PLAN` and `PLAN` JSON contracts are unchanged.
   The byte counts come in **pairs** when their ceiling is active:
   `download_bytes` (the bytes of the files that were actually repaired) beside
   `download_bytes_spent` (the bytes that crossed the wire), and `write_bytes`
@@ -182,8 +198,9 @@ flowchart TD
   chunk id was never fetched" needs a request log, not the data plane.
 - stderr: structured `tracing` logs (`--log-level`, with `RUST_LOG` adding to
   it), at `info` by default; the same events go to
-  `<exe-dir>/logs/girpr_<timestamp>.log`, at `debug` by default — in a release
-  build, or wherever `--log-file` points in any build (see **Logging**).
+  `<exe-dir>/logs/girpr_<timestamp>.log`, whose own level defaults to `debug`
+  in a debug build and `info` in a release build — in a release build, or
+  wherever `--log-file` points in any build (see **Logging**).
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
@@ -249,9 +266,10 @@ flowchart TD
   and it uses the per-launcher pair (cn `1/1`, global `1/0`, bili `14/0`) — the
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
-  no `config.ini`, byte counters stay 0). `--dry-run` also exercises the post-phase's
-  read-only paths: it lists the deprecated deletes, the audio cache move and the
-  cleanup, and stops before the `config.ini` bump. With both purge flags it lists
+  no `config.ini`, byte counters stay 0). `--dry-run` also runs the stale sweep in
+  list-only mode and exercises the post-phase's read-only paths: it lists the stale
+  deletes, the audio cache move and the cleanup, and stops before the `config.ini` bump.
+  With both purge flags it lists
   each candidate once — the after pass names only candidates the before pass did
   not. The `purge dry-run: N bytes would be freed` line is per pass: it is
   emitted once for each pass that reaches the delete step, including a pass with
@@ -263,8 +281,8 @@ flowchart TD
   ceiling still stops a dry run, including the post-repair delete
   re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
   purge that cannot be planned is the same write-class failure (exit `3`) as in a
-  real run. `--check-only` and `--print-plan` do not run the post-phase, so they
-  also skip its deprecated-list request; `--print-plan --dry-run` is just
+  real run. `--check-only` and `--print-plan` do not reach the execute-half stale
+  sweep, so they also skip the deprecated-file request; `--print-plan --dry-run` is just
   `--print-plan`.
   A malformed manifest chunk range is a **plan** error (exit `2`) in every
   mode, including these read-only ones, so `--check-only` cannot report such a
@@ -283,10 +301,14 @@ flowchart TD
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + the legacy in-install
-  `girpr.lock` + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version`
-  patterns;
-  **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
-  `ScreenShot/`). The whole plan is built before the first delete.
+  `girpr.lock` + the root `pkg_version` + the cleaned blacklist +
+  `audio_lang_*`/`Audio_*_pkg_version` patterns + the verification-state markers
+  `*_persist`, `*_revision`, `ChannelName`, `ScriptVersion`, `PatchDone`,
+  `base_res_version_hash`, `cache_versions_*`, `ctable*`, all kept for every
+  run;
+  **everything not kept by the rules purges**, incl. temps, exe, logs,
+  `ScreenShot/`, `*versions_remote*` and `VideoAssets/*.tmp`). The whole plan is
+  built before the first delete.
   The `--plan-out` document is an ordinary unexpected file if it is written
   inside the install: the `--purge-after`/`--purge-only` re-plan runs after the
   document is written and deletes it. (`--purge-before` acts on the plan built
@@ -335,9 +357,10 @@ the completed `*_tmp` prefix and continuing it.
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
 `cargo build` and `cargo test` at the workspace root build the product
-(`girpr`). The three dev tools (`gircap`, `girsync`, `sled2redb`) are workspace
-members but not default members, so a root command does not compile them; check
-them explicitly when working on them. `--workspace` is the everything command.
+(`girpr`). The dev tools (`gircap`, `girsync`, `sled2redb`, `cache-json`)
+are workspace members but not default members, so a root command does not
+compile them; check them explicitly when working on them. `--workspace` is the
+everything command.
 
 The whole workspace is checked on stable, with all targets and all features:
 
@@ -349,12 +372,13 @@ cargo nextest run --workspace --all-features
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
-copy; `tools/sled2redb/` (`sled2redb`) converts a legacy sled cache to redb.
-All three are development-only and are not part of the shipped product. They
-share the workspace lockfile but are built on request:
+copy; `tools/sled2redb/` (`sled2redb`) converts a legacy sled cache to redb;
+`tools/sync/cache-json/` (`cache-json`) converts a current-schema redb cache to
+NDJSON and back. All are development-only and are not part of the shipped
+product. They share the workspace lockfile but are built on request:
 
 ```powershell
-cargo check -p girsync -p gircap -p sled2redb
+cargo check -p girsync -p gircap -p sled2redb -p girsync-cache-json
 cargo build --workspace
 ```
 
@@ -386,15 +410,16 @@ cargo build --release
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (no second copy: 0 extra disk when the target is already full size, its growth when it is truncated, and a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
-| `--check-only` | off | Verify size+MD5; writes nothing. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
+| `--with-persistent` | off | Opt in to the dispatcher + `Persistent/` tier: query the dispatcher, mirror the persistent manifests, download hotfix full files over HTTP and publish the marker block, then bump `config.ini` last. Without it no dispatcher/persistent request is made and `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes list the work without writing markers; `--purge-only` queries the dispatcher only to widen the purge keep set and publishes no markers. Stranded non-patch `.pck`/`.usm`/`.cuepoint` files under `Persistent/` are moved back to `StreamingAssets/` before `--purge-before`, so a file whose destination is in a manifest survives the purge and is repaired normally. See the contract below; the two delivery paths are in [`docs/01`](docs/01-repair-findings-and-verdict.md) §6 and the design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7 |
+| `--check-only` | off | Verify size+MD5; writes nothing. Under `--with-persistent` it also checks persistent files and the marker block. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Cap each file at a single attempt and abort the run on the first failed file; no further files are started and in-flight files are dropped. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once) |
-| `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
+| `--dry-run` | off | Log actions, including the stale sweep, audio-cache move, cleanup and persistent work; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, the `--purge-after`/`--purge-only` re-plan in the same run deletes it as an unexpected file (`--purge-before` acts on the plan built before the document exists). Write it outside the install when combining it with a purge |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` *adds* to it — it can turn up other crates, but it cannot change this program's own level |
-| `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
+| `--log-file-level <LVL>` | `debug` in a debug build, `info` in a release build | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
 | `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable (release builds only) | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. An unopenable file is a stderr warning, never a failure |
 | `--no-log-file` | off | Write no log file at all. Turns the default off in a release build, and says so explicitly in a debug build. Cannot be combined with `--log-file`: the two say opposite things about the same file. The console is unaffected |
 | `--hyp-base <URL>` | production | Point the HYP API at another base (overrides `GIRPR_HYP_BASE`) |
@@ -403,6 +428,33 @@ cargo build --release
 `--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest
 and chunk URLs come from the `url_prefix` inside the response *bodies*, not from
 the configured base, so a local mock must return bodies pointing at itself.
+
+**`--with-persistent` — opt-in contract.** One **master flag** enables the whole
+dispatcher → manifest → marker chain: the marker block (`base_res_version_hash`,
+the `*_revision` files, `ChannelName`, `ScriptVersion`, `PatchDone`), the
+mirrors (`res_versions_persist`, `data_versions_persist`,
+`silence_data_versions_persist`) and hotfix **full-file** downloads over HTTP
+(primary URL with alternate fallback, gated by size + hash). An unflagged run
+stays byte-identical — same plan, same `SUMMARY`, same exit codes — and makes no
+dispatcher or persistent request. A failed persistent file suppresses the marker
+block and the `config.ini` bump (the version bump is always last), as does
+`--purge-only`, which puts no bytes in place. With `--purge-only` the dispatcher
+is still queried and the manifests are still fetched and verified, but
+only as a keep input: a hotfix row under `Persistent/` is not deleted by the
+cleanup, while no marker, mirror or version claim is published. Under the flag, `--check-only` has a
+**narrower meaning**: "intact" includes the persistent files *and* the marker
+block, so a byte-intact install with stale or missing markers is not clean.
+The existing byte/file ceilings also bound persistent bytes — they cannot be
+bypassed by that download path. The markers and root `pkg_version` are kept by
+the purge on every run, flag or no flag. The two delivery paths are described in
+[`docs/01`](docs/01-repair-findings-and-verdict.md) §6 and the implementation
+design in [`docs/03`](docs/03-repair-rust-implementation-plan.md) §7.
+
+**Manual verification (operator step, not a repository test).** With a real
+install, run `--with-persistent`, copy the game directory to a second machine and
+launch it **once** there, then confirm that the game neither re-verifies nor
+re-downloads hotfixes (`res_revision == res_revision_eternal`, no
+`*versions_remote*` or `VideoAssets/*.tmp` leftovers).
 
 ### Text values in `--output`
 
@@ -413,18 +465,18 @@ plane always carries each string value as a quoted string.
 
 ## Logging
 
-One policy, four programs: this binary and the three dev tools (`gircap`,
-`girsync`, `sled2redb`). It lives in `crates/log/` and is the only *policy* they
+One policy, shared by this binary and the dev tools (`gircap`, `girsync`,
+`sled2redb`). It lives in `crates/log/` and is the only *policy* they
 share that ships. It is a logic-free leaf, as is `crates/report-core/`, which
-supplies ordered-JSON and line-writing mechanics to all four: each tool keeps
+supplies ordered-JSON and line-writing mechanics to all of them: each tool keeps
 its own key order, event placement, value types, escaping and boolean spelling,
 so no report format is shared. `crates/time/` supplies the named UTC timestamp
 formats used to stamp file names, ids, request logs and lock bodies: the compact
 sortable stamp, two RFC 3339 spellings and chrono's default, each kept distinct
 and byte-pinned; callers pass the instant, so no stamping policy crosses between
 the programs. `crates/digest/` supplies hex spelling and
-fixed-width digest mechanics to this binary, `gircap`
-and `sled2redb`, and `crates/fs-names/`, which supplies the Windows path-name and
+fixed-width digest mechanics to this binary, `gircap`,
+`sled2redb` and `cache-json`, and `crates/fs-names/`, which supplies the Windows path-name and
 canonical-path mechanics — device names, trailing dot/space, ASCII case fold,
 forward slash and verbatim-free canonicalization — to this binary, `gircap` and
 `girsync`; each caller passes its own reserved set and rule flags, so no program
@@ -446,17 +498,17 @@ neither retry policy is shared. `crates/exit/` supplies the exit-table generatio
 mechanism to this binary and `gircap`: the enum/`ALL`/code/pin pattern is shared,
 but each supplies its own codes, meanings and helper methods, so no exit-code
 contract is shared. `crates/cli/` supplies the clap-error to usage-code mapping
-to this binary, `gircap` and `sled2redb`: help/version map to `0` and every
+to this binary, `gircap`, `sled2redb` and `cache-json`: help/version map to `0` and every
 other error to the usage code each caller passes in, so no exit code or exit
 table is shared. `crates/audio-language/` supplies the lower + `_`→`-` token
-primitive and the four code/display-name pairs to this binary and `gircap`;
+primitive and the code/display-name pairs to this binary and `gircap`;
 each passes its own case-folding flavour and keeps its own alias map, `none`
 sentinel and validation, so no audio policy is shared. `app/audio/` holds
 this binary's audio scan-file read/write and effective-selection policy; the
 repair code depends on it directly under a module alias, so an edit to repair,
 report or CLI leaves it cached for the narrow test targets that link it
 without this facade. `crates/proto/` supplies
-the Sophon protobuf wire types to this binary and `gircap` — the three messages,
+the Sophon protobuf wire types to this binary and `gircap` — the messages,
 their tags, the misspelled `chuncks` and opaque tag 6, so both decode one byte
 layout; each keeps its own decode boundary, dump format, validation and
 normalisation, so no program logic is shared. `crates/chunk-identity/` supplies
@@ -512,7 +564,7 @@ stdout line and the phase timer. It also owns the mutually recursive
 binary depend on it directly, so an edit to repair leaves it cached. It reuses
 `crates/report-core/` for the ordered-JSON and line-writing mechanics and keeps
 this binary's event-first order, unsigned counts and 1/0 flags distinct from
-the other two report planes.
+the other report planes.
 
 `app/fetch/` holds this binary's HYP client, Sophon manifest fetch,
 chunk streaming, manifest filter, local chunk map and attempt loop; the repair
@@ -537,13 +589,14 @@ leaf, so no capture logic crosses the boundary. `tools/sync/cache/` holds
 girsync's redb hash cache: the schema, the
 positional `postcard` codec, the open/backup/publish protocol and the digest
 vocabulary that codec stores. `girsync` consumes it directly under a module
-alias and the sled converter names it directly too, so an edit to a planner,
-command or other girsync subsystem leaves the cache and its `redb`/`postcard`/
-`tempfile` tree cached; the cache wire format is pinned by literal-byte tests.
+alias, the sled converter and the NDJSON converter name it directly too, so an
+edit to a planner, command or other girsync subsystem leaves the cache and its
+`redb`/`postcard`/`tempfile` tree cached; the cache wire format is pinned by
+literal-byte tests.
 `app/lock/` holds this binary's single-writer
 run lock — the OS advisory lock, its FNV key and the no-follow body guard; the
 repair and the lock-only integration tests depend on it directly, while the dev
-tools never take it, so a repair edit leaves the lock cached. All four share the
+tools never take it, so a repair edit leaves the lock cached. All share the
 test-only scratch-directory policy in `crates/tempdir/`, whose `test_support`
 holds only program-free
 fixtures. The girsync-specific fixtures (option/cache/planner builders) live in
@@ -578,9 +631,9 @@ shared crates carries a program's flags, exit-code values or published shapes.
   flag beats the environment because the flag was typed by the person running
   the tool and an environment variable is whatever the shell happened to
   export.
-- **Two levels, not one.** `--log-level` is the **console's** (`info` by
-  default); `--log-file-level` is the **file's** (`debug` by default, or
-  `GIRPR_LOG_FILE_LEVEL`). They are separate because they answer separate
+- **Separate levels for the console and the file.** `--log-level` is the **console's** (`info` by
+  default); `--log-file-level` is the **file's** (`debug` in a debug build, `info` in
+  a release build, or `GIRPR_LOG_FILE_LEVEL`). They are separate because they answer separate
   questions: the console is for the person watching the run, the file is for
   the person reading it afterwards.
 - **`RUST_LOG` adds to the console; it does not replace it.** The console's
@@ -598,7 +651,7 @@ shared crates carries a program's flags, exit-code values or published shapes.
   records; the file is the durable record of the run, not a live feed, and an
   exit that skips the flush (such as `kill -9`) can lose the tail.
 - The **format** is not shared: this binary writes a human-readable text log,
-  meant to be read with `grep 'path=<file>'`; the three dev tools write JSON
+  meant to be read with `grep 'path=<file>'`; the dev tools write JSON
   lines, meant to be parsed.
 
 ## Testing (offline by construction)
@@ -611,11 +664,11 @@ defaults.
 ```powershell
 cargo nextest run             # this package's offline suite (ignored tests excluded)
 cargo nextest run --workspace # the whole workspace
-cargo check -p girsync -p gircap -p sled2redb # the dev tools, which a root command does not build
+cargo check -p girsync -p gircap -p sled2redb -p girsync-cache-json # the dev tools, which a root command does not build
 cargo nextest run --test repair                       # the consolidated repair binary
 cargo nextest run -E 'test(repair_offline::)'          # one module's cases within it
 cargo clippy -p girpr --all-targets -- -D warnings
-cargo clippy -p girsync -p gircap -p sled2redb --all-targets -- -D warnings
+cargo clippy -p girsync -p gircap -p sled2redb -p girsync-cache-json --all-targets -- -D warnings
 
 # girpr-log's default-file policy is a `cfg!(debug_assertions)` branch. The
 # dev-profile runs above exercise "no default file"; this release run exercises
@@ -628,7 +681,7 @@ cargo nextest run --release -p girpr-log
 # the same commands, explained in "Real bytes, real flags — and expensive" below
 # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap
-cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
 
 # the hash and scan throughput measurements: #[ignore]d, print MiB/s
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
@@ -638,9 +691,9 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - **Hash and scan throughput is measured by hand, not asserted.** The ignored
   `util::md5::tests::md5_throughput` hashes a generated file through the same
   whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`). The
-  ignored `util::md5::tests::scan_throughput` reads one destination range per
-  MiB and one source range in every chunk through `scan_file` and
-  `scan_reader`, the path a repair scan takes. Both print MiB/s; run them with
+  ignored `util::md5::tests::scan_throughput` reads destination ranges and a
+  source range for every chunk through `scan_file` and `scan_reader`, the path a
+  repair scan takes. Both print MiB/s; run them with
   `--release`, because the debug profile measures the compiler, not the
   hasher. `GIRPR_MD5_BENCH_MIB`/`GIRPR_SCAN_BENCH_MIB` size the
   files and `GIRPR_MD5_BENCH_RUNS`/`GIRPR_SCAN_BENCH_RUNS` the
@@ -666,7 +719,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   before moving these allowances to a config file.
 
 - **The dev tools and their project-owned crates opt into a smaller lint subset.**
-  `girsync`, `gircap` and `sled2redb`, plus the crates they own (`girsync-cache`,
+  `girsync`, `gircap`, `sled2redb` and `girsync-cache-json`, plus the crates they own (`girsync-cache`,
   `girsync-leaves`, `girsync-test-support`, `gircap-http`, `gircap-hash`,
   `gircap-test-support`), set `[lints.rust] unsafe_code = "deny"` and
   `[lints.clippy] all = "warn"` themselves instead of inheriting the workspace
@@ -682,7 +735,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - **`cargo nextest run` is not `cargo test`.** It runs each test in its own
   process, which is what makes the suite's isolation real rather than
   incidental: a test that leaks a global, a temp directory or an environment
-  variable cannot reach the next one. Three things follow from it.
+  variable cannot reach the next one. Several things follow from it.
   - A `#[ignore]`d test is skipped unless `--run-ignored only` (or
     `--run-ignored all`) says otherwise — same rule as `cargo test`, different
     spelling. nextest also accepts libtest's `-- --ignored`, but the native
@@ -729,13 +782,13 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;
   `HypClient::new_with_bases` in `app/fetch/src/hyp.rs`).
-- **One scratch-directory policy, three projects.** A test that needs a tree of
+- **One scratch-directory policy.** A test that needs a tree of
   its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,
   `gircap` and `girsync` alike. Each tree gets a fresh random name (with a
   readable prefix and tag), so two runs — or two `cargo nextest run`
   invocations — never share a tree, and the guard removes the tree when the
   test ends however it ends. One policy, one implementation, shared by all
-  three projects.
+  projects that use it.
   Every one of those trees lives under **one** directory in the system temp
   directory: `<temp>/girpr-test/`. So a directory left behind by a killed run
   is recognisable as this project's — "whose leftover is this?" has an answer —
@@ -755,7 +808,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `tests/cli_contract.rs` also spawns the binary, and it never reaches the API
   at all — it is argument handling and exit codes only.
 - **The repair's own decisions are on crafted fixtures.**
-  `tests/repair_machinery.rs` has a case per decision the repair makes
+  `tests/repair_machinery.rs` covers each decision the repair makes
   per file — the tier, the write direction, the trim, the growth, the mode, the
   resume, and what a malformed manifest does — plus the facts the run
   reports on its data plane (the live and the settled byte figures agree,
@@ -775,19 +828,21 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   the `build_id` invariant, the request log, and the recorded not-found shapes.
   It is always on and it is quick, because the server's behaviour does not
   depend on the bundle holding real game bytes.
-- **Real bytes, real flags — and expensive.** `tests/artifact_bridge.rs` runs
+- **Real bytes, real flags — and expensive.** `tests/artifact_repair_bridge.rs` runs
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
-  `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs real binary runs over real bundle bytes**, and it is a
+  `HypClient` through the real flag-parsing path. The repair-only cross-tool
+  cases drive it, each asserting the patched bytes, the exact fetch set and the
+  patch's byte total. They are **`#[ignore]`d because
+  they cost real binary runs over real bundle bytes**, and the suite is a
   **pre-release gate: run it by hand before any release that changes the repair
   spec, and whenever a regression in that spec is suspected**:
   ```powershell
   # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
   cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
-  cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
+  cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_repair_bridge)'
   ```
-  The cases share one process-wide fixture — a verified bundle and one listener
+  The cases share a process-wide fixture — a verified bundle and a listener
   set — and serialize against it with a run lock; under nextest each case has a
   process of its own. Each case still gets its own scratch tree and log file,
   and checkpoints the shared request log so its fetch set holds only its own
@@ -813,7 +868,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
     working tree is a scratch copy, and `gircap verify` must still pass
     afterwards.
   - **What it claims, and only that:** `girpr`'s output is identical to what
-    another repair tool computes. Three assertions per capture — the patched
+    another repair tool computes. The assertions per capture — the patched
     file's bytes are the reference bytes, the chunks asked for are exactly the
     chunks the patch says must be fetched (and none of the ones it says can be
     reused), and the byte total is the patch's byte total — plus the run's
@@ -857,7 +912,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
    `_tmp` artefact, no blob store, no zip staging.
 6. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
 
-**Two ways to write a file — two ways to spend disk, and each with a property of its own:**
+**The write modes — and how each spends disk:**
 
 | mode | how the file is written | peak extra disk | the property it gives you |
 |---|---|---|---|
@@ -873,6 +928,7 @@ from and cannot inherit a corrupt prefix; the temp mode keeps the completed `*_t
 and continues it.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
-SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,
+SDK/WPF/plugin zips — game launches without them), plus the verification-state
+markers and root `pkg_version` kept for every run. Chunk-repair only: no hdiff,
 no 7z legacy path, no predownload, no speed limiter. Reruns are idempotent
 (intact skipped, partial files finished by verification, final MD5 re-verified).

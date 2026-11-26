@@ -1,0 +1,5 @@
+# Byte-pinned inputs copied from the research tool's samples tree: Git must not
+# rewrite their line endings (core.autocrlf is enabled on the dev machines).
+# Several inputs are CRLF; CR is part of the pinned bytes, not whitespace noise.
+persistent_inputs/** -text
+persistent_inputs/** whitespace=cr-at-eol

@@ -1,0 +1,5 @@
+# Generated artifacts: re-runnable via scripts/, never commit full dumps.
+generated/
+__pycache__/
+*.pyc
+.venv/

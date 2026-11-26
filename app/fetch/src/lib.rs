@@ -17,6 +17,9 @@
 //! the begin report borrows scalar provenance values from its caller.
 
 pub mod hyp;
+/// Persistent manifests and the full-file hotfix downloader: no product
+/// wiring, only injectable seams and offline-tested gates.
+pub mod persistent;
 pub mod retry;
 pub mod sophon;
 

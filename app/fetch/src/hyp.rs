@@ -29,7 +29,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_BODY_IDLE: Duration = Duration::from_secs(30);
 
 /// Minimal HYP client (Starward parity): getGameConfigs / getGameBranches /
-/// getBuild (latest + local) / getGameDeprecatedFileConfigs.
+/// getBuild (latest + local) / getPatchBuild / getGameDeprecatedFileConfigs.
 /// Endpoint shapes follow `HoYoPlayClient` (hyp vs sophon bases, `launcher_id` +
 /// `language` query) — see
 /// <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L108-L113>
@@ -184,6 +184,46 @@ pub struct ChunkManifestMeta {
     pub manifest: ManifestFile,
     #[serde(default)]
     pub chunk_download: ManifestUrl,
+    #[serde(default)]
+    pub manifest_download: ManifestUrl,
+}
+
+/// `getPatchBuild` response: one build identity plus its patch-manifest
+/// descriptors. Every field defaults so an upstream field added later cannot
+/// break a client that only knows today's shape.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchBuild {
+    #[serde(default)]
+    pub build_id: String,
+    #[serde(default)]
+    pub patch_id: String,
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub manifests: Vec<PatchManifestMeta>,
+}
+
+/// One patch-manifest descriptor in a `getPatchBuild` response.
+///
+/// NOTE(starward-parity): the shape matches [`ChunkManifestMeta`] except for
+/// `diff_download` (the patch bundle) in place of `chunk_download`. `stats` is
+/// a per-tag object this tool never reads, so it is left out of the DTO and
+/// ignored by serde rather than modelled — the same treatment given to the
+/// download-descriptor keys this tool does not use.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchManifestMeta {
+    #[serde(default)]
+    pub category_id: String,
+    // Deserialized for completeness; the manifest is selected by category id.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub category_name: String,
+    #[serde(default)]
+    pub matching_field: String,
+    #[serde(default)]
+    pub manifest: ManifestFile,
+    #[serde(default)]
+    pub diff_download: ManifestUrl,
     #[serde(default)]
     pub manifest_download: ManifestUrl,
 }
@@ -465,85 +505,108 @@ impl HypClient {
         .await
     }
 
-    async fn get_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
-        // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
-        // Returns retcode -202 when tag unknown -> caller maps to None.
-        tracing::debug!(api = "sophon", url = %url, "GET");
+    /// The JSON-wrapper exchange shared by both Sophon routes. `getBuild` is a
+    /// GET; `getPatchBuild` is a POST with all its arguments in the query
+    /// string (no body). Only the verb differs: the status gate, bounded body
+    /// read, `Wrapper<T>` retcode policy and `-202` → [`SophonNotFound`] mapping
+    /// are identical, so one implementation owns them and the two callers just
+    /// pick a method.
+    async fn json_wrapper<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+    ) -> Result<T> {
+        tracing::debug!(api = "sophon", url = %url, method = %method, "request");
         let deadline = self.json_body_idle;
-        retry(5, &self.backoff, |attempt| async move {
-            match self.client.get(url).send().await {
-                Ok(r) => {
-                    let status = r.status();
-                    // Same route-family rule as `get_node` and the blob path: a
-                    // non-2xx here is a broken endpoint, not a wrapper to trust.
-                    if let Err(e) = r.error_for_status_ref() {
-                        return Retry::Fatal(
-                            anyhow::Error::new(e)
-                                .context(format!("sophon api status {status} url={url}")),
-                        );
-                    }
-                    let body = match tokio::time::timeout(deadline, r.bytes()).await {
-                        Ok(Ok(body)) => body,
-                        Ok(Err(e)) => {
-                            return Retry::Retry(anyhow::Error::from(e).context("read body"));
-                        }
-                        Err(_) => {
-                            return Retry::Retry(anyhow::anyhow!(
-                                "read body timed out after {deadline:?} url={url}"
-                            ));
-                        }
-                    };
-                    // Same lazy-body rule as the HYP response line above.
-                    if tracing::enabled!(tracing::Level::TRACE) {
-                        tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
-                    }
-                    // The whole body is buffered, so a parse error is
-                    // deterministic for these bytes: five backoffs cannot change
-                    // it. Report it as a malformed response on the first attempt.
-                    let w: Wrapper<T> = match serde_json::from_slice(&body) {
-                        Ok(w) => w,
-                        Err(e) => {
-                            tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
+        retry(5, &self.backoff, |attempt| {
+            // `request` consumes the method. Clone it per attempt so the retry
+            // closure stays `FnMut` and every retry sends the same verb.
+            let method = method.clone();
+            async move {
+                match self.client.request(method, url).send().await {
+                    Ok(r) => {
+                        let status = r.status();
+                        // Same route-family rule as `get_node` and the blob path: a
+                        // non-2xx here is a broken endpoint, not a wrapper to trust.
+                        if let Err(e) = r.error_for_status_ref() {
                             return Retry::Fatal(
-                                anyhow::Error::from(e).context("parse sophon wrapper"),
+                                anyhow::Error::new(e)
+                                    .context(format!("sophon api status {status} url={url}")),
                             );
                         }
-                    };
-                    if w.retcode != 0 {
-                        tracing::debug!(api = "sophon", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
-                        let err = anyhow::anyhow!(
-                            "sophon api retcode={} msg={:?} url={}",
-                            w.retcode,
-                            w.message,
-                            url
-                        );
-                        if w.retcode == -202 {
-                            // Distinct from the other terminal codes: the caller
-                            // maps this one to "no local manifest" and falls back,
-                            // where an invalid-params code is a hard stop.
-                            return Retry::Fatal(SophonNotFound.into());
+                        let body = match tokio::time::timeout(deadline, r.bytes()).await {
+                            Ok(Ok(body)) => body,
+                            Ok(Err(e)) => {
+                                return Retry::Retry(anyhow::Error::from(e).context("read body"));
+                            }
+                            Err(_) => {
+                                return Retry::Retry(anyhow::anyhow!(
+                                    "read body timed out after {deadline:?} url={url}"
+                                ));
+                            }
+                        };
+                        // Same lazy-body rule as the HYP response line above.
+                        if tracing::enabled!(tracing::Level::TRACE) {
+                            tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
                         }
-                        if terminal_retcode(w.retcode) {
-                            return Retry::Fatal(err);
+                        // The whole body is buffered, so a parse error is
+                        // deterministic for these bytes: five backoffs cannot change
+                        // it. Report it as a malformed response on the first attempt.
+                        let w: Wrapper<T> = match serde_json::from_slice(&body) {
+                            Ok(w) => w,
+                            Err(e) => {
+                                tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
+                                return Retry::Fatal(
+                                    anyhow::Error::from(e).context("parse sophon wrapper"),
+                                );
+                            }
+                        };
+                        if w.retcode != 0 {
+                            tracing::debug!(api = "sophon", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
+                            let err = anyhow::anyhow!(
+                                "sophon api retcode={} msg={:?} url={}",
+                                w.retcode,
+                                w.message,
+                                url
+                            );
+                            if w.retcode == -202 {
+                                // Distinct from the other terminal codes: the caller
+                                // maps this one to "no local manifest" and falls back,
+                                // where an invalid-params code is a hard stop.
+                                return Retry::Fatal(SophonNotFound.into());
+                            }
+                            if terminal_retcode(w.retcode) {
+                                return Retry::Fatal(err);
+                            }
+                            Retry::Retry(err)
+                        } else if let Some(d) = w.data {
+                            tracing::debug!(api = "sophon", url = %url, attempt, "ok");
+                            Retry::Done(d)
+                        } else {
+                            // `retcode:0` with no data is the same "nothing here"
+                            // answer as `-202`; give the caller its not-found marker
+                            // instead of spending the retry budget on fixed bytes.
+                            Retry::Fatal(SophonNotFound.into())
                         }
-                        Retry::Retry(err)
-                    } else if let Some(d) = w.data {
-                        tracing::debug!(api = "sophon", url = %url, attempt, "ok");
-                        Retry::Done(d)
-                    } else {
-                        // `retcode:0` with no data is the same "nothing here"
-                        // answer as `-202`; give the caller its not-found marker
-                        // instead of spending the retry budget on fixed bytes.
-                        Retry::Fatal(SophonNotFound.into())
                     }
-                }
-                Err(e) => {
-                    tracing::debug!(api = "sophon", url = %url, attempt, "http error: {}", e);
-                    Retry::Retry(anyhow::anyhow!("http {}", e))
+                    Err(e) => {
+                        tracing::debug!(api = "sophon", url = %url, attempt, "http error: {}", e);
+                        Retry::Retry(anyhow::anyhow!("http {}", e))
+                    }
                 }
             }
         })
         .await
+    }
+
+    // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
+    // Returns retcode -202 when tag unknown -> caller maps to None.
+    async fn get_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        self.json_wrapper::<T>(reqwest::Method::GET, url).await
+    }
+
+    async fn post_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        self.json_wrapper::<T>(reqwest::Method::POST, url).await
     }
 
     pub async fn game_config(&self) -> Result<GameConfig> {
@@ -566,6 +629,16 @@ impl HypClient {
         tag: Option<&str>,
     ) -> Result<ChunkBuild> {
         self.get_direct(&sophon_build_url(self.sophon_base(), pkg, tag))
+            .await
+    }
+
+    /// POST `getPatchBuild`: the patch build a branch package resolves to.
+    ///
+    /// NOTE(starward-parity): unlike `getBuild`, this route selects nothing by
+    /// tag — the server ignores a `tag` query — so only the branch package's
+    /// identity is sent, and all of it in the query string (no body).
+    pub async fn get_patch_build(&self, pkg: &GameBranchPackage) -> Result<PatchBuild> {
+        self.post_direct(&patch_build_url(self.sophon_base(), pkg))
             .await
     }
 
@@ -607,6 +680,19 @@ fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> S
         url.push_str(&format!("&tag={}", urlencode(t)));
     }
     url
+}
+
+/// Build the Sophon `getPatchBuild` URL. Query-only, like `getBuild`, but with
+/// no tag: the server ignores one, so sending `pkg.tag` would imply a version
+/// selection this endpoint does not make. Percent-encoding is the same as for
+/// `getBuild`, so a package id or password with spaces/special chars survives.
+fn patch_build_url(base: &str, pkg: &GameBranchPackage) -> String {
+    format!(
+        "{base}/getPatchBuild?branch={}&package_id={}&password={}",
+        urlencode(&pkg.branch),
+        urlencode(&pkg.package_id),
+        urlencode(&pkg.password)
+    )
 }
 
 /// The only `default_download_mode` this tool can patch. GI reports
@@ -1108,6 +1194,91 @@ mod tests {
         assert_eq!(
             sophon_build_url(base, &pkg, Some("5.0.0")),
             "http://sophon.test/api/getBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword&tag=5.0.0"
+        );
+    }
+
+    /// `getPatchBuild` takes branch/package/password in the query and no tag.
+    /// The server ignores `tag` here, so the client must not send one —
+    /// including a `pkg.tag` that happens to be populated.
+    #[test]
+    fn patch_build_url_is_query_only_and_has_no_tag() {
+        let pkg = GameBranchPackage {
+            package_id: "pkg id".into(),
+            branch: "main".into(),
+            password: "p@ss/word".into(),
+            tag: "5.1.0".into(),
+            diff_tags: vec![],
+        };
+        let url = patch_build_url("http://sophon.test/api", &pkg);
+        assert_eq!(
+            url,
+            "http://sophon.test/api/getPatchBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword"
+        );
+        assert!(!url.contains("tag="), "{url}");
+    }
+
+    /// Patch-manifest sizes arrive as JSON strings as well as numbers; the
+    /// download descriptors' unused keys and the per-tag `stats` object are
+    /// unknown to the DTO and must not fail the parse.
+    #[test]
+    fn patch_build_deserialises_string_sizes_and_ignores_unused_keys() {
+        let body = r#"{
+            "build_id":"b","patch_id":"p","tag":"5.1.0",
+            "manifests":[{
+                "category_id":"1","category_name":"res","matching_field":"",
+                "manifest":{"id":"m","checksum":"c","compressed_size":"12","uncompressed_size":34},
+                "diff_download":{"encryption":"none","password":"","compression":"zstd","url_prefix":"https://diff/","url_suffix":"?x=1"},
+                "manifest_download":{"url_prefix":"https://manifest/"},
+                "stats":{"5.0.0":{"count":1}}
+            }]
+        }"#;
+        let build: PatchBuild = serde_json::from_str(body).unwrap();
+        assert_eq!(build.build_id, "b");
+        assert_eq!(build.patch_id, "p");
+        assert_eq!(build.tag, "5.1.0");
+        assert_eq!(build.manifests.len(), 1);
+        let meta = &build.manifests[0];
+        assert_eq!(meta.category_id, "1");
+        assert_eq!(meta.manifest.compressed_size, 12);
+        assert_eq!(meta.manifest.uncompressed_size, 34);
+        assert_eq!(meta.diff_download.url_prefix, "https://diff/");
+        assert_eq!(meta.manifest_download.url_prefix, "https://manifest/");
+    }
+
+    /// `get_patch_build` goes through the shared wrapper rules but with the
+    /// POST verb; the whole request is the query string, with no body or tag.
+    #[tokio::test]
+    async fn get_patch_build_posts_the_query_and_decodes_the_wrapper() {
+        use girpr_loopback_mock::{Reply, ScriptedServer};
+
+        let server = ScriptedServer::start(vec![Reply::new(
+            200,
+            r#"{"retcode":0,"message":"OK","data":{"build_id":"b","patch_id":"p","tag":"5.1.0","manifests":[]}}"#,
+        )]);
+        let client = HypClient::new_with_bases(
+            Biz::Hk4eGlobal,
+            "http://hyp.test/api".into(),
+            server.uri(),
+            BackoffPolicy::none(),
+        )
+        .unwrap();
+        let pkg = GameBranchPackage {
+            package_id: "pkg id".into(),
+            branch: "main".into(),
+            password: "p@ss/word".into(),
+            tag: "5.1.0".into(),
+            diff_tags: vec![],
+        };
+
+        let build = client.get_patch_build(&pkg).await.unwrap();
+        assert_eq!(build.build_id, "b");
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(
+            requests[0].target,
+            "/getPatchBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword"
         );
     }
 

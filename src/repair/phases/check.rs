@@ -32,8 +32,11 @@ use crate::config::RunFailure;
 use crate::report::{self, Summary};
 use crate::util;
 
+use crate::repair::persistent::{self, PersistentState};
 use crate::repair::scan::ScanReport;
 use girpr_chunk_verify::Verdict;
+use girpr_fetch::persistent::{hotfix_is_intact, verify_manifest_bytes};
+use girpr_persistent_plan::PersistentRow;
 use girpr_repair_plan::{FileId, PlannedFile, RepairPlan};
 
 /// Verify the whole plan; returns the number of damaged files.
@@ -253,6 +256,127 @@ fn record_check(summary: &Summary, outcome: &CheckOutcome) {
         summary.files_skipped.fetch_add(1, Ordering::Relaxed);
     } else {
         summary.files_failed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// With `--with-persistent`, "intact" also covers the persistent tier.
+///
+/// Three independent checks, all read-only and all against the decisions the
+/// plan half already made:
+/// 1. every asset's size and preferred digest (MD5 or XXH64 when the row has
+///    one) via the same `girpr_fetch` gate the execute half uses;
+/// 2. every mirror's bytes against the dispatcher's descriptor MD5/size —
+///    a truncated or replaced `*_versions_persist` is damage even when the
+///    hotfix files themselves are intact;
+/// 3. every marker's presence and exact bytes, with the base hash source
+///    re-read here so the block is the one publish would write — an omission
+///    is expected, not damage.
+///
+/// Each bad item increments `files_failed` and the returned count, so the
+/// caller turns any of them into `RunExit::CheckFailed` (exit 4). A clean item
+/// increments `files_skipped`, matching the base check's counters.
+pub fn verify_persistent(
+    game_dir: &Path,
+    exe_file_name: &str,
+    state: &PersistentState,
+    summary: &Summary,
+) -> u64 {
+    let mut bad = 0u64;
+    // The check must answer about the marker block publish would write, not the one
+    // the plan rendered from pre-repair bytes. The same helper post uses
+    // re-reads the base hash source here, so check and publish cannot disagree.
+    let markers = match persistent::refresh_markers_after_repair(game_dir, exe_file_name, state) {
+        Ok((markers, _)) => markers,
+        Err(e) => {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "CHECK fail: persistent base hash source unreadable"
+            );
+            summary.files_failed.fetch_add(1, Ordering::Relaxed);
+            return 1;
+        }
+    };
+    for asset in &state.plan.assets {
+        let row = PersistentRow {
+            remote_name: asset.rel.clone(),
+            md5: asset.md5.clone(),
+            hash: asset.hash,
+            file_size: asset.size,
+        };
+        let intact = match util::contained_join(game_dir, &asset.rel) {
+            Ok(target) => hotfix_is_intact(&row, &target),
+            Err(e) => {
+                tracing::warn!(
+                    file = %asset.rel,
+                    error = %format!("{e:#}"),
+                    "CHECK fail: persistent path escapes the game dir"
+                );
+                false
+            }
+        };
+        record_persistent(summary, &mut bad, intact, || {
+            tracing::warn!(file = %asset.rel, expect_size = asset.size, "CHECK fail: persistent file");
+        });
+    }
+    for (rel, _) in &state.plan.mirrors {
+        let intact = match util::contained_join(game_dir, rel) {
+            Ok(target) => match std::fs::read(&target) {
+                Ok(bytes) => state
+                    .dispatch
+                    .manifest_digests
+                    .iter()
+                    .find(|d| util::clean_rel(&d.mirror_rel).is_ok_and(|r| r == *rel))
+                    .is_some_and(|d| verify_manifest_bytes(d, &bytes).is_ok()),
+                Err(_) => false,
+            },
+            Err(e) => {
+                tracing::warn!(
+                    file = %rel,
+                    error = %format!("{e:#}"),
+                    "CHECK fail: persistent path escapes the game dir"
+                );
+                false
+            }
+        };
+        record_persistent(summary, &mut bad, intact, || {
+            tracing::warn!(file = %rel, "CHECK fail: persistent mirror");
+        });
+    }
+    for marker in &markers {
+        let intact = match util::contained_join(game_dir, &marker.path) {
+            Ok(target) => {
+                std::fs::read(&target).is_ok_and(|bytes| bytes == marker.value.as_bytes())
+            }
+            Err(e) => {
+                tracing::warn!(
+                    file = %marker.path,
+                    error = %format!("{e:#}"),
+                    "CHECK fail: persistent path escapes the game dir"
+                );
+                false
+            }
+        };
+        record_persistent(summary, &mut bad, intact, || {
+            tracing::warn!(
+                file = %marker.path,
+                expect_value = %marker.value,
+                "CHECK fail: marker"
+            );
+        });
+    }
+    bad
+}
+
+/// Fold one persistent verdict into the counters, logging the failure through
+/// the one call site per item so an absent, damaged and escaping path all read
+/// as `CHECK fail` and none is silently skipped.
+fn record_persistent(summary: &Summary, bad: &mut u64, intact: bool, warn: impl FnOnce()) {
+    if intact {
+        summary.files_skipped.fetch_add(1, Ordering::Relaxed);
+    } else {
+        *bad += 1;
+        summary.files_failed.fetch_add(1, Ordering::Relaxed);
+        warn();
     }
 }
 

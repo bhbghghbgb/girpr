@@ -73,7 +73,7 @@ pub struct Cli {
 /// depth, cache reset, and the dry run.
 #[derive(Args, Debug, Clone)]
 pub struct CommonArgs {
-    /// Hash algorithm; repeatable (md5, sha256). "none" disables hashing entirely.
+    /// Hash algorithm; repeatable (md5, sha256, xxhash64). "none" disables hashing entirely.
     ///
     /// **One algorithm per occurrence**: `--hash-all-of md5 --hash-all-of sha256`
     /// names two. A flag that names two values at once is refused before the run

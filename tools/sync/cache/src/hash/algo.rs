@@ -20,13 +20,14 @@
 /// ## Ord
 ///
 /// Derived, so it is declaration order — which **is** [`Self::ALL`] order and is
-/// the one order every canonical iteration in this crate uses. A third algorithm
+/// the one order every canonical iteration in this crate uses. A new algorithm
 /// gets a canonical slot at the end of the enum and nothing else has to change.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum HashAlg {
     Md5,
     Sha256,
+    Xxhash64,
 }
 
 impl HashAlg {
@@ -34,13 +35,14 @@ impl HashAlg {
     ///
     /// The single list that defines "canonical order": [`super::AlgoSet::iter`] filters
     /// this, [`super::DigestSet::iter`] walks it, and the codec emits rows in it.
-    pub const ALL: [HashAlg; 2] = [HashAlg::Md5, HashAlg::Sha256];
+    pub const ALL: [HashAlg; 3] = [HashAlg::Md5, HashAlg::Sha256, HashAlg::Xxhash64];
 
     /// The command-line spelling. Also the cache key, verbatim.
     pub const fn as_str(self) -> &'static str {
         match self {
             HashAlg::Md5 => "md5",
             HashAlg::Sha256 => "sha256",
+            HashAlg::Xxhash64 => "xxhash64",
         }
     }
 
@@ -92,6 +94,9 @@ impl HashAlg {
         match self {
             HashAlg::Md5 => 16,
             HashAlg::Sha256 => 32,
+            // XXH64's 64-bit value is stored as its big-endian bytes, so the
+            // raw bytes a row holds are the hex a user sees, byte for byte.
+            HashAlg::Xxhash64 => 8,
         }
     }
 
@@ -107,8 +112,8 @@ impl HashAlg {
         1u16 << (self as u8)
     }
 
-    /// `md5,sha256` — the supported list as the existing `--hash-all-of` refusal
-    /// names it.
+    /// `md5,sha256,xxhash64` — the supported list as the existing
+    /// `--hash-all-of` refusal names it.
     pub fn names() -> String {
         HashAlg::ALL.map(|a| a.as_str()).join(",")
     }
@@ -138,7 +143,7 @@ impl HashAlg {
 /// algorithm, and no other algorithm's name does — and an algorithm added to
 /// the list is covered the moment it is added.
 ///
-/// The two algorithms are told apart by their discriminants rather than with
+/// The algorithms are told apart by their discriminants rather than with
 /// `==`, because a derived `PartialEq` is not a `const fn` and cannot become
 /// one: the comparison has to be a `const fn` before the context that holds
 /// it can be.
@@ -212,13 +217,15 @@ impl std::fmt::Display for UnknownHash {
 impl std::error::Error for UnknownHash {}
 
 impl std::fmt::Debug for HashAlg {
-    /// The command-line spelling, quoted — **not** the derived `Md5`/`Sha256`.
+    /// The command-line spelling, quoted — **not** the derived `Md5`/`Sha256`/
+    /// `Xxhash64`.
     ///
     /// `info!(algos = ?algos)` appears in the span of all four subcommands and
-    /// prints `["md5", "sha256"]` today. A derive would silently rewrite every one
-    /// of those log lines to `[Md5, Sha256]` and quietly break anyone grepping a
-    /// log, which is exactly the sort of change that costs a day and is never in
-    /// the diff that caused it.
+    /// prints `["md5", "sha256", "xxhash64"]` for the whole vocabulary today. A
+    /// derive would silently rewrite every one of those log lines to
+    /// `[Md5, Sha256, Xxhash64]` and quietly break anyone grepping a log, which
+    /// is exactly the sort of change that costs a day and is never in the diff
+    /// that caused it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self.as_str(), f)
     }

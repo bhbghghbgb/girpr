@@ -1,6 +1,6 @@
 //! `girpr`'s own repair machinery, on crafted inputs.
 //!
-//! The artifact suite (`tests/artifact_bridge.rs`) exists to prove one thing:
+//! The artifact suite (`tests/artifact_repair_bridge.rs`) exists to prove one thing:
 //! that `girpr`'s output is what another repair tool computes. Everything
 //! else — which tier the repair picked, which direction it wrote in, whether
 //! it trimmed eagerly, whether it refused a RAM reservation — is **`girpr`'s

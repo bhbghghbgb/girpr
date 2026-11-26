@@ -16,6 +16,8 @@ mod repair_limits;
 mod repair_machinery;
 #[path = "repair_offline.rs"]
 mod repair_offline;
+#[path = "repair_persistent.rs"]
+mod repair_persistent;
 #[path = "repair_plan.rs"]
 mod repair_plan;
 #[path = "repair_purge.rs"]

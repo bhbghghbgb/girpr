@@ -1,5 +1,25 @@
 .venv/
-samples/
+# Everything under samples/ is raw capture by default. Only the trimmed
+# fixtures the offline tests consume are whitelisted below; full manifests,
+# ciphertext, 300-row hotfix samples and unwrapped keys stay out of the tree.
+samples/*
+!samples/metadata_summary.json
+!samples/dispatch_summary.json
+!samples/hk4e_cn.dispatch_summary.json
+!samples/hk4e_bilibili.dispatch_summary.json
+!samples/dispatch_fields.txt
+!samples/hk4e_cn.dispatch_fields.txt
+!samples/hk4e_bilibili.dispatch_fields.txt
+!samples/res_versions_external.full.head.ndjson
+!samples/data_versions.full.head.ndjson
+!samples/silence_data_versions.full.head.ndjson
+!samples/res_versions_external.names.tsv
+!samples/data_versions.names.tsv
+!samples/silence_data_versions.names.tsv
+!samples/*.hotfix_row.json
+!samples/FIXTURES.md
+!samples/fixtures/
+!samples/fixtures/*
 __pycache__/
 *.pyc
 *.cap

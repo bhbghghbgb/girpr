@@ -20,6 +20,11 @@ hex = "0.4.3"
 # newtypes' conversions from a hasher's output.
 md-5 = "0.11.0"
 sha2 = "0.11.1"
+# XXH64, the non-cryptographic 64-bit digest girsync can ask for beside md5 and
+# sha256. The streaming `Xxh64` is what `Sink` folds content into; the one-shot
+# `xxh64` backs the shared test vectors. Seed 0 everywhere: a cache digest is a
+# content identity, not a keyed hash.
+xxhash-rust = { version = "0.8.21", features = ["xxh64"] }
 # Only for `parse_hex`, so a bad spelling reports the same message at every
 # call site.
 anyhow = "1.0.105"

@@ -1206,7 +1206,7 @@ mod tests {
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
     }
 
-    /// C6: the driver keeps at most `jobs` file tasks alive.
+    /// The driver keeps at most `jobs` file tasks alive.
     ///
     /// A task is spawned only when the in-flight window has room, so a plan of
     /// many files does not allocate one task per file up front. The peak is

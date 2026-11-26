@@ -42,6 +42,20 @@ fn from_str_is_case_insensitive_without_help() {
     assert_eq!("Md5".parse::<HashAlg>().unwrap(), HashAlg::Md5);
     assert_eq!("SHA256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
     assert_eq!("Sha256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
+    assert_eq!("XXHASH64".parse::<HashAlg>().unwrap(), HashAlg::Xxhash64);
+    assert_eq!("Xxhash64".parse::<HashAlg>().unwrap(), HashAlg::Xxhash64);
+}
+
+/// XXH64 is a first-class request, not a foreign name that happens to decode:
+/// it owns the last canonical slot and an eight-byte raw digest.
+#[test]
+fn xxhash64_is_a_named_algorithm_with_an_eight_byte_digest() {
+    assert_eq!(HashAlg::Xxhash64.as_str(), "xxhash64");
+    assert_eq!(HashAlg::Xxhash64.digest_len(), 8);
+    assert_eq!(HashAlg::ALL.last(), Some(&HashAlg::Xxhash64));
+    assert!(HashAlg::names().contains("xxhash64"));
+    assert_eq!(parse(&["XXHASH64"]), vec![HashAlg::Xxhash64]);
+    assert_eq!(parse_any(&["xxhash64"]), vec![HashAlg::Xxhash64]);
 }
 
 /// **The resolver and the parser must not drift.** The resolver answers "which
@@ -255,7 +269,7 @@ fn iteration_is_always_canonical_order() {
             .collect();
         assert_eq!(got, want, "{set:?} iterates in ALL order");
     }
-    assert_eq!(subsets().len(), 4, "NONE, md5, sha256, both");
+    assert_eq!(subsets().len(), 8, "every subset of three algorithms");
 }
 
 /// `len` is a bit count, so it cannot disagree with `iter`. Both properties
@@ -291,7 +305,7 @@ fn difference_subtracts_and_narrows_never_widens() {
         AlgoSet::NONE.difference(both).is_empty(),
         "nothing asked for, nothing left"
     );
-    assert_eq!(both.difference(AlgoSet::one(HashAlg::Md5)).len(), 1);
+    assert_eq!(both.difference(AlgoSet::one(HashAlg::Md5)).len(), 2);
     assert!(
         both.difference(both).is_empty(),
         "everything already held, nothing owed"
@@ -326,12 +340,12 @@ fn display_pads_to_the_width_in_the_format_spec() {
 /// — fails here rather than quietly costing 25–50 MB on a 200k-file tree.
 ///
 /// Derived, not guessed: the foreign arm is a `Vec` (24), plus `Option<[u8; 16]>`
-/// at 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche
-/// to spare, so it costs a discriminant byte. The vector's own alignment rounds
-/// the total up to 80.
+/// at 17, `Option<[u8; 32]>` at 33 and `Option<[u8; 8]>` at 9 — an `Option` over
+/// an array has no niche to spare, so it costs a discriminant byte. The vector's
+/// own alignment rounds the total up to 88.
 #[test]
-fn a_digest_set_is_eighty_bytes_and_allocates_nothing() {
-    assert_eq!(std::mem::size_of::<DigestSet>(), 80);
+fn a_digest_set_is_eighty_eight_bytes_and_allocates_nothing() {
+    assert_eq!(std::mem::size_of::<DigestSet>(), 88);
     assert!(
         DigestSet::default().foreign.is_empty(),
         "the foreign arm is empty and holds nothing"
@@ -756,6 +770,34 @@ fn a_known_name_with_the_right_length_still_goes_to_its_slot() {
     assert_eq!(d.get_named("md5"), Some(&[1u8; 16][..]));
 }
 
+/// XXH64 takes its own slot under any ASCII case, and a wrong-length entry
+/// under its name still routes to `foreign` rather than corrupting that slot.
+#[test]
+fn xxhash64_uses_its_slot_and_routes_wrong_lengths_to_foreign() {
+    let mut d = DigestSet::default();
+    d.insert_named("XXHASH64", &[7u8; 8]);
+    assert_eq!(d.get(HashAlg::Xxhash64), Some(&[7u8; 8][..]));
+    assert_eq!(d.get_algo(HashAlg::Xxhash64), Some(&[7u8; 8][..]));
+    assert_eq!(d.get_named("xxhash64"), Some(&[7u8; 8][..]));
+    assert_eq!(d.foreign_iter().count(), 0);
+
+    let mut wrong = DigestSet::default();
+    wrong.insert_named("xxhash64", &[7u8; 4]);
+    assert_eq!(wrong.get(HashAlg::Xxhash64), None);
+    assert_eq!(
+        wrong.get_algo(HashAlg::Xxhash64),
+        Some(&[7u8; 4][..]),
+        "a malformed entry is still the digest the row holds under that name"
+    );
+    assert_eq!(wrong.foreign_iter().count(), 1);
+
+    // A merge overwrites the slot with the computed value, as for the others.
+    let mut computed = DigestSet::default();
+    computed.insert_named("xxhash64", &[9u8; 8]);
+    d.merge(computed);
+    assert_eq!(d.get(HashAlg::Xxhash64), Some(&[9u8; 8][..]));
+}
+
 /// **The fold is ASCII case only**, the same rule the parser and the path key
 /// follow. A Unicode fold would map the Kelvin sign `\u{212A}` onto `k`, so
 /// `blake3` and `bla\u{212A}e3` would be one name — two spellings the
@@ -877,16 +919,17 @@ fn a_set_is_two_bytes() {
 }
 
 /// `Debug` is a log-line contract. `info!(algos = ?algos)` prints in the
-/// span of all four subcommands, and it renders `["md5", "sha256"]` today; a
-/// derive on either type would rewrite every one of those lines to
-/// `[Md5, Sha256]` without failing a single test elsewhere.
+/// span of all four subcommands, and it renders `["md5", "sha256", "xxhash64"]`
+/// for the whole vocabulary today; a derive on either type would rewrite every
+/// one of those lines to `[Md5, Sha256, Xxhash64]` without failing a single test
+/// elsewhere.
 #[test]
 fn debug_renders_the_spellings_the_logs_already_carry() {
     assert_eq!(format!("{:?}", AlgoSet::NONE), "[]");
     assert_eq!(format!("{:?}", AlgoSet::one(HashAlg::Md5)), "[\"md5\"]");
     assert_eq!(
         format!("{:?}", AlgoSet::from_iter(HashAlg::ALL)),
-        "[\"md5\", \"sha256\"]"
+        "[\"md5\", \"sha256\", \"xxhash64\"]"
     );
     assert_eq!(format!("{:?}", HashAlg::Md5), "\"md5\"");
 }
@@ -981,7 +1024,7 @@ fn an_unsupported_name_is_refused_with_the_supported_list() {
     let err = parse_hash_list(&["bogus".to_string()]).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "unsupported hash 'bogus' (supported: md5,sha256 or none)"
+        "unsupported hash 'bogus' (supported: md5,sha256,xxhash64 or none)"
     );
     // The first unsupported name is the one named, whatever follows it.
     let err = parse_hash_list(&[
@@ -1058,9 +1101,10 @@ fn a_digest_is_the_same_however_the_bytes_were_split() {
     let path = write(&dir, "f.bin", &body);
 
     for set in [
-        algos(&["md5", "sha256"]),
+        algos(&["md5", "sha256", "xxhash64"]),
         algos(&["md5"]),
         algos(&["sha256"]),
+        algos(&["xxhash64"]),
     ] {
         let reference = hash_file(&path, &set).unwrap();
 
@@ -1092,9 +1136,22 @@ fn an_empty_file_hashes_to_the_digest_of_nothing() {
     let dir = girpr_tempdir::TempDir::new("girsync_hash", "empty");
     let path = write(&dir, "f.bin", b"");
 
-    let set = algos(&["md5", "sha256"]);
+    let set = algos(&["md5", "sha256", "xxhash64"]);
     let never_fed = Digests::new(&set);
     assert_eq!(never_fed.finish(), hash_file(&path, &set).unwrap());
+}
+
+/// The streaming path yields the published XXH64 vector, in the big-endian
+/// bytes the cache stores and the hex a caller reads back.
+#[test]
+fn hash_file_computes_the_published_xxhash64_vector() {
+    let dir = girpr_tempdir::TempDir::new("girsync_hash", "xxhash64");
+    let set = algos(&["xxhash64"]);
+    girpr_digest::vectors::assert_xxhash64_vectors(|bytes| {
+        let path = write(&dir, "vector.bin", bytes);
+        let got = hash_file(&path, &set).unwrap();
+        girpr_digest::encode_hex(got.get(HashAlg::Xxhash64).unwrap())
+    });
 }
 
 /// **The caller-owned buffer produces the same digest however it is sized.**
@@ -1107,7 +1164,7 @@ fn a_borrowed_buffer_matches_hash_file_at_any_size() {
     let dir = girpr_tempdir::TempDir::new("girsync_hash", "buf");
     let body: Vec<u8> = (0..(CHUNK * 2 + 12345)).map(|i| (i % 251) as u8).collect();
     let path = write(&dir, "f.bin", &body);
-    let set = algos(&["md5", "sha256"]);
+    let set = algos(&["md5", "sha256", "xxhash64"]);
     let reference = hash_file(&path, &set).unwrap();
 
     let mut tiny = [0u8; 7];

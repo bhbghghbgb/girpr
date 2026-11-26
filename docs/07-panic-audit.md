@@ -1,14 +1,11 @@
-# Panic-site audit for `girpr`
-
-**Status: complete.** The audit covered an audited tree at the time plus the
-changes in this branch.
+# Panic safety at server-derived sites in `girpr`
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
 value chosen by the server (or by a hostile local manifest) reaches arithmetic
 (the `saturating_*`/`checked_*` helpers, `+=`/`-=` updates), indexing,
 integer-width `as` casts, `unwrap`/`expect`, or `panic!`/`unreachable!`. Local
-CLI parsing, logging and test-only code are out of scope unless they feed one
-of those paths.
+CLI parsing, logging and test-only code are out of scope unless they feed one of
+those paths.
 
 **Rule:** no `catch_unwind`. A server-derived value that can panic is converted
 into a refusal (a per-file `anyhow::Error`, usually exit `2` metadata or exit `3`
@@ -17,56 +14,16 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
 ---
 
-## 1. Method
+## 1. Sites and dispositions
 
-1. Enumerated every `.unwrap()`, `.expect()`, `panic!`, `unreachable!`, direct
-   `[]` index or slice, and arithmetic/integer-width `as` conversion in the
-   production regions of:
-   `app/fetch/src/sophon/{stream,proto,map,filter}.rs`,
-   `app/fetch/src/hyp.rs`, `app/fetch/src/retry.rs`,
-   `app/util-path/src/{path,atomic}.rs`, `app/util-ini/src/ini.rs`,
-   `app/util-hash/src/md5.rs`,
-   `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
-   `src/repair/{scan,reuse,purge,mod}.rs`, `app/audio/src/lib.rs`
-   (aliased as `girpr_audio` in `src/repair/mod.rs`), `app/lock/src/lib.rs`,
-   `src/repair/file/{mod,temp,inplace,mode}.rs`,
-   `src/repair/scope/{report,limits,filter}.rs` and the thin `ledger.rs` alias
-   over `app/report/src/ledger.rs`.
-2. For each site, traced where the value comes from:
-   - **server** — a protobuf field, a `getBuild`/`getGameConfigs` JSON field, a
-     URL/prefix, or a path in a manifest;
-   - **local state** — a CLI flag, a local file, or a process counter;
-   - **invariant** — a length or index established by the same function/build.
-3. Classified each as **guarded** (checked/refused), **saturated** (bounded
-   arithmetic), or **invariant** (no server input can break it), and named the
-   test that pins the behaviour.
-4. `rg` checklist used for the sweep, re-run against the audited tree:
-
-   ```
-   rg -n '\.unwrap\(\)|\.expect\(|panic!|unreachable!|\[[a-zA-Z_][a-zA-Z0-9_.]*\]|\[[^\]]*\.\.[^\]]*\]| as (u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)|saturating|checked_| \+= | -= ' src
-   ```
-
-   followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
-
-In those regions, the audio leaf (`app/audio/src/lib.rs`) and
-`app/lock/src/lib.rs` are on the plan/write paths: the former has no
-production `unwrap`/`expect`/`panic!`, and the latter's only direct index is the
-bounded `head[..read]` in `may_write_body` (listed below).
-
----
-
-## 2. Sites and dispositions
-
-Sites are named by file and symbol rather than by line number, so the table
-survives the module splits. "Origin" says whether the value is
-server-controlled. A row is either a panic-capable site or a non-panicking
-clamp the same sweep surfaced (`max_chunk_bytes`, for example); "Disposition"
-says which.
+Sites are named by file and symbol rather than by line number. "Origin" says
+whether the value is server-controlled. A row is either a panic-capable site or
+a non-panicking clamp in the same region; "Disposition" says which.
 
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
 | `app/fetch/src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: clamped to a bounded capacity before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
-| `app/fetch/src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
+| `app/fetch/src/sophon/stream.rs` `fetch_manifest`'s protobuf parse (inside `try_fetch_verified_blob`) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
 | `app/fetch/src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `app/fetch/src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
 | `app/fetch/src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
@@ -94,30 +51,21 @@ says which.
 
 ---
 
-## 3. Findings
+## 2. Invariants
 
-**No server-derived panic site was found that is not already refused or bounded.**
-Every server field that reaches arithmetic is either checked at plan time
+Every server field that reaches arithmetic is checked at plan time
 (`offset`/`size`/range overflow), clamped (`manifest_size_hint`), or saturated
 (every sum that can exceed `u64`). Every direct index is into a vector whose
 length is established in the same function or the same plan, not by the server.
-
-One observation from the first sweep is now closed: the `u64 as i64`
-conversion in `num_from_string` used to wrap values above `i64::MAX`. It now
-uses `i64::try_from`, so an out-of-range number is a deserialization error
-rather than a wrapped negative size. Values that fit but are negative are still
-refused by the plan or clamped with `max(0)`, so the outcome remains a refused
-file or a conservative estimate, never a write outside the install.
-
-The plan-time range gate covers the temp-file overflow path, and the file-task
-window is bounded by `join_file_tasks` without a semaphore permit to unwrap.
+An out-of-range number in `num_from_string` is a deserialization error rather
+than a wrapped negative size; a value that fits but is negative is still refused
+by the plan or clamped with `max(0)`. The plan-time range gate covers the
+temp-file overflow path, and the file-task window is bounded by `join_file_tasks`
+without a semaphore permit to unwrap.
 
 ---
 
-## 4. Tests that pin the refusals
-
-Hostile-manifest and saturation evidence already in the suite, plus the
-zero-length cases added with this audit:
+## 3. Tests that pin the refusals
 
 - `girpr_repair_plan::plan::tests::malformed_chunk_ranges_are_refused_at_plan_time`
   — negative size/offset, `offset + size` overflow, range past file size.
@@ -139,12 +87,12 @@ zero-length cases added with this audit:
 
 ---
 
-## 5. What this does not cover
+## 4. What this does not cover
 
-- A fuzz target over manifest parsing/planning (the audit is a source sweep plus
-  the hostile cases above, not exhaustive input generation).
+- A fuzz target over manifest parsing/planning — the evidence is the source
+  sites above plus the hostile cases, not exhaustive input generation.
 - Non-`x86_64` `usize` widths: several casts assume a 64-bit host, the same
   assumption the release matrix already makes.
 - Panics from third-party crates (`reqwest`, `zstd`, `prost`, `walkdir`) on
   hostile bodies; those are wrapped at their `Result` boundary, but their
-  internals were not audited.
+  internals are not covered here.

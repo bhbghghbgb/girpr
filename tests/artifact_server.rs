@@ -12,7 +12,7 @@
 //! kilobytes, and it exercises every route the server has. So these cases run
 //! in every `cargo nextest run`, and the real bundle is only needed by the
 //! suite that compares `girpr`'s output against the patch
-//! (`tests/artifact_bridge.rs`).
+//! (`tests/artifact_repair_bridge.rs`).
 //!
 //! **What is served is never invented.** Every body comes out of a file the
 //! bundle carries; the only synthesized content is the failure shape, and only

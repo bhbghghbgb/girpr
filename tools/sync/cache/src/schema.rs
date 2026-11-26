@@ -14,12 +14,14 @@ pub const CACHE_PREFIX: &str = "girpr-cache";
 /// Cache schema version. Old sled directories (and any unknown version) are
 /// rejected; rebuild with `--ignore-cache` or convert with `sled2redb`.
 ///
-/// Bumped when the wire encoding changes: the schema is positional (`postcard`
-/// writes fields in declaration order, with no field names), so a row written
-/// under an older layout can no longer be read field by field. The version gate
-/// is what refuses such a cache cleanly and points at the rebuild instead of
-/// letting a decoder misread its rows.
-pub const CACHE_VERSION: u32 = 3;
+/// Bumped when the row's schema changes — either the positional `postcard`
+/// layout (`postcard` writes fields in declaration order, with no field names),
+/// or the set of algorithms with a typed slot in [`crate::hash::DigestSet`].
+/// Version 4 adds the eight-byte xxhash64 slot to the two the earlier versions
+/// carried. The version gate is what refuses an older cache cleanly and points
+/// at the rebuild instead of letting a decoder misread its rows under the old
+/// vocabulary.
+pub const CACHE_VERSION: u32 = 4;
 
 /// The `meta` row: the schema, and the case mode the cache was written under.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,7 +32,8 @@ pub struct Meta {
 }
 
 /// One cached path. `hashes` holds the **raw** digest bytes (16 for md5, 32 for
-/// sha256 — never hex), under an algorithm this build may or may not recognise.
+/// sha256, 8 for xxhash64 — never hex), under an algorithm this build may or may
+/// not recognise.
 ///
 /// `PartialEq` is what lets a wire round-trip be asserted as a whole, and what
 /// the effective-merge rule is checked against.

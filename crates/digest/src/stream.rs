@@ -17,26 +17,35 @@ use md5::Digest as _;
 ///
 /// Plain mechanics, not a program's algorithm vocabulary: girsync's `AlgoSet`
 /// and command-line names stay in girsync and are mapped to this at the call
-/// site. Two booleans are enough for the fixed-width algorithms this crate owns.
+/// site. Three booleans are enough for the fixed-width algorithms this crate owns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Algorithms {
     md5: bool,
     sha256: bool,
+    xxhash64: bool,
 }
 
 impl Algorithms {
     /// Run no algorithms. The sink is inert: it counts bytes but yields no digests.
-    pub const NONE: Self = Self::new(false, false);
+    pub const NONE: Self = Self::new(false, false, false);
     /// MD5 only.
-    pub const MD5: Self = Self::new(true, false);
+    pub const MD5: Self = Self::new(true, false, false);
     /// SHA-256 only.
-    pub const SHA256: Self = Self::new(false, true);
+    pub const SHA256: Self = Self::new(false, true, false);
+    /// XXH64 only.
+    pub const XXHASH64: Self = Self::new(false, false, true);
     /// MD5 and SHA-256 over the same bytes, in one pass.
-    pub const MD5_SHA256: Self = Self::new(true, true);
+    pub const MD5_SHA256: Self = Self::new(true, true, false);
+    /// All three over the same bytes, in one pass.
+    pub const ALL: Self = Self::new(true, true, true);
 
-    /// Build a set from two membership flags.
-    pub const fn new(md5: bool, sha256: bool) -> Self {
-        Self { md5, sha256 }
+    /// Build a set from three membership flags.
+    pub const fn new(md5: bool, sha256: bool, xxhash64: bool) -> Self {
+        Self {
+            md5,
+            sha256,
+            xxhash64,
+        }
     }
 
     /// Whether MD5 was requested.
@@ -49,9 +58,14 @@ impl Algorithms {
         self.sha256
     }
 
+    /// Whether XXH64 was requested.
+    pub const fn xxhash64(self) -> bool {
+        self.xxhash64
+    }
+
     /// Whether nothing was requested.
     pub const fn is_empty(self) -> bool {
-        !self.md5 && !self.sha256
+        !self.md5 && !self.sha256 && !self.xxhash64
     }
 }
 
@@ -69,6 +83,8 @@ pub struct DigestBytes {
     pub md5: Option<[u8; 16]>,
     /// SHA-256 bytes, when requested.
     pub sha256: Option<[u8; 32]>,
+    /// XXH64 bytes (big-endian), when requested.
+    pub xxhash64: Option<[u8; 8]>,
 }
 
 impl DigestBytes {
@@ -101,6 +117,16 @@ impl DigestBytes {
     pub fn sha256_hex(&self) -> Option<String> {
         self.sha256.map(|d| super::encode_hex(&d))
     }
+
+    /// The XXH64 bytes, when requested.
+    pub fn xxhash64_bytes(&self) -> Option<[u8; 8]> {
+        self.xxhash64
+    }
+
+    /// The XXH64 as lowercase hex, when requested.
+    pub fn xxhash64_hex(&self) -> Option<String> {
+        self.xxhash64.map(|d| super::encode_hex(&d))
+    }
 }
 
 /// A byte-absorbing sink: feeds every byte to the requested hashers and counts
@@ -114,6 +140,7 @@ impl DigestBytes {
 pub struct Sink {
     md5: Option<md5::Md5>,
     sha256: Option<sha2::Sha256>,
+    xxhash64: Option<xxhash_rust::xxh64::Xxh64>,
     bytes: u64,
     algos: Algorithms,
 }
@@ -124,6 +151,8 @@ impl Sink {
         Self {
             md5: algos.md5().then(md5::Md5::new),
             sha256: algos.sha256().then(sha2::Sha256::new),
+            // Seed 0: this is a content identity shared across runs, not a keyed hash.
+            xxhash64: algos.xxhash64().then(|| xxhash_rust::xxh64::Xxh64::new(0)),
             bytes: 0,
             algos,
         }
@@ -136,6 +165,9 @@ impl Sink {
             h.update(chunk);
         }
         if let Some(h) = self.sha256.as_mut() {
+            h.update(chunk);
+        }
+        if let Some(h) = self.xxhash64.as_mut() {
             h.update(chunk);
         }
         self.bytes += chunk.len() as u64;
@@ -163,6 +195,12 @@ impl Sink {
         self.sha256.as_ref().map(|h| bytes32(h.clone().finalize()))
     }
 
+    /// Read the current XXH64 without finishing the sink. `None` when
+    /// XXH64 was not requested.
+    pub fn xxhash64_bytes(&self) -> Option<[u8; 8]> {
+        self.xxhash64.as_ref().map(|h| bytes8(h.digest()))
+    }
+
     /// Discard everything absorbed and start over with the same algorithm set.
     ///
     /// This is the reset *mechanic* only. When to call it — on a reader seek, a
@@ -170,6 +208,10 @@ impl Sink {
     pub fn reset(&mut self) {
         self.md5 = self.algos.md5().then(md5::Md5::new);
         self.sha256 = self.algos.sha256().then(sha2::Sha256::new);
+        self.xxhash64 = self
+            .algos
+            .xxhash64()
+            .then(|| xxhash_rust::xxh64::Xxh64::new(0));
         self.bytes = 0;
     }
 
@@ -179,6 +221,7 @@ impl Sink {
             bytes: self.bytes,
             md5: self.md5.map(|h| bytes16(h.finalize())),
             sha256: self.sha256.map(|h| bytes32(h.finalize())),
+            xxhash64: self.xxhash64.map(|h| bytes8(h.digest())),
         }
     }
 }
@@ -230,6 +273,11 @@ fn bytes32(output: sha2::digest::Output<sha2::Sha256>) -> [u8; 32] {
     bytes
 }
 
+/// Big-endian bytes, the spelling a hex-rendered XXH64 uses.
+fn bytes8(value: u64) -> [u8; 8] {
+    value.to_be_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,8 +288,12 @@ mod tests {
         assert!(Algorithms::NONE.is_empty());
         assert!(Algorithms::MD5.md5() && !Algorithms::MD5.sha256());
         assert!(!Algorithms::SHA256.md5() && Algorithms::SHA256.sha256());
-        assert_eq!(Algorithms::MD5_SHA256, Algorithms::new(true, true));
+        assert!(Algorithms::XXHASH64.xxhash64());
+        assert!(!Algorithms::XXHASH64.md5() && !Algorithms::XXHASH64.sha256());
+        assert_eq!(Algorithms::MD5_SHA256, Algorithms::new(true, true, false));
+        assert_eq!(Algorithms::ALL, Algorithms::new(true, true, true));
         assert!(!Algorithms::MD5_SHA256.is_empty());
+        assert!(!Algorithms::ALL.is_empty());
     }
 
     #[test]
@@ -266,7 +318,8 @@ mod tests {
         let data: Vec<u8> = (0..5000).map(|i| (i % 251) as u8).collect();
         let want_md5 = super::super::md5_hex(&data);
         let want_sha = super::super::sha256_hex(&data);
-        let mut sink = Sink::new(Algorithms::MD5_SHA256);
+        let want_xx = super::super::xxhash64_hex(&data);
+        let mut sink = Sink::new(Algorithms::ALL);
         for chunk in data.chunks(37) {
             sink.update(chunk);
         }
@@ -274,6 +327,17 @@ mod tests {
         assert_eq!(out.len(), data.len() as u64);
         assert_eq!(out.md5_hex().as_deref(), Some(want_md5.as_str()));
         assert_eq!(out.sha256_hex().as_deref(), Some(want_sha.as_str()));
+        assert_eq!(out.xxhash64_hex().as_deref(), Some(want_xx.as_str()));
+    }
+
+    #[test]
+    fn xxhash64_only_yields_its_own_digest() {
+        let mut sink = Sink::new(Algorithms::XXHASH64);
+        sink.update(b"abc");
+        let out = sink.finish();
+        assert_eq!(out.md5, None);
+        assert_eq!(out.sha256, None);
+        assert_eq!(out.xxhash64_hex().as_deref(), Some("44bc2cf5ad770999"));
     }
 
     #[test]
@@ -284,6 +348,7 @@ mod tests {
         assert_eq!(out.len(), 37);
         assert_eq!(out.md5, None);
         assert_eq!(out.sha256, None);
+        assert_eq!(out.xxhash64, None);
     }
 
     #[test]
@@ -335,6 +400,7 @@ mod tests {
                 bytes: self.bytes,
                 md5: self.md5_bytes(),
                 sha256: self.sha256_bytes(),
+                xxhash64: self.xxhash64_bytes(),
             }
         }
     }

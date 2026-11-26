@@ -1,0 +1,12 @@
+# Python / generated caches
+__pycache__/
+*.py[cod]
+
+# Opaque binary copies (decoded values are in snapshots-short/)
+*.bin
+
+# Full generated artifacts stay on disk where the scripts write them.
+# Only the compact, self-explaining *-short/ dirs are committed.
+logs/
+snapshots/
+notes/*.txt

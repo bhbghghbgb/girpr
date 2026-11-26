@@ -37,13 +37,13 @@ main tool, and never imports its code.
 |---|---|
 | No dependency on the `girpr` crate | `Cargo.toml` declares no `girpr` path or registry dep |
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
-| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`, `--no-log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program. The shared exit-table mechanism below generates each tool's table from the tool's own list — no code or meaning crosses between the tools. The shared audio-language mechanics below carry only the four code/display-name pairs and the lower + `_`→`-` spelling; each tool keeps its own alias map, `none` sentinel and validation, so no audio policy crosses between the tools. The shared clap-error mapping below turns help/version into `0` and every other error into the usage code the caller supplies — no exit code or exit table crosses between the tools |
+| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`, `--no-log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program. The shared exit-table mechanism below generates each tool's table from the tool's own list — no code or meaning crosses between the tools. The shared audio-language mechanics below carry only the code/display-name pairs and the lower + `_`→`-` spelling; each tool keeps its own alias map, `none` sentinel and validation, so no audio policy crosses between the tools. The shared clap-error mapping below turns help/version into `0` and every other error into the usage code the caller supplies — no exit code or exit table crosses between the tools |
 | No shared fixtures | `gircap` builds its own mock server for its own tests, in the gircap-only dev library `test-support/` reached through the thin `tests/common/mod.rs` shim; the mock inverts onto gircap's own public seams and borrows nothing from the repair binary |
-| The shared *leaf* crates: the log policy, the named UTC timestamp formats, the ordered-JSON/line-writing mechanics, the digest mechanics, the chunk-identity mechanics, the chunk-cost projection mechanics, the Windows path-name and canonical-path mechanics (device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization), the relative-path shape validation mechanics, the value-range predicate facts, the retry mechanics, the exit-table generation mechanism, the clap-error to usage-code mapping mechanics, the audio-language mechanics, the Sophon protobuf wire types, the shared region values, the scratch-directory policy and the loopback test server | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-time` (`crates/time/`): the named UTC timestamp formats — the compact sortable stamp, two RFC 3339 spellings and chrono's default — each with its own pinned spelling; gircap injects its run-start instant and keeps every stamped artifact byte. `girpr-report-core` (`crates/report-core/`): ordered-JSON and line-writing mechanics — each tool passes its own field order, event placement, value types, escaping and boolean spelling, so no report format crosses between the tools. `girpr-digest` (`crates/digest/`): hex spelling and fixed-width digest mechanics — no flag, no exit code, no published shape. `girpr-chunk-identity` (`crates/chunk-identity/`): the digest-bytes/length key and borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; each tool keeps its own selection, collision policy, first-match order and published bytes, so no identity decision crosses between the tools. `girpr-chunk-cost` (`crates/chunk-cost/`): the saturating Σ compressed_size download-projection fold over `(compressed_size, downloads)` entries — each tool marks its own chunks as downloads and keeps its own selection, reuse decision, ranking and published bytes, so no cost or ranking policy crosses between the tools. `girpr-fs-names` (`crates/fs-names/`): the Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — each tool passes its own reserved set and rule flags, so no program rule is borrowed. `girpr-path-shape` (`crates/path-shape/`): the lexical relative-path shape validator — the component checks and their fixed order are shared, but gircap passes its strict spelling policy and raw-stem device rule and keeps its own stable rule IDs, messages and every published refusal byte, so no program wording crosses between the tools. `girpr-value-ranges` (`crates/value-ranges/`): pure inclusive-range facts — below-min/above-max/in-range and the offending value only; gircap passes its own bounds and keeps its own messages, its `UsageError` and its exit-1 class, so no wording or exit code crosses between the programs. `girpr-retry` (`crates/retry/`): the retry schedule factory and injectable sleep driver — each tool passes its own base delay, multiplier, jitter and cap, and keeps its own attempt loop and side effects, so no retry policy of either program is borrowed. `girpr-exit` (`crates/exit/`): the exit-table generation mechanism — the enum/`ALL`/code/pin pattern only; each tool supplies its own codes and meanings, so no exit-code contract is borrowed. `girpr-audio-language` (`crates/audio-language/`): the lower + `_`→`-` token primitive and the four code/display-name pairs in the game's canonical order — each tool passes its own case-folding flavour and keeps its own alias map, `none` sentinel and path-component validation, so no audio policy is borrowed. `girpr-proto` (`crates/proto/`): the Sophon protobuf wire types — the three messages, their tags, the misspelled `chuncks` and opaque tag 6; each tool keeps its own decode boundary, dump format, validation and normalisation, so no program logic is borrowed. `girpr-model` (`crates/model/`): the region identity, ids, channel tuples and base URLs — each tool keeps its own resolve policy, `Endpoints` override seam and URL builders, so no program logic is borrowed. `girpr-cli` (`crates/cli/`): the clap-error to usage-code mapping — help/version map to `0` and every other error to the usage code the caller passes in, so no exit code crosses between the tools. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. `girpr-loopback-mock` (`crates/loopback-mock/`): a dependency-free loopback HTTP server for canned test replies — each caller scripts its own statuses, bodies and headers and keeps its own journal assertions, so no fake-server policy crosses between the tools. None holds any logic of any program, and no test of one program depends on another's |
-| A gircap-owned mechanics crate, not a shared leaf | `gircap-http` (`tools/capture/http/`): the reqwest transport, the retrying fetcher, the request log and the error-body budget. gircap depends on it directly, so an edit to emit/blobs/manifest leaves this crate and its native tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no probe decisions, no artifact writing — and depends on no program crate (only the shared logic-free leaves `girpr-retry`, `girpr-digest` and `girpr-time`), and invokes no binary. It is the only crate that depends on `reqwest` directly; `config::validate_base` parses the two API base overrides with the `url` crate, so no transport dependency crosses into gircap. gircap keeps the narrow seams on its side: the digesting-file trait, the fixed `User-Agent` value and the ordered-join loop's consumers |
+| The shared *leaf* crates: the log policy, the named UTC timestamp formats, the ordered-JSON/line-writing mechanics, the digest mechanics, the chunk-identity mechanics, the chunk-cost projection mechanics, the Windows path-name and canonical-path mechanics (device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization), the relative-path shape validation mechanics, the value-range predicate facts, the retry mechanics, the exit-table generation mechanism, the clap-error to usage-code mapping mechanics, the audio-language mechanics, the Sophon protobuf wire types, the shared region values, the scratch-directory policy and the loopback test server | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-time` (`crates/time/`): the named UTC timestamp formats — the compact sortable stamp, the RFC 3339 spellings and chrono's default — each with its own pinned spelling; gircap injects its run-start instant and keeps every stamped artifact byte. `girpr-report-core` (`crates/report-core/`): ordered-JSON and line-writing mechanics — each tool passes its own field order, event placement, value types, escaping and boolean spelling, so no report format crosses between the tools. `girpr-digest` (`crates/digest/`): hex spelling and fixed-width digest mechanics — no flag, no exit code, no published shape. `girpr-chunk-identity` (`crates/chunk-identity/`): the digest-bytes/length key and borrowed `(digest hex, length)` view, the case-insensitive parse and the lowercase-normalisation rule; each tool keeps its own selection, collision policy, first-match order and published bytes, so no identity decision crosses between the tools. `girpr-chunk-cost` (`crates/chunk-cost/`): the saturating Σ compressed_size download-projection fold over `(compressed_size, downloads)` entries — each tool marks its own chunks as downloads and keeps its own selection, reuse decision, ranking and published bytes, so no cost or ranking policy crosses between the tools. `girpr-fs-names` (`crates/fs-names/`): the Windows path-name and canonical-path mechanics — device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization — each tool passes its own reserved set and rule flags, so no program rule is borrowed. `girpr-path-shape` (`crates/path-shape/`): the lexical relative-path shape validator — the component checks and their fixed order are shared, but gircap passes its strict spelling policy and raw-stem device rule and keeps its own stable rule IDs, messages and every published refusal byte, so no program wording crosses between the tools. `girpr-value-ranges` (`crates/value-ranges/`): pure inclusive-range facts — below-min/above-max/in-range and the offending value only; gircap passes its own bounds and keeps its own messages, its `UsageError` and its exit-1 class, so no wording or exit code crosses between the programs. `girpr-retry` (`crates/retry/`): the retry schedule factory and injectable sleep driver — each tool passes its own base delay, multiplier, jitter and cap, and keeps its own attempt loop and side effects, so no retry policy of either program is borrowed. `girpr-exit` (`crates/exit/`): the exit-table generation mechanism — the enum/`ALL`/code/pin pattern only; each tool supplies its own codes and meanings, so no exit-code contract is borrowed. `girpr-audio-language` (`crates/audio-language/`): the lower + `_`→`-` token primitive and the code/display-name pairs in the game's canonical order — each tool passes its own case-folding flavour and keeps its own alias map, `none` sentinel and path-component validation, so no audio policy is borrowed. `girpr-proto` (`crates/proto/`): the Sophon protobuf wire types — the message types, their tags, the misspelled `chuncks` and opaque tag 6; each tool keeps its own decode boundary, dump format, validation and normalisation, so no program logic is borrowed. `girpr-model` (`crates/model/`): the region identity, ids, channel tuples and base URLs — each tool keeps its own resolve policy, `Endpoints` override seam and URL builders, so no program logic is borrowed. `girpr-cli` (`crates/cli/`): the clap-error to usage-code mapping — help/version map to `0` and every other error to the usage code the caller passes in, so no exit code crosses between the tools. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. `girpr-loopback-mock` (`crates/loopback-mock/`): a dependency-free loopback HTTP server for canned test replies — each caller scripts its own statuses, bodies and headers and keeps its own journal assertions, so no fake-server policy crosses between the tools. None holds any logic of any program, and no test of one program depends on another's |
+| A gircap-owned mechanics crate, not a shared leaf | `gircap-http` (`tools/capture/http/`): the reqwest transport, the retrying fetcher, the request log and the error-body budget. gircap depends on it directly, so an edit to emit/blobs/manifest leaves this crate and its native tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no probe decisions, no artifact writing — and depends on no program crate (only the shared logic-free leaves `girpr-retry`, `girpr-digest` and `girpr-time`), and invokes no binary. It is the only crate that depends on `reqwest` directly; `config::validate_base` parses the API base overrides with the `url` crate, so no transport dependency crosses into gircap. gircap keeps the narrow seams on its side: the digesting-file trait, the fixed `User-Agent` value and the ordered-join loop's consumers |
 | A second gircap-owned mechanics crate, still not a shared leaf | `gircap-hash` (`tools/capture/hash/`): the one-pass/one-shot digests, hex spelling, gzip rule and bounded zstd decode/measure helpers. gircap depends on it directly, so an edit to emit/blobs/manifest leaves it and its native zstd tree cached. It holds no program policy — no exit codes, no version pairs, no region resolution, no artifact writing — and depends on no program crate (only the shared logic-free `girpr-digest` and the logic-free `gircap-http` leaf), and invokes no binary. gircap keeps the `--gzip-threshold` and `--max-decompressed-bytes` flags, every call site and all artifact bytes on its side — including the `DEFAULT_MAX_DECOMPRESSED_BYTES` default in its config policy, so the leaf only enforces the ceiling it is handed; the `zstd_measure`/`zstd_measure_from` pair stays deliberately duplicated there |
 
-Three deviations from the shared-crate convention are deliberate and must not be
+Some deviations from the shared-crate convention are deliberate and must not be
 "corrected" by a later session. The gircap-owned crates (`gircap-http`,
 `gircap-hash`, `gircap-test-support`) use the `gircap-` prefix, live under
 `tools/capture/` rather than `crates/`, and set their own tools-only lint policy
@@ -128,7 +128,7 @@ manifest: {manifest_download.url_prefix}/{manifest.id}
 chunk:    {chunk_download.url_prefix}/{chunk.id}
 ```
 
-### 3.3a The two route families disagree about failure *(measured)*
+### 3.3a The route families disagree about failure *(measured)*
 
 This is recorded rather than assumed because both projects' retry policies are
 written against it, and because a capture that never sees a failure cannot
@@ -147,7 +147,7 @@ it*: the launcher answered correctly, there are no branches for that game. Any
 consumer that treats "empty node" as "retry me" turns a real answer into a retry
 loop.
 
-`gircap` records all seven shapes in **`api/error_shapes.json`** on every capture,
+`gircap` records every error shape in **`api/error_shapes.json`** on every capture,
 with the volatile fields named (`RequestId`, `HostId`, `Key`, and the body length
 that follows from `Key`), an explicit `error` flag, and a `retryable` flag
 **derived from the tool's own retry policy** — so the policy is readable from the
@@ -246,9 +246,9 @@ repeat the mistake.
 
 ### 4.1 Matrix, not a single file
 
-`gircap` captures **one file per test-matrix variant** by default. Each variant
-targets a *distinct* decision the main tool makes. `--per-class N` raises the
-count; there are no per-variant flags.
+`gircap` captures files covering the test-matrix variants by default. Each
+variant targets a *distinct* decision the main tool makes. `--per-class N` raises
+the count; there are no per-variant flags.
 
 #### The case space: what the patch is, and what a class can force
 
@@ -300,8 +300,8 @@ than fixed values.
 
 **The two reuse classes are exclusive, and the class set is a partition.** A
 file that reuses *and* moves is the `reuse_moved` one, and a file that reuses
-without moving is the `reuse_in_place` one — so one capture is one shape, and
-the bundle is one file per shape.
+without moving is the `reuse_in_place` one — so each capture answers one shape,
+and the bundle holds a file for each shape.
 
 **The `same_md5 == false` carve-out is what makes the partition true.** Every
 content class requires it: a file whose whole-file MD5s agree is the **skip**
@@ -328,15 +328,15 @@ identical, no_reuse, reuse_in_place, reuse_moved, added, removed
 
 #### What the reference bundle exercises
 
-*(measured)* against a reference bundle. The counts are the patch's own
-vocabulary: how many chunks the new side has, how many of them the old file
-already holds (**reused**), how many of the reused ones live elsewhere in the
-file (**moved**), and how many have to come off the network (**fetched**). Each
-capture exercises one shape, and its patchmap records that shape's own counts,
-download cost and two sizes — these are measurements of the pair, not constants
-to copy into a reader.
+The patchmap records the patch's own arithmetic: how many chunks the new side
+has, how many of them the old file already holds (**reused**), how many of the
+reused ones live elsewhere in the file (**moved**), and how many have to come off
+the network (**fetched**). Each capture exercises a shape, and its patchmap
+records that shape's own counts, download cost and both sizes — these are
+measurements of the pair, not constants to copy into a reader; the bundle's own
+documents are authoritative.
 
-**Every patch shape is here once.** `no_reuse` fetches the whole file;
+**Every patch shape is represented.** `no_reuse` fetches the whole file;
 `reuse_in_place` fetches a part of it and leaves the rest where it belongs;
 `reuse_moved` fetches a part of it and copies the rest from elsewhere in the
 file; `identical` fetches nothing; `added` creates a file; `removed` deletes
@@ -344,8 +344,8 @@ one.
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
-*(measured)* each audio manifest carries further file entries at a modest
-compressed cost. Widening `--audio` therefore widens the candidate corpus, which is
+audio manifests carry further file entries, at a cost that depends on the pair
+and is recorded in the bundle. Widening `--audio` therefore widens the candidate corpus, which is
 the backstop when a class has no `game`-field candidate in a given version pair.
 Ranking prefers `game` on a cost tie (`field` asc after `total_cost`, so the
 choice stays deterministic), and every capture records which `matching_field` it
@@ -355,7 +355,7 @@ large, so cost ranking matters there.
 
 #### The candidates, and what each class costs
 
-*(measured)* over the pool the capture selects. The ranking key is `gircap`'s
+Over the pool the capture selects, the ranking key is `gircap`'s
 own: `total_cost` = the compressed bytes of the old
 and the new file, because the old file has to be materialized in full for the
 fixture to be real. Every common path is scored in `candidates.json`; the number
@@ -441,7 +441,7 @@ all** — every request a capture makes succeeds, so a recorded bundle says noth
 about what a missing object looks like. A tool that replays a bundle would have
 to invent that, and its "the API 404s things" would be unfounded.
 
-The two route families disagree about failure, and the document records both
+The route families disagree about failure, and the document records both
 (measured against `hk4e_global`):
 
 | family | missing object | measured answer |
@@ -459,7 +459,7 @@ shape of the rows around it.
 fields that entry marks volatile (`RequestId`, `HostId`, `Key` and the body
 length that follows from `Key`; the JSON envelopes have none).
 
-### 4.2 Chunk retention — three named sets
+### 4.2 Chunk retention — named sets
 
 For a captured path `P` and version pair `(O, N)`:
 
@@ -479,12 +479,12 @@ is likewise offline by construction.)
 
 Blobs are stored **content-addressed by chunk id**, once, at
 `chunks/blobs/<chunk-id>.zst`, with `chunks/index.json` mapping every
-`(tag, file, chunk)` triple to its blob, its URL, and its membership in each of
-the three sets. A chunk reused by two captured files — or identical across the
-two builds — is stored once and referenced twice. Each blob also records every
+`(tag, file, chunk)` triple to its blob, its URL, and its membership in each
+retention set. A chunk reused by several captured files — or identical across
+builds — is stored once and referenced by each. Each blob also records every
 `(tag, build_id)` that declares it, newest first, so the old CDN is only asked if
-the new one has gone; two builds declaring one id with *different* content is
-recorded as a conflict rather than silently resolved.
+the new one has gone; different builds declaring one id with *different* content
+is recorded as a conflict rather than silently resolved.
 
 **A blob that was fetched is kept even when it will not decode.** The store
 streams every fetched body to disk, digests it on the way past and records the
@@ -529,7 +529,7 @@ Corollaries that must hold and are asserted:
 
 ### 4.3 `game/` — the fixture
 
-Exactly three kinds of entry, nothing else, so the directory can be handed to
+Only these kinds of entry, nothing else, so the directory can be handed to
 the main tool untouched:
 
 ```
@@ -665,11 +665,11 @@ coverage assertions from a capture, and A18 and A20 come from `verify` only.
 
 ### A21, A22 and A23 — the coverage the class set exists to buy
 
-The three boundaries of the patch space, and each one has two sides. A bundle
+The boundaries of the patch space, and each one has two sides. A bundle
 that happened to contain a file with nothing reusable would say nothing about
 the other side of that boundary, and a reader would have to take the class names
 on trust — which is exactly the trust this tool exists to replace with a
-measurement. The three assertions read the patchmaps' own arithmetic — the
+measurement. The assertions read the patchmaps' own arithmetic — the
 plan's counts and the two sides' sizes — and say whether the bundle covers
 both sides of each boundary.
 
@@ -873,8 +873,9 @@ record emitter.
 it is asked to.** A release build's default is
 `<exe-dir>/logs/gircap_<timestamp>.log`; `--log-file` and `GIRCAP_LOG_FILE`
 name one otherwise, in that order, and `--no-log-file` turns the file off in
-any build. Its verbosity is `--log-file-level` (`debug` by
-default), the console's is `--log-level` (`info` by default). `RUST_LOG` *adds*
+any build. Its verbosity is `--log-file-level` (`debug` by default in a debug
+build, `info` in a release build), the console's is `--log-level` (`info` by
+default). `RUST_LOG` *adds*
 to the console — it can turn up other crates, but it cannot change this
 program's own level, because a flag is what the person running the tool typed.
 The policy is the workspace's and lives in `crates/log/`, shared with the
@@ -975,7 +976,7 @@ and `SUMMARY download_bytes` can be compared against each capture's
 **`gircap` does not depend on `girpr`.** It does not invoke it, does not read
 its flags, and does not shim them; §2's independence rule holds and the grep over
 `tools/capture/src/` returns doc comments only. The end-to-end check therefore
-lives on the `girpr` side (`girpr`'s `tests/artifact_bridge.rs`), is `#[ignore]`d
+lives on the `girpr` side (`girpr`'s `tests/artifact_repair_bridge.rs`), is `#[ignore]`d
 because it needs a bundle and takes minutes, and is run by hand.
 
 ### 8.1.1 The procedure, and the numbers it must produce
@@ -986,9 +987,10 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
 
 1. **Copy `game/` to scratch.** `girpr` writes into the game directory, so point
    `--game-path` at the copy and never at the bundle: that is what keeps a
-   cleanup flag from turning into a way to destroy the evidence. Run every capture
-   against the same copy — each touches exactly one path, so the runs accumulate
-   and the reuse map stays anchored to the old version. Afterwards
+   cleanup flag from turning into a way to destroy the evidence. Give each capture
+   its own minimal scratch copy of the one path it is about (plus `config.ini` and
+   the audio scan file), so the reuse map stays anchored to the old version and one
+   capture cannot see another's writes. Afterwards
    `gircap verify --artifact <bundle>` must still exit `0`.
 
 2. **Pre-flight for free, before spending anything.** `--print-plan` does not
@@ -1023,15 +1025,15 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
-   is the cheap answer to `*` crossing `/` — and this fixture contains
+   path, plus `--jobs 1` and `--fail-fast`. That single-path scope is the bound:
+   a file ceiling would be vacuous here. This fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
-   it, so the glob is worth quoting and bounding. One run per capture is what
+   it, so the glob is worth quoting. One run per capture is what
    makes `download_bytes` attributable; a single run over all captures sums to the
    same total but cannot be compared per capture. `removed` is the exception and
-   takes `--purge-only` instead of `--max-files 1` (§8.1.2).
+   takes `--purge-only` instead of `--repair-mode inplace` (§8.1.2).
 
-4. **Assert the cross-tool claim**, per capture — the three things, and the
+4. **Assert the cross-tool claim**, per capture — the assertions, and the
    run's preconditions:
 
    | # | assertion | read from |
@@ -1047,8 +1049,8 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    answer: it is the only one that sees every request, including any that no
    client-side log line describes.
 
-   The procedure reads assertion 2 out of a log file at `--log-level trace` as
-   the fallback for a reader with no shim — name one with `--log-file <path>`,
+   The procedure reads assertion 2 out of a log file at `--log-file-level trace`
+   as the fallback for a reader with no shim — name one with `--log-file <path>`,
    which is written in any build. Its own caveat
    is the reason the server log is better: **a reused chunk is logged too**, as
    `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the id
@@ -1093,7 +1095,7 @@ two figures worth checking are `deleted_extra_bytes=<old size>`, which is the
 patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
 says exactly this, so the artifact's contract and the run's output agree.
 
-Only the `--include` glob is shared with the other five; `--purge-only` is the
+Only the `--include` glob is shared with the other captures; `--purge-only` is the
 one flag that makes this capture different, and leaving it off would make the run
 exit non-zero for the same reason a repair run would.
 
@@ -1130,7 +1132,7 @@ Three details worth knowing rather than rediscovering:
   `--dry-run` can carry `--audio` under a scope without complaint. That is not
   inconsistency: neither writes the scan file, so there is no conflict to refuse.
 - **The path is `/`-separated and case-insensitive**, like every other glob, and
-  `*` also crosses `/` — which is why step 3 passes `--max-files 1`.
+  `*` also crosses `/` — which is why step 3 names the path with `--include`.
 
 The expected per-capture figures come from each artifact's own patchmap, never
 from a fixed table: `expectations.download_bytes` (which must equal the run's
@@ -1147,7 +1149,7 @@ the scope held across every run (a `--print-plan` pre-pass plus a real run
 per capture). The bundle itself was never a working tree and still verifies.
 
 **One capture, one class.** The class set is a partition on the content, so a
-file answers exactly one class and the bundle holds one capture per class.
+file answers exactly one class and the bundle holds a capture for each class.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -1202,11 +1204,11 @@ patchmaps; `added` contributes its whole-file download cost.
 - No patching, no hdiff, no 7z, no predownload, no purge simulation
 - No `getGameScanInfo`, SDK, WPF, or plugin enumeration
 - No cross-build *cross-file* chunk reuse modelling beyond **measuring and
-  recording** it — *(measured)* many new chunks have an MD5 present somewhere
-  in the old manifest, but only a handful of files have a chunk reusable *only*
-  from a different old file; the volume forgone by same-file-only reuse is
-  recorded in `diff/reuse_pool.json` because it quantifies a deliberate
-  simplification, not because `gircap` acts on it.
+  recording** it — new chunks often have an MD5 present somewhere in the old
+  manifest, though a chunk reusable *only* from a different old file is rare;
+  the volume forgone by same-file-only reuse is recorded in
+  `diff/reuse_pool.json` because it quantifies a deliberate simplification, not
+  because `gircap` acts on it.
 - Audio manifests are captured for the selection pool and can supply a capture
   when the `game` pool has no candidate for a class, but no audio *bulk* beyond
   the selected files is ever downloaded

@@ -87,6 +87,14 @@ impl PurgeKeys {
         }
     }
 
+    /// Add more paths that must survive the cleanup, keyed the same way as
+    /// the base plan's rels. Used by the persistent tier: a hotfix path, a
+    /// manifest mirror or a verification marker is just as expected as a base
+    /// file, and a cleanup must not delete it.
+    pub fn extend_expected<'a>(&mut self, rels: impl IntoIterator<Item = &'a str>) {
+        self.expected.extend(rels.into_iter().map(path_key));
+    }
+
     /// The planned rels, keyed with [`path_key`].
     pub fn expected(&self) -> &HashSet<String> {
         &self.expected

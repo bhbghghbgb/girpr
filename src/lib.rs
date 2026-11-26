@@ -148,6 +148,7 @@ pub mod test_support {
 
     pub use crate::hyp::terminal_retcode;
     pub use crate::repair::diagnostics::RepairDiagnostics;
+    pub use crate::repair::persistent::DispatchOverride;
     pub use crate::repair::scope::Limits;
     pub use crate::report::{Record, summary_record};
     pub use crate::retry::BackoffPolicy;
@@ -156,6 +157,7 @@ pub mod test_support {
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };
     pub use crate::util::EMPTY_MD5;
+    pub use girpr_dispatch::{DispatchInfo, ManifestDescriptor, ManifestKind};
     pub use girpr_lock::{Lock, lock_path, takes_lock};
 
     // One refusal type across the product's tests and the path leaf's
@@ -182,6 +184,57 @@ pub mod test_support {
     /// [`stamp_ago_from`] relative to the current clock.
     pub fn stamp_ago(age: Duration) -> Option<SystemTime> {
         stamp_ago_from(SystemTime::now(), age)
+    }
+
+    /// A canned dispatcher result for offline tests. The three descriptor
+    /// URLs name routes on a loopback origin; their MD5 and size are taken
+    /// from the committed NDJSON bodies, so the product's manifest gate runs
+    /// for real without a production request.
+    pub fn persistent_dispatch(
+        base: &str,
+        exe_stem: &str,
+        bodies: [(ManifestKind, &str, &[u8]); 3],
+    ) -> DispatchInfo {
+        let descriptors = bodies.map(|(kind, name, body)| ManifestDescriptor {
+            kind,
+            url: format!("{}/{}", base.trim_end_matches('/'), name),
+            expected_md5: girpr_digest::md5_hex(body),
+            expected_size: body.len() as u64,
+            mirror_rel: format!(
+                "{exe_stem}_Data/Persistent/{}_versions_persist",
+                kind.as_str()
+            ),
+        });
+        DispatchInfo {
+            game_version: "7.2_live".into(),
+            channel_name: "OSRELWin".into(),
+            server_name: "TEST".into(),
+            codename: "hk4e_global".into(),
+            res_revision: 49_530_578,
+            data_revision: 49_419_538,
+            silence_revision: 49_291_486,
+            audio_revision: 49_008_628,
+            res_hash: "62f1ec6cdb".into(),
+            data_hash: "604495f667".into(),
+            silence_hash: "c25ba650a6".into(),
+            audio_hash: "644b3d946e".into(),
+            client_game_res_url: format!("{base}/client_game_res"),
+            client_design_data_url: format!("{base}/client_design_data"),
+            client_silence_data_url: format!("{base}/client_silence_data"),
+            client_audio_assets_url: format!("{base}/client_audio_assets"),
+            manifest_digests: descriptors,
+        }
+    }
+
+    /// A dispatcher override that always returns `info`, recording the
+    /// `(biz, version)` pairs it was asked about in a shared slice.
+    pub fn persistent_override(info: DispatchInfo) -> DispatchOverride {
+        DispatchOverride::new(move |_, _| Ok(info.clone()))
+    }
+
+    /// A dispatcher override that fails the query, for the exit-2 contract.
+    pub fn failing_dispatch_override(message: &'static str) -> DispatchOverride {
+        DispatchOverride::new(move |_, _| Err(message.to_owned()))
     }
 
     /// Drain the structured decisions the most recent in-process run on this

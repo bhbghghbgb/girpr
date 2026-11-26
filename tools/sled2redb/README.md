@@ -3,26 +3,21 @@
 **Audience: developers and AI agents working on `girpr`. Not for end users.**
 
 A standalone dev tool that reads a legacy `<root>/girpr-cache` **sled directory**
-and writes a new **redb** cache file. It used to live inside `girsync` behind a
-`convert` Cargo feature; it is now its own workspace member so that the
-`girsync` package and binary have no `sled` in their dependency graph at all.
+and writes a new **redb** cache file. It is its own workspace member so that the
+`girsync` package and binary have no `sled` in their dependency graph.
 
 ## Why it is separate
 
-`sled` was used by exactly one thing — this one-shot migration — while every
-live cache path in `girsync` uses redb. Keeping the converter in `girsync`
-meant adding `sled` to girsync's graph (even as an optional dependency) and
-gating a binary and a test target behind a feature. The extraction keeps the
-conversion code unchanged and moves only the crate boundary:
+`sled` is used only for this one-shot migration, while every live cache path
+in `girsync` uses redb. Keeping the boundary here leaves:
 
-- `sled` is a plain (non-optional) dependency of `tools/sled2redb` alone.
-- `girsync` has no `[features]`, no `dep:sled`, no `required-features` targets
+- `sled` as a plain (non-optional) dependency of `tools/sled2redb` alone.
+- `girsync` with no `[features]`, no `dep:sled`, no `required-features` targets
   and no `sled2redb` binary.
-- The converter calls girsync's **public** cache/hash/util/report API through a
+- The converter calling girsync's **public** cache/hash/util/report API through a
   normal path dependency (`girsync::cache`, `girsync::hash`, `girsync::util`,
   `girsync::report`, `girsync::init_tracing`, `girsync::logging::Level`).
-  Nothing private was used, so no new public API had to be exposed.
-  `crate::…` paths in the moved source became `girsync::…` paths.
+  It exposes no private girsync API.
 
 ## Build and run
 
@@ -32,7 +27,7 @@ cargo nextest run -p sled2redb                   # its end-to-end cases
 .\target\debug\sled2redb <SLED_DIR> <REDB_PATH>
 ```
 
-`cargo nextest run -p girsync` no longer builds or runs any converter target.
+`cargo nextest run -p girsync` builds no converter target.
 
 ## Command line
 
@@ -84,7 +79,7 @@ running conversion is making. The random name says nothing about which run left
 it, so there is nothing to interpret — a leftover is simply yours to remove.
 
 A **legacy sled directory** has to be removed before the new file can take its
-name. That removal is the one step that is not atomic — a failure in that
+name. That removal is the step that is not atomic — a failure in that
 window leaves no cache at all, and the error says so when it happens. A stale
 file under `--force` is replaced by an atomic rename instead, with no such
 window. A conversion that fails before that point never touches the previous
@@ -99,7 +94,7 @@ digests in the legacy JSON rows are decoded to raw bytes on the way in.
 | File | Responsibility |
 | --- | --- |
 | `src/lib.rs` | the crate root; `pub mod convert` |
-| `src/convert.rs` | the converter: the one module in this crate that touches `sled` |
+| `src/convert.rs` | the converter: the module in this crate that touches `sled` |
 | `src/main.rs` | the `sled2redb` binary: the two paths, `--force` and `--output`, and the shared `report::Record` writer |
 | `tests/convert.rs` | end-to-end cases (build a legacy sled DB, convert, read the redb cache back) |
 | `tests/common/mod.rs` | the shared test fixtures, copied from `girsync` so the cases run unchanged |

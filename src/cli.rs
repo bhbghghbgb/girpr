@@ -181,6 +181,14 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub scan: bool,
 
+    /// Query the dispatcher and include the `Persistent/` update in the plan.
+    /// Opt-in: without it no dispatcher or persistent request is made and the
+    /// `PLAN`, `SUMMARY` and exit codes stay byte-identical. Read-only modes
+    /// list the persistent work without writing markers or mirrors;
+    /// `--purge-only` does no persistent work at all.
+    #[arg(long, default_value_t = false)]
+    pub with_persistent: bool,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -340,6 +348,8 @@ impl Args {
             // must not grow a key.
             repair_mode_explicit: self.repair_mode.is_some(),
             jobs,
+            with_persistent: self.with_persistent,
+            persistent_dispatch_override: None,
             check_only: self.check_only,
             scan: self.scan,
             purge_only: self.purge_only,

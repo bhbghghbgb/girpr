@@ -10,7 +10,7 @@ they are not Persistent hotfixes.
 
 This is a definitive answer for `hk4e_global` at the timestamp below, obtained
 by querying the live API directly (not by inferring from Collapse's client-side
-gate). The nuance from `docs/08` remains true and is now explained: Collapse's
+gate). The nuance from docs/01 §6 remains true and is now explained: Collapse's
 `Repair.cs:167` gate (`string.IsNullOrEmpty(asset.AssetIndex.remoteURL)`) is a
 **client-side routing decision**, but it happens to align with the server's
 data layout: hotfix bytes exist only on the plain-HTTP dispatcher CDN.
@@ -126,7 +126,7 @@ Decoded values (field numbers from `GenshinGateway.proto`):
 Parsed: **2631** res rows + **533** data rows = **3164** dispatcher rows. Live
 schema keys: `remoteName`, `md5`, `hash` (XXH64 hex), `fileSize`, plus
 `category` (496 rows), `isPatch` (10 rows), `localName` (2 rows). Note:
-`docs/08 §4.4` says `isPatch` never comes from the manifest because Collapse's
+docs/01 §6.4.4 says `isPatch` never comes from the manifest because Collapse's
 `PropertyVersioning.cs:29-30` marks it `[JsonIgnore]` — the **server does send
 it** (10 rows), Collapse simply discards it. Those 10 server-flagged rows:
 
@@ -300,7 +300,7 @@ not the basis of the conclusion — the live byte comparison is.
   (`Fetch.Persistent.cs:200-211`) forces a dispatcher file into `Persistent/`
   only when the local base path has a **different MD5** — exactly our 369+7
   hotfix set. Sophon covers the base half; HTTP covers the hotfix half.
-* **Client-side gate remains.** `docs/08` correctly states Collapse always
+* **Client-side gate remains.** docs/01 §6 correctly states Collapse always
   uses HTTP for dispatcher assets because `remoteURL` is assigned. The new
   finding explains *why that is safe* and rules out a hidden Sophon fast path.
 
@@ -310,7 +310,7 @@ not the basis of the conclusion — the live byte comparison is.
 
 See `FINDINGS.md` for the concise version. Short version:
 
-1. Keep the docs/08 plan: dispatcher query → persistent manifests → full-file
+1. Keep the design in docs/03 §7: dispatcher query → persistent manifests → full-file
    HTTP download with alt URL → MD5 re-verify → markers last. **No Sophon
    chunk-fetch path is needed for Persistent.**
 2. girpr's existing Sophon machinery remains correct for base assets; no need
@@ -324,7 +324,7 @@ See `FINDINGS.md` for the concise version. Short version:
    ten `[isPatch]` rows and seven new-only files. The alt URL must be kept
    (`Fetch.Persistent.cs:190`).
 5. Marker writes, purge keep-set changes, atomic manifest writes, blank-line
-   tolerance and post-download MD5 verification from docs/08 §§4.2–4.4 are
+   tolerance and post-download MD5 verification from docs/01 §§6.4.2–6.4.4 are
    unchanged and still required.
 6. New fact to pin in tests: live manifests carry `isPatch`, `localName` and
    `category`; a parser must tolerate (and ignore, per Collapse) those keys.

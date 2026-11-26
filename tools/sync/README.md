@@ -41,7 +41,8 @@ module tree holds only in a test build (`#[cfg(test)]`).
 | `commands/sync/plan/` | `mod.rs` (the facade), `build.rs` (`Plan` + `build_plan`, pure), `link.rs` (link storage and the on-disk spellings), `safety.rs` (the plan-time guards), `records.rs` (the summary and the dry-run records); `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
 | `src/commands/sync/plan/tests.rs` | the plan module's own cases: the plan-time guards, the link storage they spare, and the on-disk spellings they name |
 | `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
-| `tools/sync/cache/` | the redb cache, its wire codec and the digest vocabulary the codec stores: `schema` (`Meta`/`FileRec`), `wire` (the `postcard` byte codec), `db/` (`CacheDb`, `Handle`, backend), `write` (`CacheWrite`, `CommitLimits`), `open` (`open_db`, backups/snapshots), `backup`, `lock`, `hash`, `helpers`. `src/lib.rs` aliases the crate as `cache`, so no public path moves. |
+| `tools/sync/cache/` | the redb cache, its wire codec and the digest vocabulary the codec stores: `schema` (`Meta`/`FileRec`), `wire` (the `postcard` byte codec), `db/` (`CacheDb`, `Handle`, backend), `write` (`CacheWrite`, `CommitLimits`), `open` (`open_db`, backups/snapshots), `backup`, `lock`, `hash`, `helpers`. `src/lib.rs` aliases the crate as `cache`, so no public path moves. `CacheDb::visit_entries` and `CacheDb::meta` are the streaming reads the NDJSON converter uses. |
+| `tools/sync/cache-json/` | the standalone `cache-json` converter: NDJSON export/import of a current-schema cache, reading and writing through `girsync-cache` without opening redb itself. It has no dependency on girsync's lib facade, so a command edit leaves it cached. |
 | `tools/sync/leaves/` | the acyclic leaves this lib depends on directly: `rw/` (`mod.rs` = `RwRuntime`, `limits.rs` = the flag shape, `gate.rs` = the counters and src-then-dst ordering, `fixtures.rs` = test limiters), `filter.rs` (include/exclude rules over `girpr-filter`), `link.rs` (link classification and removal) and `hardlink.rs` (link count and identity from `girpr-fs-identity`). `src/lib.rs` re-exports them under their old module names, so no public path moves. |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
@@ -86,10 +87,10 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run] [...]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run] [...]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256 --hash-all-of xxhash64] [--hash-any-of md5 --hash-any-of sha256 --hash-any-of xxhash64] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 **Each occurrence of a hash flag names one algorithm**, and the flag is
@@ -113,6 +114,18 @@ sled2redb`. Its command is `sled2redb <SLED_DIR> <REDB_PATH>` with `--force` and
 error exits `3`, and there is no `--version`. The full behaviour and rationale
 live in [`tools/sled2redb/README.md`](../sled2redb/README.md).
 
+### NDJSON cache export/import
+
+A second standalone tool, `cache-json` in `tools/sync/cache-json`, converts a
+current-schema redb cache to newline-delimited JSON and back:
+`cache-json to-json <CACHE> [NDJSON]` (default `-` is stdout) and
+`cache-json from-json <NDJSON|-> <CACHE> [--force]`. The stream is a meta line
+followed by one line per row, so it can be parsed incrementally; digests are
+hex under their verbatim algorithm names. Import publishes the new cache in one
+rename and refuses a foreign schema version. Build and test it with
+`cargo build -p girsync-cache-json` and
+`cargo nextest run -p girsync-cache-json`; the format and failure rules are in
+[`tools/sync/cache-json/README.md`](cache-json/README.md).
 
 `--no-backup` and `--backup-retain N` are on every subcommand too — see
 [Backups and failures](#backups-and-failures).
@@ -126,18 +139,18 @@ repair binary and with `gircap` — one set of rules, so a script that learned
 - **A release build always writes a log file; a debug build writes one only
   when it is asked to.** A release build's default is
   `<exe-dir>/logs/girsync_<timestamp>.log`. A debug build writes no file by
-  default: it is the build a developer and a test suite run, and a file per
-  run in a directory nobody reads is a directory that grows by one file per
-  run, forever. `--no-log-file` turns the file off in any build.
+  default: it is the build a developer and a test suite run, and a log file per
+  run in a directory nobody reads is a directory that grows with every run,
+  forever. `--no-log-file` turns the file off in any build.
 - **Where it goes**, in order of precedence: `--no-log-file`, then
   `--log-file`, then `GIRSYNC_LOG_FILE`, then the default. `--no-log-file`
   wins because "write no log file" is the more specific thing to have said;
   the flag beats the environment because the flag was typed by the person
   running the tool and an environment variable is whatever the shell happened
   to export.
-- **Two levels.** `--log-level` is the console's (`info` by default);
-  `--log-file-level` is the file's (`debug` by default, or
-  `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
+- **A level for each destination.** `--log-level` is the console's (`info` by default);
+  `--log-file-level` is the file's (`debug` in a debug build, `info` in a release
+  build, or `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
   file is read afterwards.
 - **`RUST_LOG` adds to the console; it does not replace it.** The console's
   spec is this program's own directive (`girsync=info`, plus `redb=warn`) with
@@ -152,7 +165,7 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   should leave a record of how far it got.
 - **The log events name what produced them.** The walk reports itself in
   `scan start`, `scan progress: walk` and `scan done`. A **folder** side's
-  effective map is built in two phases — one that walks the tree and consults
+  effective map is built in phases — one that walks the tree and consults
   the cache, one that hashes what the plan asked for — and each phase reports a
   start, a progress and a done, all named for the map and for the phase they
   came from: `effective start: phase a`, `effective progress: phase a` and
@@ -166,14 +179,14 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   event and no `effective` event at all. (`compare` also names the load
   itself, with `load record side`; `compare-self` opens the record read-only
   instead, with `cache opened read-only`.) So a grep for `effective done`
-  finds a folder side's two done events and a record side's none.
+  finds a folder side's done events and a record side's none.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).
 
 ### `--no-trust-size` / `--no-trust-mtime`
 
-The stat short circuit is an optimisation, so it is switchable. These name the two
+The stat short circuit is an optimisation, so it is switchable. These name the stat
 fields it consults rather than adding a switch for the optimisation itself — **both
 together is "disable it"**, expressed as the reason:
 
@@ -188,7 +201,7 @@ Only *file on both sides* pairs are affected. Dirs are compared by presence, a k
 conflict by kind, and a one-sided path is `MISSING`/`EXTRA` — none of which any flag
 here touches.
 
-The two flags are **not** interchangeable, and the difference is worth knowing:
+The flags are **not** interchangeable, and the difference is worth knowing:
 
 - **`--no-trust-mtime` can change a verdict.** A file whose mtime moved but whose
   bytes did not — a `touch`, an extractor rewriting identical bytes — is currently
@@ -223,7 +236,7 @@ believes protects them. Concretely, `--hash-all-of none --no-trust-size` would h
 nothing to fall back on, so a size-differing pair could only be reported as **equal** —
 and `sync` under it would leave `dst` stale while reporting success.
 
-Two guards, on purpose. The flag layer refuses the combination, so the user gets a
+There are guards here, on purpose. The flag layer refuses the combination, so the user gets a
 message instead of a run — and it refuses it in one place, so every subcommand including
 `update` behaves the same way, since the combination is a property of the *request* and
 not of the command receiving it. Behind it, `diff::pair_verdict` refuses to report a pair
@@ -238,9 +251,9 @@ by doing *less* would be wrong.
 
 ### `--hash-all-of` / `--hash-any-of`
 
-Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive, and
+Both are repeatable (`md5`, `sha256`, `xxhash64`; default `md5`) and mutually exclusive, and
 **each occurrence names one algorithm** — `--hash-all-of md5 --hash-all-of sha256`
-asks for two, and `--hash-all-of md5 sha256` is refused before the run starts.
+asks for both, and `--hash-all-of md5 sha256` is refused before the run starts.
 They answer one question — *how many of the named algorithms must a comparison be able
 to use?* — and the difference is what happens when a side cannot supply them:
 
@@ -303,7 +316,7 @@ subcommand:
 | `--rw-threads-dst D` | one per side: 1 and D |
 | `--rw-threads-src S --rw-threads-dst D` | one per side: S and D |
 
-`--rw-threads` conflicts with the other three (exit `2`). Giving both per-side flags
+`--rw-threads` conflicts with the per-side flags and `--rw-dual-drive` (exit `2`). Giving both per-side flags
 is legal and is the explicit form of the point. `0` is refused per flag, naming it,
 with exit `3` — a runtime usage mistake, not a typo.
 
@@ -317,7 +330,7 @@ Worth stating because it is the whole feature:
 | `--rw-dual-drive` | **one per side** |
 
 Under one shared counter, src being hashed waits for dst to finish being hashed.
-Under two counters they proceed at once — which is worth exactly what two separate
+Under per-side counters they proceed at once — which is worth exactly what separate
 drives can do. **A copy still runs one at a time under `--rw-dual-drive`**, because
 a copy is simultaneously reading src and writing dst and needs a permit for each.
 
@@ -388,7 +401,7 @@ same disagreement is logged as an event whose message is
 The two are different strings and answer different questions — a parser reads
 the event's fields, and the error text is what the run says as it fails. The
 algorithm named is the **first in canonical order** among those that disagreed
-(`md5` before `sha256`), never the order the flags were typed in: the copy
+(`md5`, then `sha256`, then `xxhash64`), never the order the flags were typed in: the copy
 computes and judges a *set* of algorithms, and a set carries no order, so
 `--hash-all-of sha256 --hash-all-of md5` still names `md5` first. It is the same
 fixed order the `digest-differs` tag uses, so a parser can switch on the algorithm
@@ -404,7 +417,7 @@ digests included — and reports the same `ScanStats`. Two runs can print identi
 `CHANGED` lines while having hashed different files, so the tests compare the maps,
 not the output: `tests/rw_threads/`.
 
-Two properties hold, both inside `resolve_folder`:
+These properties hold inside `resolve_folder`:
 
 - **Each worker writes its row as its hash lands, so rows are in completion
   order.** Completion order is not a promise, and it cannot change a decision: the
@@ -415,8 +428,8 @@ Two properties hold, both inside `resolve_folder`:
   not writing at all.
 - **Durability is per-digest.** Each completed hash goes through the batched handle
   immediately, and `COMMIT_INTERVAL` bounds how much work an interruption can lose.
-  At most one digest per pool thread is in flight, so the buffer between hash and
-  write is bounded by the pool instead of by the tree — the map the phase returns is
+  In-flight digests are bounded by the pool, so the buffer between hash and write
+  is bounded by the pool instead of by the tree — the map the phase returns is
   necessarily tree-sized.
 
 ### update, compare and compare-self
@@ -468,8 +481,8 @@ folder for digests of files the folder has, which a folder can always compute.
 The `hashed` counter in the run's log line is the answer to "how much would this
 read?", which is the question `--dry-run` exists to ask.
 
-The scan asks the cache two different questions, and they are worth telling
-apart because only one of them needs the records. The alternate-case index
+The scan asks the cache different questions, and they are worth telling
+apart because only one kind needs the records. The alternate-case index
 reads the whole `entries` table's *keys*, to find a stale alternate-cased row
 for a path — the names are all it needs, and the row itself is read only when
 one is actually adopted, which is normally never. The index is built when a
@@ -484,7 +497,7 @@ collecting them either: the only keys it keeps are the stale ones, and a scan
 that finds nothing stale keeps none. In the default insensitive mode that is a
 full pass over the table's keys in one phase, and the scan makes that pass
 **once**: the index keeps the keys it read, and the prune works from the same
-set. The distinction the two questions are worth telling apart for is the
+set. The distinction worth telling apart is the
 difference between rebuilding a hash map of rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
@@ -551,8 +564,8 @@ record's cache, every file whose size+mtime still matched would have its "conten
 comparison" be the record's digest compared with itself, and content that changed
 while preserving both would be invisible. `--no-trust-cached-hashes` would be the
 only thing that could surface it. Instead the folder is hashed against nothing, so
-it must be read to be compared, and a `CHANGED` means the bytes disagree. Two
-independent reasons nothing is written: the record is opened read-only (the handle
+it must be read to be compared, and a `CHANGED` means the bytes disagree.
+Nothing is written for independent reasons: the record is opened read-only (the handle
 has no write path at all), and the folder side is resolved against an in-memory
 handle that is not the same file.
 
@@ -725,8 +738,8 @@ Worth knowing:
 
 `digest-differs` names the algorithms that **actually disagreed**, which under
 `--hash-any-of` is not the list you asked for — the planner settles a pair with one
-digest, and the tag says which. The list is always in a **fixed order** (`md5` before
-`sha256`), not the order the flags were typed, so
+digest, and the tag says which. The list is always in a **fixed order** (`md5`,
+then `sha256`, then `xxhash64`), not the order the flags were typed, so
 `--hash-all-of sha256 --hash-all-of md5` reports `digest-differs:md5+sha256`. That
 makes the tag a function of the disagreement rather than of how two flags were
 ordered, which is what lets a parser switch on it. A failed copy's verify message
@@ -751,8 +764,9 @@ being asked for it twice in two shapes.
 
 Whether that event is written is decided by what the run has a subscriber for,
 not by `--log-level`: the console layer is filtered by that flag, but the file
-layer is filtered by `--log-file-level`, which is `debug` by default — so a
-file log captures every record even at the default `info` console.
+layer is filtered by `--log-file-level`, which defaults to `debug` in a debug
+build and `info` in a release build. So a debug-build file log captures more than
+the default `info` console; a release build needs a higher file level for that.
 
 ### sync
 
@@ -826,8 +840,8 @@ not that internal order.
    state to `girpr-cache-old-<ts>` — before any write. The live
    `<root>/girpr-cache` is authoritative; `old-*`/`backup-*` are never
    auto-read. dst gets the snapshot only: it is a copy of the same bytes taken
-   at the same moment, so a second name for it would be a third copy of one
-   file. `--no-backup` skips both copies and `--backup-retain N` bounds how
+   at the same moment, so another name for it would just be another copy of
+   the same file. `--no-backup` skips both copies and `--backup-retain N` bounds how
    many are kept — see [Backups and failures](#backups-and-failures).
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
@@ -876,9 +890,9 @@ keys, which is what the diff compares. Pairing by exact key instead would make a
 case-only pair look one-sided, skip the digest it needs, and leave the diff
 comparing two entries where one has no digest; `hashes_differ` is silent on a
 missing digest, size+mtime agree, and the run reports success having copied
-nothing. `tests/sync.rs::a_case_only_difference_in_content_is_copied_not_merely_
-renamed` exists for exactly that, because every other case-only fixture uses
-identical bytes and would pass either way.
+nothing. The case-only difference-in-content coverage in `tests/sync.rs` and
+`tests/sync_plan/` exists for exactly that; a case-only fixture with identical
+bytes would pass either way.
 
 **Laziness moves work between runs rather than only removing it, so the honest
 summary is a trade.** With cold caches:
@@ -933,7 +947,7 @@ all: it is opened read-only.
 
 `--backup-retain N` counts **per prefix and per directory**: the
 `girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
-snapshots beside dst's cache are two separate lists, each bounded to its own
+snapshots beside dst's cache are separate lists, each bounded to its own
 N. The bound covers both lists in every folder the run touches, so a
 folder used as a source and as a destination is bounded on its copies and on
 its snapshots alike. `N` must be at least 1 — `--backup-retain 0` is refused
@@ -1015,8 +1029,8 @@ the bound, and it can be the one the bound keeps in place of a whole copy.
 
 That check and the rename that follows it are two calls, and there is no
 portable rename that is conditional on the name holding this run's claim, so
-a claim taken away between the two is still landed on: the gap is one
-syscall wide and it cannot be closed. It is only reachable on a filesystem
+a claim taken away between the two is still landed on: the gap is narrow
+and it cannot be closed. It is only reachable on a filesystem
 that can neither link nor lock a file — with a link the publish is atomic,
 and with a lock the record below keeps a bound off the claim until the run
 opens the folder's cache.
@@ -1034,7 +1048,7 @@ The drop and the rename are two calls: where the removal succeeded the name is
 free in between, and another run can take it in that window. The rename then
 fails: a platform that cannot replace a directory cannot replace the claim
 another run holds either, so the name is taken and the publish moves on to
-the next name. The gap is one syscall wide and cannot be closed.
+the next name. The gap is narrow and cannot be closed.
 
 The ask and the removal are two calls as well, and no portable call removes a
 claim by what it is rather than by what it is called, so a claim taken away
@@ -1178,7 +1192,7 @@ That is also why `SideCapability`'s `can_hash_from_disk` stays true under a dry 
 The testable form of that is **`ScanStats` is identical in both modes**, and it
 is asserted as a whole struct rather than field by field, so a counter added
 later cannot quietly start reporting a write's outcome instead of a decision.
-Two ways to get that wrong are both instances of one mistake — gating a *decision*
+The ways to get that wrong are instances of one mistake — gating a *decision*
 or a *count* behind the write handle instead of gating only the write:
 
 - Computing the prune set inside `if let Some(w) = batch` makes a dry run report
@@ -1201,15 +1215,14 @@ what a real `--ignore-cache` run does too. A **corrupt** cache is deliberately n
 in that list: it is the one state where the cache is neither absent nor discarded,
 and it is a hard error in both modes.
 
-`sync`'s two outputs are the same document. The `SUMMARY` uses identical field
+`sync`'s dry-run and real-run outputs are the same document. The `SUMMARY` uses identical field
 names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 `keep_extra` — and the action records share one vocabulary and one order
 (`FIX-DIR`, `MKDIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
 run's only addition is `dry_run=true`, so a caller reading either does not have to
 know which it got.
 
-`a_dry_run_reports_what_a_real_run_reports` compares the two modes as a
-**segmented** comparison. The plan and the renames are decided
+The two modes are compared as a **segmented** comparison. The plan and the renames are decided
 before anything is written, so they are compared **ordered, field for field**. The
 actions are reported as they complete, and completion order is a function of I/O
 timing rather than of the plan, so they are compared as a **multiset** — with the
@@ -1241,15 +1254,12 @@ pass could look at it. Those directories are excluded from the plan; counting
 them would promise removals that cannot happen. `--keep-extra` spares the set
 entirely, directories as well as files.
 
-Tests pin the whole thing. `compare_dry_run_writes_nothing_and_answers_the_same`
-asserts both caches are byte-identical and the verdict matches;
-`compare_dry_run_computes_the_same_digests` asserts the two runs produce *equal
-effective maps*, which is stronger than agreeing on printed verdicts — two runs
-can print the same `CHANGED` lines while having hashed different files and reached
-the same conclusion by luck, whereas the maps hold the digests themselves.
-`dry_run_reports_the_same_counters_as_a_real_run` extends that to `ScanStats`,
-and `the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs` guards the
-fixture underneath, so neither equality can pass vacuously by hashing nothing.
+Tests pin the whole thing: both caches come out byte-identical and the verdict
+matches; the two runs produce *equal effective maps*, which is stronger than
+agreeing on printed verdicts — two runs can print the same `CHANGED` lines while
+having hashed different files and reached the same conclusion by luck, whereas
+the maps hold the digests themselves. `ScanStats` is compared as well, and the
+fixture is guarded so neither equality can pass vacuously by hashing nothing.
 
 ## Core semantics (must-know for AI edits)
 
@@ -1676,7 +1686,7 @@ by what the planner asked for.
 | a backup copy | one whole-file copy of the cache — src's `backup-*`, dst's `old-*`; `--no-backup` skips both |
 | a backup copy's record | one small file beside it, held until the run opens the folder's cache |
 
-Two places are index-shaped rather than nested-loop-shaped, which is the
+Some places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
 
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
@@ -1774,8 +1784,8 @@ them; `--dry-run` costs the same again.
   is **derived** from the same rows by a rule, since that mode is the same fixture
   without the rename pass; and record **order** is asserted as a property (event
   kinds in apply order, each kind contiguous) rather than as a transcript — which is
-  the check that can ask a new record kind where it applies. The one
-  whole-document comparison left is dry-run against real-run, and it earns that:
+  the check that can ask a new record kind where it applies. The
+  whole-document comparison that remains is dry-run against real-run, and it earns that:
   both are the same code path with only the write gate differing, so a divergence
   means the dry run took a different branch. It cannot catch a *systematic* error
   though — a summary wrong in both modes passes it — which is what the derived
