@@ -206,6 +206,17 @@ impl<'a> FullDecode<'a> {
     }
 }
 
+/// One row of the `paths.tsv` sidecar. `csv` owns field quoting and the
+/// terminator; the column order here *is* the pinned header order.
+#[derive(Debug, Serialize)]
+struct SidecarRow<'a> {
+    path: &'a str,
+    size: i64,
+    md5: &'a str,
+    nchunks: usize,
+    is_folder: bool,
+}
+
 /// The `paths.tsv` sidecar: `path \t size \t md5 \t nchunks \t is_folder`.
 ///
 /// Header line, `\n` endings, one row per *entry*. Sorted by path so `diff`
@@ -215,31 +226,43 @@ impl<'a> FullDecode<'a> {
 /// per entry, in entry order within the shared path: the sidecar is a per-entry
 /// document, not a path index, so each row carries that entry's own size, md5,
 /// chunk count and folder flag.
+///
+/// `csv` writes the rows with a tab delimiter and quotes a path containing a
+/// tab so it stays one field instead of becoming extra columns.
 pub fn paths_tsv(entries: &[SophonChunkFile]) -> String {
-    const HEADER: &str = "path\tsize\tmd5\tnchunks\tis_folder\n";
+    const HEADER: [&str; 5] = ["path", "size", "md5", "nchunks", "is_folder"];
     // One reference per entry, paired with its original index. Sorting by
     // (path, index) keeps the path-sorted order for clean diffs while giving
     // equal paths a stable, defined entry-order tie-break. Rendering straight
     // from each entry (no path→entry map) means a duplicate never loses its own
-    // values to the last entry sharing that path. One allocation, no clones.
+    // values to the last entry sharing that path.
     let mut ordered: Vec<(usize, &SophonChunkFile)> = entries.iter().enumerate().collect();
     ordered.sort_by(|(i, a), (j, b)| a.file.cmp(&b.file).then_with(|| i.cmp(j)));
-    let mut s = String::with_capacity(HEADER.len() + ordered.len() * 96);
-    s.push_str(HEADER);
-    for (_, e) in ordered {
-        use std::fmt::Write as _;
-        let _ = write!(
-            s,
-            "{}\t{}\t{}\t{}\t{}",
-            e.file,
-            e.size,
-            e.md5,
-            e.chunks.len(),
-            if e.is_folder { "true" } else { "false" }
-        );
-        s.push('\n');
+    let mut w = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        // Pin LF explicitly: the sidecar is always plain and greppable, on
+        // every platform, regardless of csv's own default terminator.
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
+    if ordered.is_empty() {
+        // `serialize` writes headers only when it sees the first row, so an
+        // empty sidecar would otherwise lose its pinned header entirely.
+        w.write_record(HEADER)
+            .expect("writing a header into a Vec cannot fail");
     }
-    s
+    for (_, e) in ordered {
+        w.serialize(SidecarRow {
+            path: e.file.as_str(),
+            size: e.size,
+            md5: e.md5.as_str(),
+            nchunks: e.chunks.len(),
+            is_folder: e.is_folder,
+        })
+        .expect("serialising a sidecar row into a Vec cannot fail");
+    }
+    let bytes = w.into_inner().expect("flushing a Vec cannot fail");
+    String::from_utf8(bytes).expect("csv writes UTF-8")
 }
 
 /// Reconcile a decode against `getBuild.stats` and log the verdict.
@@ -672,6 +695,27 @@ mod tests {
                 "dup.txt\t10\tmd5-a\t1\tfalse",
             ]
         );
+    }
+
+    /// A path containing a tab is quoted by `csv`, so it stays one field
+    /// instead of silently becoming two. No shipped fixture carries one, but
+    /// the writer must not corrupt such a path if it ever appears.
+    #[test]
+    fn a_tab_in_a_path_is_quoted_so_the_row_keeps_its_columns() {
+        let entries = vec![entry("dir/a\tb.txt", 5, 1, false)];
+        let rows = paths_tsv(&entries);
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(true)
+            .from_reader(rows.as_bytes());
+        let record = rdr
+            .records()
+            .next()
+            .expect("one data row")
+            .expect("the tab is quoted, so this stays a five-field record");
+        assert_eq!(record.len(), 5);
+        assert_eq!(&record[0], "dir/a\tb.txt");
+        assert_eq!(&record[2], "md5-dir/a\tb.txt");
     }
 
     /// `--manifest-detail paths-only`: the archive, the sidecar and the meta

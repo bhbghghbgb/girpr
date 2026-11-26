@@ -653,11 +653,27 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
     }
 }
 
+/// One row of `diff/paths.tsv`, serialised in this field order.
+#[derive(Debug, Serialize)]
+struct DiffRow<'a> {
+    field: &'a str,
+    path: &'a str,
+    state: &'static str,
+    // One-sided rows have no measured sizes; `csv` writes `None` as an empty
+    // field, matching the old `\t\t` pair, while the other numbers stay 0.
+    old_size: Option<i64>,
+    new_size: Option<i64>,
+    reused: u64,
+    moved: u64,
+    patch_bytes: u64,
+    total_cost: u64,
+}
+
 /// `diff/paths.tsv` — the flat per-path form, sorted by path.
 ///
-/// One row per path in either manifest: `path`, `state`, `old_size`, `new_size`,
-/// `reused`, `moved`, `patch_bytes`, `total_cost`. Plain text always, header
-/// line, LF endings — this is the file a reader greps.
+/// One row per path in either manifest: `field`, `path`, `state`, `old_size`,
+/// `new_size`, `reused`, `moved`, `patch_bytes`, `total_cost`. Plain text
+/// always, header line, LF endings — this is the file a reader greps.
 /// The two `paths.tsv` writers are **not** duplicates, despite the name.
 ///
 /// This one is `diff/paths.tsv` — `field path state old_size … total_cost`,
@@ -667,49 +683,63 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
 /// different documents; a reader greps them for different things and merging
 /// them would lose a column.
 ///
-/// What they do share is a weakness: **neither escapes a tab**, so one path
-/// containing a tab corrupts both identically. Real manifests carry none, and
-/// escaping would change bytes that shipped bundles already contain, so it is
-/// left as a recorded property rather than a fix.
+/// Both now go through `csv` with a tab delimiter, so a path containing a tab
+/// is quoted and stays one field. Real manifests carry none, so shipped bytes
+/// are unchanged.
 pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
-    const HEADER: &str =
-        "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
-    // Sized from the header and the row count rather than `String::from`,
-    // which starts at zero and reallocates as a 2 744-row table lands.
-    let mut s = String::with_capacity(
-        HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>(),
-    );
-    s.push_str(HEADER);
+    const HEADER: [&str; 9] = [
+        "field",
+        "path",
+        "state",
+        "old_size",
+        "new_size",
+        "reused",
+        "moved",
+        "patch_bytes",
+        "total_cost",
+    ];
+    let row_count: usize = diffs.iter().map(|f| f.rows.len()).sum();
+    let mut w = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        // Pin LF explicitly: this is the file a reader greps, on every platform.
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
+    if row_count == 0 {
+        // `serialize` writes headers only on the first row; an empty diff must
+        // still publish its pinned header.
+        w.write_record(HEADER)
+            .expect("writing a header into a Vec cannot fail");
+    }
     for f in diffs {
         for row in &f.rows {
-            s.push_str(&f.field);
-            s.push('\t');
-            s.push_str(&row.path);
-            s.push('\t');
-            s.push_str(row.state.as_str());
-            s.push('\t');
-            match &row.score {
-                Some(sc) => {
-                    use std::fmt::Write as _;
-                    // Seven `to_string()` calls per row, each a fresh
-                    // allocation, for numbers that go straight back out.
-                    let _ = write!(
-                        s,
-                        "{}\t{}\t{}\t{}\t{}\t{}",
-                        sc.old_size,
-                        sc.new_size,
-                        sc.reused,
-                        sc.moved,
-                        sc.patch_bytes,
-                        sc.total_cost
-                    );
-                }
-                None => s.push_str("\t\t0\t0\t0\t0"),
-            }
-            s.push('\n');
+            let (old_size, new_size, reused, moved, patch_bytes, total_cost) = match &row.score {
+                Some(sc) => (
+                    Some(sc.old_size),
+                    Some(sc.new_size),
+                    sc.reused,
+                    sc.moved,
+                    sc.patch_bytes,
+                    sc.total_cost,
+                ),
+                None => (None, None, 0, 0, 0, 0),
+            };
+            w.serialize(DiffRow {
+                field: f.field.as_str(),
+                path: row.path.as_str(),
+                state: row.state.as_str(),
+                old_size,
+                new_size,
+                reused,
+                moved,
+                patch_bytes,
+                total_cost,
+            })
+            .expect("serialising a diff row into a Vec cannot fail");
         }
     }
-    s
+    let bytes = w.into_inner().expect("flushing a Vec cannot fail");
+    String::from_utf8(bytes).expect("csv writes UTF-8")
 }
 
 /// The cheapest scores, already ordered for spec spec §5's tie-break.
@@ -1532,6 +1562,26 @@ mod tests {
         assert_eq!(f[0], "game");
         assert_eq!(f[2], "changed");
         assert_eq!((f[5], f[6], f[7], f[8]), ("1", "1", "7", "22"));
+    }
+
+    /// A path containing a tab is quoted by `csv`, so it stays one field
+    /// instead of splitting into extra columns on a reader's round-trip.
+    #[test]
+    fn a_tab_in_a_path_is_quoted_so_the_row_keeps_its_columns() {
+        let mut d = three_state_pair();
+        d.rows[0].path = "with\ttab".into();
+        let tsv = paths_tsv(std::slice::from_ref(&d));
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(true)
+            .from_reader(tsv.as_bytes());
+        let records = rdr
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("every row keeps nine fields when the tab is quoted");
+        assert_eq!(records.len(), 4);
+        assert!(records.iter().all(|r| r.len() == 9));
+        assert!(records.iter().any(|r| &r[1] == "with\ttab"));
     }
 
     // ---------------------------------------------------------- aggregation

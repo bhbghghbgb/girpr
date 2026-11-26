@@ -194,6 +194,9 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 url = "2.5.9"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# TSV sidecars are written by `csv` with a tab delimiter: it owns field
+# quoting and the LF terminator, while the pinned headers and sort stay local.
+csv = "1.4.0"
 prost = "0.14.6"
 # The shared Sophon wire types: one byte layout for the three protobuf messages
 # both programs decode. The leaf owns tags and field names only; gircap's dump
