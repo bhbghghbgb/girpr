@@ -12,8 +12,8 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Title | State | Commit ref(s) | Note |
 |----|-------|-------|---------------|------|
-| T01 | Purge parallel map → rayon | pending_review | aa091ace | Deviation: eight-thread ceiling dropped (unpinned perf heuristic); rayon global pool sizes itself. Follow-up suggestion held for reviewer: docs/04-scope-limitation-spec.md:727 "scoped worker" wording. |
-| T02 | Repair futures combinators → futures-util | pending_review | 9af85115 | Deviation: added per-fan-out Semaphore (FuturesOrdered polls all; ManifestBudget caps at 4 only); both permits acquired inside each fetch. Follow-up held for reviewer: flaky logs_of/spawn_blocking_traced capture test (baseline-reproduced, unrelated). |
+| T01 | Purge parallel map → rayon | completed | aa091ace | Deviation: eight-thread ceiling dropped (unpinned perf heuristic); rayon global pool sizes itself. |
+| T02 | Repair futures combinators → futures-util | completed | 9af85115 | Deviation: added per-fan-out Semaphore (FuturesOrdered polls all; ManifestBudget caps at 4 only); both permits acquired inside each fetch. |
 | T03 | Salvage order → petgraph | todo | | §R6 lines 212–227; high risk, §A1 lines 15–16 — stop if the safety argument cannot be re-established |
 | T04 | Root test origin server → axum | todo | | §R2 lines 157–170, §X1 lines 56–89; large test blast radius |
 | T05 | CLI help snapshots → trycmd + strip-ansi | todo | | §R3 lines 172–184, §LEAF-2 lines 432–439, §X3 lines 110–125 |
@@ -49,7 +49,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 
 | ID | Batch (task IDs) | State | Note |
 |----|------------------|-------|------|
-| — | (none seeded) | — | Reviews are added as batches reach a checkpoint |
+| A | T01, T02 | done | Both completed; no fix or revert; endorsed F01, F02. |
 
 ## Follow-ups
 
@@ -59,7 +59,8 @@ A follow-up planning review batches the survivors only after every task is settl
 
 | ID | Description | State | Note |
 |----|-------------|-------|------|
-| — | (none seeded) | — | Follow-ups are recorded after review sessions |
+| F01 | Update docs/04-scope-limitation-spec.md:727 wording from "scoped worker" to "rayon worker" after purge delegate | open | Docs-only; endorsed by review A. |
+| F02 | Investigate intermittent missing blocking log line in a_local_build_tag_mismatch_degrades_to_the_fallback; logs_of / spawn_blocking_traced dispatcher capture | open | Low priority; pre-existing and unrelated to T02; needs repro evidence. Endorsed by review A. |
 
 ## Persistent context
 
