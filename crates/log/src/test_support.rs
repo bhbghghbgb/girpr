@@ -198,12 +198,41 @@ fn assert_current_thread_runtime() {
     );
 }
 
+/// Keep two level-enabling dispatchers registered for the whole test binary.
+///
+/// `tracing` caches callsite interest process-globally. If a callsite is first
+/// emitted by a sibling test running under `NoSubscriber`, its interest is
+/// cached as `never()` and a scoped subscriber installed later receives nothing.
+/// A rebuild at subscriber-install time heals callsites already registered, but
+/// a sibling can register another callsite after it and poison that one again.
+/// With more than one live registered dispatcher, callsite registration consults
+/// the registry instead of the emitting thread's default, so the levels these
+/// keepers enable stay enabled for callsites registered during concurrent tests.
+/// They are never installed as defaults, so they capture no events.
+#[cfg(feature = "test-support-async")]
+fn keep_callsites_interested() {
+    static KEEPERS: std::sync::OnceLock<(
+        tracing::dispatcher::Dispatch,
+        tracing::dispatcher::Dispatch,
+    )> = std::sync::OnceLock::new();
+    KEEPERS.get_or_init(|| {
+        (
+            tracing::dispatcher::Dispatch::new(subscriber(CaptureBuffer::default())),
+            tracing::dispatcher::Dispatch::new(subscriber(CaptureBuffer::default())),
+        )
+    });
+}
+
 #[cfg(feature = "test-support-async")]
 pub async fn logs_of_async<F: Future>(f: F) -> (F::Output, String) {
     assert_current_thread_runtime();
 
     let buffer = CaptureBuffer::default();
     let guard = tracing::subscriber::set_default(subscriber(buffer.clone()));
+    keep_callsites_interested();
+    // Recompute cached interest while this subscriber is the thread default,
+    // healing callsites a sibling registered under `NoSubscriber` before here.
+    tracing::callsite::rebuild_interest_cache();
     let out = f.await;
     drop(guard);
     (
