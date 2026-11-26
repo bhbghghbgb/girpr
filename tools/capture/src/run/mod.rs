@@ -956,10 +956,7 @@ fn covered_ids(s: &Selfcheck) -> String {
 
 /// The recorded `result`, as its lowercase wire spelling.
 fn selfcheck_slug(s: &Selfcheck) -> String {
-    serde_json::to_string(&s.result)
-        .unwrap_or_else(|_| "?".into())
-        .trim_matches('"')
-        .to_string()
+    s.result.as_str().to_string()
 }
 
 /// Write the request log on the blocking pool, keeping the cause if it fails.

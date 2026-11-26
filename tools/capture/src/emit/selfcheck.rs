@@ -761,6 +761,18 @@ pub enum Result_ {
     Incomplete,
 }
 
+impl Result_ {
+    /// The lowercase wire spelling, matching `#[serde(rename_all = "lowercase")]`
+    /// without a serde round-trip. Kept in step with the derive by a test below.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Result_::Pass => "pass",
+            Result_::Fail => "fail",
+            Result_::Incomplete => "incomplete",
+        }
+    }
+}
+
 /// `verify/selfcheck.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Selfcheck {
@@ -1305,11 +1317,18 @@ mod tests {
 
     #[test]
     fn the_result_serialises_lowercase_the_schema_doc_writes() {
-        assert_eq!(serde_json::to_string(&Result_::Pass).unwrap(), "\"pass\"");
-        assert_eq!(serde_json::to_string(&Result_::Fail).unwrap(), "\"fail\"");
-        assert_eq!(
-            serde_json::to_string(&Result_::Incomplete).unwrap(),
-            "\"incomplete\""
-        );
+        for (result, spelling) in [
+            (Result_::Pass, "pass"),
+            (Result_::Fail, "fail"),
+            (Result_::Incomplete, "incomplete"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&result).unwrap(),
+                format!("\"{spelling}\"")
+            );
+            // `selfcheck_slug` uses `as_str()` instead of a serde round-trip;
+            // keep the two spellings the same so neither can drift.
+            assert_eq!(result.as_str(), spelling);
+        }
     }
 }
