@@ -1403,9 +1403,11 @@ impl Drop for Mock {
 /// This is the test half of the injectable transport seam. It reuses the exact
 /// routing and body construction the TCP server uses — there is no second
 /// implementation of "what does this fixture serve" to drift — and builds an
-/// [`HttpResponse`] carrying the same three headers `write_response` sends. It
-/// also logs every request and honours the fail-once map, so `mock.requests()`
-/// and a retried 503 behave identically on both paths.
+/// [`HttpResponse`] carrying this path's three headers (`connection`,
+/// `content-length` and `content-type`); the TCP path's set also includes a
+/// `date` that hyper adds, so the two are not byte-identical. It also logs
+/// every request and honours the fail-once map, so `mock.requests()` and a
+/// retried 503 behave identically on both paths.
 struct MemoryTransport {
     table: Arc<Table>,
     log: Arc<Mutex<Vec<Recorded>>>,

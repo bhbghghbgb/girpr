@@ -48,8 +48,9 @@ fn the_measured_global_urls_are_reproduced_exactly() {
 mod canned {
     use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 
-    /// A canned server. The loopback leaf owns the listener, the reply writer
-    /// and the request journal; this module keeps gircap's own scripting
+    /// A canned server. wiremock owns the listener and reply writing; the
+    /// loopback leaf keeps only reply order, the invocation count and the
+    /// request journal. This module keeps gircap's own scripting
     /// contract (which headers are sent and which counts are pinned).
     pub struct Mock {
         server: ScriptedServer,

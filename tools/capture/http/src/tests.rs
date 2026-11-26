@@ -724,8 +724,9 @@ fn the_buffered_file_write_equals_the_string() {
 mod canned {
     use girpr_loopback_mock::{RecordedRequest, Reply, ScriptedServer};
 
-    /// A canned server. The loopback leaf owns the listener, the reply writer
-    /// and the request journal; this module keeps gircap-http's own scripting
+    /// A canned server. wiremock owns the listener and reply writing; the
+    /// loopback leaf keeps only reply order, the invocation count and the
+    /// request journal. This module keeps gircap-http's own scripting
     /// contract (which headers are sent and which counts are pinned).
     pub struct Mock {
         server: ScriptedServer,
