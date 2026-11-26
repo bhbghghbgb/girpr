@@ -72,14 +72,12 @@ pub mod util;
 // crate's public surface.
 pub use girpr_log;
 
-// The glob crate, re-exported for the same reason: [`Filter::includes`] and
-// [`Filter::excludes`] hand back `glob::Pattern`, so the type is part of this
-// crate's public surface, and a caller that wants to hold a compiled pattern
-// needs no dependency of its own. A caller that wants to build one rather than
-// read it reaches [`glob::Pattern::new`] here too. It comes through
-// `girpr-filter`, the single place that pins the glob version both filters
-// compile against.
-pub use girpr_filter::glob;
+// The globset crate, re-exported for the same reason: [`Filter::includes`] and
+// [`Filter::excludes`] hand back `Compiled`, which holds globset matchers, so a
+// caller that wants to build its own glob needs no dependency of its own. It
+// comes through `girpr-filter`, the single place that pins the globset version
+// both filters compile against.
+pub use girpr_filter::globset;
 
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{
@@ -96,9 +94,11 @@ pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 // options are at the crate root, so the type of one of their fields has to be
 // reachable there too.
 //
-// The crate's own way is not the only way - [`glob::Pattern::new`] builds a
-// pattern too - but it is the one that names the offending glob.
+// The crate's own way is not the only way - [`globset::Glob::new`] builds a
+// glob too - but it is the one that names the offending glob. [`Compiled`] is
+// the type the compiler hands back, re-exported so a caller can name it.
 pub use filter::{Filter, compile_patterns};
+pub use girpr_filter::Compiled;
 pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan, subscriber_for};
 pub use planner::HashPlan;

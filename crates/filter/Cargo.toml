@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 # One glob version for both filters. Re-exported so a filter (and a caller of
-# girsync's public surface) names the exact type this crate compiled.
-glob = "0.3.4"
+# girsync's public surface) names the exact library this crate compiled.
+globset = "0.4.22"
 # Compile-time reporting of the offending user-written glob.
 anyhow = "1.0.105"

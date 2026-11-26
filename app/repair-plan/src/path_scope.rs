@@ -10,9 +10,13 @@
 //! string `plan::build_plan` stores and `util::path::contained_rel` validates at
 //! the filesystem boundary.
 //!
+//! The globs are compiled by `girpr-filter` into `globset` matchers; the case
+//! mode is fixed at compile time there, so this scope keeps the one girpr
+//! always uses (case-insensitive).
+//!
 //! Three semantics are inherited deliberately and must not be "fixed" here:
 //!
-//! - **`*` crosses `/`.** With `require_literal_separator: false`,
+//! - **`*` crosses `/`.** With globset's `literal_separator(false)`,
 //!   `--include "*.blk"` matches
 //!   `GenshinImpact_Data/StreamingAssets/.../00/09801749.blk`. A user expecting
 //!   `*.blk` to mean "in the current directory" is surprised; the flag help says
@@ -21,7 +25,7 @@
 //!   manifests are lowercase anyway; `girsync` defaults `--case-sensitive` to
 //!   `false` and this port hardcodes that. This folding is **not**
 //!   `girpr_util_path`'s `path_key`: both fold ASCII case only and leave
-//!   non-ASCII bytes exact, but the glob crate applies its per-character fold
+//!   non-ASCII bytes exact, but globset applies its per-character fold
 //!   on every host as a containment predicate over a user-written pattern,
 //!   while `path_key` is the map key for path identity and folds only on
 //!   Windows. The rules differ deliberately. A glob is a containment predicate
@@ -33,14 +37,10 @@
 //!   down without reordering anything.
 
 use anyhow::Result;
-use girpr_filter::glob::{MatchOptions, Pattern};
-use girpr_filter::{Backslash, compile, match_options, matches_any};
+use girpr_filter::{Backslash, Compiled, compile, matches_any};
 
-/// girsync's matching options, hardcoded (see the module docs).
-///
-/// A fixed value: keeping it `const` avoids rebuilding it for every walked
-/// path in the hottest predicate.
-const MATCH_OPTIONS: MatchOptions = match_options(false);
+/// girpr's case mode, hardcoded (see the module docs): never case-sensitive.
+const CASE_SENSITIVE: bool = false;
 
 /// The set of globs narrowing one run, compiled once at startup.
 ///
@@ -48,8 +48,8 @@ const MATCH_OPTIONS: MatchOptions = match_options(false);
 /// `--exclude`-only and unflagged runs identical.
 #[derive(Debug, Default, Clone)]
 pub struct PathScope {
-    includes: Vec<Pattern>,
-    excludes: Vec<Pattern>,
+    includes: Vec<Compiled>,
+    excludes: Vec<Compiled>,
 }
 
 impl PathScope {
@@ -82,10 +82,10 @@ impl PathScope {
 
     /// `true` when `rel` is inside the scope. `--exclude` beats `--include`.
     pub fn is_visible(&self, rel: &str) -> bool {
-        if !self.includes.is_empty() && !matches_any(&self.includes, rel, MATCH_OPTIONS) {
+        if !self.includes.is_empty() && !matches_any(&self.includes, rel, CASE_SENSITIVE) {
             return false;
         }
-        !matches_any(&self.excludes, rel, MATCH_OPTIONS)
+        !matches_any(&self.excludes, rel, CASE_SENSITIVE)
     }
 
     /// The `--include` globs as written, for the "matched nothing" usage
@@ -100,10 +100,10 @@ impl PathScope {
     }
 }
 
-fn join_patterns(patterns: &[Pattern]) -> String {
+fn join_patterns(patterns: &[Compiled]) -> String {
     patterns
         .iter()
-        .map(|p| p.as_str().to_string())
+        .map(|p| p.written().to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -115,7 +115,7 @@ fn join_patterns(patterns: &[Pattern]) -> String {
 /// `--include "game\*.dat"` means a path separator, not a glob escape. The cost
 /// is that `\` cannot escape a metacharacter, which is not a thing anyone types
 /// at a game install.
-pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>> {
+pub fn compile_patterns(list: &[String]) -> Result<Vec<Compiled>> {
     compile(list, Backslash::Separator)
 }
 

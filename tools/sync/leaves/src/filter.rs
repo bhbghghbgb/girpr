@@ -23,43 +23,42 @@
 //! subtree rule without being told.
 
 use anyhow::Result;
-use girpr_filter::glob::{MatchOptions, Pattern};
-use girpr_filter::{Backslash, any_matches_or_ancestor, compile, match_options, matches_any};
+use girpr_filter::{Backslash, Compiled, any_matches_or_ancestor, compile, matches_any};
 use std::collections::HashMap;
 
 /// Compile glob strings, reporting the offending pattern on failure.
-pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>> {
+pub fn compile_patterns(list: &[String]) -> Result<Vec<Compiled>> {
     compile(list, Backslash::Escape)
 }
 
 /// The run's include and exclude rules, compiled once.
 ///
-/// **One value, one home.** The patterns and the options they are matched with
-/// travel together, so a caller cannot ask whether a path is excluded without
-/// also saying which rules apply — and the options are built once per run
-/// rather than once per path.
+/// **One value, one home.** The patterns and the case mode they are matched
+/// with travel together, so a caller cannot ask whether a path is excluded
+/// without also saying which rules apply.
 ///
 /// The case mode is not owned here. It is a run-wide setting that also selects
 /// the cache's case flag, the planner's pairing, the rename pass and the mkdir
 /// check, so it stays on girsync's `CommonOpts` config field; this value is
-/// *built* from it, and the two have to agree.
+/// *built* from it, and the two have to agree. globset fixes the case mode when
+/// a glob is compiled, so each [`Compiled`] keeps a matcher for each mode and
+/// this filter only selects one.
 #[derive(Debug, Clone)]
 pub struct Filter {
-    includes: Vec<Pattern>,
-    excludes: Vec<Pattern>,
-    opts: MatchOptions,
+    includes: Vec<Compiled>,
+    excludes: Vec<Compiled>,
+    case_sensitive: bool,
 }
 
 impl Filter {
     /// The rules of one run, matched under `case_sensitive`.
     ///
-    /// The matching options are built here and kept, so every path this filter
-    /// is asked about is matched the same way.
-    pub fn new(includes: Vec<Pattern>, excludes: Vec<Pattern>, case_sensitive: bool) -> Self {
+    /// Every path this filter is asked about is matched in the same case mode.
+    pub fn new(includes: Vec<Compiled>, excludes: Vec<Compiled>, case_sensitive: bool) -> Self {
         Self {
             includes,
             excludes,
-            opts: match_options(case_sensitive),
+            case_sensitive,
         }
     }
 
@@ -87,7 +86,7 @@ impl Filter {
     /// An include pattern is a filter on the path itself, so this is a
     /// question about `rel` alone: nothing above it is consulted.
     fn hidden_by_include(&self, rel: &str) -> bool {
-        !self.includes.is_empty() && !matches_any(&self.includes, rel, self.opts)
+        !self.includes.is_empty() && !matches_any(&self.includes, rel, self.case_sensitive)
     }
 
     /// True when an exclude pattern matches `rel` itself.
@@ -96,7 +95,7 @@ impl Filter {
     /// a directory covers the whole subtree below it, and that is the other
     /// half of the rule — see [`Filter::excluded_by_pattern_or_ancestor`].
     fn excluded_by_pattern(&self, rel: &str) -> bool {
-        matches_any(&self.excludes, rel, self.opts)
+        matches_any(&self.excludes, rel, self.case_sensitive)
     }
 
     /// True when an exclude pattern matches `rel` or one of its ancestor
@@ -105,16 +104,16 @@ impl Filter {
     /// The ancestor test is what makes an excluded directory cover its
     /// subtree.
     fn excluded_by_pattern_or_ancestor(&self, rel: &str) -> bool {
-        any_matches_or_ancestor(&self.excludes, rel, self.opts)
+        any_matches_or_ancestor(&self.excludes, rel, self.case_sensitive)
     }
 
     /// The `--include` patterns, as compiled.
-    pub fn includes(&self) -> &[Pattern] {
+    pub fn includes(&self) -> &[Compiled] {
         &self.includes
     }
 
     /// The `--exclude` patterns, as compiled.
-    pub fn excludes(&self) -> &[Pattern] {
+    pub fn excludes(&self) -> &[Compiled] {
         &self.excludes
     }
 }
@@ -193,31 +192,28 @@ mod tests {
     use girpr_filter::matches_or_ancestor;
 
     /// Compiled patterns, from `&str`s.
-    fn patterns(list: &[&str]) -> Vec<Pattern> {
+    fn patterns(list: &[&str]) -> Vec<Compiled> {
         let owned: Vec<String> = list.iter().map(|s| s.to_string()).collect();
         compile_patterns(&owned).unwrap()
     }
 
-    /// The rule the bundle replaced: build the match options per call and
-    /// apply them.
+    /// The rule the bundle replaced: ask the same question per call rather
+    /// than through the filter's cached case mode.
     ///
     /// Kept as the reference the bundled filter has to agree with, so a change
-    /// to the cached options cannot quietly change which paths a run hides.
+    /// to the cached mode cannot quietly change which paths a run hides.
     fn per_call_is_excluded(
         rel: &str,
-        includes: &[Pattern],
-        excludes: &[Pattern],
+        includes: &[Compiled],
+        excludes: &[Compiled],
         case_sensitive: bool,
     ) -> bool {
-        let opts = MatchOptions {
-            case_sensitive,
-            require_literal_separator: false,
-            require_literal_leading_dot: false,
-        };
-        if !includes.is_empty() && !includes.iter().any(|p| p.matches_with(rel, opts)) {
+        if !includes.is_empty() && !matches_any(includes, rel, case_sensitive) {
             return true;
         }
-        excludes.iter().any(|p| matches_or_ancestor(p, rel, opts))
+        excludes
+            .iter()
+            .any(|p| matches_or_ancestor(p, rel, case_sensitive))
     }
 
     /// An excluded directory is a subtree, and the separator is the boundary:
