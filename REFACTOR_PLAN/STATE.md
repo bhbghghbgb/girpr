@@ -16,7 +16,7 @@ reviewers only — no dates, session/tool IDs, machine data or change log.
 | T02 | Repair futures combinators → futures-util | completed | 9af85115 | Deviation: added per-fan-out Semaphore (FuturesOrdered polls all; ManifestBudget caps at 4 only); both permits acquired inside each fetch. |
 | T03 | Salvage order → petgraph | skipped | | Byte-level safety proof tied to one global write direction + disjoint destinations; a graph order cannot re-establish it without changing correctness-critical src/repair/file/** byte movement (non-finding). Durable: temp.rs has no salvage-order consumption (R6 consumer list stale); disjointness premise fails in Tier::Ordered — latent risk if revisited. |
 | T04 | Root test origin server → axum | completed | e51d485c | Stale hints: manifest setup ~388–401 (not 554–865); metadata.rs tests are a second server user but needed no edits (API kept). Drop now sends a watch stop signal to cancel detached axum handlers. Removed only the accept-loop lifecycle test + wait_until_idle. |
-| T05 | CLI help snapshots → trycmd + strip-ansi | todo | | §R3 lines 172–184, §LEAF-2 lines 432–439, §X3 lines 110–125 |
+| T05 | CLI help snapshots → trycmd + strip-ansi | in_progress | | §R3 lines 172–184, §LEAF-2 lines 432–439, §X3 lines 110–125 |
 | T06 | Process assertions → assert_cmd | todo | | §R4 lines 186–196; keep the async process seam for mock-backed tests |
 | T07 | Structured JSON log capture | todo | | §R8 lines 244–257, §LEAF-10 lines 530–534; adds a surface to shared girpr-log |
 | T08 | INI parser/merger → rust-ini | todo | | §APP-1 lines 262–279; byte-exact pins need adjustment, policy layer stays |
