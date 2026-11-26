@@ -946,8 +946,8 @@ fn recorded(f: &Fetcher) -> RequestRecord {
 ///
 /// The slot string reaches `fetch_errors` and the summary, so reporting
 /// only "a request task panicked" loses the one text that says why.
-/// `JoinSet` names the failed task by id; the loop maps that id back to the
-/// item index before the error is consumed.
+/// The loop carries each future's index through the panic boundary and
+/// downcasts its payload, so the cause reaches this error with its slot.
 #[tokio::test]
 async fn a_panicking_request_task_keeps_its_index_and_cause() {
     let f = fetcher(1, Arc::new(RecordingSleep::default()));

@@ -470,9 +470,9 @@ impl Fetcher {
     /// `f` returns `(index, result)` and **never** an outer `Err`: the index is
     /// how a failed task is told apart from one that died.
     ///
-    /// `f` receives an [`Arc<Fetcher>`] rather than a borrow, because
-    /// `JoinSet::spawn` needs a `'static` future. One `Arc` is built for the
-    /// whole wave and cloned into each task — a refcount bump, not a fresh
+    /// `f` receives an [`Arc<Fetcher>`] rather than a borrow, because each
+    /// buffered future is `'static` and cannot borrow the fetcher. One `Arc` is
+    /// built for the whole wave and cloned into each task — a refcount bump, not a fresh
     /// copy of the fetcher's maps and strings per item. All tasks still share
     /// one pool, one log and one error-body budget.
     pub async fn map_concurrently<T, R, F, Fut>(

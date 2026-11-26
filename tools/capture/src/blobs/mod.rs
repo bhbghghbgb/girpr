@@ -405,9 +405,9 @@ impl Store {
                     row
                 }
                 // A task that did not report still keeps its slot, so the row
-                // and the error name the chunk it belonged to. The payload is in
-                // `why` whenever the shared loop could map the task id back;
-                // only an unrecoverable id leaves the generic sentence.
+                // and the error name the chunk it belonged to. The recovered
+                // panic payload is in `why`; only a slot no future reported
+                // leaves the generic sentence.
                 Err(crate::tasks::JoinOutcome::Lost { why }) => {
                     let why = why
                         .unwrap_or_else(|| "the chunk fetch task panicked while storing it".into());

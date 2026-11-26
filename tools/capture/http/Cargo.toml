@@ -37,9 +37,13 @@ bytes = "1.12"
 # The fetcher/transport mechanics compile once here and stay cached across edits
 # to emit/blobs/manifest in the parent package.
 reqwest = "0.13.5"
-# The runtime for the ordered-join loop and the injectable timers the backoff
-# awaits; no `fs`/`io`/`net`/`process` features are requested here.
+# The runtime for the injectable timers the backoff awaits and for the blocking
+# joins; no `fs`/`io`/`net`/`process` features are requested here.
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+# The buffered stream owns the bounded concurrency of the ordered join; the
+# collection into input order stays local because the library yields completions
+# in completion order. `futures-util` is already a transitive dependency.
+futures = "0.3.34"
 # Derive `Display`/`Error` for `ApiError` without changing its format strings.
 thiserror = "2"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
