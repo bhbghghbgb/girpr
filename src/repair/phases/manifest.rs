@@ -769,31 +769,6 @@ mod tests {
         );
     }
 
-    /// The registry drops a connection as soon as it finishes: a single
-    /// request is reaped without another accept arriving to trigger it.
-    #[tokio::test]
-    async fn finished_connections_are_reaped_without_another_accept() {
-        let (body, checksum) = (OK_BODY.to_vec(), OK_CHECKSUM.to_owned());
-        let server = serve(vec![("ok", Reply::Body(body))]).await;
-        let build = build(server.base(), vec![meta("game", "ok", &checksum)]);
-        let client = Client::new();
-        let manifests = fetch_latest(
-            &client,
-            &BackoffPolicy::none(),
-            &build,
-            &HashSet::new(),
-            &HashSet::new(),
-            1,
-            ManifestBudget::new(),
-        )
-        .await
-        .expect("the manifest answers");
-        assert_eq!(manifests.len(), 1);
-        tokio::time::timeout(Duration::from_secs(2), server.wait_until_idle())
-            .await
-            .expect("the finished connection is reaped without another accept");
-    }
-
     /// A failed local manifest is skipped, and the successful ones still
     /// contribute. The earlier selection's entry for a path wins, so
     /// completion order cannot leak into the map.

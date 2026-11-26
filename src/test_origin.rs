@@ -1,18 +1,20 @@
 //! A shared loopback origin for the repair phases' unit tests.
 //!
-//! The two hand-rolled servers in `repair::phases` used to repeat the same
-//! accept loop, header parsing and response writing. This module owns that
-//! transport once, keeps each phase's routing and reply policy in its caller,
-//! and aborts the driver on drop so a route that never answers cannot outlive
-//! the test that started it.
+//! The caller owns the routing and reply policy; axum owns the listener, HTTP
+//! parsing, keep-alive and response framing. Dropping the server tells every
+//! in-flight handler to stop and aborts the accept loop, so a route that never
+//! answers cannot outlive the test that started it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use tokio::net::TcpListener;
 use tokio::sync::{Notify, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 
 /// One reply a route can give. Variants that carry a counter or a gate let a
 /// caller hold a request open or let it through once another route was hit,
@@ -21,7 +23,7 @@ use tokio::task::{JoinHandle, JoinSet};
 pub(crate) enum Reply {
     Body(Vec<u8>),
     Status(&'static str),
-    /// Count the request, then keep the socket open without answering, so an
+    /// Count the request, then keep it open without answering, so an
     /// uncancelled fetch would wait forever.
     NeverAfterHit(Arc<AtomicUsize>),
     /// Answer `status` only once another route has been hit, so the failure
@@ -69,11 +71,10 @@ impl InFlight {
     /// Count this request as in flight and wait for the release.
     ///
     /// The returned guard owns the slot, so dropping the request future
-    /// (for example when its connection task is aborted mid-wait) always
-    /// releases it, even though the handler never resumes to call `leave`
-    /// itself.
+    /// (for example when the handler is cancelled mid-wait) always releases
+    /// it, even though the handler never resumes to call `leave` itself.
     pub(crate) async fn enter(self: &Arc<Self>) -> InFlightGuard {
-        // Own the slot before the first await, so an abort at any point
+        // Own the slot before the first await, so a cancel at any point
         // releases it through the guard's `Drop`.
         let guard = InFlightGuard {
             gate: Arc::clone(self),
@@ -132,144 +133,118 @@ impl Drop for InFlightGuard {
     }
 }
 
-/// A running test origin. Dropping it cancels the accept loop, and the
-/// `JoinSet` that loop owns aborts every connection task it spawned, so a
-/// test never depends on runtime teardown to stop a route that never answers.
+/// Handler state: the caller's route plus the signal that ends the test.
+struct OriginPolicy {
+    route: Route,
+    stopping: watch::Receiver<bool>,
+}
+
+/// Answer one request by applying the caller's route and running its reply
+/// policy. axum owns the request line, headers and response framing.
+async fn handle(State(policy): State<Arc<OriginPolicy>>, request: Request) -> Response {
+    let target = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/")
+        .to_owned();
+    answer((policy.route)(&target), &policy.stopping).await
+}
+
+async fn answer(reply: Option<Reply>, stopping: &watch::Receiver<bool>) -> Response {
+    let mut stopping = stopping.clone();
+    let respond = async {
+        match reply {
+            Some(Reply::Body(body)) => (StatusCode::OK, body).into_response(),
+            Some(Reply::Status(reason)) => status_code(reason).into_response(),
+            Some(Reply::NeverAfterHit(hits)) => {
+                hits.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                unreachable!("a never-answering route holds the request open")
+            }
+            Some(Reply::StatusAfterHit(reason, hits)) => {
+                while hits.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+                status_code(reason).into_response()
+            }
+            Some(Reply::GatedBody { body, gate }) => {
+                let _guard = gate.enter().await;
+                (StatusCode::OK, body).into_response()
+            }
+            None => StatusCode::NOT_FOUND.into_response(),
+        }
+    };
+    // A held request must not outlive its test: cancelling `respond` drops
+    // the in-flight guard and lets hyper close the connection.
+    tokio::select! {
+        response = respond => response,
+        _ = until_stopping(&mut stopping) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn until_stopping(receiver: &mut watch::Receiver<bool>) {
+    while !*receiver.borrow_and_update() {
+        if receiver.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Scripted statuses carry a full reason phrase; axum takes a typed code and
+/// writes the canonical reason line itself.
+fn status_code(reason: &'static str) -> StatusCode {
+    let digits = reason.split_whitespace().next().unwrap_or(reason);
+    StatusCode::from_bytes(digits.as_bytes()).expect("scripted status carries a 3-digit code")
+}
+
+/// A running test origin. Dropping it releases every held handler and aborts
+/// the accept loop, so the test never depends on runtime teardown to stop a
+/// route that never answers.
 pub(crate) struct TestServer {
     base: String,
     driver: JoinHandle<()>,
-    live: Arc<AtomicUsize>,
-    idle: Arc<Notify>,
+    stopping: watch::Sender<bool>,
 }
 
 impl TestServer {
     pub(crate) fn base(&self) -> &str {
         &self.base
     }
-
-    /// Wait until every accepted connection has been reaped.
-    pub(crate) async fn wait_until_idle(&self) {
-        loop {
-            let idle = self.idle.notified();
-            tokio::pin!(idle);
-            // Register before reading the count, so a wakeup between the
-            // check and the await cannot be lost on any runtime flavor.
-            idle.as_mut().enable();
-            if self.live.load(Ordering::SeqCst) == 0 {
-                return;
-            }
-            idle.as_mut().await;
-        }
-    }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        // Aborting the driver drops its `JoinSet`, which aborts the
-        // connections still in flight.
+        // Signal first: axum spawns each connection as a detached task, so
+        // aborting the driver alone would leave gated handlers waiting.
+        let _ = self.stopping.send_replace(true);
         self.driver.abort();
     }
 }
 
 /// Serve replies chosen by `route` on an ephemeral loopback port. The caller
-/// owns the routing policy; this module owns the socket and the response
-/// bytes. `None` is a `404`, the same as an unknown target before the fold-in.
+/// owns the routing policy; this module owns the socket and axum writes the
+/// response bytes. `None` is a `404`, the same as an unknown target before the
+/// fold-in.
 pub(crate) async fn serve<F>(route: F) -> TestServer
 where
     F: Fn(&str) -> Option<Reply> + Send + Sync + 'static,
 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("addr"));
-    let live = Arc::new(AtomicUsize::new(0));
-    let idle = Arc::new(Notify::new());
-    let route: Route = Arc::new(route);
-    let spawned_live = Arc::clone(&live);
-    let spawned_idle = Arc::clone(&idle);
-
+    let (stopping, _) = watch::channel(false);
+    let policy = Arc::new(OriginPolicy {
+        route: Arc::new(route),
+        stopping: stopping.subscribe(),
+    });
+    let router = Router::new().fallback(handle).with_state(policy);
     let driver = tokio::spawn(async move {
-        let mut connections = JoinSet::new();
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    let Ok((socket, _)) = accepted else {
-                        continue;
-                    };
-                    spawned_live.fetch_add(1, Ordering::SeqCst);
-                    let route = Arc::clone(&route);
-                    connections.spawn(handle_connection(socket, route));
-                }
-                // Reap a finished connection as soon as it completes, instead
-                // of leaving its entry for the next accept.
-                reaped = connections.join_next(), if !connections.is_empty() => {
-                    if reaped.is_some() {
-                        spawned_live.fetch_sub(1, Ordering::SeqCst);
-                        if spawned_live.load(Ordering::SeqCst) == 0 {
-                            spawned_idle.notify_waiters();
-                        }
-                    }
-                }
-            }
-        }
+        axum::serve(listener, router).await.expect("serve");
     });
 
     TestServer {
         base,
         driver,
-        live,
-        idle,
+        stopping,
     }
-}
-
-/// Answer one request on `socket`.
-async fn handle_connection(mut socket: TcpStream, route: Route) {
-    let mut buf = vec![0u8; 8192];
-    let mut got = 0;
-    while got < buf.len() {
-        match socket.read(&mut buf[got..]).await {
-            Ok(0) => break,
-            Ok(n) => {
-                got += n;
-                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            Err(_) => return,
-        }
-    }
-    let head = String::from_utf8_lossy(&buf[..got]).to_string();
-    let target = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/");
-    let (status, body, in_flight) = match route(target) {
-        Some(Reply::Body(body)) => ("200 OK", body, None),
-        Some(Reply::Status(status)) => (status, Vec::new(), None),
-        Some(Reply::NeverAfterHit(hits)) => {
-            hits.fetch_add(1, Ordering::SeqCst);
-            std::future::pending::<()>().await;
-            unreachable!("a never-answering route holds the socket open")
-        }
-        Some(Reply::StatusAfterHit(status, hits)) => {
-            while hits.load(Ordering::SeqCst) == 0 {
-                tokio::task::yield_now().await;
-            }
-            (status, Vec::new(), None)
-        }
-        Some(Reply::GatedBody { body, gate }) => {
-            let guard = gate.enter().await;
-            ("200 OK", body, Some(guard))
-        }
-        None => ("404 Not Found", Vec::new(), None),
-    };
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = socket.write_all(head.as_bytes()).await;
-    let _ = socket.write_all(&body).await;
-    let _ = socket.flush().await;
-    // Dropping the guard releases the slot; an aborted connection never
-    // reaches this point, but its guard still runs when the task is torn down.
-    drop(in_flight);
 }

@@ -252,6 +252,10 @@ tokio = { version = "1.54.1", default-features = false, features = ["process", "
 # local helper keeps this product's own body-scripting contract; the fetch and
 # capture tests script the same leaf with their own replies and assertions.
 girpr-loopback-mock = { path = "crates/loopback-mock" }
+# The route-based loopback origin for the repair phase tests. Only HTTP/1 and
+# the tokio service are needed; axum owns parsing, keep-alive and framing while
+# the test-supplied route keeps its reply scripting.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 # The artifact-server fixture tests build zstd frames for their replay bodies;
 # the production paths do their prost/zstd work in `girpr-fetch`. The root's
 # canned manifest bodies are frozen bytes in manifest.rs, so this crate needs
