@@ -16,11 +16,10 @@
 //! honest.
 
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use backoff::ExponentialBackoffBuilder;
 use backoff::backoff::{Backoff, Zero};
 
@@ -103,36 +102,30 @@ impl DelaySequence {
     }
 }
 
-/// The future [`Sleep::sleep`] hands back.
-///
-/// Boxed on purpose: callers hold a `Sleep` as a trait object (a `dyn`-compatible
-/// trait cannot return `impl Future` or use `async fn`). One box per retry
-/// backoff is nothing beside the wait it may stand in for. `'static` because
-/// every implementation here is independent of `self` after the call.
-pub type SleepFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
 /// Something a retry loop can wait on, so tests can count delays instead of
 /// spending them.
 ///
 /// Async on purpose: a blocking `std::thread::sleep` would hold a runtime worker
 /// for the whole backoff, so requests that are in flight could not progress
-/// while one loop waited. [`RealSleep`] yields instead.
+/// while one loop waited. [`RealSleep`] yields instead. The attribute keeps the
+/// trait usable as `dyn Sleep`, which is how callers inject a driver without
+/// parameterising their own types over it.
+#[async_trait]
 pub trait Sleep: Send + Sync + fmt::Debug {
     /// Wait for `d`.
-    fn sleep(&self, d: Duration) -> SleepFuture;
+    async fn sleep(&self, d: Duration);
 }
 
 /// Real wall-clock waiting, without taking the worker with it.
 #[derive(Debug, Default)]
 pub struct RealSleep;
 
+#[async_trait]
 impl Sleep for RealSleep {
-    fn sleep(&self, d: Duration) -> SleepFuture {
-        Box::pin(async move {
-            if !d.is_zero() {
-                tokio::time::sleep(d).await;
-            }
-        })
+    async fn sleep(&self, d: Duration) {
+        if !d.is_zero() {
+            tokio::time::sleep(d).await;
+        }
     }
 }
 
@@ -145,10 +138,9 @@ impl Sleep for RealSleep {
 #[derive(Debug, Default)]
 pub struct ZeroSleep;
 
+#[async_trait]
 impl Sleep for ZeroSleep {
-    fn sleep(&self, _d: Duration) -> SleepFuture {
-        Box::pin(async {})
-    }
+    async fn sleep(&self, _d: Duration) {}
 }
 
 /// Records what it was asked to wait for and returns immediately.
@@ -169,14 +161,13 @@ impl RecordingSleep {
     }
 }
 
+#[async_trait]
 impl Sleep for RecordingSleep {
-    fn sleep(&self, d: Duration) -> SleepFuture {
-        // Recorded before the future is built rather than inside it: this
-        // sleeper never waits, so the only observable difference is when the
-        // push happens, and doing it here keeps the future free of a borrow and
-        // therefore `'static`.
+    async fn sleep(&self, d: Duration) {
+        // The macro boxes the method body, so this push happens on first poll
+        // rather than at call time. Every caller awaits the sleep before reading
+        // `delays()`, so the recorded sequence is unchanged.
         self.lock().push(d);
-        Box::pin(async {})
     }
 }
 

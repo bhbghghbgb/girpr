@@ -63,8 +63,8 @@ pub use log::{RequestLog, now_rfc3339};
 pub use record::{ACCEPT, ACCEPT_ENCODING, Kind, RequestRecord, header_map};
 pub use transport::{
     DEFAULT_MAX_RESPONSE_BYTES, HttpRequest, HttpResponse, HttpTransport, RealSleep,
-    RecordingSleep, ReqwestTransport, ResponseBody, RetryPolicy, SendFuture, Sleep, SleepFuture,
-    Transport, ZeroSleep,
+    RecordingSleep, ReqwestTransport, ResponseBody, RetryPolicy, SendFuture, Sleep, Transport,
+    ZeroSleep,
 };
 
 // The mechanics tests live with the mechanics: this crate's own test target

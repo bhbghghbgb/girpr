@@ -10,7 +10,7 @@ use girpr_retry::{DelaySequence, Schedule};
 // The sleep hook lives in the shared leaf so both tools inject the same three
 // drivers. Re-exported here to keep the `http` module's public surface (and the
 // in-tree imports that reach through it) unchanged.
-pub use girpr_retry::{RealSleep, RecordingSleep, Sleep, SleepFuture, ZeroSleep};
+pub use girpr_retry::{RealSleep, RecordingSleep, Sleep, ZeroSleep};
 
 /// When to retry, and how long to wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

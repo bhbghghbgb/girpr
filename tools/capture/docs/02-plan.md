@@ -90,7 +90,7 @@ tools/capture/
 │   │   └── tests.rs      # mechanics tests over the public seams (stays local)
 │   │
 │   │   The mechanics moved to the logic-free `tools/capture/http/` crate:
-│   │   error.rs (ApiError), transport.rs (RetryPolicy, SleepFuture, Sleep,
+│   │   error.rs (ApiError), transport.rs (RetryPolicy, Sleep,
 │   │   RealSleep, RecordingSleep, DEFAULT_MAX_RESPONSE_BYTES, Transport),
 │   │   record.rs (Kind, RequestRecord, ACCEPT, ACCEPT_ENCODING, header_map),
 │   │   log.rs (RequestLog, now_rfc3339), error_bodies.rs, tasks.rs and

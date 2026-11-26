@@ -13,6 +13,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# `#[async_trait]` keeps `Sleep` dyn-compatible without hand-written
+# `Pin<Box<dyn Future>>` plumbing; the macro still boxes internally.
+async-trait = "0.1.92"
 # Only the stateful delay sequence (`ExponentialBackoffBuilder`/`Zero` and the
 # `Backoff` trait) is used; no async retry driver and no clock feature, so the
 # leaf adds nothing to a program's runtime surface.
