@@ -12,6 +12,8 @@
 //!   ordering is the deadlock-freedom invariant and stays exactly as it was.
 //! - [`filter`] — girsync's include/exclude rules on top of `girpr-filter`'s
 //!   one pinned glob version. The subtree rule is unchanged.
+//! - [`heartbeat`] — the progress clock and reset shared by the walk and the
+//!   two effective phases. Each caller injects its own trigger predicate.
 //! - [`hardlink`] — the copy guard's link count and handle-backed identity,
 //!   read from `girpr-fs-identity`.
 //! - [`link`] — what counts as a link and how to remove one without touching
@@ -24,5 +26,6 @@
 
 pub mod filter;
 pub mod hardlink;
+pub mod heartbeat;
 pub mod link;
 pub mod rw;

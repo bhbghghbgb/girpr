@@ -9,6 +9,7 @@ use std::num::NonZeroUsize;
 
 use girsync_leaves::filter::Filter;
 use girsync_leaves::hardlink;
+use girsync_leaves::heartbeat::Heartbeat;
 use girsync_leaves::link;
 use girsync_leaves::rw::{RwLimiter, RwLimits, RwRuntime, RwSide};
 
@@ -37,6 +38,13 @@ fn the_link_and_hardlink_facts_are_reachable_without_girsync() {
     assert_eq!(link::topmost_link_ancestor(&root, "a.txt").unwrap(), None);
     assert_eq!(hardlink::count(&file).unwrap(), 1);
     assert!(hardlink::info(&file).unwrap().regular_file);
+}
+
+#[test]
+fn the_heartbeat_trigger_is_reachable_without_girsync() {
+    let mut heartbeat = Heartbeat::new(|count, _| count % 2 == 0);
+    assert!(heartbeat.tick(1).is_none());
+    assert!(heartbeat.tick(2).is_some());
 }
 
 #[test]

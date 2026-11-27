@@ -3,7 +3,7 @@ name = "girsync-leaves"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The girsync-owned acyclic leaves: rw limits, filter rules and filesystem link/identity helpers"
+description = "The girsync-owned acyclic leaves: rw limits, filter rules, progress heartbeat and filesystem link/identity helpers"
 
 [lib]
 name = "girsync_leaves"
