@@ -75,7 +75,10 @@ pub mod plan;
 pub mod test_support;
 
 pub use filter::{console_filter, filter};
-pub use install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
+pub use install::{
+    ConsoleSpec, FileFormat, SpanFields, emit_env_warnings, file_sink, open_log_file,
+    subscriber_for, warn_subscriber_install,
+};
 pub use level::Level;
 pub use plan::{
     EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,

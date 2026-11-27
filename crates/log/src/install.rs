@@ -17,7 +17,8 @@ use std::io::Write;
 use std::path::Path;
 
 use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::{EnvFilter, Layer as _, fmt};
 
 use crate::plan::{EnvOptions, LogPlan};
 
@@ -63,6 +64,134 @@ where
     let (writer, guard) = NonBlockingBuilder::default().lossy(false).finish(file);
     let filter = crate::filter(&plan.file_filter(), &plan.file_filter());
     (writer, guard, filter)
+}
+
+/// The file layer's rendering format.
+///
+/// The repair binary writes text so a run can be read with `grep`; the two dev
+/// tools write JSON lines so a run can be parsed. The choice is the caller's —
+/// this crate owns the stack around the layer, not the shape of its records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileFormat {
+    /// Human-readable lines, with a level, target and message.
+    Text,
+    /// One JSON object per event, with the event's fields at the top level.
+    #[cfg(feature = "json")]
+    Json,
+}
+
+/// Which span context a JSON file layer renders alongside each event.
+///
+/// The text formatter's `with_current_span`/`with_span_list` are no-ops, so
+/// only the JSON arm consumes these. Callers pass the values their current
+/// stack uses rather than relying on an upstream default that could move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpanFields {
+    /// Render the event's innermost span.
+    pub current_span: bool,
+    /// Render the event's enclosing span list.
+    pub span_list: bool,
+}
+
+impl SpanFields {
+    /// Neither span field: the text file layer's current output.
+    pub const NONE: Self = Self {
+        current_span: false,
+        span_list: false,
+    };
+    /// Both span fields: what the JSON formatter already defaults to.
+    pub const ALL: Self = Self {
+        current_span: true,
+        span_list: true,
+    };
+}
+
+/// The console sink's three program-specific choices.
+///
+/// `writer` is stderr in a binary and a shared buffer in an in-process test;
+/// `filter` is built by the caller because girsync adds its own fixed
+/// directives; `ansi` follows the program's console policy. None of the three
+/// is a log-file policy, so none of them is decided here.
+pub struct ConsoleSpec<W> {
+    /// Where the human-readable layer writes.
+    pub writer: W,
+    /// What the human-readable layer shows.
+    pub filter: EnvFilter,
+    /// Whether the human-readable layer uses ANSI escapes.
+    pub ansi: bool,
+}
+
+/// Assemble the tracing stack a resolved plan describes, without installing it.
+///
+/// This is the layer *mechanics* the three programs used to repeat: make the
+/// console layer, open the plan's file (when it has one), make the non-blocking
+/// sink and its filter, choose the file layer's format, and join the two layers
+/// into a registry. What stays at each call site is everything that is policy
+/// or ownership: how to open the file and word a failed open, the console's
+/// filter and colouring, the project's target on the announcement, and — most
+/// importantly — how long the returned [`WorkerGuard`] lives. girpr keeps it in
+/// a process-global slot that every exit path drains; the tools keep it in a
+/// guard that drops or is finished at the end of the run.
+///
+/// `open_file` is called at most once, only when the plan has a file. It owns
+/// both the writer type and the degradation wording, because a program's
+/// warning bytes are its own contract. Returning `None` leaves a console-only
+/// stack, so a file that cannot be opened never turns into a failed run.
+pub fn subscriber_for<W, FW, Open>(
+    plan: &LogPlan,
+    console: ConsoleSpec<W>,
+    format: FileFormat,
+    span_fields: SpanFields,
+    mut open_file: Open,
+) -> (
+    impl tracing::Subscriber + Send + Sync + 'static,
+    Option<WorkerGuard>,
+)
+where
+    W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
+    FW: std::io::Write + Send + 'static,
+    Open: FnMut(&Path) -> Option<FW>,
+{
+    let console_layer = fmt::layer()
+        .with_writer(console.writer)
+        .with_ansi(console.ansi)
+        .with_target(true)
+        .with_filter(console.filter);
+
+    let file = plan.file_path().and_then(&mut open_file);
+    let mut worker = None;
+    let file_layer = file.map(|f| {
+        let (nb, guard, filter) = file_sink(f, plan);
+        worker = Some(guard);
+        // The text formatter has no span toggles; only the JSON arm reads
+        // `span_fields`, and it does so explicitly so the bytes are pinned.
+        let _ = span_fields;
+        match format {
+            FileFormat::Text => fmt::layer()
+                .with_writer(nb)
+                .with_ansi(false)
+                .with_target(true)
+                .with_filter(filter)
+                .boxed(),
+            #[cfg(feature = "json")]
+            FileFormat::Json => fmt::layer()
+                .json()
+                .with_writer(nb)
+                .with_ansi(false)
+                .with_target(true)
+                .with_current_span(span_fields.current_span)
+                .with_span_list(span_fields.span_list)
+                .with_filter(filter)
+                .boxed(),
+        }
+    });
+
+    (
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer),
+        worker,
+    )
 }
 
 /// Say where the log file went, or that there is none.
@@ -126,7 +255,14 @@ mod tests {
             .expect("create scratch directory")
     }
 
+    #[derive(Clone, Default)]
     struct SharedVec(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedVec {
+        fn snapshot(&self) -> Vec<u8> {
+            self.0.lock().expect("not poisoned").clone()
+        }
+    }
 
     impl Write for SharedVec {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -137,6 +273,175 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    impl<'a> fmt::MakeWriter<'a> for SharedVec {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The console layer obeys the filter the caller chose, and a plan with no
+    /// file never asks the caller to open one or returns a guard to own.
+    #[test]
+    fn subscriber_for_scopes_the_console_and_skips_a_fileless_plan() {
+        let console = SharedVec::default();
+        let plan = crate::LogPlan::resolve(
+            "girpr",
+            crate::LogOptions {
+                no_log_file: true,
+                ..Default::default()
+            },
+            crate::EnvOptions::default(),
+        );
+        let (subscriber, worker) = subscriber_for(
+            &plan,
+            ConsoleSpec {
+                writer: console.clone(),
+                filter: plan.console_filter(),
+                ansi: false,
+            },
+            FileFormat::Text,
+            SpanFields::NONE,
+            |_| -> Option<std::fs::File> { panic!("a plan with no file opens nothing") },
+        );
+        assert!(worker.is_none(), "no file means no guard");
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "girpr::check", "own line");
+            tracing::info!(target: "reqwest::x", "other line");
+        });
+        let text = String::from_utf8(console.snapshot()).expect("the console writes utf-8");
+        assert!(text.contains("own line"), "{text}");
+        assert!(!text.contains("other line"), "{text}");
+    }
+
+    /// A failed open is the caller's call: it writes its own warning and the
+    /// stack stays a working console-only one, with nothing to flush.
+    #[test]
+    fn subscriber_for_degrades_to_console_only() {
+        let console = SharedVec::default();
+        let named = std::path::PathBuf::from("unopenable.log");
+        let plan = crate::LogPlan::resolve(
+            "girpr",
+            crate::LogOptions {
+                log_file: Some(named.clone()),
+                ..Default::default()
+            },
+            crate::EnvOptions::default(),
+        );
+        let mut warnings = Vec::new();
+        let mut opens = 0;
+        let (subscriber, worker) = subscriber_for(
+            &plan,
+            ConsoleSpec {
+                writer: console.clone(),
+                filter: plan.console_filter(),
+                ansi: false,
+            },
+            FileFormat::Text,
+            SpanFields::NONE,
+            |path| {
+                opens += 1;
+                let _ = writeln!(
+                    warnings,
+                    "WARN disabling file logging ({}): denied",
+                    path.display()
+                );
+                None::<std::fs::File>
+            },
+        );
+        assert_eq!(opens, 1, "the caller opens the file at most once");
+        assert!(worker.is_none(), "a failed open leaves no guard to own");
+        assert_eq!(
+            String::from_utf8(warnings).expect("the warning is utf-8"),
+            format!(
+                "WARN disabling file logging ({}): denied\n",
+                named.display()
+            ),
+            "the degradation wording belongs to the caller"
+        );
+
+        tracing::subscriber::with_default(subscriber, || tracing::info!("still narrated"));
+        assert!(
+            String::from_utf8(console.snapshot())
+                .expect("the console writes utf-8")
+                .contains("still narrated")
+        );
+    }
+
+    /// The text arm keeps the record girpr greps for: level, target, message.
+    #[test]
+    fn subscriber_for_writes_the_text_file_layer() {
+        let dir = scratch_dir("text-stack");
+        let path = dir.path().join("run.log");
+        let plan = crate::LogPlan::resolve(
+            "girpr",
+            crate::LogOptions {
+                log_file: Some(path.clone()),
+                ..Default::default()
+            },
+            crate::EnvOptions::default(),
+        );
+        let (subscriber, worker) = subscriber_for(
+            &plan,
+            ConsoleSpec {
+                writer: SharedVec::default(),
+                filter: plan.console_filter(),
+                ansi: false,
+            },
+            FileFormat::Text,
+            SpanFields::NONE,
+            |p| open_log_file(p).ok(),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "girpr::logging", "log file: {}", path.display());
+        });
+        worker.expect("the opened file owns a guard");
+
+        let body = std::fs::read_to_string(&path).expect("the file was written");
+        assert!(
+            body.contains("INFO girpr::logging: log file:"),
+            "the text layer keeps the target: {body}"
+        );
+    }
+
+    /// The JSON arm keeps one object per event, with a level field. Enabled by
+    /// the tools that supply the formatter, so it is tested where it compiles.
+    #[cfg(feature = "json")]
+    #[test]
+    fn subscriber_for_writes_the_json_file_layer() {
+        let dir = scratch_dir("json-stack");
+        let path = dir.path().join("run.log");
+        let plan = crate::LogPlan::resolve(
+            "girsync",
+            crate::LogOptions {
+                log_file: Some(path.clone()),
+                ..Default::default()
+            },
+            crate::EnvOptions::default(),
+        );
+        let (subscriber, worker) = subscriber_for(
+            &plan,
+            ConsoleSpec {
+                writer: SharedVec::default(),
+                filter: plan.console_filter(),
+                ansi: false,
+            },
+            FileFormat::Json,
+            SpanFields::ALL,
+            |p| open_log_file(p).ok(),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "girsync::logging", "a json line");
+        });
+        worker.expect("the opened file owns a guard");
+
+        let body = std::fs::read_to_string(&path).expect("the file was written");
+        assert!(body.contains("\"level\":\"INFO\""), "{body}");
+        assert!(body.contains("\"message\":\"a json line\""), "{body}");
     }
 
     /// The shared sink is lossless: everything queued before the guard drops

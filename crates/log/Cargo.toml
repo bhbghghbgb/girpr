@@ -23,7 +23,11 @@ workspace = true
 # `json` formatter are pulled in. Both stay out of shipped builds: they are
 # activated by this feature alone, which every consumer enables only as a
 # dev-dependency.
-test-support = ["dep:serde_json", "tracing-subscriber/json"]
+# The JSON file layer in `install::subscriber_for` needs `Format<Json>`; the
+# two dev tools enable this on their normal dependency. The repair binary keeps
+# its text file layer and does not pull the formatter into shipped builds.
+json = ["tracing-subscriber/json"]
+test-support = ["dep:serde_json", "json"]
 # `logs_of_async` / `logs_of_async_json` and their always-on current-thread
 # runtime assertion are optional on top of the sync surface. Consumers that
 # only capture synchronous logs enable `test-support` alone and never compile
