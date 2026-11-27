@@ -10,14 +10,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::{Args as ClapArgs, Parser};
 use girpr_audio_language::{CaseFold, normalize_audio_token};
-use girpr_log::Level;
 
 use crate::Biz;
 use crate::config::RunCtx;
 use crate::repair::scope::Limits;
-use crate::report::OutputFormat;
 use crate::retry::BackoffPolicy;
 use girpr_repair_plan::PathScope;
 use girpr_repair_policy::RepairMode;
@@ -54,6 +52,30 @@ fn jobs_help() -> String {
 /// is absent so the run does not mistake the default for a deliberate value.
 fn jobs_long_help() -> String {
     format!("{}\n\n[default: {DEFAULT_JOBS}]", jobs_help())
+}
+
+// The five global flags are declared once in `girpr-cli`. They are flattened
+// into `Args` at their original position, so the published help order and the
+// other flags are unchanged. This binary's flags are not clap-global and its
+// possible-value descriptions are its own.
+girpr_cli::global_args! {
+    #[derive(ClapArgs, Debug)]
+    pub struct GlobalArgs {
+        order = output_first;
+        global = false;
+        output_value_name = "OUTPUT";
+        docs = {
+            log_level = "Console verbosity: `error`/`warn`/`info`/`debug`/`trace`.\n\nThe console is for the person watching the run, so it is `info` by\ndefault. `RUST_LOG` *adds* to it: it can turn up other crates\n(`RUST_LOG=reqwest=debug`), but it cannot change this program's own\nlevel, because a flag is what the person running the tool typed.",
+            log_file_level = "Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.\n\nThe file is for the person reading it afterwards, so it is one step\nlouder than the console: `debug` by default. `GIRPR_LOG_FILE_LEVEL`\nsays otherwise when this flag is absent. The two levels are separate\nbecause they answer separate questions, and a run that wants a quiet\nconsole and a detailed file should not have to choose.",
+            log_file = "Where the log file goes.\n\nIn a **release** build the default is `logs/girpr_<timestamp>.log` in a\n`logs/` directory beside the executable; in a **debug** build there is\nno default and the file is written only because this flag named it.\n`GIRPR_LOG_FILE` names one when this flag does not. Missing parent\ndirectories are created. A file that cannot be opened is a stderr\nwarning, never a failure.",
+            no_log_file = "Write no log file at all.\n\nThe console is unaffected: this turns off the *file*, which is where a\nrun is read afterwards, and not the console, which is where a run is\nwatched while it happens.\n\nA release build writes a log file by default and this turns that off;\na debug build writes none by default and this says so explicitly.\nIt cannot be combined with `--log-file`: the two say opposite things\nabout the same file, and a usage error says so rather than one of them\nsilently winning.",
+            output = "How stdout is written: one human `key=value` line per record, or one JSON\nobject per line (NDJSON) carrying the same records in the same order. Only\nstdout is affected — diagnostics stay on stderr as `tracing` events either\nway — and `--log-file`, if given, carries the same rendered lines.",
+        };
+        possible_values = {
+            text = "One human-readable `key=value` line per record: `SUMMARY total=0 …`. The default, and the format every doc example and golden line is written against",
+            json = "One JSON object per line (NDJSON), same records, same order: `{\"event\":\"summary\",\"total\":0,…}`. No enclosing array, so a caller can stream it and recover the exact ordering",
+        };
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -230,56 +252,8 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub plan_out: Option<PathBuf>,
 
-    /// How stdout is written: one human `key=value` line per record, or one JSON
-    /// object per line (NDJSON) carrying the same records in the same order. Only
-    /// stdout is affected — diagnostics stay on stderr as `tracing` events either
-    /// way — and `--log-file`, if given, carries the same rendered lines.
-    #[arg(long, value_enum, default_value_t, global = true)]
-    pub output: OutputFormat,
-
-    /// Console verbosity: `error`/`warn`/`info`/`debug`/`trace`.
-    ///
-    /// The console is for the person watching the run, so it is `info` by
-    /// default. `RUST_LOG` *adds* to it: it can turn up other crates
-    /// (`RUST_LOG=reqwest=debug`), but it cannot change this program's own
-    /// level, because a flag is what the person running the tool typed.
-    #[arg(long, value_name = "LV", default_value = "info", value_parser = girpr_log::parse_level)]
-    pub log_level: Level,
-
-    /// Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.
-    ///
-    /// The file is for the person reading it afterwards, so it is one step
-    /// louder than the console: `debug` by default. `GIRPR_LOG_FILE_LEVEL`
-    /// says otherwise when this flag is absent. The two levels are separate
-    /// because they answer separate questions, and a run that wants a quiet
-    /// console and a detailed file should not have to choose.
-    #[arg(long, value_name = "LV", value_parser = girpr_log::parse_level)]
-    pub log_file_level: Option<Level>,
-
-    /// Where the log file goes.
-    ///
-    /// In a **release** build the default is `logs/girpr_<timestamp>.log` in a
-    /// `logs/` directory beside the executable; in a **debug** build there is
-    /// no default and the file is written only because this flag named it.
-    /// `GIRPR_LOG_FILE` names one when this flag does not. Missing parent
-    /// directories are created. A file that cannot be opened is a stderr
-    /// warning, never a failure.
-    #[arg(long, value_name = "FILE")]
-    pub log_file: Option<PathBuf>,
-
-    /// Write no log file at all.
-    ///
-    /// The console is unaffected: this turns off the *file*, which is where a
-    /// run is read afterwards, and not the console, which is where a run is
-    /// watched while it happens.
-    ///
-    /// A release build writes a log file by default and this turns that off;
-    /// a debug build writes none by default and this says so explicitly.
-    /// It cannot be combined with `--log-file`: the two say opposite things
-    /// about the same file, and a usage error says so rather than one of them
-    /// silently winning.
-    #[arg(long, conflicts_with = "log_file")]
-    pub no_log_file: bool,
+    #[command(flatten)]
+    pub globals: GlobalArgs,
 
     /// Point the HYP API at this base URL instead of the production CDN.
     /// Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects
@@ -359,7 +333,7 @@ impl Args {
             plan_out: self.plan_out,
             purge_after: self.purge_after,
             purge_before: self.purge_before,
-            output: self.output,
+            output: self.globals.output,
             // Endpoint overrides: explicit flag > GIRPR_*_BASE env > production, resolved
             // by `RunCtx::api_bases`. Omitted flags stay `None`, so the env seam
             // every offline test already uses is untouched.

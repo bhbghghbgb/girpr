@@ -5,16 +5,27 @@
 //! is installed before any work so a failure is diagnosable afterwards, and the
 //! process ends with the one code the run earned.
 
-use gircap::cli::{Cmd, exit_on_clap_error, parse_from, resolve_common};
+use gircap::cli::{Cmd, parse_from, resolve_common};
 use gircap::config::{capture_plan, materialize_plan, verify_plan};
+use gircap::exit::ExitCode;
 use gircap::{exit, logging, run};
 
 #[tokio::main]
 async fn main() {
-    let cli = match parse_from(std::env::args_os()) {
-        Ok(c) => c,
-        Err(e) => exit_on_clap_error(e),
-    };
+    // The shared shim prints clap's message and maps the failure with gircap's
+    // own usage code. `exit_with` stays here: it is the process boundary that
+    // flushes stdout, and only this program owns it.
+    let cli = girpr_cli::parse_or_report_error(
+        parse_from(std::env::args_os()),
+        ExitCode::Usage.code() as u8,
+        |code| {
+            exit::exit_with(if code == 0 {
+                ExitCode::Ok
+            } else {
+                ExitCode::Usage
+            })
+        },
+    );
 
     // Logging first: everything after this point is diagnosable from the file.
     let (event, common) = match &cli.cmd {
@@ -33,8 +44,8 @@ async fn main() {
     // The path is echoed on stderr when the caller named it — by flag or by
     // `GIRCAP_LOG_FILE` — so a wrapper that captured only stdout can still
     // find the log. The default path is announced inside the file instead.
-    if let Some(path) = log_guard.plan().named_file() {
-        eprintln!("log file: {}", path.display());
+    if let Some(line) = girpr_cli::log_file_announcement(log_guard.plan()) {
+        eprintln!("{line}");
     }
 
     // Resolving the plan is where flag validation happens, so a rejected request

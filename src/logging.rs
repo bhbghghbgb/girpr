@@ -59,20 +59,12 @@ pub const PROJECT: &str = "girpr";
 
 /// The raw-stderr line that acknowledges a caller-named log file.
 ///
-/// [`init_tracing`] already announces the path into the file through
-/// [`girpr_log::announce_log_file!`]. A caller who *named* the file, however,
-/// never saw a timestamped default and may have silenced the console, so the
-/// binary repeats the path on stderr without going through a filter. This is
-/// that whole line as a value: the binary prints it and the tests assert it,
-/// so the bytes have exactly one definition.
-///
-/// `None` when the file was not named (the default, or no file at all): nobody
-/// asked for it, so there is nothing to acknowledge. Pure — the plan is already
-/// resolved, and nothing here touches a process, a sink or the environment.
-pub fn log_file_announcement(plan: &LogPlan) -> Option<String> {
-    plan.named_file()
-        .map(|path| format!("log file: {}", path.display()))
-}
+/// The definition lives in `girpr-cli` alongside the parse/error shim, shared
+/// with the two tools; this re-export keeps `girpr::log_file_announcement` as
+/// the path the binary and its tests use. [`init_tracing`] announces the path
+/// into the file, while this line is emitted unfiltered on stderr for a caller
+/// who named the path and may have silenced the console.
+pub use girpr_cli::log_file_announcement;
 
 /// The guard that keeps the non-blocking file writer alive for the run.
 ///

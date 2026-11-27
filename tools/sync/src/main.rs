@@ -11,7 +11,12 @@ use tracing::error;
 /// event written a statement earlier, which is the one line the file exists to
 /// keep.
 fn main() -> std::process::ExitCode {
-    let cli = Cli::parse();
+    // girsync keeps clap's own usage status (`2`): the CLI contract pins it,
+    // so the shared shim is parameterised with that number rather than with a
+    // product-specific one. Printing and the process boundary stay here.
+    let cli = girpr_cli::parse_or_report_error(Cli::try_parse(), 2, |code| {
+        std::process::exit(i32::from(code))
+    });
     // The log file is written when it is asked for, and a file that cannot be
     // opened is a warning on stderr rather than a failure: a run must not end
     // differently because of where it was asked to log. Once the subscriber is
@@ -28,8 +33,8 @@ fn main() -> std::process::ExitCode {
     // The path is echoed on stderr when the caller named it — by flag or by
     // `GIRSYNC_LOG_FILE` — so a wrapper that captured only stdout can still
     // find the log. The default path is announced inside the file instead.
-    if let Some(path) = log_guard.plan().named_file() {
-        eprintln!("log file: {}", path.display());
+    if let Some(line) = girpr_cli::log_file_announcement(log_guard.plan()) {
+        eprintln!("{line}");
     }
     let code = match run(cli, log_guard.plan()) {
         Ok(code) => code,

@@ -8,65 +8,35 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use girpr_log::Level;
-
-use crate::report::OutputFormat;
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "girsync",
-    about = "Dev-only one-way folder mirror with hash cache"
-)]
-pub struct Cli {
-    /// Console log level: trace|debug|info|warn|error.
-    ///
-    /// `RUST_LOG` *adds* to it: it can turn up other crates
-    /// (`RUST_LOG=redb=debug`), but it cannot change this program's own
-    /// level, because a flag is what the person running the tool typed.
-    #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
-    pub log_level: Level,
-    /// Log file level: trace|debug|info|warn|error.
-    ///
-    /// Defaults to `debug`; `GIRSYNC_LOG_FILE_LEVEL` says otherwise when this
-    /// flag is absent. The file is one step louder than the console by
-    /// default, because the file is read afterwards and the console is read
-    /// while it happens.
-    #[arg(long, value_name = "LV", global = true, value_parser = girpr_log::parse_level)]
-    pub log_file_level: Option<Level>,
-    /// Where the log file goes.
-    ///
-    /// In a **release** build the default is `logs/girsync_<timestamp>.log` in
-    /// a `logs/` directory beside the executable; in a **debug** build there is
-    /// no default and the file is written only because this flag named it.
-    /// `GIRSYNC_LOG_FILE` names one when this flag does not. The file is
-    /// appended to, as JSON lines.
-    #[arg(long, value_name = "FILE", global = true)]
-    pub log_file: Option<PathBuf>,
-    /// Write no log file at all.
-    ///
-    /// The console is unaffected: this turns off the *file*, which is where a
-    /// run is read afterwards, and not the console, which is where it is
-    /// watched while it happens.
-    ///
-    /// A release build writes a log file by default and this turns that off;
-    /// a debug build writes none by default and this says so explicitly. It
-    /// cannot be combined with `--log-file`: the two say opposite things about
-    /// the same file, and a usage error says so rather than one of them
-    /// silently winning.
-    #[arg(long, global = true, conflicts_with = "log_file")]
-    pub no_log_file: bool,
-    /// How stdout reports are written: text (one human line per record) or json
-    /// (one JSON object per line, same records and same order).
-    ///
-    /// Only stdout is affected. Diagnostics go to stderr as `tracing` events
-    /// either way, so `--output json` yields a stream of JSON records on stdout
-    /// with no human chatter mixed in. The log file is a third, separate
-    /// stream: it is JSON too, but it is written beside the run rather than
-    /// into it.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
-    pub output: OutputFormat,
-    #[command(subcommand)]
-    pub cmd: Cmd,
+// The five global flags are declared once in `girpr-cli`. Only this program's
+// published descriptions and its `global` spelling are inputs; the field order
+// and layout are unchanged.
+girpr_cli::global_args! {
+    #[derive(Parser, Debug)]
+    #[command(
+        name = "girsync",
+        about = "Dev-only one-way folder mirror with hash cache"
+    )]
+    pub struct Cli {
+        order = log_first;
+        global = true;
+        output_value_name = "OUTPUT";
+        docs = {
+            log_level = "Console log level: trace|debug|info|warn|error.\n\n`RUST_LOG` *adds* to it: it can turn up other crates\n(`RUST_LOG=redb=debug`), but it cannot change this program's own\nlevel, because a flag is what the person running the tool typed.",
+            log_file_level = "Log file level: trace|debug|info|warn|error.\n\nDefaults to `debug`; `GIRSYNC_LOG_FILE_LEVEL` says otherwise when this\nflag is absent. The file is one step louder than the console by\ndefault, because the file is read afterwards and the console is read\nwhile it happens.",
+            log_file = "Where the log file goes.\n\nIn a **release** build the default is `logs/girsync_<timestamp>.log` in\na `logs/` directory beside the executable; in a **debug** build there is\nno default and the file is written only because this flag named it.\n`GIRSYNC_LOG_FILE` names one when this flag does not. The file is\nappended to, as JSON lines.",
+            no_log_file = "Write no log file at all.\n\nThe console is unaffected: this turns off the *file*, which is where a\nrun is read afterwards, and not the console, which is where it is\nwatched while it happens.\n\nA release build writes a log file by default and this turns that off;\na debug build writes none by default and this says so explicitly. It\ncannot be combined with `--log-file`: the two say opposite things about\nthe same file, and a usage error says so rather than one of them\nsilently winning.",
+            output = "How stdout reports are written: text (one human line per record) or json\n(one JSON object per line, same records and same order).\n\nOnly stdout is affected. Diagnostics go to stderr as `tracing` events\neither way, so `--output json` yields a stream of JSON records on stdout\nwith no human chatter mixed in. The log file is a third, separate\nstream: it is JSON too, but it is written beside the run rather than\ninto it.",
+        };
+        possible_values = {
+            text = "One human-readable line per record: `MISSING a.txt`, `COPY a.txt`, `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the README's examples are written in",
+            json = "One JSON object per line (NDJSON), same records, same order: `{\"event\":\"missing\",\"path\":\"a.txt\"}`",
+        };
+        rest = {
+            #[command(subcommand)]
+            pub cmd: Cmd,
+        }
+    }
 }
 
 /// Flags shared by every subcommand: hashing, glob filters, case mode, walk

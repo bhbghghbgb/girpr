@@ -61,62 +61,32 @@ pub enum Cmd {
     List(ListArgs),
 }
 
-/// Flags every command takes.
-///
-/// Flattened into all four rather than declared once per command, so a script
-/// can pass `--log-level debug --output json` to anything and be right.
-#[derive(Debug, Clone, ClapArgs)]
-pub struct CommonArgs {
-    /// stderr verbosity: `error`/`warn`/`info`/`debug`/`trace`.
-    ///
-    /// `RUST_LOG` *adds* to it: it can turn up other crates
-    /// (`RUST_LOG=reqwest=debug`), but it cannot change this program's own
-    /// level, because a flag is what the person running the tool typed.
-    #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
-    pub log_level: Level,
-
-    /// Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.
-    ///
-    /// Defaults to `debug`; `GIRCAP_LOG_FILE_LEVEL` says otherwise when this
-    /// flag is absent. The file is one step louder than the console by
-    /// default, because the file is read afterwards and the console is read
-    /// while it happens.
-    #[arg(long, value_name = "LV", global = true, value_parser = girpr_log::parse_level)]
-    pub log_file_level: Option<Level>,
-
-    /// Where the log file goes.
-    ///
-    /// In a **release** build the default is `logs/gircap_<timestamp>.log` in a
-    /// `logs/` directory beside the executable; in a **debug** build there is
-    /// no default and the file is written only because this flag named it.
-    /// `GIRCAP_LOG_FILE` names one when this flag does not. The file is
-    /// appended to, as JSON lines.
-    #[arg(long, value_name = "FILE", global = true)]
-    pub log_file: Option<PathBuf>,
-
-    /// Write no log file at all.
-    ///
-    /// The console is unaffected: this turns off the *file*, which is where a
-    /// capture is read afterwards, and not the console, which is where it is
-    /// watched while it happens.
-    ///
-    /// A release build writes a log file by default and this turns that off;
-    /// a debug build writes none by default and this says so explicitly. It
-    /// cannot be combined with `--log-file`: the two say opposite things about
-    /// the same file, and a usage error says so rather than one of them
-    /// silently winning.
-    #[arg(long, global = true, conflicts_with = "log_file")]
-    pub no_log_file: bool,
-
-    /// How the single stdout summary is rendered.
-    #[arg(
-        long,
-        value_enum,
-        value_name = "FORMAT",
-        default_value_t = OutputFormat::Text,
-        global = true
-    )]
-    pub output: OutputFormat,
+// Flags every command takes, declared once in `girpr-cli`. Flattened into all
+// four commands by the derive below, so a script can pass `--log-level debug
+// --output json` to anything and be right. Only this program's published
+// descriptions and its `global` spelling are inputs here.
+girpr_cli::global_args! {
+    #[doc = " Flags every command takes."]
+    #[doc = ""]
+    #[doc = " Flattened into all four rather than declared once per command, so a script"]
+    #[doc = " can pass `--log-level debug --output json` to anything and be right."]
+    #[derive(Debug, Clone, ClapArgs)]
+    pub struct CommonArgs {
+        order = log_first;
+        global = true;
+        output_value_name = "FORMAT";
+        docs = {
+            log_level = "stderr verbosity: `error`/`warn`/`info`/`debug`/`trace`.\n\n`RUST_LOG` *adds* to it: it can turn up other crates\n(`RUST_LOG=reqwest=debug`), but it cannot change this program's own\nlevel, because a flag is what the person running the tool typed.",
+            log_file_level = "Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.\n\nDefaults to `debug`; `GIRCAP_LOG_FILE_LEVEL` says otherwise when this\nflag is absent. The file is one step louder than the console by\ndefault, because the file is read afterwards and the console is read\nwhile it happens.",
+            log_file = "Where the log file goes.\n\nIn a **release** build the default is `logs/gircap_<timestamp>.log` in a\n`logs/` directory beside the executable; in a **debug** build there is\nno default and the file is written only because this flag named it.\n`GIRCAP_LOG_FILE` names one when this flag does not. The file is\nappended to, as JSON lines.",
+            no_log_file = "Write no log file at all.\n\nThe console is unaffected: this turns off the *file*, which is where a\ncapture is read afterwards, and not the console, which is where it is\nwatched while it happens.\n\nA release build writes a log file by default and this turns that off;\na debug build writes none by default and this says so explicitly. It\ncannot be combined with `--log-file`: the two say opposite things about\nthe same file, and a usage error says so rather than one of them\nsilently winning.",
+            output = "How the single stdout summary is rendered.",
+        };
+        possible_values = {
+            text = "`SUMMARY k=v k=v`, human-readable",
+            json = "`{\"event\":\"summary\", …}`, one object per line, machine-readable",
+        };
+    }
 }
 
 /// `--gzip-threshold`'s default, in bytes.
@@ -474,26 +444,19 @@ where
     RecordedArgv { lossy, raw }
 }
 
-/// Exit with `code` on a clap error, having printed clap's own message.
+/// The exit code a clap error maps to, without exiting.
 ///
 /// Only `--help` and `--version` are `0`. Everything else — including a
 /// *missing* subcommand, which clap renders as a help screen — is a usage error
 /// and exits `1`, because a harness that treats "printed help" as "ran
 /// successfully" cannot tell a help request from a command line with a typo
 /// dropped off the end of it.
-pub fn exit_on_clap_error(e: clap::Error) -> ! {
-    let code = clap_error_code(e.kind());
-    let _ = e.print();
-    crate::exit::exit_with(code)
-}
-
-/// The exit code a clap error maps to, without exiting.
 ///
 /// The decision comes from `girpr_cli::clap_error_code`, parameterised by
 /// gircap's own usage code; no exit table crosses from the repair binary.
 /// Exposed so the process-level contract can be asserted against one function
 /// rather than against a spawned binary in every case; `tests/cli_contract.rs`
-/// spawns the binary anyway, to prove the shim actually calls this.
+/// spawns the binary too, to prove the process follows the same rule.
 pub fn clap_error_code(kind: clap::error::ErrorKind) -> ExitCode {
     match girpr_cli::clap_error_code(kind, ExitCode::Usage.code() as u8) {
         0 => ExitCode::Ok,

@@ -3,7 +3,7 @@ name = "girpr-cli"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared clap-error to usage-code mapping mechanics, parameterised by each caller's own usage code"
+description = "The shared clap-error/exit, global-flag and log-announcement mechanics, parameterised by each caller's own policy"
 
 [lib]
 name = "girpr_cli"
@@ -13,8 +13,16 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-# Only `ErrorKind` is used, to tell an answer (`--help` / `--version`) from a
-# usage error. No exit table, no exit code of any program and no process
-# boundary live here: the caller passes in its own usage code and keeps its own
-# way of turning the result into a process status.
+# `ErrorKind` separates an answer (`--help` / `--version`) from a usage error;
+# the possible-value parser carries the caller's `--output` descriptions. No
+# exit table, no exit code of any program and no process boundary live here.
 clap = "4.6.10"
+# `Level`, `parse_level` and `LogPlan::named_file` are the shared policy and
+# plan the five global flags and the announcement are expressed in. The leaf
+# owns the verbosity names, environment variables and default levels; no
+# program's logging setup or process exit crosses this crate.
+girpr-log = { path = "../log" }
+# The one `OutputFormat` value set, shared by all three `--output` flags and
+# all three report planes. No possible-value text or flag policy lives here:
+# each caller supplies its own published descriptions.
+girpr-report-core = { path = "../report-core" }

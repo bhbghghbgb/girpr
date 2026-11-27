@@ -41,6 +41,10 @@ clap = { version = "4.6.10", features = ["derive"] }
 # `gircap`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters.
 girpr-log = { path = "../../crates/log" }
+# The global-flag declarations and the parse-error / log-announcement shims,
+# shared with the repair binary and `gircap`. Only policy — help text and
+# whether the flags are clap-global — is supplied at this call site.
+girpr-cli = { path = "../../crates/cli" }
 # Shared Windows path-name mechanics (device names, trailing dot/space, ASCII
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
