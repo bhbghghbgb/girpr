@@ -19,9 +19,10 @@
 //!   is public too: [`crate::effective::Repopulate`].
 //!
 //! The comparisons those rules are written in stay inside the crate: the
-//! component equality, the Unicode lowercase mapping, the ASCII-case
-//! comparison and the cache prefix. They are how a rule is written, not rules
-//! of their own.
+//! component equality, the Unicode lowercase mapping and the ASCII-case
+//! comparison. The cache prefix is the exception — it and the two name
+//! predicates live in `girpr-cache-names`, shared with the fixtures that
+//! filter the same names.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(windows)]
 use std::ffi::OsStr;
 
-use crate::cache::CACHE_PREFIX;
+use girpr_cache_names::has_cache_prefix;
 
 /// Seconds since `t0`, for `elapsed_s` span fields.
 pub fn elapsed_s(t0: std::time::Instant) -> f64 {
@@ -84,14 +85,11 @@ fn slash_rel_for(rel: &str, windows: bool) -> String {
 /// so the ASCII-only rule says it without borrowing a rule that answers
 /// something else.
 ///
-/// **Its users.** The cache reservation's two rules — the prefix helper
-/// [`has_cache_prefix`] and its exact-name counterpart [`is_cache_name`] — ask
-/// it on Windows only, where the filesystem folds case; on POSIX the two
-/// spellings are distinct entries, so the reservation matches exactly there.
-/// The borrowed key's equality ([`FoldedKey`]) asks it on every platform,
-/// because a key is a key everywhere. And the hash module's fold is checked
-/// against it, so the crate's answer to "do these two spellings fold alike" is
-/// written once and two sites cannot drift apart over it.
+/// **Its users.** The borrowed key's equality ([`FoldedKey`]) asks it on every
+/// platform, because a key is a key everywhere. The hash module's fold is
+/// checked against it, so the crate's answer to "do these two spellings fold
+/// alike" is written once and two sites cannot drift apart over it. The cache
+/// reservation's Windows-only fold lives in `girpr-cache-names`.
 pub(crate) const fn ascii_case_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -123,45 +121,6 @@ const fn ascii_lower(b: u8) -> u8 {
     if b >= b'A' && b <= b'Z' { b + 32 } else { b }
 }
 
-/// True when one path component names cache state: it starts with `girpr-cache`,
-/// covering the live DB, its backups and its `old-*` snapshots.
-///
-/// The comparison folds case on Windows only. There the filesystem cannot tell
-/// `GIRPR-CACHE` from `girpr-cache`, so a case-only rename of the tool's own
-/// cache is the same file and must be reserved the same way. On POSIX the two
-/// spellings are distinct entries, and an upper-case one is ordinary content
-/// that must not be swept up by the reservation.
-///
-/// **The fold is the path key's, not the identity rule's.** On Windows the
-/// comparison is `ascii_case_eq` — the crate's one ASCII-case comparison, asked
-/// here because on POSIX the reservation is an exact prefix match — and it
-/// folds ASCII case and compares every other byte exactly: the rule
-/// [`path_key`] states. The identity rule ([`component_eq`]) keeps a Unicode
-/// fallback, because it answers a different question: do two spellings open
-/// the same place on disk. The reservation asks about the tool's own names,
-/// and the prefix it matches is ASCII, so the ASCII-only rule is the one that
-/// states it. The identity rule's fold would answer a question nobody is
-/// asking here.
-///
-/// **Stated with its exact-name counterpart** [`is_cache_name`]. The two
-/// reserve one vocabulary under one spelling rule: this one reserves the whole
-/// `girpr-cache*` prefix, and that one asks whether the component is the
-/// cache's own name, `girpr-cache`, rather than one of its copies. Both state
-/// the ASCII-only comparison, on Windows only, so a reader who follows one
-/// finds the other.
-fn has_cache_prefix(component: &str) -> bool {
-    #[cfg(windows)]
-    {
-        component
-            .get(..CACHE_PREFIX.len())
-            .is_some_and(|head| ascii_case_eq(head, CACHE_PREFIX))
-    }
-    #[cfg(not(windows))]
-    {
-        component.starts_with(CACHE_PREFIX)
-    }
-}
-
 /// True when the final path component starts with `girpr-cache`, i.e. the path is
 /// a record (a DB directory) rather than a folder root.
 ///
@@ -185,7 +144,8 @@ pub fn is_record_path(p: &Path) -> bool {
 /// The same spelling rule as that one: case is folded on Windows only, where
 /// the filesystem cannot tell `GIRPR-CACHE` from `girpr-cache`, and the two are
 /// different names elsewhere. The prefix helper `has_cache_prefix` states the
-/// same comparison, so the two halves of the vocabulary cannot drift apart.
+/// same comparison, so the two halves of the vocabulary cannot drift apart;
+/// both name rules are shared with `girpr-cache-names`.
 ///
 /// **Public, and published with its counterpart.** The two rules are one
 /// vocabulary, and the crate publishes both halves of it: the answer this rule
@@ -199,16 +159,9 @@ pub fn is_record_path(p: &Path) -> bool {
 /// The rule has one caller today, [`crate::effective::side_folder`], which
 /// decides from it whether a side has a folder to repopulate at all.
 pub fn is_cache_name(p: &Path) -> bool {
-    p.file_name().and_then(|s| s.to_str()).is_some_and(|name| {
-        #[cfg(windows)]
-        {
-            ascii_case_eq(name, CACHE_PREFIX)
-        }
-        #[cfg(not(windows))]
-        {
-            name == CACHE_PREFIX
-        }
-    })
+    p.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(girpr_cache_names::is_cache_name)
 }
 
 /// True for any relative path with a `girpr-cache*` component: the live DB,

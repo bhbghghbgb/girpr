@@ -51,6 +51,9 @@ girpr-cli = { path = "../../crates/cli" }
 # fold, forward slash). Each call site passes its own policy; no program rule is
 # borrowed, so this couples no program to another.
 girpr-fs-names = { path = "../../crates/fs-names" }
+# The one `girpr-cache*` reservation: its prefix and its two name predicates
+# are shared with the cache crate and the test fixtures.
+girpr-cache-names = { path = "../../crates/cache-names" }
 # Pure inclusive-range facts for the numeric flags checked here and by the two
 # other programs. The leaf answers below-min/above-max/in-range and carries the
 # offending value; girsync keeps its own `{flag}` wording and deliberately keeps

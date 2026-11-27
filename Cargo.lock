@@ -1627,6 +1627,7 @@ dependencies = [
  "criterion",
  "dunce",
  "filetime",
+ "girpr-cache-names",
  "girpr-cli",
  "girpr-filter",
  "girpr-fs-names",
@@ -1656,6 +1657,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitflags",
+ "girpr-cache-names",
  "girpr-digest",
  "girpr-fs-identity",
  "girpr-tempdir",

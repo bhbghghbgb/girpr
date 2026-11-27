@@ -146,19 +146,20 @@ stays a rule of its own.
 **The cache reservation is another site, and it folds the path key's way.**
 `util::has_cache_prefix` asks a narrower question than any of the others above:
 is this path component one of the tool's own names (`girpr-cache` and its
-copies)? The prefix it matches is ASCII, so the ASCII-only comparison
-(`util::ascii_case_eq`) states it without borrowing the identity rule's Unicode
-fallback — that rule answers whether two spellings open the same place on disk,
-which is not the question here. On POSIX neither fold applies at all: the two
-spellings are distinct entries, so the reservation is an exact prefix match
-and `GIRPR-CACHE` is ordinary content.
+copies)? The prefix it matches is ASCII, so an ASCII-only comparison states it
+without borrowing the identity rule's Unicode fallback — that rule answers
+whether two spellings open the same place on disk, which is not the question
+here. On POSIX neither fold applies at all: the two spellings are distinct
+entries, so the reservation is an exact prefix match and `GIRPR-CACHE` is
+ordinary content.
 
-**The reservation's rules each state that comparison.** The prefix
+**The reservation's rules each state that comparison, once.** The prefix
 helper `util::has_cache_prefix` reserves the whole `girpr-cache*` prefix, and
 its exact-name counterpart `util::is_cache_name` asks whether the component is
-the cache's own name, `girpr-cache`, rather than one of its copies. Both ask
-it with `util::ascii_case_eq` on Windows and with an exact match elsewhere, so
-a reader who follows one finds the other.
+the cache's own name, `girpr-cache`, rather than one of its copies. The prefix
+and both name rules live in `girpr-cache-names`, which spells the fold on
+Windows and the exact match elsewhere; `util` keeps the two call sites, so a
+reader who follows one finds the other.
 
 **Enforced by:** the enforcement tests cover the key's ASCII-only fold and its
 borrowed form, identity's wider fold and its deliberate disagreement with the

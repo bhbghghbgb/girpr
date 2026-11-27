@@ -2,14 +2,12 @@
 //!
 //! `girsync` reserves the whole `girpr-cache*` prefix for its own state — the
 //! live database, its backups and its `old-*` snapshots — and never mirrors it
-//! as ordinary content. Its production predicates live in `girsync` because
-//! that is where the rest of the path policy lives; `girpr-tempdir` cannot
-//! depend on `girsync-cache`, yet its `entry_names` fixture has to filter the
-//! same names out of a scratch tree. This crate is the tiny home for the prefix
-//! and the two predicates, so the fixture and the product state the reservation
-//! in one place and cannot drift.
+//! as ordinary content. Its path predicates and the fixtures' name filter ask
+//! the same question; `girpr-tempdir` cannot depend on `girsync-cache`, so this
+//! crate is the tiny home for the prefix and the two predicates shared by both,
+//! and the reservation is stated in one place.
 //!
-//! The spelling rule is deliberate and matches production: the comparison
+//! The spelling rule is deliberate and is the one production uses: the comparison
 //! folds ASCII case **on Windows only**, where the filesystem cannot tell
 //! `GIRPR-CACHE` from `girpr-cache`, and is an exact match elsewhere, where the
 //! upper-case spelling is ordinary content. The old fixture used an

@@ -9,7 +9,10 @@ use crate::hash::DigestSet;
 
 /// Cache file name. Also the prefix that marks a path as a *record*
 /// (backups and `old-*` snapshots share it).
-pub const CACHE_PREFIX: &str = "girpr-cache";
+///
+/// Re-exported from `girpr-cache-names` so the prefix has one home, shared
+/// with the name predicates and the test fixtures that filter the same names.
+pub use girpr_cache_names::CACHE_PREFIX;
 
 /// Cache schema version. An unknown version is rejected; rebuild with
 /// `--ignore-cache`.

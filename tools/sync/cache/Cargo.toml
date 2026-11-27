@@ -52,6 +52,9 @@ girpr-fs-identity = { path = "../../../crates/fs-identity" }
 girpr-digest = { path = "../../../crates/digest" }
 # Structured narration from open/publish/write.
 tracing = { workspace = true }
+# The one `girpr-cache*` reservation: this crate re-exports its prefix and the
+# product's predicates use its name rules, so fixtures and product cannot drift.
+girpr-cache-names = { path = "../../../crates/cache-names" }
 
 [dev-dependencies]
 # The cache's unit tests build fixture trees with the workspace's one scratch
