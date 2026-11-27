@@ -1,11 +1,11 @@
-//! One retry driver, backed by the shared schedule and sleep mechanics.
+//! This program's retry driver, backed by the shared loop mechanics.
 //!
 //! The caller owns the classifier — a retcode table, an HTTP status rule, a
 //! file-level failure — and answers [`Retry`] (or [`RetryState`], when work must
-//! be carried across attempts) per attempt. This module maps a transient answer
-//! onto a wait from the [`Schedule`] and a fatal answer
-//! onto an immediate return, then drives the attempts itself so the wait goes
-//! through the injected [`Sleep`] hook.
+//! be carried across attempts) per attempt. This module maps those answers onto
+//! the shared driver's steps, chooses this program's jitter and zero-wait mode,
+//! and words the retained error in `anyhow` terms. The attempt loop, the wait
+//! rule and the sleep hook itself come from the shared leaf.
 //!
 //! A retry may need to keep work across attempts (a scratch buffer, a byte
 //! counter, a partially written file). [`RetryState`] and [`retry_state`] hand
@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use girpr_retry::{DelaySequence, RealSleep, Schedule, Sleep, ZeroSleep};
+use girpr_retry_driver::{Driver, Failure, Step};
 
 /// What waits between attempts.
 ///
@@ -102,7 +103,7 @@ pub enum RetryState<T, S> {
 ///
 /// The wait is taken between attempts only: exhausting the attempts does not
 /// pay for a wait before returning. The transient/permanent decision stays
-/// here, at the caller's seam; the leaf only supplies delays and sleeps.
+/// here, at the caller's seam; the shared leaf only drives the loop.
 pub async fn retry<T, F, Fut>(
     attempts: u32,
     backoff: &BackoffPolicy,
@@ -112,38 +113,39 @@ where
     F: FnMut(u32) -> Fut,
     Fut: Future<Output = Retry<T>>,
 {
-    if attempts == 0 {
-        return Err(anyhow::anyhow!("no attempts"));
-    }
     let mut delays = backoff.build();
-    for attempt_no in 1..=attempts {
-        match attempt(attempt_no).await {
-            Retry::Done(v) => return Ok(v),
-            Retry::Fatal(e) => return Err(e),
-            Retry::Retry(e) if attempt_no >= attempts => {
-                return Err(e.context(format!("after {attempts} attempts")));
-            }
-            Retry::Retry(_) => {
-                if let Some(wait) = delays.next_delay() {
-                    backoff.sleeper.sleep(wait).await;
+    Driver::new(attempts, &mut delays, backoff.sleeper.as_ref())
+        .drive(
+            (),
+            |_, _| (),
+            move |(), n| {
+                let fut = attempt(n);
+                async move {
+                    match fut.await {
+                        Retry::Done(v) => Step::Done(v),
+                        Retry::Fatal(e) => Step::Fatal(e),
+                        Retry::Retry(e) => Step::Retry((), e),
+                    }
                 }
-            }
-        }
-    }
-    Err(anyhow::anyhow!("no attempts"))
+            },
+        )
+        .await
+        .map_err(|failure| match failure {
+            Failure::Fatal(e) => e,
+            Failure::Exhausted(e) => e.context(format!("after {attempts} attempts")),
+            Failure::NoAttempts => anyhow::anyhow!("no attempts"),
+        })
 }
 
 /// Run `attempt` up to `attempts` times, handing `state` to each attempt and
 /// taking it back on a retry.
 ///
-/// The shared leaf's delay sequence cannot carry a value from one attempt's
-/// answer into the next. Each attempt takes the state out of a local slot and a
-/// retry puts the state the attempt returned back for the next call. The driver
-/// is a single sequential loop — the attempt future is awaited before the slot
-/// is refilled — so no lock is needed: [`RetryState`] moves the state by value,
-/// there is no concurrent accessor. A `Done` or `Fatal` answer ends the loop
-/// with the state dropped; the waits are the same as [`retry`].
-#[allow(clippy::expect_used)] // the slot is always filled on entry and refilled on a retry
+/// The shared driver carries the state in a local slot: an attempt takes it by
+/// value and a retry returns the next state, which the driver hands to the
+/// following attempt. The loop is sequential — the attempt future is awaited
+/// before the slot is refilled — so no lock is needed. A `Done` or `Fatal`
+/// answer ends the loop with the state dropped; the waits are the same as
+/// [`retry`].
 pub async fn retry_state<T, S, F, Fut>(
     attempts: u32,
     backoff: &BackoffPolicy,
@@ -154,30 +156,28 @@ where
     F: FnMut(S, u32) -> Fut,
     Fut: Future<Output = RetryState<T, S>>,
 {
-    if attempts == 0 {
-        return Err(anyhow::anyhow!("no attempts"));
-    }
     let mut delays = backoff.build();
-    let mut slot = Some(state);
-    for attempt_no in 1..=attempts {
-        let carried = slot
-            .take()
-            .expect("retry state present for the next attempt");
-        match attempt(carried, attempt_no).await {
-            RetryState::Done(v) => return Ok(v),
-            RetryState::Fatal(e) => return Err(e),
-            RetryState::Retry(next, e) => {
-                slot = Some(next);
-                if attempt_no >= attempts {
-                    return Err(e.context(format!("after {attempts} attempts")));
+    Driver::new(attempts, &mut delays, backoff.sleeper.as_ref())
+        .drive(
+            state,
+            |_, _| (),
+            move |state, n| {
+                let fut = attempt(state, n);
+                async move {
+                    match fut.await {
+                        RetryState::Done(v) => Step::Done(v),
+                        RetryState::Fatal(e) => Step::Fatal(e),
+                        RetryState::Retry(next, e) => Step::Retry(next, e),
+                    }
                 }
-                if let Some(wait) = delays.next_delay() {
-                    backoff.sleeper.sleep(wait).await;
-                }
-            }
-        }
-    }
-    Err(anyhow::anyhow!("no attempts"))
+            },
+        )
+        .await
+        .map_err(|failure| match failure {
+            Failure::Fatal(e) => e,
+            Failure::Exhausted(e) => e.context(format!("after {attempts} attempts")),
+            Failure::NoAttempts => anyhow::anyhow!("no attempts"),
+        })
 }
 
 #[cfg(test)]

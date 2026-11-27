@@ -58,6 +58,10 @@ girpr-chunk-identity = { path = "../../crates/chunk-identity" }
 # range check; the map's own first-match policy stays here.
 girpr-chunk-layout = { path = "../../crates/chunk-layout" }
 girpr-retry = { path = "../../crates/retry" }
+# The policy-free attempt loop lives one leaf above `girpr-retry`. This crate
+# keeps its own answer types, jitter and error wording; the leaf only owns the
+# loop mechanics shared with capture's fetcher.
+girpr-retry-driver = { path = "../../crates/retry-driver" }
 # The persistent plan's value types and pure rules. The manifest descriptors
 # are `girpr_dispatch` values; this crate owns only their fetch and the
 # full-file downloader, never the decisions made over the parsed rows.
