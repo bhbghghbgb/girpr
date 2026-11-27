@@ -28,7 +28,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
 | T15 | `tasks/T15-fs-path-helpers.md` | completed | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 kept |
 | T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
-| T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
+| T17 | `tasks/T17-subscriber-and-log-internals.md` | pending review | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 batch |
 | T18 | `tasks/T18-report-core.md` | todo | — | after T16 |
 | T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
 | T20 | `tasks/T20-test-http-servers.md` | todo | — | |
@@ -96,6 +96,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F37 | T16 | `girpr-cli` now links `girpr-log` and `girpr-report-core`; consider whether re-exporting `Level`/`OutputFormat` from it is the preferred seam versus direct imports. | proposed |
 | F38 | T16 | The `clap` feature on `girpr-report-core` (and forwarding features on app/report, tools/sync, tools/capture) is now unused since `--output` uses `PossibleValuesParser`; could be retired later. | proposed |
 | F39 | T16 | girpr's `--output` was previously `global = true`; the shared macro emits `global = false` — behavior-neutral today (no subcommands) but note if subcommands are added. | proposed |
+| F40 | T17 | Consider an explicit `AnsiChoice` enum instead of `Option<bool>` if another program needs "formatter default" semantics. | proposed |
+| F41 | T17 | If a third file format appears, a caller-supplied formatter factory would avoid another cfg-gated enum arm in the shared function. | proposed |
+| F42 | T17 | `CaptureBuffer` and internal `SharedBytes` remain two byte sinks by design (public feature surface vs crate-private helper); revisit only if the feature surface is intentionally changed. | proposed |
 
 ## Persistent context
 
@@ -128,3 +131,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T15: `Absent` carries the original `NotFound` error; `util-hash`'s `Md5` re-export left intact; prefix helpers imported directly from `girsync_leaves::link` so the disk-question scanner still sees only real disk calls.
 - T16: shared CLI uses an item-level `global_args!` macro (two arms) rather than a flattened struct to preserve each binary's help order and public struct literals; --help/exit bytes verified identical against the pre-T16 tree.
 - CP5 done: T15 kept; T16 kept after removing redundant parser bounds; workspace 2339 passed / 8 skipped; only one trycmd help golden (`tests/cmd/help.trycmd`, girpr --help) exists; sync/capture assert help semantically.
+- T17: `subscriber_for` takes `ConsoleSpec<W>`, `FileFormat`, `SpanFields` and `open_file`; `FileFormat::Json` behind a new girpr-log `json` feature used by the tools; girpr passes `ansi: None` to preserve its NO_COLOR behavior.
