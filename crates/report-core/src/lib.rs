@@ -14,7 +14,10 @@
 //! caller's spelling, a tool that forbids booleans simply never passes one, and
 //! a tool that renders `true` keeps rendering `true`. The text form's quoting or
 //! percent-encoding is also the caller's — [`write_line`] writes an already
-//! rendered string and never interprets it.
+//! rendered string and never interprets it. The one value this crate does own
+//! is [`OutputFormat`]: the two renderings' *name*, with one spelling and one
+//! text rendering. Each plane keeps its own record fields, possible-value
+//! descriptions and escaping.
 //!
 //! No `serde_json` `preserve_order` feature is enabled or needed: keys are
 //! emitted in the order this crate chooses through `serialize_entry`, which is
@@ -37,6 +40,54 @@ pub enum Order {
     /// Every entry — fields and `event` alike — is sorted by key, so `event`
     /// lands in its alphabetical position. This is the `girsync` contract.
     Alphabetical,
+}
+
+/// How a report record is rendered on stdout. Selected by the global
+/// `--output` flag.
+///
+/// The value set, its spelling and its text rendering are shared by the three
+/// report planes; each plane keeps its own record layout, field order,
+/// possible-value descriptions and escaping. The `ValueEnum` derive is opt-in
+/// so a consumer that only renders records compiles no CLI framework.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "clap", value(rename_all = "kebab-case"))]
+pub enum OutputFormat {
+    /// One human-readable line per record. The default.
+    #[default]
+    Text,
+    /// One JSON object per line (NDJSON), the same records in the same order.
+    Json,
+}
+
+impl OutputFormat {
+    /// The value as it appears in `--output`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutputFormat::Text => "text",
+            OutputFormat::Json => "json",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(OutputFormat::Text),
+            "json" => Ok(OutputFormat::Json),
+            other => Err(format!(
+                "unknown output format {other:?}; expected text or json"
+            )),
+        }
+    }
 }
 
 /// Write one JSON object: an `event` entry plus the keyed `fields`.
@@ -117,7 +168,7 @@ mod tests {
     use serde::ser::{Serialize, Serializer};
     use serde_json::json;
 
-    use super::{Order, write_json_object, write_line};
+    use super::{Order, OutputFormat, write_json_object, write_line};
 
     /// A stand-in for a tool's own value vocabulary, with a quote that forces
     /// escaping and a boolean that would change bytes if this crate rendered
@@ -236,6 +287,23 @@ mod tests {
             println!("subcase: {label}");
             run();
         }
+    }
+
+    /// The one value this crate owns: two spellings, one text rendering, and
+    /// a hand parse whose wording is the same one the capture tool published.
+    #[test]
+    fn output_format_value_set_and_renderings() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Text);
+        assert_eq!(OutputFormat::Text.as_str(), "text");
+        assert_eq!(OutputFormat::Json.as_str(), "json");
+        assert_eq!(OutputFormat::Text.to_string(), "text");
+        assert_eq!(OutputFormat::Json.to_string(), "json");
+        assert_eq!("text".parse::<OutputFormat>(), Ok(OutputFormat::Text));
+        assert_eq!("json".parse::<OutputFormat>(), Ok(OutputFormat::Json));
+        assert_eq!(
+            "xml".parse::<OutputFormat>().expect_err("unknown format"),
+            "unknown output format \"xml\"; expected text or json"
+        );
     }
 
     struct EventFirstProbe<'a>(&'a str, Vec<(&'static str, Probe)>);

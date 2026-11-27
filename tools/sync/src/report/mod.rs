@@ -55,34 +55,11 @@ use crate::diff::Diff;
 use crate::hash::HashAlg;
 
 /// How stdout records are rendered. Selected by the global `--output` flag.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub enum OutputFormat {
-    /// One human-readable line per record: `MISSING a.txt`, `COPY a.txt`,
-    /// `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the README's
-    /// examples are written in.
-    #[default]
-    Text,
-    /// One JSON object per line (NDJSON), same records, same order:
-    /// `{"event":"missing","path":"a.txt"}`.
-    Json,
-}
-
-impl OutputFormat {
-    /// The value as it appears in `--output`, and in a span field.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            OutputFormat::Text => "text",
-            OutputFormat::Json => "json",
-        }
-    }
-}
-
-impl std::fmt::Display for OutputFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+///
+/// The value set and spelling are shared; the possible-value descriptions this
+/// binary publishes in `--help` are its own and are handed to the shared CLI
+/// flag as data.
+pub use girpr_report_core::OutputFormat;
 
 /// Where a [`Report`] sends each record it emits.
 ///

@@ -1449,7 +1449,6 @@ dependencies = [
 name = "girpr-report"
 version = "0.1.0"
 dependencies = [
- "clap",
  "girpr-log",
  "girpr-report-core",
  "girpr-util-counter",
@@ -1463,6 +1462,7 @@ dependencies = [
 name = "girpr-report-core"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "serde",
  "serde_json",
 ]

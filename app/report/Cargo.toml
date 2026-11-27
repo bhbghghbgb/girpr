@@ -13,16 +13,16 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-# `OutputFormat` is this crate's own value type; only a CLI-facing consumer
-# needs it as a clap flag. The derive is opt-in so a consumer that just renders
-# records does not pull clap into its graph. The root repair binary, which
-# defines `--output`, enables this feature.
-clap = ["dep:clap"]
+# `OutputFormat` is re-exported from the shared core; only a CLI-facing
+# consumer needs its `clap` derive. Forward the opt-in instead of taking a
+# direct dependency, so a consumer that just renders records builds no clap.
+clap = ["girpr-report-core/clap"]
 
 [dependencies]
-# The ordered-JSON and line-writing mechanics below the plane. This crate keeps
-# girpr's own event-first order, unsigned counts and 1/0 flags; the core owns no
-# field order, value vocabulary or boolean spelling, and no `preserve_order`.
+# The ordered-JSON and line-writing mechanics below the plane, and the shared
+# `OutputFormat` value set. This crate keeps girpr's own event-first order,
+# unsigned counts and 1/0 flags; the core owns no field order, value vocabulary
+# or boolean spelling, and no `preserve_order`.
 girpr-report-core = { path = "../../crates/report-core" }
 # The saturating atomic counter used by the byte and RAM reservations. It is a
 # dependency-free leaf, so a config, path or hash edit leaves the report cached.
@@ -31,10 +31,6 @@ girpr-util-counter = { path = "../util-counter" }
 # vocabulary (`Val`) and the label casing. No derive, no `preserve_order`.
 serde = "1.0.229"
 serde_json = "1.0.154"
-# Only the `clap` feature's `ValueEnum` derive on `OutputFormat` needs this; the
-# flag spelling stays here and the shared leaf carries no CLI policy. Optional
-# so the default build of the report plane compiles no CLI framework.
-clap = { version = "4.6.10", features = ["derive"], optional = true }
 # The stdout/log mirror, the meter's refund warning and the phase lines.
 tracing = "0.1.44"
 # The one `PROGRESS` ticker and its interval. `test-util` is dev-only below.

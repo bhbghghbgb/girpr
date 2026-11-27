@@ -34,37 +34,11 @@ use crate::encoding;
 // lives in `crate::encoding` and is re-exported here so the path is stable.
 pub use crate::encoding::percent_decode;
 /// How a record is rendered on stdout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum OutputFormat {
-    /// `SUMMARY k=v k=v`, human-readable.
-    #[default]
-    Text,
-    /// `{"event":"summary", …}`, one object per line, machine-readable.
-    Json,
-}
-
-impl std::str::FromStr for OutputFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "text" => Ok(OutputFormat::Text),
-            "json" => Ok(OutputFormat::Json),
-            other => Err(format!(
-                "unknown output format {other:?}; expected text or json"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for OutputFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            OutputFormat::Text => "text",
-            OutputFormat::Json => "json",
-        })
-    }
-}
+///
+/// The value set, spelling and hand-parse wording are shared; the
+/// possible-value descriptions this binary publishes in `--help` are its own
+/// and are handed to the shared CLI flag as data.
+pub use girpr_report_core::OutputFormat;
 
 /// One value on a summary line.
 ///

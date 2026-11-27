@@ -260,7 +260,7 @@ girpr-audio-language = { path = "../../crates/audio-language" }
 # The ordered-JSON writer and the one newline-appending line writer. A logic-free
 # leaf: it emits the entries in the order gircap supplies, with gircap's own
 # `event` value, `Val` types, `serde_json` escaping and `true`/`false` spelling.
-girpr-report-core = { path = "../../crates/report-core" }
+girpr-report-core = { path = "../../crates/report-core", features = ["clap"] }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
 percent-encoding = "2.3.2"

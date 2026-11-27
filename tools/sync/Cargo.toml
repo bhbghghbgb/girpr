@@ -81,7 +81,7 @@ girpr-filter = { path = "../../crates/filter" }
 # Ordered-JSON and line-writing mechanics for the stdout data plane. This
 # crate keeps its own alphabetical key order, `serde_json::Value` fields and
 # record layouts; the leaf only writes the object in the order asked for.
-girpr-report-core = { path = "../../crates/report-core" }
+girpr-report-core = { path = "../../crates/report-core", features = ["clap"] }
 rayon = "1.12.0"
 # The case-fix rename claims its short temporary sibling through the shared
 # atomic claim primitive, so the claim and its cleanup have one home.

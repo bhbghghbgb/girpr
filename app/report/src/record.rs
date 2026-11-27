@@ -30,41 +30,11 @@ pub const PROGRESS_INTERVAL_SECS: u64 = 10;
 
 /// How stdout records are rendered. Selected by the global `--output` flag.
 ///
-/// The `ValueEnum` derive is opt-in: it is only needed by the CLI-facing
-/// consumer that defines `--output`, and is absent from the default build so
-/// clap is not compiled for record rendering alone. `as_str` below stays the
-/// canonical spelling in every build; the derive uses the same `kebab-case`
-/// values so the two cannot drift.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
-#[cfg_attr(feature = "clap", value(rename_all = "kebab-case"))]
-pub enum OutputFormat {
-    /// One human-readable `key=value` line per record: `SUMMARY total=0 …`.
-    /// The default, and the format every doc example and golden line is
-    /// written against.
-    #[default]
-    Text,
-    /// One JSON object per line (NDJSON), same records, same order:
-    /// `{"event":"summary","total":0,…}`. No enclosing array, so a caller can
-    /// stream it and recover the exact ordering.
-    Json,
-}
-
-impl OutputFormat {
-    /// The value as it appears in `--output`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            OutputFormat::Text => "text",
-            OutputFormat::Json => "json",
-        }
-    }
-}
-
-impl std::fmt::Display for OutputFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// The value set, spelling and text rendering now live in `girpr-report-core`,
+/// alongside the writer this plane builds on. The possible-value descriptions
+/// this binary publishes in `--help` stay here: they describe *these* records
+/// and are supplied to the shared CLI flag as data.
+pub use girpr_report_core::OutputFormat;
 
 /// A field value on the data plane.
 ///
