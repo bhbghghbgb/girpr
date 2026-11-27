@@ -18,7 +18,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T04 | `tasks/T04-digest-internals.md` | completed | 3 commits: restartable sink unification; Md5/Sha256 templating; shared buffered hash/copy loop | CP1 kept |
 | T05 | `tasks/T05-retryable-status.md` | pending review | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | resolves T06 dependency |
 | T06 | `tasks/T06-async-retry-driver.md` | pending review | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 batch complete |
-| T07 | `tasks/T07-bounded-join.md` | todo | — | |
+| T07 | `tasks/T07-bounded-join.md` | pending review | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 batch complete |
 | T08 | `tasks/T08-ledger-cas-helpers.md` | todo | — | |
 | T09 | `tasks/T09-whole-file-verify.md` | todo | — | |
 | T10 | `tasks/T10-bounded-byte-io.md` | todo | — | |
@@ -65,6 +65,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F06 | T05 | Optionally collapse the thin delegating wrappers (`fetch::retryable`, `RetryPolicy::should_retry_status`) into direct `girpr_retry::should_retry_status` calls; kept local to preserve the published `http` module surface and test seams. | proposed |
 | F07 | T06 | Optionally collapse `RetryPolicy::backoff()` / `BackoffPolicy::build()` schedule wrappers into direct `girpr_retry::Schedule::exponential(...)` calls once test seams are reviewed; kept local to preserve published module surfaces. | proposed |
 | F08 | T06 | If in-place (not by-value) state carry is ever needed in capture, consider an HRTB/boxed-future variant of the driver; not worth the per-attempt allocation now. | proposed |
+| F09 | T07 | Repair phases still render `Failed(JoinError)` with their own `Display` templates; switching to the payload-aware `join_failure` would change published error text and needs an explicit wording decision. | proposed |
+| F10 | T07 | `inplace.rs::bounded_window` stays local: an ordered buffered window with no index or panic recovery and file-local reservation semantics. | proposed |
+| F11 | T07 | Collapsing `spawn_blocking_traced` and the file driver's setup wrappers further would bury the load-bearing "capture at spawn time" documentation and the diagnostics-owner hook. | proposed |
 
 ## Persistent context
 
@@ -85,3 +88,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T05 finding: the report's out-of-range-u16 discrepancy claim does not hold in this tree (http 1.5.0 `from_u16` accepts 100..=999 and `is_server_error` is 500..600); the shared 500..=599 rule preserves prior behavior exactly.
 - T06 note: the report's 897-898 "retry drivers stay local" note does not block the task — the new leaf holds no classification or side effects, and jitter/logging/error types stayed in the products.
 - T06 observation: clippy reports one warning in `crates/chunk-layout` (T02's crate, already reviewed at CP1); not re-opened.
+- T07 guardrails held: capture's buffered-future panics and repair's `Handle::block_on` cancellation remain distinct; dispatcher and `DiagnosticsOwner` survive via the thread-setup hook; published fallback strings unchanged.
