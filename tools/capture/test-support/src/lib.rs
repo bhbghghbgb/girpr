@@ -2054,10 +2054,9 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
     }
 }
 
-/// Look up one decoded query value. The standard form parser handles `%XX`,
-/// `+` and lossy UTF-8; bracketed keys stay literal because that is the spelling
-/// the recorded request URLs use.
+/// Look up one decoded query value through the shared grammar leaf. The form
+/// parser handles `%XX`, `+` and lossy UTF-8; bracketed keys stay literal
+/// because that is the spelling the recorded request URLs use.
 fn query_param(query: &str, key: &str) -> Option<String> {
-    url::form_urlencoded::parse(query.as_bytes())
-        .find_map(|(k, v)| (k == key).then(|| v.into_owned()))
+    girpr_request_url::decoded_query_value(query, key)
 }

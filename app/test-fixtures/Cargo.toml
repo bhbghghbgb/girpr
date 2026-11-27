@@ -35,9 +35,10 @@ girpr-tempdir = { path = "../../crates/tempdir" }
 girpr-log = { path = "../../crates/log", features = ["test-support-async"] }
 # The mock's canned JSON answers and their tweaks.
 serde_json = "1.0.154"
-# The mock reads the request's query with the standard form decoder instead of
-# a local `%XX` loop; `url` re-exports `form_urlencoded` (already in the lockfile).
-url = "2.5.9"
+# The mock reads the request's query with the shared grammar leaf's form
+# decoder instead of a local `%XX` loop; the leaf borrows `url`'s decoder
+# (already in the lockfile).
+girpr-request-url = { path = "../../crates/request-url" }
 # The manifest body is protobuf; `Message` is the encode trait the fixture needs.
 prost = "0.14.6"
 # The patch-manifest wire shape the mock encodes for a scripted `getPatchBuild`

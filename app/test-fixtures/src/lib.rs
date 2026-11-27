@@ -1304,13 +1304,8 @@ fn build_responses(
 }
 
 fn query_tag(target: &str) -> Option<String> {
-    let q = target.split_once('?')?.1;
-    for pair in q.split('&') {
-        if let Some(v) = pair.strip_prefix("tag=") {
-            return Some(v.to_string());
-        }
-    }
-    None
+    let query = target.split_once('?')?.1;
+    girpr_request_url::literal_query_value(query, "tag").map(str::to_owned)
 }
 
 async fn serve_one(

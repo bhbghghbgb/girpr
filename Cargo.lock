@@ -1122,12 +1122,12 @@ dependencies = [
  "fs2",
  "gircap",
  "girpr-chunk-cost",
+ "girpr-request-url",
  "girpr-tempdir",
  "prost",
  "serde",
  "serde_json",
  "tokio",
- "url",
  "walkdir",
  "zstd",
 ]
@@ -1504,11 +1504,11 @@ dependencies = [
  "girpr-log",
  "girpr-model",
  "girpr-proto",
+ "girpr-request-url",
  "girpr-tempdir",
  "prost",
  "serde_json",
  "tokio",
- "url",
  "zstd",
 ]
 

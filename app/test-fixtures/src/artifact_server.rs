@@ -981,8 +981,7 @@ async fn serve_one(mut socket: tokio::net::TcpStream, route: Route, served: Arc<
                 Response::ok_json(EMPTY_PATCH_BUILD.as_bytes().to_vec())
             } else {
                 let query = target.split_once('?').map_or("", |(_, q)| q);
-                let tag = url::form_urlencoded::parse(query.as_bytes())
-                    .find_map(|(k, v)| (k == "tag").then(|| v.into_owned()));
+                let tag = girpr_request_url::decoded_query_value(query, "tag");
                 served.record(Hit {
                     kind: HitKind::Build,
                     id: tag.clone().unwrap_or_else(|| "latest".to_string()),

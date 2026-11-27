@@ -40,9 +40,9 @@ serde_json = "1.0.154"
 # insertion order without `serde_json/preserve_order` (which would reorder
 # `Value` objects for unrelated consumers in this workspace).
 serde = "1.0.229"
-# Request queries are decoded with the standard form parser rather than a local
-# `%XX`/`+` loop; `url` re-exports `form_urlencoded` (already in the lockfile).
-url = "2.5.9"
+# Request queries are decoded by the shared grammar leaf rather than a local
+# `%XX`/`+` loop; the leaf borrows `url`'s form decoder (already in the lockfile).
+girpr-request-url = { path = "../../../crates/request-url" }
 # The canned manifest bodies are protobuf frames the mock encodes by hand.
 prost = "0.14.6"
 # axum owns the mock's listener, HTTP parsing, keep-alive, routing and header
