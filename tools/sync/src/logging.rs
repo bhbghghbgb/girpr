@@ -32,9 +32,11 @@
 use std::path::Path;
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, prelude::*};
+use tracing_subscriber::{fmt, util::SubscriberInitExt as _};
 
-use girpr_log::install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
+use girpr_log::install::{
+    ConsoleSpec, FileFormat, SpanFields, emit_env_warnings, open_log_file, warn_subscriber_install,
+};
 
 pub use girpr_log::Level;
 
@@ -147,7 +149,9 @@ pub fn init_tracing(
 /// while a test passes a shared buffer and installs it thread-scoped with
 /// `tracing::subscriber::with_default`. The layer stack, the two filters, the
 /// JSON format and the file path are identical either way — only the console
-/// writer and where the subscriber is installed differ.
+/// writer and where the subscriber is installed differ. The stack itself is
+/// shared with the other two programs; this wrapper supplies only this tool's
+/// console filter and its file-open warning.
 ///
 /// The returned [`WorkerGuard`] keeps the non-blocking file writer's queue
 /// alive. It is returned separately from the subscriber so the caller can make
@@ -164,50 +168,30 @@ pub fn subscriber_for<W>(
 where
     W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
 {
-    let console_layer = fmt::layer()
-        .with_writer(console_writer)
-        .with_ansi(true)
-        .with_target(true)
-        .with_filter(girpr_log::console_filter(
-            plan.rust_log_directives(),
-            &["redb=warn", &plan.own_console_directive()],
-        ));
+    // redb's own chatter is an implementation detail; keeping it at warn is
+    // this tool's console policy, not a log-file policy. The plan's own
+    // directive is still appended last so `--log-level` wins a tie.
+    let console_filter = girpr_log::console_filter(
+        plan.rust_log_directives(),
+        &["redb=warn", &plan.own_console_directive()],
+    );
 
-    // The file is opened append-only, so two runs against one path do not
-    // erase each other. A file that cannot be opened costs the run its
-    // narration and nothing else. A plan with no file — a debug build that was
-    // not asked for one, or any build told `--no-log-file` — has no sink at
-    // all, so the run leaves nothing behind.
-    let file = match plan.file_path() {
-        None => None,
-        Some(path) => match open_log_file(path) {
+    girpr_log::install::subscriber_for(
+        plan,
+        ConsoleSpec {
+            writer: console_writer,
+            filter: console_filter,
+            ansi: true,
+        },
+        FileFormat::Json,
+        SpanFields::ALL,
+        |path| match open_log_file(path) {
             Ok(f) => Some(f),
             Err(e) => {
                 eprintln!("WARN disabling file logging ({}): {e}", path.display());
                 None
             }
         },
-    };
-
-    let mut worker = None;
-    let file_layer = file.map(|f| {
-        let (nb, guard, filter) = file_sink(f, plan);
-        worker = Some(guard);
-        fmt::layer()
-            .json()
-            .with_writer(nb)
-            .with_ansi(false)
-            .with_target(true)
-            .with_current_span(true)
-            .with_span_list(true)
-            .with_filter(filter)
-    });
-
-    (
-        tracing_subscriber::registry()
-            .with(console_layer)
-            .with(file_layer),
-        worker,
     )
 }
 

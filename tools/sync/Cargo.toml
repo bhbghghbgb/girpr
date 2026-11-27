@@ -40,7 +40,9 @@ clap = { version = "4.6.10", features = ["derive"] }
 # The log-file and log-level policy, shared with the repair binary and with
 # `gircap`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters.
-girpr-log = { path = "../../crates/log" }
+# `json` supplies the file layer's formatter in the shared subscriber stack;
+# this tool already enables the same feature on its own tracing-subscriber dep.
+girpr-log = { path = "../../crates/log", features = ["json"] }
 # The global-flag declarations and the parse-error / log-announcement shims,
 # shared with the repair binary and `gircap`. Only policy — help text and
 # whether the flags are clap-global — is supplied at this call site.
