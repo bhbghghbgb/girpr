@@ -87,6 +87,7 @@ use crate::retry::{BackoffPolicy, RetryState, retry_state};
 #[cfg(test)]
 use crate::sophon::SophonChunk;
 use crate::util;
+use girpr_chunk_cost::nonneg;
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 use girpr_util_io::{PIECE, copy_within_bounded, scratch as scratch_buf, zero_bounded};
 
@@ -451,8 +452,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
                 // writes, accumulated across its attempts: a chunk an
                 // abandoned attempt wrote is in the install, so it is
                 // not a byte the repair did not have to touch.
-                let kept =
-                    (ctx.plan.files()[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
+                let kept = nonneg(ctx.plan.files()[idx].size).saturating_sub(stats.settled_writes);
                 ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
             }
             Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}

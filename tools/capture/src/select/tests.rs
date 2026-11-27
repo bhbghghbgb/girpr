@@ -68,7 +68,7 @@ fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
         // for the compressed charge the real diff would read off its chunks.
         // The dedicated cost tests below spell out a compressed size that
         // differs from the declared one.
-        download_bytes: (state == State::Added).then(|| size.max(0) as u64),
+        download_bytes: (state == State::Added).then(|| nonneg(size)),
         score: s,
         is_folder: false,
     }

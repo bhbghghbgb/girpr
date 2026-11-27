@@ -23,7 +23,7 @@ use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
-use girpr_chunk_cost::nonneg;
+use girpr_chunk_cost::{nonneg, saturating_nonneg_sum};
 use girpr_chunk_layout::fits;
 use girpr_chunk_verify::{
     Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
@@ -362,11 +362,11 @@ fn trim_dead_tail(
 ) -> Result<()> {
     let have = handle_len(handle)
         .with_context(|| format!("stat {} before the trim", final_path.display()))?;
-    if have > file.size.max(0) as u64 {
+    if have > nonneg(file.size) {
         if trim_is_free(file, &file.chunks, sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
             diagnostics::record_dead_tail_trimmed();
-            handle.set_len(file.size.max(0) as u64)?;
+            handle.set_len(nonneg(file.size))?;
         } else {
             // The deferred trim: a reuse candidate reaches past the target's
             // end, so the tail is not dead weight. The trim waits for the end
@@ -460,7 +460,7 @@ fn stage_sources(
         }
         let Some(off) = sources[i] else { continue };
         let c = &file.chunks[i];
-        let bytes = util::read_range(handle, off, c.uncompressed_size.max(0) as u64)
+        let bytes = util::read_range(handle, off, nonneg(c.uncompressed_size))
             .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
         let h = util::md5::md5_digest(&bytes);
         if !h.matches_hex(&c.uncompressed_md5) {
@@ -569,7 +569,7 @@ async fn patch_chunks(
     for k in write_order {
         let i = bad[k];
         let c = &file.chunks[i];
-        let dst = c.offset.max(0) as u64;
+        let dst = nonneg(c.offset);
         if let Some(bytes) = &captured[i] {
             // A staged source: the bytes are already verified.
             write_at(ctx, writes, handle, dst, bytes)?;
@@ -590,7 +590,7 @@ async fn patch_chunks(
                 &mut scratch,
                 src,
                 dst,
-                c.uncompressed_size.max(0) as u64,
+                nonneg(c.uncompressed_size),
             )?;
             stats.chunks_reused += 1;
         } else {
@@ -615,7 +615,7 @@ async fn patch_chunks(
 
     // The file must end at its manifest size: shorter means the tail is
     // missing, longer means it is dead weight.
-    handle.set_len(file.size.max(0) as u64)?;
+    handle.set_len(nonneg(file.size))?;
     handle.flush()?;
     Ok(())
 }
@@ -769,7 +769,7 @@ async fn verify_and_retry(
         })
         .await?;
     }
-    handle.set_len(file.size.max(0) as u64)?;
+    handle.set_len(nonneg(file.size))?;
     handle.flush()?;
     // The digest and, when the layout has an overlap, the verdicts the
     // terminal decision needs are the same read: the scan hashes the whole
@@ -1006,11 +1006,11 @@ fn staged_payload(
     source_ok: &[bool],
     bad: &[usize],
 ) -> u64 {
-    bad.iter()
-        .filter(|&&i| sources[i].is_some() && source_ok[i])
-        .fold(0u64, |total, &i| {
-            total.saturating_add(chunks[i].uncompressed_size.max(0) as u64)
-        })
+    saturating_nonneg_sum(
+        bad.iter()
+            .filter(|&&i| sources[i].is_some() && source_ok[i])
+            .map(|&i| chunks[i].uncompressed_size),
+    )
 }
 
 /// Delete the target for `--repair-mode discard`.

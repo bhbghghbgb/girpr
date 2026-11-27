@@ -29,6 +29,7 @@ pub mod classes;
 pub mod decide;
 pub mod require;
 
+use girpr_chunk_cost::nonneg;
 use serde::Serialize;
 
 use std::collections::BTreeMap;
@@ -488,7 +489,7 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
                     shape,
                     classes: Class::all_satisfied_by(shape),
                 },
-                size: row.size.max(0) as u64,
+                size: nonneg(row.size),
                 download_bytes: row.download_bytes.unwrap_or(0),
             });
         }

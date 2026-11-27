@@ -20,6 +20,7 @@
 //! between those two steps would be tens of megabytes of peak RSS to avoid a
 //! second decompress.
 
+use girpr_chunk_cost::nonneg;
 use serde::{Deserialize, Serialize};
 
 use crate::hash;
@@ -436,7 +437,7 @@ impl BlobProps {
             md5_compressed: compressed.map(|c| c.md5.clone()).unwrap_or_default(),
             md5_decompressed: String::new(),
             sha256_compressed: compressed.map(|c| c.sha256.clone()).unwrap_or_default(),
-            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
+            uncompressed_size: nonneg(chunk.uncompressed_size),
             unknown_field6: chunk.unknown_field6,
             verified: None,
             decode_error: None,

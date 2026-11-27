@@ -3,6 +3,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use girpr_chunk_cost::nonneg;
+
 use crate::blobs::Sources;
 use crate::blobs::chunks::FilePair;
 use crate::hash;
@@ -635,7 +637,7 @@ pub fn patch_shape(map: &PatchMap) -> PatchShape {
             reuse: t.reuse as u64,
             moved: t.moved as u64,
         }),
-        old_size: map.old.as_ref().map(|s| s.size.max(0) as u64),
-        new_size: map.new.as_ref().map(|s| s.size.max(0) as u64),
+        old_size: map.old.as_ref().map(|s| nonneg(s.size)),
+        new_size: map.new.as_ref().map(|s| nonneg(s.size)),
     }
 }

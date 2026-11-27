@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use anyhow::{Context, Result};
+use girpr_chunk_cost::nonneg;
 
 use super::{
     COPY_BUF, ChunkStats, FileCtx, FileId, FileWrites, Inplace, Mode, PlannedFile, note_write,
@@ -313,7 +314,7 @@ fn rollback_failed_chunk(
     c: &SophonChunk,
     tmp_len: &mut u64,
 ) -> Result<()> {
-    let offset = c.offset.max(0) as u64;
+    let offset = nonneg(c.offset);
     rollback_tmp(f, tmp_path, offset)?;
     *tmp_len = offset;
     tracing::debug!(
@@ -718,7 +719,7 @@ pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
     // `compressed_size` keeps the stop exact under `--jobs N` instead of
     // overshooting by up to N-1 chunks, and the real byte count is folded back
     // in below so `SUMMARY download_bytes` stays the true figure.
-    let reserved = c.compressed_size.max(0) as u64;
+    let reserved = nonneg(c.compressed_size);
     if !ctx.summary.reserve_download_bytes(reserved) {
         ctx.summary.stop(StoppedBy::Download);
         tracing::warn!(
@@ -728,12 +729,12 @@ pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
-    let expected = c.uncompressed_size.max(0) as u64;
+    let expected = nonneg(c.uncompressed_size);
     // The seek is the only thing that can fail before the fetch starts. It
     // happens after the reservation, so a failure refunds it: no byte crossed
     // the wire, and a leaked reservation would count against the ceiling for
     // the rest of the run.
-    let mut sink = match ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64) {
+    let mut sink = match ChunkFileSink::new(ctx, &mut *out, nonneg(c.offset)) {
         Ok(sink) => sink,
         Err(e) => return Err(settle_seek_failure(ctx, reserved, &c.id, e)),
     };
