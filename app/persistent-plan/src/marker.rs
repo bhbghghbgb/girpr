@@ -93,7 +93,7 @@ fn first_hidden<'a, T>(
     items
         .iter()
         .find(|item| eligible(*item) && !visible(key(*item)))
-        .map(|item| key(item))
+        .map(key)
 }
 
 /// First marker the active path scope hides, if any.

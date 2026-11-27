@@ -610,7 +610,7 @@ mod tests {
         assert!(!fact.is_file());
         assert!(matches!(fact.file_len(), FileLen::Present(_)));
 
-        let fact = classify_metadata(std::fs::metadata(&dir.join("missing.dat")));
+        let fact = classify_metadata(std::fs::metadata(dir.join("missing.dat")));
         assert!(
             matches!(&fact, MetadataFact::Absent(e) if e.kind() == std::io::ErrorKind::NotFound)
         );
