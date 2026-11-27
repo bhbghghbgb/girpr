@@ -9,7 +9,7 @@
 //! [`verify_bytes`] is the convenience form for in-memory bytes (manifests and
 //! unit tests).
 
-use girpr_digest::{Md5, md5_hex};
+use girpr_digest::{Md5, format_xxhash64_hex, md5_hex, xxhash64_u64};
 
 use crate::value::PersistentRow;
 
@@ -113,8 +113,8 @@ pub fn verify_observed(row: &PersistentRow, observed: &ObservedDigest) -> Digest
             } else {
                 DigestVerdict::Mismatch {
                     algorithm: "xxh64",
-                    expected: format!("{want:016x}"),
-                    actual: format!("{:016x}", observed.xxhash64),
+                    expected: format_xxhash64_hex(want),
+                    actual: format_xxhash64_hex(observed.xxhash64),
                 }
             }
         }
@@ -135,15 +135,6 @@ pub fn verify_observed(row: &PersistentRow, observed: &ObservedDigest) -> Digest
 /// Verify in-memory bytes against a row.
 pub fn verify_bytes(row: &PersistentRow, bytes: &[u8]) -> DigestVerdict {
     verify_observed(row, &ObservedDigest::of_bytes(bytes))
-}
-
-/// The numeric XXH64 (seed 0) of `bytes`. This is the same value
-/// `xxhash64_hex` spells, taken straight from the hasher with no hex round-trip.
-fn xxhash64_u64(bytes: &[u8]) -> u64 {
-    use std::hash::Hasher as _;
-    let mut hasher = xxhash_rust::xxh64::Xxh64::new(0);
-    hasher.update(bytes);
-    hasher.finish()
 }
 
 #[cfg(test)]

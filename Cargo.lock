@@ -1382,11 +1382,9 @@ dependencies = [
  "girpr-digest",
  "girpr-dispatch",
  "girpr-util-path",
- "hex",
  "serde",
  "serde_json",
  "url",
- "xxhash-rust",
 ]
 
 [[package]]

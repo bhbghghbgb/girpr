@@ -400,7 +400,7 @@ fn observed_from(bytes: DigestBytes) -> ObservedDigest {
     ObservedDigest::of_stream(
         bytes.bytes,
         Md5::from(bytes.md5.unwrap_or([0u8; 16])),
-        u64::from_be_bytes(bytes.xxhash64.unwrap_or([0u8; 8])),
+        bytes.xxhash64_u64().unwrap_or(0),
     )
 }
 

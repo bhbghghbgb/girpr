@@ -10,7 +10,7 @@
 //! supplies verified bytes, and this module turns them into values or a typed
 //! [`ParseError`] naming the offending line.
 
-use girpr_digest::Md5;
+use girpr_digest::{Md5, parse_xxhash64_hex};
 
 use crate::value::PersistentRow;
 
@@ -97,13 +97,11 @@ fn into_row(wire: WireRow, line: usize) -> Result<PersistentRow, ParseError> {
 }
 
 /// The manifest spells XXH64 as 16 hex digits: the big-endian bytes of the
-/// 64-bit value, the same spelling `girpr_digest::xxhash64_hex` emits. `hex`
-/// accepts either case and enforces the exact width.
+/// 64-bit value, the same spelling `girpr_digest::xxhash64_hex` emits. The leaf
+/// parses either case and enforces the width; this adapter keeps the manifest's
+/// own error wording.
 fn parse_hash_hex(text: &str) -> Result<u64, String> {
-    let mut bytes = [0u8; 8];
-    hex::decode_to_slice(text, &mut bytes)
-        .map(|()| u64::from_be_bytes(bytes))
-        .map_err(|_| format!("hash is not 16 hex digits: {text:?}"))
+    parse_xxhash64_hex(text).map_err(|_| format!("hash is not 16 hex digits: {text:?}"))
 }
 
 #[cfg(test)]
