@@ -351,6 +351,20 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The `schema_version` a JSON value declares, read on its own.
+///
+/// Both version-aware readers need the declaration before they parse a
+/// document into its current type: a field the type expects but the document
+/// lacks is a symptom, not the diagnosis. This only extracts the number — what
+/// a missing or unusable value *means* stays with each caller, because the
+/// directory probe calls that "not a bundle" while the strict reader refuses
+/// the document with a different message.
+fn declared_schema_version(value: &serde_json::Value) -> Option<u64> {
+    value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+}
+
 /// Read one JSON document whose schema version must match this build's.
 ///
 /// The version is read **on its own, first**, exactly as [`schema_version_of`]
@@ -368,10 +382,7 @@ fn read_versioned_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T,
     let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let value: serde_json::Value =
         serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    match value
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-    {
+    match declared_schema_version(&value) {
         Some(v) if v == u64::from(crate::SCHEMA_VERSION) => {}
         Some(v) => {
             return Err(format!(
@@ -484,10 +495,7 @@ pub fn probe_manifest(
             )));
         }
     };
-    match value
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-    {
+    match declared_schema_version(&value) {
         Some(v) => Ok(ManifestProbe::Version(v as u32)),
         None => Ok(ManifestProbe::NotABundle(format!(
             "{}: no schema_version; this is not a bundle gircap wrote",
