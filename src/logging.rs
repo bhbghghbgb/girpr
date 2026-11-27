@@ -48,10 +48,12 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
 
-use girpr_log::install::{emit_env_warnings, file_sink, open_log_file, warn_subscriber_install};
+use girpr_log::install::{
+    ConsoleSpec, FileFormat, SpanFields, emit_env_warnings, open_log_file, warn_subscriber_install,
+};
 use girpr_log::{Level, LogOptions, LogPlan};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::prelude::*;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 /// This project's name: the default log file's stem, and the prefix of the
 /// environment variables that answer for the flags.
@@ -132,30 +134,22 @@ fn init_tracing_with(
         env,
     );
 
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_filter(plan.console_filter());
-
-    // A plan with no file has no file sink: a debug build that was not asked
-    // for a file, or any build that was told `--no-log-file`. A file that
-    // cannot be opened is a warning and no sink, so the run leaves nothing
-    // behind. The appender hands each event to a worker thread, which writes
-    // the file; the guard is held separately and registered only if the
-    // subscriber accepts the layer.
-    let mut guard = None;
-    let file_layer = match open_or_warn(plan.file_path(), warnings) {
-        None => None,
-        Some(f) => {
-            let (writer, worker_guard, filter) = file_sink(f, &plan);
-            guard = Some(worker_guard);
-            Some(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(writer)
-                    .with_ansi(false)
-                    .with_filter(filter),
-            )
-        }
-    };
+    // The shared stack builds the console and file layers; this binary keeps
+    // its own text format, its warning destination and — crucially — its guard
+    // policy. `open_or_warn` is passed in so the degradation path keeps both
+    // its injectable sink and its exact bytes. A plan with no file never calls
+    // it, and a file that cannot be opened leaves a console-only stack.
+    let (subscriber, guard) = girpr_log::install::subscriber_for(
+        &plan,
+        ConsoleSpec {
+            writer: std::io::stderr,
+            filter: plan.console_filter(),
+            ansi: true,
+        },
+        FileFormat::Text,
+        SpanFields::NONE,
+        |path| open_or_warn(Some(path), warnings),
+    );
 
     // A subscriber that is already installed would swallow the file layer
     // whole: the events would go to somebody else's subscriber and the log file
@@ -164,11 +158,7 @@ fn init_tracing_with(
     // pretending to have logged. Only an accepted layer's guard is registered:
     // a rejected layer never receives an event, so retaining its guard would
     // keep a worker alive for a file that has nothing to write.
-    match tracing_subscriber::registry()
-        .with(stderr_layer)
-        .with(file_layer)
-        .try_init()
-    {
+    match subscriber.try_init() {
         Ok(()) => install_guard(guard),
         Err(e) => {
             // `guard` is dropped here, draining the empty rejected file.
