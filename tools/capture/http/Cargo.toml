@@ -27,6 +27,10 @@ all = "warn"
 # drive the same waits and stop rules while keeping their own jitter and policy.
 girpr-retry = { path = "../../../crates/retry" }
 girpr-retry-driver = { path = "../../../crates/retry-driver" }
+# The API identity sent on every request. The leaf owns the one literal shared
+# with the repair binary; this crate re-exports it so the fetcher and gircap's
+# `logging` module keep the same names and the request log stays byte-identical.
+girpr-hyp-wire = { path = "../../../crates/hyp-wire" }
 # The ordered-join window and panic-payload rule live in the shared logic-free
 # leaf; this module keeps only gircap's own wording and its `JoinOutcome` ->
 # `ApiError` mapping at the call sites.

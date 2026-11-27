@@ -220,6 +220,10 @@ girpr-proto = { path = "../../crates/proto" }
 # leaf: gircap keeps its own `Biz::resolve`, its `Endpoints` override seam and
 # its request builders. `clap` is on because `Biz` is the `--biz` flag type.
 girpr-model = { path = "../../crates/model", features = ["clap"] }
+# The shared HYP/Sophon wire values: the envelope shape, the number-or-string
+# fields and the API identity. gircap keeps its own typed dumps, its verbatim
+# raw bodies and its non-zero-retcode exit policy on this side of the boundary.
+girpr-hyp-wire = { path = "../../crates/hyp-wire" }
 # The query grammar and CDN path-append mechanics shared with the repair
 # binary. This tool keeps its own URL builders, base override seam, channel
 # decision and every recorded URL byte; the leaf only supplies the spelling.

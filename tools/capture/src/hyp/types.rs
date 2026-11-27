@@ -37,89 +37,18 @@ pub use girpr_model::region::DOWNLOAD_MODE_CHUNK;
 
 /// A number the API may send as an integer or as a decimal string.
 ///
-/// Serialises back as whichever variant it was parsed from, so a typed value
-/// round-trips to the same bytes the API sent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum IntOrStr {
-    /// An actual JSON number.
-    Int(i64),
-    /// A JSON string holding a decimal integer. *Measured* for every size in
-    /// `getBuild`.
-    Str(String),
-}
-
-impl IntOrStr {
-    /// The value as `u64`, or `None` when it is negative or not a number.
-    pub fn as_u64(&self) -> Option<u64> {
-        match self {
-            IntOrStr::Int(i) => u64::try_from(*i).ok(),
-            IntOrStr::Str(s) => s.trim().parse().ok(),
-        }
-    }
-
-    /// The value as `i64`, or `None` when it is not a number.
-    pub fn as_i64(&self) -> Option<i64> {
-        match self {
-            IntOrStr::Int(i) => Some(*i),
-            IntOrStr::Str(s) => s.trim().parse().ok(),
-        }
-    }
-}
-
-impl std::fmt::Display for IntOrStr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IntOrStr::Int(i) => write!(f, "{i}"),
-            IntOrStr::Str(s) => f.write_str(s),
-        }
-    }
-}
-
-impl From<u64> for IntOrStr {
-    fn from(v: u64) -> Self {
-        match i64::try_from(v) {
-            Ok(i) => IntOrStr::Int(i),
-            Err(_) => IntOrStr::Str(v.to_string()),
-        }
-    }
-}
-
-impl From<i64> for IntOrStr {
-    fn from(v: i64) -> Self {
-        IntOrStr::Int(v)
-    }
-}
-
-/// The API sends these as strings, and so does a caller writing a fixture — the
-/// string form is the *faithful* one and gets no coercion on the way in.
-impl From<&str> for IntOrStr {
-    fn from(v: &str) -> Self {
-        IntOrStr::Str(v.to_string())
-    }
-}
-
-impl From<String> for IntOrStr {
-    fn from(v: String) -> Self {
-        IntOrStr::Str(v)
-    }
-}
+/// The type itself is shared with the repair binary through `girpr-hyp-wire`.
+/// Its preserve-the-wire-form behaviour is this tool's typed-dump policy and is
+/// unchanged by the move; the numeric views are `as_u64` / `as_i64`.
+pub use girpr_hyp_wire::IntOrStr;
 
 /// `{"retcode":…,"message":…,"data":{…}}`, the wrapper every endpoint returns.
 ///
-/// `retcode` is checked by [`crate::http::Fetcher::get_json`] before any of this
-/// is reached, so a body that arrives here has already been shown to be `0`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Wrapper<T> {
-    /// `0` on success. `-202` on `getBuild` means *no such tag*.
-    #[serde(default)]
-    pub retcode: i64,
-    /// `"OK"`, or the reason.
-    #[serde(default)]
-    pub message: String,
-    /// The payload.
-    pub data: T,
-}
+/// The envelope shape is shared with the repair binary; the payload is required
+/// here, where the typed view is what the run acts on. `retcode` is checked by
+/// [`crate::http::Fetcher::get_json`] before any of this is reached, so a body
+/// that arrives here has already been shown to be `0`.
+pub type Wrapper<T> = girpr_hyp_wire::Envelope<T>;
 
 /// A required field that was absent.
 ///

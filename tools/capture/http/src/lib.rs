@@ -76,18 +76,11 @@ pub use transport::{
 #[cfg(test)]
 mod tests;
 
-/// The one `User-Agent` string sent on every request.
-///
-/// A generic Unity player string rather than one naming the tool: the API is a
-/// third party, and a request should not identify the client that made it. It is
-/// still a real header, so a captured `api/requests.ndjson` records exactly what
-/// the CDN saw. Moving the constant here changes no byte of that record.
-pub const USER_AGENT: &str = "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)";
-
-/// The [`USER_AGENT`] string, owned where a [`String`] is wanted.
-pub fn user_agent() -> String {
-    USER_AGENT.to_string()
-}
+/// The one `User-Agent` string sent on every request, shared with the repair
+/// binary through the `girpr-hyp-wire` leaf. Re-exported here so the fetcher and
+/// `gircap`'s `logging` module keep their existing names; the byte on the wire
+/// and in the request log is unchanged.
+pub use girpr_hyp_wire::{USER_AGENT, user_agent};
 
 /// The narrow view of a caller-owned file that the fetcher streams a body into.
 ///

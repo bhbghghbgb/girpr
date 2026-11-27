@@ -74,16 +74,10 @@ impl CapturedBody {
     /// view that failed to deserialise is exactly the case where the retcode
     /// still has to be reported.
     pub fn retcode(&self) -> i64 {
-        serde_json::from_slice::<EnvelopeOnly>(&self.bytes)
+        serde_json::from_slice::<girpr_hyp_wire::EnvelopeHead>(&self.bytes)
             .map(|e| e.retcode)
             .unwrap_or(i64::MIN)
     }
-}
-
-/// Just the envelope, for [`CapturedBody::retcode`].
-#[derive(serde::Deserialize)]
-struct EnvelopeOnly {
-    retcode: i64,
 }
 
 /// All six bodies of a capture, plus the derived pair.
