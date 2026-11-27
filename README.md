@@ -83,7 +83,7 @@ machine rather than the code.
 | `crates/value-ranges/` | pure inclusive-range facts for numeric CLI values: below-min/above-max/in-range plus the offending value; no error type, wording, exit code or range constant, so each caller keeps its own | `check_in_range`, `RangeFact`, `RangeBound` |
 | `app/util-hash/` | MD5 and the one-read scan | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader` |
 | `app/util-ini/` | `config.ini`, ignore/blacklist files | `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist` |
-| `app/util-counter/` | the saturating atomic byte counter | `add_saturating` |
+| `app/util-counter/` | the saturating atomic byte-counter mechanics: plain add, ceiling-bound charge and saturation-aware refund | `add_saturating`, `try_charge`, `try_refund` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | the repair behaviors |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | the usage-error classes |
 | `tests/common/mod.rs` | thin shims over the shared test libraries | re-exports of `MockServer`, `FixtureSpec`, `ctx_for`, `run`, … |
