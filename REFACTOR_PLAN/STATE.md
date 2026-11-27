@@ -34,7 +34,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T20 | `tasks/T20-test-http-servers.md` | completed | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 kept; deferrals F50/F51 accepted; comment fix in review |
 | T21 | `tasks/T21-hyp-wire.md` | completed | 3 commits: hyp-wire leaf; fetch envelope/identity adoption; capture identity/envelope adoption | CP8 kept |
 | T22 | `tasks/T22-capture-emit-stores.md` | completed | 4 commits: capture serialize/gzip bodies; bounded-store mechanics; schema-version read; zstd error formatter | CP8 kept |
-| T23 | `tasks/T23-girsync-heartbeat.md` | todo | — | |
+| T23 | `tasks/T23-girsync-heartbeat.md` | pending review | 3 commits: heartbeat leaf; scan adoption; effective phase adoption | CP9 batch |
 | T24 | `tasks/T24-workspace-inheritance.md` | todo | — | |
 
 ## Reviews
@@ -119,6 +119,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F60 | T22 | `gzip_from_reader` has one production caller; leave it until a second file-backed gzip path appears rather than changing a driver's measured behaviour. | proposed |
 | F61 | T21 | The shared number decoder trims whitespace on string-encoded numbers whereas serde-aux did not — a relaxation; no current field exercises it. Decide whether to pin the stricter behavior. | proposed |
 | F62 | T21 | Capture's `Wrapper<T>` alias field `message` changed from `String` to `Option<String>`; no consumer reads it, but it is a public surface change worth an explicit decision. | proposed |
+| F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | proposed |
+| F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | proposed |
 
 ## Persistent context
 
@@ -160,3 +162,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T21: chose a new `girpr-hyp-wire` leaf over extending `crates/proto` (protobuf tags and JSON envelopes are different wire contracts); shared `Envelope.retcode` is required as fetch's was — capture's former `#[serde(default)]` was unreachable because `get_json` rejects a body with no retcode first, and no test/golden covers it (flag for CP8).
 - T22: `bounded_store` lives in `gircap-http` (shared parent dependency) because `error_bodies.rs` is there and `gircap-http` cannot depend on `gircap`; BufWriter construction stayed at call sites.
 - CP8 done: T21/T22 kept; the flagged `Envelope.retcode` default concern was verified unreachable and behavior-equal; workspace 2361 passed / 8 skipped.
+- T23: `Heartbeat<F>` owns only the clock/trigger; `elapsed_s`, wording, fields and levels stay at the three call sites.
