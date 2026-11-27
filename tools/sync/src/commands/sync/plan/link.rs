@@ -28,7 +28,7 @@ use path_clean::PathClean;
 
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
-use crate::link::try_is_link;
+use crate::link::{path_prefixes, strict_path_prefixes, try_is_link};
 #[cfg(windows)]
 use crate::util::unicode_case_eq;
 use crate::util::{path_key, slash_rel};
@@ -41,19 +41,16 @@ use crate::util::{path_key, slash_rel};
 /// disk before it removes anything, which covers a difference between the walk
 /// and the apply phase.
 pub(super) fn link_ancestor<'a>(rel: &str, dm: &'a HashMap<String, EffRec>) -> Option<&'a str> {
-    let mut end = 0;
-    loop {
-        let (prefix, next) = match rel[end..].find('/') {
-            Some(i) => (&rel[..end + i], Some(end + i + 1)),
-            None => (rel, None),
-        };
+    for prefix in path_prefixes(rel) {
+        // The map is the question here: no disk stat, and the map's own key is
+        // returned so a case-only spelling is spared as the walk reported it.
         if let Some((key, rec)) = dm.get_key_value(prefix)
             && rec.is_link
         {
             return Some(key.as_str());
         }
-        end = next?;
     }
+    None
 }
 
 /// The spelling `rel` has on disk now.
@@ -129,8 +126,8 @@ impl LinkStorage {
 
 /// Add an ancestor directory and every directory above it to `keep_dirs`.
 pub(super) fn keep_ancestors(rel: &str, keep_dirs: &mut HashSet<String>) {
-    for (i, _) in rel.match_indices('/') {
-        keep_dirs.insert(rel[..i].to_string());
+    for prefix in strict_path_prefixes(rel) {
+        keep_dirs.insert(prefix.to_string());
     }
 }
 

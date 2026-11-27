@@ -145,6 +145,31 @@ fn remove_file_or_dir(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Every `/`-separated prefix of `rel`, shortest first, `rel` itself included.
+///
+/// The walk is lexical over the string, so a doubled or trailing separator
+/// leaves the empty final component in the last prefix, exactly as the
+/// hand-written scans did. What to ask about each prefix — a map lookup or a
+/// disk stat — and when to stop stay with the caller.
+pub fn path_prefixes(rel: &str) -> impl Iterator<Item = &str> + '_ {
+    std::iter::successors(Some(0usize), |&start| {
+        rel[start..].find('/').map(|i| start + i + 1)
+    })
+    .map(move |start| {
+        let end = rel[start..].find('/').map_or(rel.len(), |i| start + i);
+        &rel[..end]
+    })
+}
+
+/// Every prefix of `rel` except `rel` itself: its ancestor directories.
+pub fn strict_path_prefixes(rel: &str) -> impl Iterator<Item = &str> + '_ {
+    let mut prefixes = path_prefixes(rel).peekable();
+    std::iter::from_fn(move || {
+        let current = prefixes.next()?;
+        (prefixes.peek().is_some()).then_some(current)
+    })
+}
+
 /// The shortest ancestor of `rel` under `root` that is a link, or `None`.
 ///
 /// The entry itself counts: a link that is itself extra is the path to remove.
@@ -155,20 +180,12 @@ fn remove_file_or_dir(path: &Path) -> io::Result<()> {
 /// One `symlink_metadata` per component, so it costs depth stats per removal and
 /// only on paths the plan already decided to remove.
 pub fn topmost_link_ancestor(root: &Path, rel: &str) -> io::Result<Option<String>> {
-    let mut end = 0;
-    loop {
-        let (prefix, next) = match rel[end..].find('/') {
-            Some(i) => (&rel[..end + i], Some(end + i + 1)),
-            None => (rel, None),
-        };
+    for prefix in path_prefixes(rel) {
         if try_is_link(&root.join(prefix))? {
             return Ok(Some(prefix.to_string()));
         }
-        match next {
-            Some(next) => end = next,
-            None => return Ok(None),
-        }
     }
+    Ok(None)
 }
 
 /// The shortest **strict** ancestor of `rel` that is a link, or `None`.
@@ -187,6 +204,27 @@ pub fn link_ancestor_above(root: &Path, rel: &str) -> io::Result<Option<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prefix walk keeps the old spelling exactly, including the empty
+    /// final component of a doubled or trailing separator, and the strict
+    /// form drops only the path itself.
+    #[test]
+    fn path_prefixes_include_the_path_and_strict_prefixes_do_not() {
+        for (rel, all, strict) in [
+            ("a/b/c.txt", vec!["a", "a/b", "a/b/c.txt"], vec!["a", "a/b"]),
+            ("a.txt", vec!["a.txt"], vec![]),
+            ("", vec![""], vec![]),
+            ("a//b", vec!["a", "a/", "a//b"], vec!["a", "a/"]),
+            ("a/", vec!["a", "a/"], vec!["a"]),
+        ] {
+            assert_eq!(path_prefixes(rel).collect::<Vec<_>>(), all, "{rel:?}");
+            assert_eq!(
+                strict_path_prefixes(rel).collect::<Vec<_>>(),
+                strict,
+                "{rel:?}"
+            );
+        }
+    }
 
     /// A missing component is not a link: there is nothing to traverse, so the
     /// guard can let the operation proceed and fail (or succeed) on its own.
