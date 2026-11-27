@@ -30,7 +30,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | completed | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 kept |
 | T18 | `tasks/T18-report-core.md` | completed | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 kept |
-| T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
+| T19 | `tasks/T19-test-fixture-helpers.md` | pending review | 1 commit: fixture helper consolidation and cache-names leaf | CP7 batch |
 | T20 | `tasks/T20-test-http-servers.md` | todo | — | |
 | T21 | `tasks/T21-hyp-wire.md` | todo | — | |
 | T22 | `tasks/T22-capture-emit-stores.md` | todo | — | |
@@ -102,6 +102,10 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | proposed |
 | F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | proposed |
 | F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | proposed |
+| F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | proposed |
+| F47 | T19 | `app/lock::field` stays local (scans whole `key=value` lines, unlike whitespace-token `field_token`); consolidation needs an explicit decision on values containing spaces. | proposed |
+| F48 | T19 | Capture-side `read_json`/`write_json` helpers use generic deserialization and different error policies; left local by contract. | proposed |
+| F49 | T19 | `ctx_default` bakes `jobs = 1` and `backoff = none()`; a parameterized variant is only worth adding if a third fixture needs different defaults. | proposed |
 
 ## Persistent context
 
@@ -137,3 +141,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T17: `subscriber_for` takes `ConsoleSpec<W>`, `FileFormat`, `SpanFields` and `open_file`; `FileFormat::Json` behind a new girpr-log `json` feature used by the tools; girpr passes `ansi: None` to preserve its NO_COLOR behavior.
 - T18: broken-pipe policy stays parameterized by the caller via `io::Result`; each plane keeps its own `Val` vocabulary, layout, field order and event derivation.
 - CP6 done: T17/T18 kept; no fixes or reverts; workspace 2345 passed / 8 skipped; clippy clean when allowing the out-of-batch chunk-layout warning.
+- T19: `girpr-cache-names` owns the Windows ASCII-case-fold rule; `entry_names_with` parameterizes the `girpr-cache*` predicate; `CARGO_BIN_EXE_girpr` remains integration-only; test roots unchanged.
