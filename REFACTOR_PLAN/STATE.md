@@ -19,10 +19,10 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T05 | `tasks/T05-retryable-status.md` | completed | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | CP2 kept |
 | T06 | `tasks/T06-async-retry-driver.md` | completed | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 kept |
 | T07 | `tasks/T07-bounded-join.md` | completed | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 kept |
-| T08 | `tasks/T08-ledger-cas-helpers.md` | pending review | 3 commits: counter CAS primitives; meter charge/refund/settle; RAM reserve/release | CP3 batch |
-| T09 | `tasks/T09-whole-file-verify.md` | pending review | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 batch |
-| T10 | `tasks/T10-bounded-byte-io.md` | pending review | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 batch complete |
-| T11 | `tasks/T11-clear-readonly.md` | pending review | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 batch complete |
+| T08 | `tasks/T08-ledger-cas-helpers.md` | completed | 3 commits: counter CAS primitives; meter charge/refund/settle; RAM reserve/release | CP3 kept |
+| T09 | `tasks/T09-whole-file-verify.md` | completed | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 kept |
+| T10 | `tasks/T10-bounded-byte-io.md` | completed | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 kept; clippy drop fix in review |
+| T11 | `tasks/T11-clear-readonly.md` | completed | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 kept |
 | T12 | `tasks/T12-request-url.md` | todo | — | |
 | T13 | `tasks/T13-line-and-bom-readers.md` | todo | — | |
 | T14 | `tasks/T14-claim-publish.md` | todo | — | |
@@ -43,7 +43,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | --- | --- | --- | --- |
 | CP1 | T01–T04 | done | all kept; T01 unused-import defect fixed in review |
 | CP2 | T05–T07 | done | all kept; no fixes or reverts |
-| CP3 | T08–T11 | open | |
+| CP3 | T08–T11 | done | all kept; T10 clippy drop fix in review |
 | CP4 | T12–T14 | open | |
 | CP5 | T15–T16 | open | |
 | CP6 | T17–T18 | open | |
@@ -78,6 +78,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | proposed |
 | F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | proposed |
 | F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | proposed |
+| F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | proposed |
+| F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | proposed |
 
 ## Persistent context
 
@@ -103,3 +105,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T08 keeper: the remaining `stopped_by` CAS in `app/report/src/ledger.rs` is an idempotent first-wins flag, not a saturating tally; routed through no leaf deliberately.
 - T09 keeper: `src/repair/file/inplace.rs` scanned-verdict reuse digest comparisons remain local `matches_hex` calls by the reuse-guard contract.
 - T10 boundary: `inplace.rs` was not edited — it already calls the `mod.rs` wrappers that delegate to the leaf and downloads through `temp.rs`, so it consumes both mechanics transitively.
+- CP3 done: T08/T09/T10/T11 kept; T10's `drop(rw)` calls removed for clippy; only the out-of-batch chunk-layout `collapsible_if` warning remains when clippy runs with -D warnings.
