@@ -13,7 +13,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | ID | Task file | Status | Commits | Notes |
 | --- | --- | --- | --- | --- |
 | T01 | `tasks/T01-chunk-cost-arithmetic.md` | pending review | 4 commits: chunk-cost primitives; repair-plan/chunk-verify adoption; gircap manifest totals; repair scan/plan | resolves T02 dependency |
-| T02 | `tasks/T02-chunk-layout.md` | todo | — | depends on T01 |
+| T02 | `tasks/T02-chunk-layout.md` | pending review | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | resolves T04 dependency |
 | T03 | `tasks/T03-xxh64-hex-boundary.md` | todo | — | |
 | T04 | `tasks/T04-digest-internals.md` | todo | — | depends on T03 |
 | T05 | `tasks/T05-retryable-status.md` | todo | — | |
@@ -58,7 +58,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | ID | Source task | Recommendation | Status |
 | --- | --- | --- | --- |
 | F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | proposed |
-| F02 | T01 | T02's half-open range/tiling leaf can consume `checked_end` directly; no change needed in T01. | proposed |
+| F02 | T01 | T02's half-open range/tiling leaf can consume `checked_end` directly; no change needed in T01. | done |
+| F03 | T02 | Give capture's A11 `Layout::of` a typed-problem adapter: adjacent-previous diagnostic semantics differ from the coverage cursor and its strings are published in `verify/selfcheck.json`, so it stayed local by contract. | proposed |
+| F04 | T02 | Decide explicitly what an unrepresentable signed chunk end means for tiling; the fold clamps at `i64::MAX` (matching capture's old behaviour) and plan-time validation rejects those ranges before layout. | proposed |
 
 ## Persistent context
 
@@ -69,4 +71,6 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - These plan files and the report must not be referenced from code or permanent docs.
 - Report line numbers are shifted relative to the current tree; implementers validate named sites against code, not cited lines.
 - F01's remaining single i64→u64 clamps overlap other task boundaries; they were left local in T01.
-- T01 implemented and validated (see task table); awaiting CP1 review.
+- T01 and T02 implemented and validated (see task table); awaiting CP1 review.
+- CP1 note: T02 reports a leftover unused `saturating_nonneg_sum` import in `src/repair/scan.rs` from T01; reviewer should fix it as a T01 defect.
+- T02's tiling leaf consumes T01's `checked_end` (F02 done) and clamps unrepresentable signed ends at `i64::MAX`, matching capture's prior behaviour.
