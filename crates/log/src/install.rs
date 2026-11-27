@@ -1,17 +1,20 @@
 //! The format-agnostic mechanics of installing a logging subscriber.
 //!
-//! Each project still builds its own layers and owns the guard that keeps the
-//! non-blocking file writer alive: the repair binary holds a process-global
-//! slot and drains it from `flush_log()`, while the two dev tools keep the
-//! guard in a struct that drops (or is finished) at the end of the run. What is
-//! the same everywhere is the work *before* those layers: open the file, make
-//! the non-blocking writer and the file's filter, say where the file went, and
-//! report the warnings that do not stop a run. This module owns that part so
-//! the three installations cannot drift in those mechanics.
+//! Each project still owns the guard that keeps the non-blocking file writer
+//! alive: the repair binary holds a process-global slot and drains it from
+//! `flush_log()`, while the two dev tools keep the guard in a struct that drops
+//! (or is finished) at the end of the run. Everything up to that guard is now
+//! assembled here by [`subscriber_for`]: the console and file layers, opening
+//! the file, the non-blocking writer and the file's filter, and joining the two
+//! layers into a registry. Saying where the file went and reporting warnings
+//! that do not stop a run stay here too, so the three installations cannot
+//! drift in those mechanics.
 //!
-//! None of this decides a format. The text of a warning is chosen by the caller
-//! (hence the `prefix` on [`emit_env_warnings`]) so a project's stderr bytes stay
-//! exactly what they were; the file's timestamped name stays in [`crate::plan`].
+//! None of this decides a program's policy. The text of a warning is chosen by
+//! the caller (hence the `prefix` on [`emit_env_warnings`]), as are the console
+//! filter and colouring, the file's format and how a failed open is worded; a
+//! project's stderr and file bytes stay exactly what they were. The file's
+//! timestamped name stays in [`crate::plan`].
 
 use std::io::Write;
 use std::path::Path;

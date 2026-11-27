@@ -20,15 +20,16 @@
 //!
 //! # What this crate is not
 //!
-//! It is not a logging *implementation*. Each project still builds its own
-//! layers and owns the guard that keeps its non-blocking writer alive, because
-//! each one writes a different file format and drains that guard differently.
-//! What is shared is the policy — the path, the levels, the precedence, and the
-//! names of the environment variables — plus the format-agnostic mechanics in
-//! [`install`]: opening the file, making the non-blocking writer and filter,
-//! and saying where the file went or what went wrong. Two projects that each
-//! re-decided those would drift, and the drift would show up as "why does this
-//! tool's log file live somewhere else".
+//! It is not a logging *policy*. Each project still owns the guard that keeps
+//! its non-blocking writer alive, because each one drains that guard
+//! differently, and still chooses its console filter, its file format and its
+//! own warning wording. What is shared is the policy — the path, the levels,
+//! the precedence, and the names of the environment variables — plus the
+//! mechanics in [`install`]: assembling the layer stack, opening the file,
+//! making the non-blocking writer and filter, and saying where the file went
+//! or what went wrong. Two projects that each re-decided those would drift,
+//! and the drift would show up as "why does this tool's log file live somewhere
+//! else".
 //!
 //! # Using it
 //!

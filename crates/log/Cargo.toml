@@ -19,13 +19,12 @@ workspace = true
 # synchronous helpers need no runtime at all; only the async variants read the
 # current runtime's flavor.
 #
-# The JSON capture surface is where `serde_json` and `tracing-subscriber`'s
-# `json` formatter are pulled in. Both stay out of shipped builds: they are
-# activated by this feature alone, which every consumer enables only as a
-# dev-dependency.
-# The JSON file layer in `install::subscriber_for` needs `Format<Json>`; the
-# two dev tools enable this on their normal dependency. The repair binary keeps
-# its text file layer and does not pull the formatter into shipped builds.
+# `serde_json` is only for the test-capture surface, which every consumer
+# enables as a dev-dependency; it stays out of shipped builds.
+# The JSON file layer in `install::subscriber_for` needs `Format<Json>`; the two
+# dev tools enable `json` on their normal dependency (they already enabled the
+# same formatter on their own tracing-subscriber dependency). The repair binary
+# keeps its text file layer and does not pull the formatter into shipped builds.
 json = ["tracing-subscriber/json"]
 test-support = ["dep:serde_json", "json"]
 # `logs_of_async` / `logs_of_async_json` and their always-on current-thread

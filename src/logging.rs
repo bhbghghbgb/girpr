@@ -144,8 +144,8 @@ fn init_tracing_with(
         ConsoleSpec {
             writer: std::io::stderr,
             filter: plan.console_filter(),
-            // The old layer never chose: tracing-subscriber's default still
-            // decides, so NO_COLOR keeps exactly the effect it had before.
+            // Leave ANSI to the formatter's own default, which honours
+            // NO_COLOR; this binary never chooses either way.
             ansi: None,
         },
         FileFormat::Text,
