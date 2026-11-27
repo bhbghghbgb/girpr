@@ -576,38 +576,14 @@ pub async fn probe_error_shapes(
 
 /// `url` with one query parameter's value replaced.
 ///
-/// `key` is matched literally, brackets included: the measured spelling of
-/// `game_ids[]` keeps them, and matching on a decoded form would silently not
-/// find the parameter.
-///
-/// **The replacement value is percent-encoded, by [`crate::biz::enc`].** Splicing
-/// `value` in raw would make this a second URL grammar living beside
-/// [`crate::biz::push_pair`] — the one every real URL in this tool goes through.
-/// The two would agree only while every value stays `"undefined"`: a value
-/// containing `&`, `=`, `+` or a space would split the query into a different set
-/// of parameters and the probe would ask the wrong question while still looking
-/// like a probe.
-///
-/// The key stays literal for the same reason it is matched literally: `push_pair`
-/// appends keys unencoded too, so the two now agree on both halves. Encoding is a
-/// no-op for the values actually used, so **no recorded URL changes** — see
+/// The key is matched and written literally, brackets included, and the value
+/// is percent-encoded by the shared grammar leaf: a `game_ids[]` probe cannot
+/// lose its brackets, and an `&` in a value cannot split the query into a
+/// different set of parameters. Encoding is a no-op for the values actually
+/// used, so **no recorded URL changes** — see
 /// `a_value_needing_encoding_is_encoded_and_todays_is_not`.
 fn with_param(url: &str, key: &str, value: &str) -> String {
-    let Some((base, query)) = url.split_once('?') else {
-        return url.to_string();
-    };
-    let prefix = format!("{key}=");
-    let parts: Vec<String> = query
-        .split('&')
-        .map(|p| {
-            if p.starts_with(&prefix) {
-                format!("{prefix}{}", crate::biz::enc(value))
-            } else {
-                p.to_string()
-            }
-        })
-        .collect();
-    format!("{base}?{}", parts.join("&"))
+    girpr_request_url::replace_query_value(url, key, value)
 }
 
 #[cfg(test)]
@@ -719,7 +695,8 @@ mod tests {
         );
 
         // The key is matched and kept literally, brackets and all — the measured
-        // spelling of `game_ids[]` must survive, and `push_pair` does the same.
+        // spelling of `game_ids[]` must survive, and the leaf's pair/rewrite
+        // helpers do the same.
         let cfg = "https://api.example/getGameConfigs?game_ids[]=gopR6Cufr3&lang=en-us";
         assert_eq!(
             with_param(cfg, "game_ids[]", "undefined"),

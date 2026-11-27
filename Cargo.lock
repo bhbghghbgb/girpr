@@ -1057,6 +1057,7 @@ dependencies = [
  "girpr-path-shape",
  "girpr-proto",
  "girpr-report-core",
+ "girpr-request-url",
  "girpr-retry",
  "girpr-tempdir",
  "girpr-time",

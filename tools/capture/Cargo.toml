@@ -7,7 +7,7 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). Its seventeen shared path deps are leaf crates
+# the tree (docs/00-spec.md §2). Its eighteen shared path deps are leaf crates
 # holding a shared *policy* or *mechanics* and no logic of any program: `girpr-log` (the
 # log-file and log-level policy — flag names, environment variables, default
 # levels and default paths), `girpr-time` (the named UTC timestamp formats —
@@ -46,8 +46,11 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # validation and normalisation logic in this crate),
 # `girpr-model` (the region identity, ids, channel tuples, base URLs and the
 # chunk-mode/channel-endpoint values — gircap keeps its `Biz::resolve` policy,
-# its `Endpoints` override seam and every URL builder in this crate) and
-# `girpr-tempdir` (the scratch-directory policy, a dev-dependency, so the
+# its `Endpoints` override seam and every URL builder in this crate),
+# `girpr-request-url` (the query pair/encoding/rewrite mechanics and CDN path
+# append — gircap keeps its URL builders, its literal bracketed key and every
+# recorded byte) and `girpr-tempdir` (the scratch-directory policy, a
+# dev-dependency, so the
 # tree a test writes into is named and removed the same way in all three
 # projects), and `girpr-loopback-mock` (a wiremock-backed loopback HTTP server
 # for canned replies, a dev-dependency shared by the repair, fetch and both
@@ -212,6 +215,10 @@ girpr-proto = { path = "../../crates/proto" }
 # leaf: gircap keeps its own `Biz::resolve`, its `Endpoints` override seam and
 # its request builders. `clap` is on because `Biz` is the `--biz` flag type.
 girpr-model = { path = "../../crates/model", features = ["clap"] }
+# The query grammar and CDN path-append mechanics shared with the repair
+# binary. This tool keeps its own URL builders, base override seam, channel
+# decision and every recorded URL byte; the leaf only supplies the spelling.
+girpr-request-url = { path = "../../crates/request-url" }
 # Hex spelling of digests, shared with the repair binary and the other tools. A
 # leaf mechanics crate: gircap still publishes lowercase hex strings and owns
 # its own algorithm set, it only borrows the spelling.

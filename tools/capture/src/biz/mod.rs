@@ -24,7 +24,7 @@
 
 use crate::cli::Biz as BizId;
 use crate::http::ApiError;
-use percent_encoding::utf8_percent_encode;
+use girpr_request_url::{build_query_url, push_pair};
 
 // The public path for the shared byte-to-`%XX` helper stays here even though
 // `enc` now obtains its escapes from the byte table directly.
@@ -36,8 +36,6 @@ pub use crate::encoding::percent;
 /// `girpr-model::region`. The `Biz::resolve` policy and the `Endpoints` override
 /// seam stay here, at this tool's call site.
 pub use girpr_model::region::Host;
-
-use girpr_model::query::QUERY_VALUE_SET;
 
 /// The four HYP endpoints `gircap` addresses.
 ///
@@ -219,14 +217,15 @@ impl<'a> Endpoints<'a> {
 
     /// The `getBuild` URL for one tag, or for the branch head when `tag` is `None`.
     pub fn get_build_url(&self, params: &BranchParams, tag: Option<&str>) -> String {
-        let mut url = format!("{}/getBuild", self.sophon.trim_end_matches('/'));
-        push_pair(&mut url, "branch", &params.branch);
-        push_pair(&mut url, "package_id", &params.package_id);
-        push_pair(&mut url, "password", &params.password);
+        let mut pairs = vec![
+            ("branch", params.branch.as_str()),
+            ("package_id", params.package_id.as_str()),
+            ("password", params.password.as_str()),
+        ];
         if let Some(t) = tag {
-            push_pair(&mut url, "tag", t);
+            pairs.push(("tag", t));
         }
-        url
+        build_query_url(self.sophon.trim_end_matches('/'), "getBuild", &pairs)
     }
 }
 
@@ -317,22 +316,14 @@ fn field(v: &serde_json::Value, pointer: &str, what: &str) -> Result<String, Api
         .ok_or_else(|| ApiError::shape(what, format!("main.{pointer} is missing or not a string")))
 }
 
-/// Append `&key=encoded_value`, with the separator decided by what is there.
-fn push_pair(url: &mut String, key: &str, value: &str) {
-    url.push(if url.contains('?') { '&' } else { '?' });
-    url.push_str(key);
-    url.push('=');
-    url.push_str(&enc(value));
-}
-
 /// Percent-encode a query **value**.
 ///
-/// Keys are appended literally (see [`Endpoints::hyp_url`]); values are encoded
-/// with the byte table shared through `girpr-model`, so a `password` with a `/`
-/// or a space cannot change the request's shape and cannot be re-spelled by a
-/// change on the fetch side.
+/// Keys are appended literally (see [`Endpoints::hyp_url`]); values use the
+/// shared grammar leaf, so a `password` with a `/` or a space cannot change the
+/// request's shape and cannot be re-spelled by a change on the fetch side. The
+/// path stays public as this tool's encoding seam.
 pub fn enc(s: &str) -> String {
-    utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
+    girpr_request_url::encode_value(s)
 }
 
 #[cfg(test)]
