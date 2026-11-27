@@ -1292,6 +1292,7 @@ dependencies = [
  "futures-util",
  "girpr-chunk-identity",
  "girpr-chunk-layout",
+ "girpr-chunk-verify",
  "girpr-digest",
  "girpr-dispatch",
  "girpr-loopback-mock",
@@ -1393,6 +1394,7 @@ dependencies = [
 name = "girpr-persistent-plan"
 version = "0.1.0"
 dependencies = [
+ "girpr-chunk-verify",
  "girpr-digest",
  "girpr-dispatch",
  "girpr-util-path",

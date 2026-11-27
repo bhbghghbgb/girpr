@@ -21,6 +21,10 @@ girpr-dispatch = { path = "../dispatch" }
 # and the case-folded identity key) are the two leaves this crate is allowed
 # to depend on. Everything else here is a pure decision over values.
 girpr-digest = { path = "../../crates/digest" }
+# The pure whole-file gate: size first, then the preferred digest. This crate
+# keeps the row's algorithm preference and its own `DigestVerdict`; the leaf
+# owns only the decision over the values handed to it.
+girpr-chunk-verify = { path = "../chunk-verify" }
 girpr-util-path = { path = "../util-path" }
 # NDJSON is the manifest wire shape; serde's unknown-key tolerance is what
 # makes `isPatch`/`category`/`localName` parsed-but-ignored rather than fatal.

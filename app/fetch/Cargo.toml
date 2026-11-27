@@ -67,6 +67,11 @@ girpr-retry-driver = { path = "../../crates/retry-driver" }
 # full-file downloader, never the decisions made over the parsed rows.
 girpr-dispatch = { path = "../dispatch" }
 girpr-persistent-plan = { path = "../persistent-plan" }
+# The pure whole-file gate shared with the repair check and the persistent
+# plan. This crate keeps `ManifestVerifyError`, the alternate/fatal policy and
+# the MD5-only Sophon checksum rule; the leaf owns only the size-then-digest
+# decision over injected values.
+girpr-chunk-verify = { path = "../chunk-verify" }
 girpr-util-hash = { path = "../util-hash" }
 # The downloader writes a verified body to a temp sibling before publishing it.
 tempfile = "3.27.0"

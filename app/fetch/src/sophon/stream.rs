@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream::Stream};
+use girpr_chunk_verify::digest_matches;
 use girpr_digest::{Algorithms, Sink};
 use prost::Message;
 use std::io::Write;
@@ -205,9 +206,10 @@ where
     tracing::debug!(blob = %id, compressed_bytes = digest.compressed_bytes, "manifest downloaded");
     tracing::debug!(blob = %id, decompressed_bytes = digest.bytes, expect_md5 = %checksum, actual_md5 = %digest.md5, "manifest checksum check");
     // A checksum mismatch is worth another try: the origin may have served a
-    // torn body, and the next attempt is a fresh one. `matches_hex` is
-    // case-insensitive, as upstream's comparison is.
-    if !digest.md5.matches_hex(checksum) {
+    // torn body, and the next attempt is a fresh one. The case-insensitive
+    // comparison is the same primitive the whole-file gate uses; whether this
+    // failure is retried stays this site's policy.
+    if !digest_matches(checksum, &digest.md5.to_hex()) {
         return Retry::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             id,

@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(
             verify_whole_file(0, lower, Some(0), || Ok::<_, ()>(upper.to_string())),
             WholeFileVerdict::Match {
-                observed: lower.to_string()
+                observed: upper.to_string()
             }
         );
         assert_eq!(

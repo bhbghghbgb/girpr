@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{Stream, StreamExt};
+use girpr_chunk_verify::{WholeFileVerdict, verify_whole_file};
 use girpr_digest::{Algorithms, DigestBytes, Md5, hash_reader};
 use girpr_dispatch::ManifestDescriptor;
 use girpr_persistent_plan::{ObservedDigest, PersistentRow, parse_rows, verify_observed};
@@ -95,21 +96,25 @@ pub fn verify_manifest_bytes(
     descriptor: &ManifestDescriptor,
     raw: &[u8],
 ) -> std::result::Result<(), ManifestVerifyError> {
-    let actual = raw.len() as u64;
-    if actual != descriptor.expected_size {
-        return Err(ManifestVerifyError::Size {
-            expected: descriptor.expected_size,
-            actual,
-        });
+    // In-memory bytes are always present and the digest read cannot fail, so
+    // the gate's two other failure arms are unreachable here. The typed error
+    // this program publishes is still built from the verdict's own fields.
+    match verify_whole_file(
+        descriptor.expected_size,
+        &descriptor.expected_md5,
+        Some(raw.len() as u64),
+        || Ok::<_, std::convert::Infallible>(girpr_digest::md5_hex(raw)),
+    ) {
+        WholeFileVerdict::Match { .. } => Ok(()),
+        WholeFileVerdict::LengthMismatch { expected, actual } => {
+            Err(ManifestVerifyError::Size { expected, actual })
+        }
+        WholeFileVerdict::DigestMismatch { expected, actual } => {
+            Err(ManifestVerifyError::Md5 { expected, actual })
+        }
+        WholeFileVerdict::Absent => unreachable!("an in-memory manifest body is always present"),
+        WholeFileVerdict::DigestUnavailable(never) => match never {},
     }
-    let md5 = girpr_digest::md5_hex(raw);
-    if !md5.eq_ignore_ascii_case(&descriptor.expected_md5) {
-        return Err(ManifestVerifyError::Md5 {
-            expected: descriptor.expected_md5.clone(),
-            actual: md5,
-        });
-    }
-    Ok(())
 }
 
 /// Fetch one manifest. The caller owns concurrency: this function uses the

@@ -9,6 +9,7 @@
 //! [`verify_bytes`] is the convenience form for in-memory bytes (manifests and
 //! unit tests).
 
+use girpr_chunk_verify::{WholeFileVerdict, verify_whole_file};
 use girpr_digest::{Md5, format_xxhash64_hex, md5_hex, xxhash64_u64};
 
 use crate::value::PersistentRow;
@@ -100,35 +101,31 @@ impl std::fmt::Display for DigestVerdict {
 /// to agree (the two are recorded together but the server can spell either one
 /// from a different byte set).
 pub fn verify_observed(row: &PersistentRow, observed: &ObservedDigest) -> DigestVerdict {
-    if observed.size != row.file_size {
-        return DigestVerdict::SizeMismatch {
-            expected: row.file_size,
-            actual: observed.size,
-        };
-    }
-    match expected_digest(row) {
-        ExpectedDigest::Xxh64(want) => {
-            if observed.xxhash64 == want {
-                DigestVerdict::Ok
-            } else {
-                DigestVerdict::Mismatch {
-                    algorithm: "xxh64",
-                    expected: format_xxhash64_hex(want),
-                    actual: format_xxhash64_hex(observed.xxhash64),
-                }
-            }
+    // Which digest a row requires is this program's preference; the gate only
+    // compares the spelling it is handed. Both algorithms spell as hex there,
+    // and the case-insensitive rule is the leaf's one implementation.
+    let (algorithm, expected_hex, observed_hex) = match expected_digest(row) {
+        ExpectedDigest::Xxh64(want) => (
+            "xxh64",
+            format_xxhash64_hex(want),
+            format_xxhash64_hex(observed.xxhash64),
+        ),
+        ExpectedDigest::Md5(want) => ("md5", want, observed.md5.to_hex()),
+    };
+    match verify_whole_file(row.file_size, &expected_hex, Some(observed.size), || {
+        Ok::<_, std::convert::Infallible>(observed_hex)
+    }) {
+        WholeFileVerdict::Match { .. } => DigestVerdict::Ok,
+        WholeFileVerdict::LengthMismatch { expected, actual } => {
+            DigestVerdict::SizeMismatch { expected, actual }
         }
-        ExpectedDigest::Md5(want) => {
-            if observed.md5.matches_hex(&want) {
-                DigestVerdict::Ok
-            } else {
-                DigestVerdict::Mismatch {
-                    algorithm: "md5",
-                    expected: want,
-                    actual: observed.md5.to_hex(),
-                }
-            }
-        }
+        WholeFileVerdict::DigestMismatch { expected, actual } => DigestVerdict::Mismatch {
+            algorithm,
+            expected,
+            actual,
+        },
+        WholeFileVerdict::Absent => unreachable!("an observed digest is always present"),
+        WholeFileVerdict::DigestUnavailable(never) => match never {},
     }
 }
 
