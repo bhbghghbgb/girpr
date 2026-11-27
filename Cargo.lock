@@ -1458,6 +1458,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-request-url"
+version = "0.1.0"
+dependencies = [
+ "girpr-model",
+ "percent-encoding",
+ "url",
+]
+
+[[package]]
 name = "girpr-retry"
 version = "0.1.0"
 dependencies = [
