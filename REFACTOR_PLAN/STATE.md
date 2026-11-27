@@ -12,10 +12,10 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 
 | ID | Task file | Status | Commits | Notes |
 | --- | --- | --- | --- | --- |
-| T01 | `tasks/T01-chunk-cost-arithmetic.md` | pending review | 4 commits: chunk-cost primitives; repair-plan/chunk-verify adoption; gircap manifest totals; repair scan/plan | resolves T02 dependency |
-| T02 | `tasks/T02-chunk-layout.md` | pending review | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | resolves T04 dependency |
-| T03 | `tasks/T03-xxh64-hex-boundary.md` | pending review | 4 commits: digest XXH64 conversions; persistent-plan/fetch adoption; cache-json hex wrappers; chunk-identity normalize_hex re-export | resolves T04 dependency |
-| T04 | `tasks/T04-digest-internals.md` | pending review | 3 commits: restartable sink unification; Md5/Sha256 templating; shared buffered hash/copy loop | CP1 batch complete |
+| T01 | `tasks/T01-chunk-cost-arithmetic.md` | completed | 4 commits: chunk-cost primitives; repair-plan/chunk-verify adoption; gircap manifest totals; repair scan/plan | CP1 kept; unused import fixed in review |
+| T02 | `tasks/T02-chunk-layout.md` | completed | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | CP1 kept |
+| T03 | `tasks/T03-xxh64-hex-boundary.md` | completed | 4 commits: digest XXH64 conversions; persistent-plan/fetch adoption; cache-json hex wrappers; chunk-identity normalize_hex re-export | CP1 kept |
+| T04 | `tasks/T04-digest-internals.md` | completed | 3 commits: restartable sink unification; Md5/Sha256 templating; shared buffered hash/copy loop | CP1 kept |
 | T05 | `tasks/T05-retryable-status.md` | todo | — | |
 | T06 | `tasks/T06-async-retry-driver.md` | todo | — | depends on T05 |
 | T07 | `tasks/T07-bounded-join.md` | todo | — | |
@@ -41,7 +41,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 
 | Checkpoint | Reviews | Status | Outcome |
 | --- | --- | --- | --- |
-| CP1 | T01–T04 | open | |
+| CP1 | T01–T04 | done | all kept; T01 unused-import defect fixed in review |
 | CP2 | T05–T07 | open | |
 | CP3 | T08–T11 | open | |
 | CP4 | T12–T14 | open | |
@@ -77,4 +77,5 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T02's tiling leaf consumes T01's `checked_end` (F02 done) and clamps unrepresentable signed ends at `i64::MAX`, matching capture's prior behaviour.
 - T03 implemented and validated; no follow-ups proposed. Remaining `{:016x}` sites in gircap are opaque manifest-id prefixes, not hashes.
 - T04 implemented and validated; `Sha256::try_parse_hex` is additive and public paths are unchanged.
-- CP1 batch is T01–T04; reviewer must also fix the T01 leftover unused `saturating_nonneg_sum` import in `src/repair/scan.rs`.
+- CP1 done: T01–T04 kept; the T01 unused `saturating_nonneg_sum` import was scoped to the test module in review. Follow-ups F01/F03/F04/F05 remain open.
+- CP1 minor observations, no action taken: a redundant `RangeProblem::NegativeOffset` match arm in `manifest/proto.rs`; `hash_file_with_buf` opens the file before the leaf's empty-buffer check, so an empty-buffer-plus-missing-file error reports the open failure.
