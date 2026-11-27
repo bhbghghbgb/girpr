@@ -24,7 +24,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T10 | `tasks/T10-bounded-byte-io.md` | completed | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 kept; clippy drop fix in review |
 | T11 | `tasks/T11-clear-readonly.md` | completed | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 kept |
 | T12 | `tasks/T12-request-url.md` | pending review | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 batch |
-| T13 | `tasks/T13-line-and-bom-readers.md` | todo | — | |
+| T13 | `tasks/T13-line-and-bom-readers.md` | pending review | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 batch |
 | T14 | `tasks/T14-claim-publish.md` | todo | — | |
 | T15 | `tasks/T15-fs-path-helpers.md` | todo | — | |
 | T16 | `tasks/T16-global-cli-and-format.md` | todo | — | before T18 |
@@ -82,6 +82,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | proposed |
 | F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | proposed |
 | F25 | T12 | Consider a policy-parameterized HYP URL seam to unify fetch's and capture's HYP builders; deliberately not done because girpr's hardcoded/unencoded language spelling and capture's `needs_channel`/override policy are call-site contracts. | proposed |
+| F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | proposed |
+| F27 | T13 | Consider relocating the pure `game_version_from_text` scan into a logic-free leaf so gircap no longer depends on an `app/` crate that also owns the repair config writer. | proposed |
+| F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | proposed |
 
 ## Persistent context
 
@@ -109,3 +112,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T10 boundary: `inplace.rs` was not edited — it already calls the `mod.rs` wrappers that delegate to the leaf and downloads through `temp.rs`, so it consumes both mechanics transitively.
 - CP3 done: T08/T09/T10/T11 kept; T10's `drop(rw)` calls removed for clippy; only the out-of-batch chunk-layout `collapsible_if` warning remains when clippy runs with -D warnings.
 - T12 keeper: CAP-06 blob-id shape helpers left local by guardrail — tightening girpr to capture's strict rule risks rejecting real ids.
+- T13: BOM-only behavior and trailing-newline contracts remain opposite by explicit parameters; capture's Cargo.toml now states the newline distinction; `game_version_from_text` takes a `value_of` closure to keep anchoring/empty-value/error wording at call sites.
