@@ -21,6 +21,9 @@ girpr-dispatch = { path = "../dispatch" }
 # and the case-folded identity key) are the two leaves this crate is allowed
 # to depend on. Everything else here is a pure decision over values.
 girpr-digest = { path = "../../crates/digest" }
+# The shared 1-based, blank-skipping line iterator. The manifest has no BOM
+# convention (`Keep`), and its typed `ParseError` wording stays here.
+girpr-line-reader = { path = "../../crates/line-reader" }
 # The pure whole-file gate: size first, then the preferred digest. This crate
 # keeps the row's algorithm preference and its own `DigestVerdict`; the leaf
 # owns only the decision over the values handed to it.

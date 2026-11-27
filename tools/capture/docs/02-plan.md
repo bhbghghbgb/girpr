@@ -173,7 +173,7 @@ phase of a capture lives in the module that owns the work it does.
 The direct dependency set is the CLI/runtime/report stack (`clap`, `tokio`,
 `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `tracing-appender`,
 `chrono`), the file/format helpers (`url`, `prost`, `flate2`, `walkdir`,
-`ini_core`, `percent-encoding`), typed errors (`thiserror`), the gircap-owned
+`percent-encoding`), typed errors (`thiserror`), the gircap-owned
 `gircap-http` / `gircap-hash`, and the shared logic-free leaves. `reqwest` is no
 longer a direct dependency: the transport is owned by the logic-free
 `gircap-http` crate, which gircap depends on directly. MD5/SHA-256 are spelled

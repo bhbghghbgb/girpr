@@ -38,9 +38,12 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # `girpr-value-ranges` (pure inclusive-range facts — below-min/above-max/in-range
 # and the offending value only; gircap keeps its own messages, its bounds and
 # its exit-1 class),
-# `girpr-audio-language` (the lower + `_`→`-` token primitive and the four
-# code/display-name pairs — gircap keeps its own trim, none sentinel and
-# path-component validation),
+# `girpr-audio-language` (the lower + `_`→`-` token primitive, the four
+# code/display-name pairs and the canonical scan-file join — gircap keeps its
+# own trim, none sentinel, validation and trailing-newline flag),
+# `girpr-util-ini` (the pure `game_version` line scan — gircap passes its own
+# first-match/`[General]` policy and keeps every A13 failure byte; the config
+# writer and launcher-list readers stay in the repair binary),
 # `girpr-proto` (the Sophon protobuf wire types — tags, the misspelled `chuncks`
 # and opaque tag 6 only; gircap keeps its own dump format and all measurement,
 # validation and normalisation logic in this crate),
@@ -247,10 +250,12 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # logic-free leaf: gircap passes its strict spelling policy and its own device
 # rule, and keeps its stable rule IDs, messages and every published byte here.
 girpr-path-shape = { path = "../../crates/path-shape" }
-# The shared lower + `_`→`-` audio-token primitive and the four canonical
-# code/display-name pairs. The leaf holds no audio policy: gircap keeps its own
-# trimming, ASCII folding, `none` sentinel and path-component validation, and
-# writes the same scan-file bytes as the repair binary for the same selection.
+# The shared lower + `_`→`-` audio-token primitive, the four canonical
+# code/display-name pairs and the canonical scan-file projection. The leaf holds
+# no audio policy: gircap keeps its own trimming, ASCII folding, `none` sentinel,
+# unknown-code validation and path-component validation. The scan-file join is
+# the same for both programs, but the trailing newline is an explicit flag:
+# gircap ends every line with `\n`, the repair binary writes no final newline.
 girpr-audio-language = { path = "../../crates/audio-language" }
 # The ordered-JSON writer and the one newline-appending line writer. A logic-free
 # leaf: it emits the entries in the order gircap supplies, with gircap's own
@@ -266,11 +271,10 @@ flate2 = "1.1.11"
 # Directory walks in the index and inventory passes. Already in the shared
 # lockfile through the other workspace members; no new dependency is fetched.
 walkdir = "2.5.1"
-# The `game/config.ini` version probe. A streaming parser is used rather than a
-# map-building one (`configparser`/`ini`) because gircap takes the FIRST
-# `game_version` in `[General]`; a hash map keeps only the last. This keeps that
-# reader's policy distinct from the repair binary's last-match/no-section rule.
-ini_core = "0.2.0"
+# The shared pure `game_version` line scan. gircap passes its own FIRST-match,
+# `[General]`-only selection and keeps its A13 failure wording; the repair
+# binary passes LAST-match, no-section. No INI parser dependency is needed here.
+girpr-util-ini = { path = "../../app/util-ini" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 # Only the `non_blocking` writer guard, which is what flushes the tail of a

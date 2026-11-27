@@ -29,6 +29,9 @@ quick-xml = { version = "0.42.0", features = ["serialize"] }
 # injectable seam, and depending on it would close the graph.
 girpr-model = { path = "../../crates/model" }
 girpr-digest = { path = "../../crates/digest" }
+# The shared blank-skipping line iterator. The descriptor has no BOM convention
+# (`Keep`); its `DispatchError` wording stays here.
+girpr-line-reader = { path = "../../crates/line-reader" }
 # The CDN path-segment append mechanics are shared with the persistent plan;
 # the error wording, prefix selection and `DispatchError` type stay here.
 girpr-request-url = { path = "../../crates/request-url" }

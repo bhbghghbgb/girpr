@@ -1061,8 +1061,8 @@ dependencies = [
  "girpr-retry",
  "girpr-tempdir",
  "girpr-time",
+ "girpr-util-ini",
  "girpr-value-ranges",
- "ini_core",
  "percent-encoding",
  "prost",
  "rayon",
@@ -1205,6 +1205,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "girpr-audio-language",
+ "girpr-line-reader",
  "girpr-tempdir",
  "girpr-util-path",
  "tracing",
@@ -1271,6 +1272,7 @@ dependencies = [
  "base64 0.23.1",
  "brotli",
  "girpr-digest",
+ "girpr-line-reader",
  "girpr-model",
  "girpr-request-url",
  "prost",
@@ -1344,6 +1346,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-line-reader"
+version = "0.1.0"
+
+[[package]]
 name = "girpr-lock"
 version = "0.1.0"
 dependencies = [
@@ -1400,6 +1406,7 @@ dependencies = [
  "girpr-chunk-verify",
  "girpr-digest",
  "girpr-dispatch",
+ "girpr-line-reader",
  "girpr-request-url",
  "girpr-util-path",
  "serde",
@@ -1548,6 +1555,7 @@ name = "girpr-util-ini"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "girpr-line-reader",
  "girpr-log",
  "girpr-tempdir",
  "girpr-util-path",
@@ -2037,15 +2045,6 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.2",
-]
-
-[[package]]
-name = "ini_core"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a467a31a9f439b5262fa99c17084537bff57f24703d5a09a2b5c9657ec73a61"
-dependencies = [
- "cfg-if",
 ]
 
 [[package]]

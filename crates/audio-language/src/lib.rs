@@ -8,8 +8,10 @@
 //!
 //! What is deliberately *not* here: the alias map that turns a display name
 //! into a code, the `none` game-only sentinel, and capture's path-component
-//! validation. Those are each program's own policy and stay at the call site;
-//! changing them can move bundle bytes or selection decisions. [`CaseFold`]
+//! validation. This leaf owns no alias map: the reverse lookup takes the
+//! caller's aliases as an explicit parameter, so those remain each program's
+//! own policy at the call site; changing them can move bundle bytes or
+//! selection decisions. [`CaseFold`]
 //! lets each caller keep its exact lower-casing flavour, and trimming stays
 //! with the caller that does it, so neither tool's byte contract changes.
 
@@ -72,6 +74,63 @@ pub fn display_name_position(name: &str) -> Option<usize> {
     AUDIO_LANGUAGES.iter().position(|(_, n)| *n == name)
 }
 
+/// The canonical code whose display name is exactly `name`, if there is one.
+pub fn code_from_display_name(name: &str) -> Option<&'static str> {
+    AUDIO_LANGUAGES
+        .iter()
+        .find(|(_, n)| *n == name)
+        .map(|(code, _)| *code)
+}
+
+/// Reverse lookup using the caller's own alias spellings.
+///
+/// Canonical names are matched exactly first; an alias is matched ASCII
+/// case-insensitively. The leaf owns **no** alias map — `aliases` is supplied
+/// by the caller, because which spellings are accepted is program policy that
+/// can change what a selection means. The repair scan-file reader passes its
+/// `English(US)` / `English` aliases here; a caller that accepts only the four
+/// canonical names passes an empty iterator.
+pub fn code_from_display_name_with_aliases<'a>(
+    name: &str,
+    aliases: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Option<&'a str> {
+    if let Some(code) = code_from_display_name(name) {
+        return Some(code);
+    }
+    aliases.into_iter().find_map(|(spelling, code)| {
+        if name.eq_ignore_ascii_case(spelling) {
+            Some(code)
+        } else {
+            None
+        }
+    })
+}
+
+/// Render selected codes as display names, one per line, in the game's
+/// canonical order.
+///
+/// This is the shared canonical projection and join: duplicates are written
+/// once and codes that have no display name here are ignored, because whether
+/// an unknown code is an error is the caller's validation policy.
+///
+/// `trailing_newline` is the caller's byte contract and is deliberately a
+/// parameter, not a convergence: the capture fixture ends **every** line with
+/// `\n`, while the repair binary's scan file writes no final newline. Both
+/// spellings are produced by this one implementation.
+pub fn render_scan_file<'a>(
+    codes: impl IntoIterator<Item = &'a str>,
+    trailing_newline: bool,
+) -> String {
+    let mut selected: Vec<&str> = codes.into_iter().filter_map(display_name).collect();
+    selected.sort_by_key(|name| display_name_position(name).unwrap_or(usize::MAX));
+    selected.dedup();
+    let mut out = selected.join("\n");
+    if trailing_newline && !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +154,50 @@ mod tests {
         assert_eq!(display_name("fr-fr"), None);
         assert_eq!(display_name_position("Korean"), Some(3));
         assert_eq!(display_name_position("nope"), None);
+    }
+
+    #[test]
+    fn reverse_lookup_takes_the_callers_aliases_explicitly() {
+        assert_eq!(code_from_display_name("Chinese"), Some("zh-cn"));
+        assert_eq!(code_from_display_name("chinese"), None);
+        assert_eq!(
+            code_from_display_name_with_aliases("Chinese", []),
+            Some("zh-cn")
+        );
+        assert_eq!(
+            code_from_display_name_with_aliases("chinese", []),
+            None,
+            "without an alias the canonical name is exact"
+        );
+        let aliases = [("English(US)", "en-us"), ("English", "en-us")];
+        assert_eq!(
+            code_from_display_name_with_aliases("ENGLISH", aliases),
+            Some("en-us")
+        );
+        assert_eq!(
+            code_from_display_name_with_aliases("english(us)", aliases),
+            Some("en-us")
+        );
+        assert_eq!(
+            code_from_display_name_with_aliases("Klingon", aliases),
+            None
+        );
+    }
+
+    #[test]
+    fn render_scan_file_joins_in_canonical_order_with_the_callers_newline() {
+        let codes = ["ko-kr", "zh-cn", "en-us", "ko-kr", "fr-fr"];
+        assert_eq!(
+            render_scan_file(codes, false),
+            "Chinese\nEnglish(US)\nKorean",
+            "the repair scan file has no trailing newline"
+        );
+        assert_eq!(
+            render_scan_file(codes, true),
+            "Chinese\nEnglish(US)\nKorean\n",
+            "the capture fixture ends every line with a newline"
+        );
+        let empty: [&str; 0] = [];
+        assert_eq!(render_scan_file(empty, true), "");
     }
 }

@@ -23,6 +23,10 @@ serde_json = "1.0.154"
 rust-ini = { version = "0.21.3", features = ["case-insensitive"] }
 # The malformed-entry warning the config-list readers emit.
 tracing = "0.1.44"
+# The BOM-stripping, 1-based, blank-skipping line iterator shared with the
+# audio, manifest and descriptor readers. A BOM-only file is blank here, while
+# the audio reader refuses it — that decision stays at each call site.
+girpr-line-reader = { path = "../../crates/line-reader" }
 # The containment check and the atomic publish the config writer bumps through.
 # Keeping the config writer in its own crate means an edit here leaves the
 # path, hash and counter crates (and their consumers) cached.

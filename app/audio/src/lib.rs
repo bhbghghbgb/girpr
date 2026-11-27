@@ -22,10 +22,12 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-// The code/display-name pairs and their order are shared with the capture
-// tool so both write the same scan-file bytes; the file's read/write policy
-// stays here.
-use girpr_audio_language::AUDIO_LANGUAGES;
+// The code/display-name table, its reverse lookup and the canonical join are
+// shared with the capture tool. The trailing newline is passed explicitly:
+// capture ends every line with `\n`, this scan file writes no final newline.
+// The file's read/write policy stays here.
+use girpr_audio_language::{code_from_display_name_with_aliases, render_scan_file};
+use girpr_line_reader::{BomPolicy, non_blank_lines};
 
 /// Decide the effective audio set for this run.
 ///
@@ -131,26 +133,16 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<
 /// stripped first, because `char::is_whitespace` does not treat U+FEFF as
 /// whitespace and it would hide the first display name.
 fn parse_scan_text(text: &str) -> (HashSet<String>, Vec<&str>) {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // This reader's two alias spellings belong here, not in the leaf: the leaf
+    // owns no alias map and accepts only exact canonical names on its own.
+    const ALIASES: &[(&str, &str)] = &[("English(US)", "en-us"), ("English", "en-us")];
     let mut set = HashSet::new();
     let mut unrecognized: Vec<&str> = Vec::new();
-    for line in text.lines() {
+    for (_, line) in non_blank_lines(text, BomPolicy::Strip) {
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let code = match line {
-            "Chinese" => Some("zh-cn"),
-            s if s.eq_ignore_ascii_case("English(US)") || s.eq_ignore_ascii_case("English") => {
-                Some("en-us")
-            }
-            "Japanese" => Some("ja-jp"),
-            "Korean" => Some("ko-kr"),
-            _ => None,
-        };
-        match code {
-            Some(c) => {
-                set.insert(c.to_string());
+        match code_from_display_name_with_aliases(line, ALIASES.iter().copied()) {
+            Some(code) => {
+                set.insert(code.to_string());
             }
             None => unrecognized.push(line),
         }
@@ -166,15 +158,11 @@ fn parse_scan_text(text: &str) -> (HashSet<String>, Vec<&str>) {
 /// file reads as an empty selection and would silently turn a configured
 /// language set into game-only.
 pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>) -> Result<()> {
-    let lines: Vec<&str> = AUDIO_LANGUAGES
-        .iter()
-        .filter(|(code, _)| langs.contains(*code))
-        .map(|(_, name)| *name)
-        .collect();
+    let rendered = render_scan_file(langs.iter().map(String::as_str), false);
     let p = girpr_util_path::contained_join(game_dir, scan_dir)?;
     // A partial file reads as an empty selection, so publish only the whole
     // list; the scan file is advisory, so it does not need a durable sync.
-    girpr_util_path::atomic::write_atomic(&p, lines.join("\n").as_bytes(), false)
+    girpr_util_path::atomic::write_atomic(&p, rendered.as_bytes(), false)
 }
 
 #[cfg(test)]

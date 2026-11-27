@@ -17,8 +17,8 @@
 //! [`audio_scan_file`].
 use std::path::Path;
 
-use girpr_audio_language::{display_name, display_name_position};
-use ini_core::{Item, Parser};
+use girpr_audio_language::{display_name, render_scan_file};
+use girpr_util_ini::{SectionRequirement, Selection, game_version_from_text};
 
 use crate::biz::Biz;
 
@@ -65,49 +65,32 @@ pub fn config_ini(biz: &Biz, game_version: &str) -> String {
 /// a comparison against the same input would pass even if the format were
 /// unreadable.
 ///
-/// `ini_core` owns the INI syntax: line endings, comments, the first `=` as the
-/// key/value boundary, and separating section headers from properties. Only the
-/// tool's own selection policy stays here — the FIRST match, and only inside
-/// `[General]`. A map-building reader (`configparser`/`ini`) would keep the last
-/// match and quietly give this reader the repair binary's semantics instead.
+/// The shared line scan owns the first-`=` split, the lenient section headers
+/// and blank lines; only the tool's own policy stays here — the FIRST match,
+/// only inside `[General]`, and the A13 wording for each failure. A map-building
+/// reader (`configparser`/`ini`) would keep the last match and quietly give this
+/// reader the repair binary's semantics instead.
 pub fn parse_game_version(ini: &str) -> Result<String, String> {
-    let mut in_general = false;
-    for item in Parser::new(ini) {
-        match item {
-            Item::Section(name) => in_general = is_general_section(name),
-            // ini_core only recognises a well-formed `[name]` at the start of a
-            // line. This reader has always accepted an indented or malformed
-            // header and stripped brackets from it, so keep that leniency here
-            // instead of reading such a line as a property.
-            Item::Property(key, _) if key.trim_start().starts_with('[') => {
-                in_general = is_general_section(key);
+    // This reader trims the key (a leading space is tolerated) and treats an
+    // empty value as a failure; the repair reader's stricter key shape and its
+    // empty-value rule stay in `girpr_util_ini`.
+    let found = game_version_from_text(
+        ini,
+        Selection::First,
+        SectionRequirement::GeneralOnly,
+        |line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != "game_version" {
+                return None;
             }
-            Item::Error(line) if line.trim_start().starts_with('[') => {
-                in_general = is_general_section(line);
-            }
-            // A `game_version` line with no `=` is not a match at all (the old
-            // reader split at the first `=` and skipped a line without one).
-            Item::Property(key, Some(value)) if in_general && key.trim() == "game_version" => {
-                let value = value.trim();
-                if value.is_empty() {
-                    return Err("game_version is present but empty".into());
-                }
-                return Ok(value.to_string());
-            }
-            Item::Property(_, _)
-            | Item::Comment(_)
-            | Item::Error(_)
-            | Item::SectionEnd
-            | Item::Blank => {}
-        }
+            Some(value.trim().to_string())
+        },
+    );
+    match found {
+        Some(value) if value.is_empty() => Err("game_version is present but empty".into()),
+        Some(value) => Ok(value),
+        None => Err(format!("no game_version in the {GENERAL_SECTION} section")),
     }
-    Err(format!("no game_version in the {GENERAL_SECTION} section"))
-}
-
-/// The reader's lenient section-header rule: a `[`-leading line counts, with
-/// all leading/trailing brackets stripped before the name is compared.
-fn is_general_section(line: &str) -> bool {
-    line.trim().trim_matches(|c| c == '[' || c == ']').trim() == "General"
 }
 
 /// Render the audio scan file for the selected codes.
@@ -132,15 +115,9 @@ pub fn audio_scan_file(codes: &[String]) -> Result<String, String> {
             ));
         }
     }
-    let mut selected: Vec<&str> = codes.iter().filter_map(|c| display_name(c)).collect();
-    selected.sort_by_key(|n| display_name_position(n).unwrap_or(usize::MAX));
-    selected.dedup();
-    let mut out = String::new();
-    for name in selected {
-        out.push_str(name);
-        out.push('\n');
-    }
-    Ok(out)
+    // The canonical order, dedup and join are shared with the repair binary;
+    // the trailing newline is this fixture's contract, passed explicitly.
+    Ok(render_scan_file(codes.iter().map(String::as_str), true))
 }
 
 /// One file to write into `game/` or `expected/`.
@@ -348,7 +325,7 @@ mod tests {
     }
 
     /// The reader accepts an indented or bracket-loose `[General]` header and a
-    /// `#` comment line; delegating the syntax to ini_core must not narrow that.
+    /// `#` comment line; the shared line scan must not narrow that.
     #[test]
     fn the_reader_keeps_its_lenient_section_and_comment_shapes() {
         for header in [

@@ -1,0 +1,15 @@
+[package]
+name = "girpr-line-reader"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared BOM-stripping, 1-based, blank-skipping line iterator"
+
+[lib]
+name = "girpr_line_reader"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -8,6 +8,7 @@
 
 use crate::{DispatchError, Result};
 use girpr_digest::Md5;
+use girpr_line_reader::{BomPolicy, non_blank_lines};
 use prost::Message as _;
 use prost::encoding::{WireType, decode_key, decode_varint};
 
@@ -200,8 +201,10 @@ pub struct DescriptorRow {
 /// full manifest the query path mirrors. A blank line is skipped (Collapse's
 /// own parser throws on it).
 pub fn parse_descriptor(text: &str) -> Result<DescriptorRow> {
-    if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
-        let row: DescriptorRow = serde_json::from_str(line)
+    // The descriptor body has no BOM convention (`Keep`) and no line number in
+    // the error; only the first non-blank row matters.
+    if let Some((_, line)) = non_blank_lines(text, BomPolicy::Keep).next() {
+        let row: DescriptorRow = serde_json::from_str(line.trim())
             .map_err(|e| DispatchError::Proto(format!("bad descriptor row: {e}")))?;
         if Md5::try_parse_hex(&row.md5).is_none() {
             return Err(DispatchError::Proto(format!(

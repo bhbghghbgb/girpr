@@ -5,8 +5,71 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ini::Ini;
 
+use girpr_line_reader::{BomPolicy, non_blank_lines};
 use girpr_util_path::atomic::write_atomic;
 use girpr_util_path::clean_rel;
+
+/// Which matching `game_version` line wins.
+///
+/// The repair binary takes the **last** match across the whole file; the
+/// capture tool takes the **first** match inside `[General]`. The choice is a
+/// parameter because the two programs deliberately disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Selection {
+    First,
+    Last,
+}
+
+/// Whether a `[General]` header must precede a `game_version` match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionRequirement {
+    /// Scan the whole file, including headerless keys.
+    Any,
+    /// Only lines after a `[General]` header count. The header spelling is
+    /// lenient (leading whitespace and unbalanced/multiple brackets), matching
+    /// the launcher's own reader.
+    GeneralOnly,
+}
+
+/// Scan `game_version` lines in pure text: no file I/O, no key-shape rule and
+/// no error wording.
+///
+/// `value_of` receives each non-blank line with its line terminator removed
+/// but otherwise raw, so a caller that anchors the key at column zero can
+/// still tell an indented line from an unindented one. It returns the version
+/// when the line has the caller's key shape. That keeps validation at the call
+/// site: this crate
+/// requires the key at column zero and ignores an empty value, while the
+/// capture tool trims the key and reports an empty value as a failure. The
+/// `Selection` / `SectionRequirement` pair is the only policy shared here.
+pub fn game_version_from_text(
+    text: &str,
+    selection: Selection,
+    section: SectionRequirement,
+    mut value_of: impl FnMut(&str) -> Option<String>,
+) -> Option<String> {
+    let mut in_general = false;
+    let mut last = None;
+    for (_, line) in non_blank_lines(text, BomPolicy::Keep) {
+        if section == SectionRequirement::GeneralOnly {
+            let header = line.trim();
+            if header.starts_with('[') {
+                in_general = header.trim_matches(|c| c == '[' || c == ']').trim() == "General";
+                continue;
+            }
+            if !in_general {
+                continue;
+            }
+        }
+        if let Some(value) = value_of(line) {
+            match selection {
+                Selection::First => return Some(value),
+                Selection::Last => last = Some(value),
+            }
+        }
+    }
+    last
+}
 
 /// Parse `config.ini` last `game_version=` match.
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
@@ -25,7 +88,12 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
     };
-    Ok(text.lines().filter_map(game_version_line).next_back())
+    Ok(game_version_from_text(
+        &text,
+        Selection::Last,
+        SectionRequirement::Any,
+        game_version_line,
+    ))
 }
 
 /// The value of one `game_version` line, if it has the documented shape.
@@ -154,14 +222,10 @@ fn parse_config_list(
     text: &str,
     mut entry: impl FnMut(&serde_json::Value) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<HashSet<String>> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut set = HashSet::new();
     let mut first_failure: Option<(usize, String)> = None;
-    for (i, line) in text.lines().enumerate() {
+    for (i, line) in non_blank_lines(text, BomPolicy::Strip) {
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
         let failure = match serde_json::from_str::<serde_json::Value>(line) {
             Ok(v) if !v.is_object() => Some(anyhow::anyhow!("the line is not a JSON object")),
             Ok(v) => match entry(&v) {
@@ -177,11 +241,11 @@ fn parse_config_list(
         if let Some(e) = failure {
             tracing::warn!(
                 path = %path.display(),
-                line = i + 1,
+                line = i,
                 error = %e,
                 "invalid entry in the {what} list; ignored"
             );
-            first_failure.get_or_insert((i + 1, e.to_string()));
+            first_failure.get_or_insert((i, e.to_string()));
         }
     }
     if set.is_empty()
@@ -644,6 +708,79 @@ mod tests {
                 "line {line:?}"
             );
         }
+    }
+
+    /// The helper owns only selection and section tracking. Both callers'
+    /// key shapes are supplied as closures so their validation stays local.
+    #[test]
+    fn version_reader_parameters_keep_first_last_and_section_distinct() {
+        let text = "[Other]\ngame_version=9.9.9\n[General]\n game_version=8.8.8\ngame_version=7.0.0\ngame_version=6.0.0\n";
+        let trimmed_key = |line: &str| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != "game_version" {
+                return None;
+            }
+            Some(value.trim().to_string())
+        };
+        assert_eq!(
+            game_version_from_text(
+                text,
+                Selection::Last,
+                SectionRequirement::Any,
+                game_version_line
+            ),
+            Some("6.0.0".to_string()),
+            "the repair reader takes the last match across the whole file"
+        );
+        assert_eq!(
+            game_version_from_text(
+                text,
+                Selection::First,
+                SectionRequirement::GeneralOnly,
+                trimmed_key
+            ),
+            Some("8.8.8".to_string()),
+            "the capture reader takes the first match in [General] and trims the key"
+        );
+        // A lenient header still opens the section; a malformed one still closes it.
+        assert_eq!(
+            game_version_from_text(
+                "[[General]]\ngame_version=7.0.0\n[Other]\ngame_version=8.8.8\n",
+                Selection::First,
+                SectionRequirement::GeneralOnly,
+                trimmed_key
+            ),
+            Some("7.0.0".to_string())
+        );
+        assert_eq!(
+            game_version_from_text(
+                "[Other]\ngame_version=7.0.0\n",
+                Selection::Last,
+                SectionRequirement::GeneralOnly,
+                trimmed_key
+            ),
+            None
+        );
+        // Empty values are the caller's policy: a closure that accepts them
+        // yields an empty string; the repair line shape rejects the line.
+        assert_eq!(
+            game_version_from_text(
+                "game_version=\n",
+                Selection::Last,
+                SectionRequirement::Any,
+                trimmed_key
+            ),
+            Some(String::new())
+        );
+        assert_eq!(
+            game_version_from_text(
+                "game_version=\n",
+                Selection::Last,
+                SectionRequirement::Any,
+                game_version_line
+            ),
+            None
+        );
     }
 
     #[test]

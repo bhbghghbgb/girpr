@@ -11,6 +11,7 @@
 //! [`ParseError`] naming the offending line.
 
 use girpr_digest::{Md5, parse_xxhash64_hex};
+use girpr_line_reader::{BomPolicy, non_blank_lines};
 
 use crate::value::PersistentRow;
 
@@ -55,16 +56,15 @@ struct WireRow {
 pub fn parse_rows(bytes: &[u8]) -> Result<Vec<PersistentRow>, ParseError> {
     let text = std::str::from_utf8(bytes).map_err(|e| ParseError::NotUtf8(e.to_string()))?;
     let mut rows = Vec::new();
-    for (index, line) in text.lines().enumerate() {
+    // The manifest wire shape has no BOM convention, so `Keep` is deliberate:
+    // a leading U+FEFF is part of the first row and fails it, as before.
+    for (line_number, line) in non_blank_lines(text, BomPolicy::Keep) {
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
         let wire: WireRow = serde_json::from_str(line).map_err(|e| ParseError::Row {
-            line: index + 1,
+            line: line_number,
             message: format!("invalid JSON row: {e}"),
         })?;
-        let row = into_row(wire, index + 1)?;
+        let row = into_row(wire, line_number)?;
         rows.push(row);
     }
     if rows.is_empty() {

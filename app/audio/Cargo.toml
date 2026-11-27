@@ -17,10 +17,16 @@ workspace = true
 # resolution warnings this boundary emits.
 anyhow = "1.0.105"
 tracing = "0.1.44"
-# The four code/display-name pairs and their canonical order, shared with the
-# capture tool so both write the same scan-file bytes. This crate keeps the
-# read/write and selection policy; the leaf owns only the constant table.
+# The four code/display-name pairs, their canonical order, the caller-supplied
+# reverse lookup and the canonical join. This crate keeps the read/write and
+# selection policy and passes its own trailing-newline and alias parameters;
+# the leaf owns only the mechanics.
 girpr-audio-language = { path = "../../crates/audio-language" }
+# The BOM-stripping, 1-based, blank-skipping line iterator shared with the
+# launcher-list, manifest and descriptor readers. The BOM-only refusal stays
+# here, on the raw text, because this program's meaning is the opposite of the
+# config-list reader's.
+girpr-line-reader = { path = "../../crates/line-reader" }
 # Server-controlled path containment and the atomic temp-then-rename publish.
 # These are low-level mechanics with no product policy, so an edit to the
 # config writer, the hash or the counter leaves the whole audio boundary
