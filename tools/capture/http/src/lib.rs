@@ -15,8 +15,9 @@
 //! - [`BodyFile`] — the caller's digesting file. The byte sink and its digests
 //!   belong to the parent; this crate only writes bytes and calls `restart`.
 //! - [`USER_AGENT`] / [`user_agent`] — the one header value, a fixed string.
-//! - [`tasks`] — the ordered-join loop, relocated here because it is a clean
-//!   mechanics leaf; the parent re-exports it for its own blob fill pass.
+//! - [`tasks`] — the seam for the ordered-join loop. The window and the panic
+//!   rule live in the shared logic-free `girpr-async-join` leaf; this module
+//!   keeps gircap's wording, and the parent re-exports it for its blob fill pass.
 //!
 //! ## What the request log records, and why each field earns its place
 //!

@@ -1,31 +1,22 @@
-//! The one ordered-join loop and the one rule for a lost task.
+//! The ordered-join seam gircap's callers already resolve through.
 //!
-//! Two callers run a bounded ordered join over a plan and both need each result
-//! in its input slot: gircap's blob-store fill pass and this crate's
-//! [`crate::fetcher::Fetcher::map_concurrently`]. [`join_ordered`] is that loop,
-//! written once as a `futures` buffered stream with an ordered collection. A
-//! task can be lost to a panic or to cancellation, and throwing the cause away
-//! — silently, or behind a generic "panicked" row — loses what an operator
-//! needs, which is in the panic payload, not in `Display`. The loop applies the
-//! same downcast rule as [`join_failure`] so the caller's outcome still names
-//! the cause and the slot it belonged to. The two direct `spawn_blocking` joins
-//! — gircap's blob measurement and the request-log write — take that rule
-//! through [`join_blocking`].
+//! The mechanics — the indexed `buffer_unordered(jobs.max(1))` window, result
+//! restoration by input slot, and the downcast that recovers a panic's own
+//! message — live in the shared logic-free `girpr-async-join` leaf. This module
+//! keeps the `crate::tasks::*` paths used by the fetcher, the blob store and the
+//! request-log write unchanged, together with gircap's published wording: the
+//! fallback for a non-string payload and the two "task panicked / was
+//! cancelled" sentences. `JoinOutcome` -> `ApiError` mapping stays at each
+//! caller, because that is program policy.
 
-/// The message a panic payload carries, with the task name attached.
-///
-/// Neither a `JoinError`'s `Display` nor the `Box<dyn Any + Send>` a caught
-/// unwind yields includes the message the failing task wrote. That reason —
-/// what an operator actually needs — has to be downcast out of the payload.
-/// Sharing this rule keeps the `JoinError` and caught-unwind paths spelling the
-/// same text.
-fn panic_message(payload: &(dyn std::any::Any + Send), task: &str) -> String {
-    let message = payload
-        .downcast_ref::<&str>()
-        .map(|s| (*s).to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a non-string panic payload".to_string());
-    format!("the {task} task panicked: {message}")
+use std::sync::Arc;
+
+use girpr_async_join::{DEFAULT_FALLBACK, Wording};
+
+pub use girpr_async_join::JoinOutcome;
+
+fn wording(task: &str) -> Wording {
+    Wording::new(task, DEFAULT_FALLBACK)
 }
 
 /// The most useful text a [`tokio::task::JoinError`] carries.
@@ -37,54 +28,19 @@ fn panic_message(payload: &(dyn std::any::Any + Send), task: &str) -> String {
 ///
 /// [`into_panic`]: tokio::task::JoinError::into_panic
 pub fn join_failure(e: tokio::task::JoinError, task: &str) -> String {
-    if !e.is_panic() {
-        return format!("the {task} task was cancelled: {e}");
-    }
-    let payload = e.into_panic();
-    panic_message(payload.as_ref(), task)
-}
-
-/// What became of one item in [`join_ordered`].
-///
-/// The two arms are separate because they need different handling: `Failed` is
-/// the work saying what went wrong, with its slot known, while `Lost` is the
-/// loop saying the work never reported. `Lost` keeps the recovered panic
-/// payload in `why`; `why: None` is the defensive fallback for a slot no work
-/// ever reported.
-pub enum JoinOutcome<E> {
-    /// The task returned a failure of its own.
-    Failed(E),
-    /// The task did not return a result at all.
-    Lost {
-        /// The message [`join_failure`] would produce, when one was recovered.
-        why: Option<String>,
-    },
+    girpr_async_join::join_failure(e, &wording(task))
 }
 
 /// Run `f` over `items`, at most `jobs` at a time, **in input order**.
 ///
 /// `f` receives the item's index and a clone of the shared slice, and returns
-/// `(index, result)`. The index comes back through every path — success, the
-/// work's own failure, and a panic — because `buffer_unordered` yields results
-/// in completion order and a failed item must still be told apart from one that
-/// died. Each result is written into its own slot, which is what restores input
-/// order. A panic is caught at the future boundary with the same payload
-/// downcast [`join_failure`] applies to a `JoinError`, so it keeps both its slot
-/// and its cause instead of collapsing into one generic string.
-///
-/// **The slice is shared rather than copied per task.** A task receives an
-/// `Arc<[T]>` and indexes it by the slot it was given, so an item that owns
-/// several allocations — a whole `Want` per chunk — is cloned once into the
-/// `Arc` by the caller instead of once per future.
-///
-/// Concurrency is bounded by `jobs.max(1)` (a zero bound is treated as one),
-/// matching the old loop. Dropping this future drops the buffered stream and
-/// cancels every in-flight item at its current await point. A slot no task ever
-/// reported becomes [`JoinOutcome::Lost`] with `why: None`, so the caller can
-/// still produce a row for the item rather than dropping it. `task` names the
-/// work in the recovered message and in the log.
+/// `(index, result)`. A panic is caught at the future boundary and keeps both
+/// its slot and its cause instead of collapsing into one generic string.
+/// Dropping this future cancels every in-flight item at its current await
+/// point; a slot no task ever reported becomes [`JoinOutcome::Lost`] with
+/// `why: None`, so the caller can still produce a row for the item.
 pub async fn join_ordered<T, R, E, F, Fut>(
-    items: &std::sync::Arc<[T]>,
+    items: &Arc<[T]>,
     jobs: usize,
     task: &str,
     f: F,
@@ -93,63 +49,23 @@ where
     T: Send + Sync + 'static,
     R: Send + 'static,
     E: Send + 'static,
-    F: Fn(usize, std::sync::Arc<[T]>) -> Fut,
+    F: FnMut(usize, Arc<[T]>) -> Fut,
     Fut: std::future::Future<Output = (usize, Result<R, E>)> + Send + 'static,
 {
-    use futures::{FutureExt, StreamExt};
-
-    let n = items.len();
-    let mut out: Vec<Option<Result<R, JoinOutcome<E>>>> = (0..n).map(|_| None).collect();
-
-    // One future per input slot, polled at most `jobs.max(1)` at a time. The
-    // library owns the concurrency bound and the completion signal; collecting
-    // by index is the local policy that turns completion order back into input
-    // order.
-    let mut running = futures::stream::iter(0..n)
-        .map(move |i| {
-            let work = f(i, std::sync::Arc::clone(items));
-            async move {
-                // A panic in a buffered future would otherwise unwind through
-                // this whole loop into the caller and take the run with it.
-                // Catch it at the future boundary and recover the payload with
-                // the same downcast `join_failure` uses for a spawned task.
-                match std::panic::AssertUnwindSafe(work).catch_unwind().await {
-                    Ok((i, r)) => (i, r.map_err(JoinOutcome::Failed)),
-                    Err(payload) => {
-                        let why = panic_message(payload.as_ref(), task);
-                        tracing::error!(item = i, error = %why, "a {task} task did not report");
-                        (i, Err(JoinOutcome::Lost { why: Some(why) }))
-                    }
-                }
-            }
-        })
-        .buffer_unordered(jobs.max(1));
-
-    while let Some((i, outcome)) = running.next().await {
-        out[i] = Some(outcome);
-    }
-
-    out.into_iter()
-        .map(|r| r.unwrap_or(Err(JoinOutcome::Lost { why: None })))
-        .collect()
+    girpr_async_join::join_ordered(items, jobs, wording(task), f).await
 }
 
 /// Run `work` on the blocking pool, keeping the cause if it does not return.
 ///
-/// [`join_failure`] applied at the one place that spawns blocking work, so the
-/// next `spawn_blocking` site gets the payload-preserving rule rather than
-/// rediscovering `format!("{e}")`. `work` is a parameter rather than a concrete
-/// closure so a test can drive the panic arm: no input makes the real blob
-/// measurement or request-log write panic on demand.
+/// `work` is a parameter rather than a concrete closure so a test can drive the
+/// panic arm: no input makes the real blob measurement or request-log write
+/// panic on demand.
 pub async fn join_blocking<T, F>(task: &str, work: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    match tokio::task::spawn_blocking(work).await {
-        Ok(value) => Ok(value),
-        Err(e) => Err(join_failure(e, task)),
-    }
+    girpr_async_join::join_blocking(&wording(task), work).await
 }
 
 #[cfg(test)]

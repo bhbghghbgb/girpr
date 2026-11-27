@@ -27,6 +27,10 @@ all = "warn"
 # drive the same waits and stop rules while keeping their own jitter and policy.
 girpr-retry = { path = "../../../crates/retry" }
 girpr-retry-driver = { path = "../../../crates/retry-driver" }
+# The ordered-join window and panic-payload rule live in the shared logic-free
+# leaf; this module keeps only gircap's own wording and its `JoinOutcome` ->
+# `ApiError` mapping at the call sites.
+girpr-async-join = { path = "../../../crates/async-join" }
 # Hex spelling of bytes for the request log's header digests. Logic-free leaf:
 # no flag, no exit code, no published shape.
 girpr-digest = { path = "../../../crates/digest" }
@@ -42,10 +46,6 @@ reqwest = "0.13.5"
 # The runtime for the injectable timers the backoff awaits and for the blocking
 # joins; no `fs`/`io`/`net`/`process` features are requested here.
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
-# The buffered stream owns the bounded concurrency of the ordered join; the
-# collection into input order stays local because the library yields completions
-# in completion order. `futures-util` is already a transitive dependency.
-futures = "0.3.34"
 # Derive `Display`/`Error` for `ApiError` without changing its format strings.
 thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
@@ -56,6 +56,9 @@ girpr-time = { path = "../../../crates/time" }
 tracing = "0.1.44"
 
 [dev-dependencies]
+# The join tests need an in-flight signal channel; the window itself lives in
+# the shared leaf, so `futures` is a test-only dependency of this crate now.
+futures = "0.3.34"
 # The mechanics tests build scratch directories and script canned replies on a
 # loopback server. Neither is needed by a shipped build of this crate; gircap's
 # own canned mock encodes different contracts and is deliberately not borrowed
