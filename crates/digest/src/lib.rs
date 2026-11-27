@@ -71,6 +71,24 @@ pub fn decode_hex(text: &str) -> std::result::Result<Vec<u8>, hex::FromHexError>
     hex::decode(text)
 }
 
+/// Lowercase a digest spelling in place at a caller's decode boundary.
+///
+/// A digest is an identity, not a spelling: two manifests that spell one
+/// digest in different cases would make their programs disagree about the
+/// same bytes. Normalising once where a document enters a program makes every
+/// later key agree instead of relying on each comparison to remember. Live
+/// manifests already spell digests in lowercase, so a string with no uppercase
+/// byte is left completely untouched — no allocation on the common path.
+///
+/// Re-exported by `girpr-chunk-identity` for callers that already depend on
+/// that crate. *When* to normalise stays with the caller: the wire leaf does
+/// not fold fields, since renaming or normalising one there changes dump bytes.
+pub fn normalize_hex(s: &mut String) {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        *s = s.to_ascii_lowercase();
+    }
+}
+
 /// One-shot lowercase-hex MD5 of `bytes`.
 pub fn md5_hex(bytes: &[u8]) -> String {
     encode_hex(&md5::Md5::digest(bytes))
@@ -518,6 +536,26 @@ mod tests {
         assert_eq!(upper.to_string(), EMPTY_SHA256);
         assert!(upper.matches_hex(EMPTY_SHA256));
         assert!(Sha256::parse_hex(EMPTY_MD5).is_err());
+    }
+
+    /// Folding happens only when needed: live manifests are already lowercase,
+    /// so the common path neither rewrites nor reallocates the string.
+    #[test]
+    fn normalize_hex_folds_only_uppercase_and_is_idempotent() {
+        let mut upper = "D41D8CD98F00B204E9800998ECF8427E".to_string();
+        normalize_hex(&mut upper);
+        assert_eq!(upper, EMPTY_MD5);
+
+        let mut already = EMPTY_MD5.to_string();
+        let ptr = already.as_ptr();
+        normalize_hex(&mut already);
+        normalize_hex(&mut already);
+        assert_eq!(already, EMPTY_MD5);
+        assert_eq!(
+            already.as_ptr(),
+            ptr,
+            "a lowercase digest is left untouched"
+        );
     }
 
     #[test]

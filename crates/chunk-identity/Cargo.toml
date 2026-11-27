@@ -3,7 +3,7 @@ name = "girpr-chunk-identity"
 version = "0.1.0"
 edition = "2024"
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared chunk-identity value types and digest-normalisation mechanics"
+description = "The shared chunk-identity value types and borrowed view (hex normalisation re-exported)"
 
 [lib]
 name = "girpr_chunk_identity"
@@ -13,7 +13,8 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-# The digest-byte key and the case-insensitive hex parse rule live here; the
-# wire type the borrowed view reads comes from the logic-free proto leaf.
+# The digest-byte key and the case-insensitive hex parse rule live here, and
+# the hex normalisation helper is re-exported from the same leaf; the wire type
+# the borrowed view reads comes from the logic-free proto leaf.
 girpr-digest = { path = "../digest" }
 girpr-proto = { path = "../proto" }

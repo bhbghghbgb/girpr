@@ -26,12 +26,15 @@
 //!   case-insensitive comparison.
 //!
 //! [`normalize_hex`] is the one way to lower a digest spelling at that decode
-//! boundary. It lives here rather than in `girpr-proto` because the wire leaf
-//! stays logic-free: renaming or normalising a field there changes dump bytes.
-//! What each program *does* with a normalised digest — which fields it
+//! boundary; its mechanics live in `girpr-digest` beside the other hex helpers
+//! and are re-exported here. It is not in `girpr-proto`: the wire leaf stays
+//! logic-free, because renaming or normalising a field there changes dump
+//! bytes. What each program *does* with a normalised digest — which fields it
 //! publishes, and which chunk it fetches first on a collision — stays local.
 
 use girpr_digest::Md5;
+// A single import for callers that already depend on this crate for the view.
+pub use girpr_digest::normalize_hex;
 use girpr_proto::SophonChunk;
 
 /// The owned identity key: parsed digest bytes plus the decoded length.
@@ -96,20 +99,6 @@ impl<'a> ChunkIdentity<'a> {
     pub fn matches(&self, key: IdentityKey) -> bool {
         self.size == key.size
             && Md5::try_parse_hex(self.digest).is_some_and(|digest| digest == key.digest)
-    }
-}
-
-/// Lowercase a digest spelling in place at a caller's decode boundary.
-///
-/// A digest is an identity, not a spelling: comparing two manifests that spell
-/// one digest in different cases would make two programs disagree about the
-/// same bytes. Normalising once where a document enters a program makes every
-/// later key agree instead of relying on each comparison to remember. Live
-/// manifests are already lowercase, so a string with no uppercase byte is left
-/// completely untouched — no allocation on the common path.
-pub fn normalize_hex(s: &mut String) {
-    if s.bytes().any(|b| b.is_ascii_uppercase()) {
-        *s = s.to_ascii_lowercase();
     }
 }
 
@@ -202,25 +191,5 @@ mod tests {
         normalize_hex(&mut upper_owned);
         assert_eq!(upper_owned, EMPTY);
         assert!(set.contains(&ChunkIdentity::new(&upper_owned, 20)));
-    }
-
-    /// Lowercasing is idempotent, and on the common path it does not reallocate
-    /// the string: live manifests already spell their digests in lowercase.
-    #[test]
-    fn normalize_lowercases_only_when_needed_and_does_not_reallocate() {
-        let mut s = UPPER.to_string();
-        normalize_hex(&mut s);
-        assert_eq!(s, EMPTY);
-
-        let mut already = EMPTY.to_string();
-        let ptr = already.as_ptr();
-        normalize_hex(&mut already);
-        normalize_hex(&mut already);
-        assert_eq!(already, EMPTY);
-        assert_eq!(
-            already.as_ptr(),
-            ptr,
-            "a lowercase digest is left untouched"
-        );
     }
 }
