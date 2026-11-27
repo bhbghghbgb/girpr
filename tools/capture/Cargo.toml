@@ -83,7 +83,9 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # native zstd tree cached. It owns no exit code, version pair, region value,
 # probe decision or artifact writer, depends on no program crate (only the
 # logic-free `girpr-digest` leaf), and invokes no binary.
-# The zstd_measure/zstd_measure_from pair stays deliberately duplicated there.
+# The zstd_measure/zstd_measure_from pair shares its decode-and-measure body
+# there, with each caller injecting its own error text; the two messages stay
+# deliberately distinct.
 #
 # The three gircap-owned crates below (`gircap-http`, `gircap-hash`,
 # `gircap-test-support`) deliberately deviate from the shared-crate convention:

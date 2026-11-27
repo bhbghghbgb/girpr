@@ -497,6 +497,40 @@ fn zstd_error(bytes: &[u8], what: &str, e: impl std::fmt::Display) -> String {
     )
 }
 
+/// The decode-and-measure body shared by both measurement entry points.
+///
+/// The error formatter is injected because the two callers know different
+/// things: a buffer can quote its whole length, a reader only the head it
+/// sniffed before it was consumed. Only this body is shared — the messages stay
+/// deliberately distinct, and the offline-bundle assertions on their text are
+/// what keep a formatter from quietly flattening one into the other.
+fn measure_decoded<R: std::io::Read>(
+    dec: &mut R,
+    ceiling: u64,
+    error: impl Fn(&dyn std::fmt::Display) -> String,
+) -> Result<Measure, String> {
+    let mut hasher = Md5::new();
+    let mut len = 0_u64;
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let n = dec.read(&mut buf).map_err(|e| error(&e))?;
+        if n == 0 {
+            break;
+        }
+        len += n as u64;
+        if len > ceiling {
+            return Err(error(&format!(
+                "the decoded output exceeds the {ceiling} B decode limit"
+            )));
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(Measure {
+        len,
+        md5: hex_bytes(&hasher.finalize()),
+    })
+}
+
 /// What a zstd decode said about the bytes it produced, without keeping them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Measure {
@@ -528,31 +562,10 @@ pub struct Measure {
 /// what the frame really contains, so a false declaration has to be measured
 /// past and reported, not used to truncate the answer.
 pub fn zstd_measure(bytes: &[u8], what: &str, ceiling: u64) -> Result<Measure, String> {
-    use std::io::Read as _;
     let mut dec =
         zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
-    let mut hasher = Md5::new();
-    let mut len = 0_u64;
-    let mut buf = [0_u8; 16 * 1024];
-    loop {
-        let n = dec.read(&mut buf).map_err(|e| zstd_error(bytes, what, e))?;
-        if n == 0 {
-            break;
-        }
-        len += n as u64;
-        if len > ceiling {
-            return Err(zstd_error(
-                bytes,
-                what,
-                format!("the decoded output exceeds the {ceiling} B decode limit"),
-            ));
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(Measure {
-        len,
-        md5: hex_bytes(&hasher.finalize()),
-    })
+    // The buffer version knows the whole length: keep quoting it in its errors.
+    measure_decoded(&mut dec, ceiling, |e| zstd_error(bytes, what, e))
 }
 
 /// [`zstd_measure`] over a reader rather than a buffer.
@@ -569,12 +582,11 @@ pub fn zstd_measure(bytes: &[u8], what: &str, ceiling: u64) -> Result<Measure, S
 /// needs — it separates "the CDN answered with an XML error page" from "a zstd
 /// frame arrived and is corrupt".
 ///
-/// **The loop below is duplicated from [`zstd_measure`] on purpose.** Making one
-/// delegate to the other, to share it, quietly downgrades the *slice* version's
-/// message too — and `a_streaming_measurement_agrees_with_decompressing_the_same_bytes`
-/// catches that, because that path is required to be byte-identical to
-/// [`zstd_decompress`]. Ten duplicated lines beat a shared function that makes
-/// one caller lie about what it knows.
+/// **The loop is shared, the formatter is not.** Both measurements walk the
+/// decoder through the same body, and each injects the error text it can
+/// honestly produce. Sharing the body cannot swap one message for the other:
+/// the formatter is a parameter, and the offline-bundle assertions on the
+/// distinct texts are what keep it that way.
 ///
 /// `ceiling` is the run's `--max-decompressed-bytes`, for the reason
 /// [`zstd_measure`] gives: the measurement bounds the decode, not the frame's
@@ -600,30 +612,8 @@ pub fn zstd_measure_from<R: std::io::Read>(
 
     let mut dec = zstd::stream::read::Decoder::new(std::io::Cursor::new(head).chain(reader))
         .map_err(|e| zstd_error_streamed(head, what, e))?;
-    let mut hasher = Md5::new();
-    let mut len = 0_u64;
-    let mut buf = [0_u8; 16 * 1024];
-    loop {
-        let n = dec
-            .read(&mut buf)
-            .map_err(|e| zstd_error_streamed(head, what, e))?;
-        if n == 0 {
-            break;
-        }
-        len += n as u64;
-        if len > ceiling {
-            return Err(zstd_error_streamed(
-                head,
-                what,
-                format!("the decoded output exceeds the {ceiling} B decode limit"),
-            ));
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(Measure {
-        len,
-        md5: hex_bytes(&hasher.finalize()),
-    })
+    // A reader can only name the head it sniffed; never the whole body.
+    measure_decoded(&mut dec, ceiling, |e| zstd_error_streamed(head, what, e))
 }
 
 /// Fill `buf` up to its length, or as far as the reader gets. How many arrived.
