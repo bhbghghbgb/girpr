@@ -21,6 +21,7 @@
 //! import rather than reinterpreted; see [`MetaLine`].
 
 use anyhow::{Context, Result, bail};
+use girpr_digest::{decode_hex, encode_hex};
 use girsync_cache::{CACHE_VERSION, FileRec, Meta, hash::DigestSet};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -91,10 +92,10 @@ impl EntryLine {
     pub fn from_rec(path: &str, rec: &FileRec) -> Self {
         let mut hashes = Vec::with_capacity(rec.hashes.len());
         for (algo, digest) in rec.hashes.iter() {
-            hashes.push((algo.as_str().to_string(), hex::encode(digest)));
+            hashes.push((algo.as_str().to_string(), encode_hex(digest)));
         }
         for (name, digest) in rec.hashes.foreign_iter() {
-            hashes.push((name.to_string(), hex::encode(digest)));
+            hashes.push((name.to_string(), encode_hex(digest)));
         }
         Self {
             path: path.to_string(),
@@ -107,7 +108,7 @@ impl EntryLine {
 
     /// Decode back into the row the cache stores.
     ///
-    /// Hex is decoded with `hex::decode`; algorithm names go through
+    /// Hex is decoded with the shared `decode_hex` wrapper; algorithm names go through
     /// [`DigestSet::insert_named`], which is the cache's own routing rule, so
     /// an unknown name is carried verbatim and a known name with an unexpected
     /// length lands where the wire decoder would put it. `kind` is a closed
@@ -118,7 +119,7 @@ impl EntryLine {
         }
         let mut hashes = DigestSet::default();
         for (name, hex) in &self.hashes {
-            let digest = hex::decode(hex)
+            let digest = decode_hex(hex)
                 .with_context(|| format!("decode hex digest for algorithm {name:?}"))?;
             hashes.insert_named(name, &digest);
         }
