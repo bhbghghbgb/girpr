@@ -20,12 +20,11 @@
 //! writes here, which is what lets `--output json` be piped straight into a
 //! parser.
 
-use std::io::Write as _;
 use std::sync::Mutex;
 
 use serde::ser::{Serialize, Serializer};
 
-use girpr_report_core::{Order, write_json_object};
+use girpr_report_core::{Order, Record as CoreRecord, write_record_line};
 
 use crate::VERSION;
 use crate::encoding;
@@ -176,7 +175,9 @@ pub struct Record {
     label: &'static str,
     /// Which command produced it: `capture`, `verify`, `materialize`, `list`.
     pub event: &'static str,
-    fields: Vec<(&'static str, Val)>,
+    /// The ordered field list, shared with the other planes. This crate still
+    /// owns `Val`, the layout, the event value and every field order.
+    core: CoreRecord<Val>,
 }
 
 impl Record {
@@ -188,11 +189,14 @@ impl Record {
         Self {
             label: "SUMMARY",
             event,
-            fields: vec![
-                ("event", Val::Str(event.to_string())),
-                ("tool", Val::Str("gircap".to_string())),
-                ("version", Val::Str(VERSION.to_string())),
-            ],
+            core: CoreRecord::with_fields(
+                "SUMMARY",
+                vec![
+                    ("event", Val::Str(event.to_string())),
+                    ("tool", Val::Str("gircap".to_string())),
+                    ("version", Val::Str(VERSION.to_string())),
+                ],
+            ),
         }
     }
 
@@ -206,10 +210,13 @@ impl Record {
         Self {
             label,
             event: "",
-            fields: vec![
-                ("tool", Val::Str("gircap".to_string())),
-                ("version", Val::Str(VERSION.to_string())),
-            ],
+            core: CoreRecord::with_fields(
+                label,
+                vec![
+                    ("tool", Val::Str("gircap".to_string())),
+                    ("version", Val::Str(VERSION.to_string())),
+                ],
+            ),
         }
     }
 
@@ -222,7 +229,7 @@ impl Record {
     /// the same name are two facts, and silently collapsing them would make the
     /// line lie.
     pub fn set(mut self, key: &'static str, value: impl Into<Val>) -> Self {
-        self.fields.push((key, value.into()));
+        self.core.push(key, value.into());
         self
     }
 
@@ -241,14 +248,18 @@ impl Record {
     where
         I: IntoIterator<Item = (&'static str, Val)>,
     {
-        self.fields.extend(fields);
+        self.core.extend(fields);
         self
     }
 
     /// Look up a field by name, for tests and for callers that want to assert
     /// on the value rather than the rendering.
     pub fn get(&self, key: &str) -> Option<&Val> {
-        self.fields.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+        self.core
+            .fields()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
     }
 
     /// Every field name, **in the order they were appended**.
@@ -258,13 +269,13 @@ impl Record {
     /// and one a caller parsing the output has to be able to ask. Duplicate
     /// names appear as many times as they were set - see [`Record::set`].
     pub fn keys(&self) -> impl Iterator<Item = &'static str> {
-        self.fields.iter().map(|(k, _)| *k)
+        self.core.fields().iter().map(|(k, _)| *k)
     }
 
     /// The rendered text line: `SUMMARY event=capture tool=gircap …`.
     pub fn to_text_line(&self) -> String {
         let mut s = String::from(self.label);
-        for (k, v) in &self.fields {
+        for (k, v) in self.core.fields() {
             s.push(' ');
             s.push_str(k);
             s.push('=');
@@ -327,20 +338,16 @@ impl Serialize for Record {
         // `Val`, so the core cannot change its spelling or type. Values keep
         // gircap's own boolean spelling and percent-encoding untouched.
         let fallback;
-        let event: &Val = match self.fields.iter().find(|(k, _)| *k == "event") {
+        let event: &Val = match self.core.fields().iter().find(|(k, _)| *k == "event") {
             Some((_, v)) => v,
             None => {
                 fallback = Val::Str(self.json_event());
                 &fallback
             }
         };
-        let fields: Vec<(&str, &Val)> = self
-            .fields
-            .iter()
-            .filter(|(k, _)| *k != "event")
-            .map(|(k, v)| (*k, v))
-            .collect();
-        write_json_object(serializer, "event", event, &fields, Order::EventFirst)
+        // The core skips the `event` field so the member is not written twice.
+        self.core
+            .write_json(serializer, "event", event, Order::EventFirst)
     }
 }
 
@@ -691,22 +698,28 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
 /// Everything else on the data plane goes through [`Record::emit`], so there is
 /// no second writer for a record to escape from.
 pub fn emit(line: &str) {
-    // `writeln!` into an explicitly-locked handle, rather than `println!`.
+    // An explicitly-locked handle, rather than `println!`.
     //
     // `println!` takes the stdout lock itself and then checks whether the
     // handle is a terminal on every single call, so it pays for a "maybe a user
     // is watching" decision once per record. `list` is the only unbounded
     // producer — one `BUNDLE` per bundle under a root — and for the
     // single-record commands this is noise. The handle is flushed by the
-    // `LineWriter` behind stdout on `drop`, and `exit_with` flushes too.
+    // `LineWriter` behind stdout on `drop`, and `exit_with` flushes too. The
+    // shared sink does the log-then-write step; this call site keeps the lock
+    // and the ignore-errors policy.
     let _guard = STDOUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = std::io::stdout().lock();
-    let _ = writeln!(out, "{line}");
-    if let Some(rest) = line.strip_prefix("SUMMARY ") {
-        tracing::debug!(summary = rest, "summary");
-    } else {
-        tracing::debug!(line, "stdout");
-    }
+    // The event name is derived here, from the rendered line: a summary's
+    // fields become its own event's payload, any other line is a generic one.
+    // `gircap` ignores write errors; that policy stays at this call site.
+    let _ = write_record_line(&mut out, line, |line| {
+        if let Some(rest) = line.strip_prefix("SUMMARY ") {
+            tracing::debug!(summary = rest, "summary");
+        } else {
+            tracing::debug!(line, "stdout");
+        }
+    });
 }
 
 #[cfg(test)]
