@@ -146,13 +146,13 @@ pub(super) fn drive_junction_decision(
 }
 
 /// The message of a caught panic.
+///
+/// The downcast lives in the shared leaf; this fixture keeps its own fallback
+/// string and its own no-task-label wording, so a broken fixture's failure
+/// still reads exactly as its callers expect.
 #[cfg(test)]
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-        .unwrap_or_else(|| "the panic carried no message".to_string())
+    girpr_async_join::panic_text(payload.as_ref(), "the panic carried no message")
 }
 
 /// Report that the junction could not be created, or fail when

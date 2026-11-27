@@ -42,5 +42,8 @@ tempfile = "3.27.0"
 junction = { version = "2.1.0", default-features = false }
 
 [dev-dependencies]
+# The junction fixture's caught-panic helper uses the same payload downcast as
+# the two programs and their tests; the leaf is logic-free and test-only here.
+girpr-async-join = { path = "../../crates/async-join" }
 # The scratch directories the file and containment tests write into.
 girpr-tempdir = { path = "../../crates/tempdir" }

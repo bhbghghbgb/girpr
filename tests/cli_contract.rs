@@ -76,15 +76,12 @@ fn strip_ansi(s: &str) -> String {
 /// The message from a panic a parser raises for input it cannot read.
 ///
 /// Catching the panic keeps the message assertable inside a table-driven test —
-/// the same cases used to be separate `#[should_panic]` functions.
+/// the same cases used to be separate `#[should_panic]` functions. The payload
+/// downcast is the shared leaf's; this helper keeps its own strict rule that a
+/// non-string payload is a test bug, not a fallback string.
 fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
     let panic = std::panic::catch_unwind(f).expect_err("the helper must panic");
-    panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .expect("the panic carries a message")
-        .to_owned()
+    girpr_async_join::panic_text_opt(panic.as_ref()).expect("the panic carries a message")
 }
 
 /// The binary's file name, passed as argv[0] to in-process parses so their
