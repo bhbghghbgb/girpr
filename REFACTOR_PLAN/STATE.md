@@ -30,8 +30,8 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | completed | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 kept |
 | T18 | `tasks/T18-report-core.md` | completed | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 kept |
-| T19 | `tasks/T19-test-fixture-helpers.md` | pending review | 1 commit: fixture helper consolidation and cache-names leaf | CP7 batch |
-| T20 | `tasks/T20-test-http-servers.md` | pending review | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 batch complete |
+| T19 | `tasks/T19-test-fixture-helpers.md` | completed | 1 commit: fixture helper consolidation and cache-names leaf | CP7 kept; comment fix in review |
+| T20 | `tasks/T20-test-http-servers.md` | completed | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 kept; deferrals F50/F51 accepted; comment fix in review |
 | T21 | `tasks/T21-hyp-wire.md` | todo | — | |
 | T22 | `tasks/T22-capture-emit-stores.md` | todo | — | |
 | T23 | `tasks/T23-girsync-heartbeat.md` | todo | — | |
@@ -47,7 +47,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | CP4 | T12–T14 | done | all kept; no fixes or reverts |
 | CP5 | T15–T16 | done | T15 kept; T16 kept with clippy bound fix |
 | CP6 | T17–T18 | done | all kept; no fixes or reverts |
-| CP7 | T19–T20 | open | |
+| CP7 | T19–T20 | done | both kept; stale comments fixed; T20 deferrals accepted |
 | CP8 | T21–T22 | open | |
 | CP9 | T23–T24 | open | |
 
@@ -109,6 +109,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F50 | T20 | CAP-15 raw-scripted reply mode deferred: the three raw-socket servers have deliberately different policies; a dedicated task could add a parameterized raw-reply helper and migrate only the malformed shape. | proposed |
 | F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | proposed |
 | F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | proposed |
+| F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | proposed |
+| F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | proposed |
 
 ## Persistent context
 
@@ -146,3 +148,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP6 done: T17/T18 kept; no fixes or reverts; workspace 2345 passed / 8 skipped; clippy clean when allowing the out-of-batch chunk-layout warning.
 - T19: `girpr-cache-names` owns the Windows ASCII-case-fold rule; `entry_names_with` parameterizes the `girpr-cache*` predicate; `CARGO_BIN_EXE_girpr` remains integration-only; test roots unchanged.
 - T20 boundary: only axum socket/stop/gate mechanics moved; the three server contracts and per-test reply policies stayed distinct; `argv_with_program` takes the sentinel as a parameter and the binary runner stayed in integration roots.
+- CP7 done: T19/T20 kept; two stale comments fixed; workspace 2348 passed / 8 skipped; T20 deferrals F50/F51 accepted as justified follow-ups.
