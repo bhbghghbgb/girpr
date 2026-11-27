@@ -33,6 +33,7 @@ use girpr_digest::{Algorithms, DigestBytes, Md5, hash_reader};
 use girpr_dispatch::ManifestDescriptor;
 use girpr_persistent_plan::{ObservedDigest, PersistentRow, parse_rows, verify_observed};
 use girpr_util_path::atomic::write_atomic_with;
+use girpr_util_path::readonly::{ReadOnlyOutcome, clear_readonly};
 use tempfile::NamedTempFile;
 
 use crate::retry::{BackoffPolicy, Retry, retry};
@@ -425,31 +426,6 @@ fn verify_path(row: &PersistentRow, path: &Path) -> Result<bool> {
     Ok(verify_observed(row, &observed).is_ok())
 }
 
-/// Strip the read-only attribute on this one target immediately
-/// before overwriting it. No tree-wide walk, no mutation of unrelated files.
-fn clear_readonly(path: &Path) {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return;
-    };
-    if !meta.permissions().readonly() {
-        return;
-    }
-    let mut permissions = meta.permissions();
-    // The file is already read-only and this one target must be overwritten;
-    // no unrelated file's permissions are touched.
-    #[allow(clippy::permissions_set_readonly_false)]
-    {
-        permissions.set_readonly(false);
-    }
-    if let Err(e) = std::fs::set_permissions(path, permissions) {
-        tracing::warn!(
-            path = %path.display(),
-            error = %e,
-            "could not clear read-only before publishing; will try the temp path"
-        );
-    }
-}
-
 /// Could this target be opened for writing? A directory or a locked file
 /// answers no; that is when the verified temp sibling becomes the deliverable
 /// rather than an error.
@@ -479,7 +455,15 @@ fn publish_verified(
         return Err(anyhow::Error::new(WriteCeilingStopped));
     }
     if target.exists() {
-        clear_readonly(target);
+        // A failed clear is not fatal: the verified temp sibling is still a
+        // usable deliverable when the target cannot be opened for writing.
+        if let ReadOnlyOutcome::SetFailed(e) = clear_readonly(target) {
+            tracing::warn!(
+                path = %target.display(),
+                error = %e,
+                "could not clear read-only before publishing; will try the temp path"
+            );
+        }
     }
     if target.exists() && !can_open_for_write(target) {
         let (kept, path) = temp

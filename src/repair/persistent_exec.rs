@@ -20,6 +20,7 @@ use girpr_fetch::persistent::{
 };
 use girpr_persistent_plan::{PersistentAsset, PersistentRow, data_dir_name};
 use girpr_util_path::atomic::write_atomic;
+use girpr_util_path::readonly::{ReadOnlyOutcome, clear_readonly};
 use reqwest::Client;
 use walkdir::WalkDir;
 
@@ -292,7 +293,7 @@ fn prerequisites(game_dir: &Path, exe_file_name: &str) -> Result<(), RunFailure>
     let stale =
         join(game_dir, &format!("{persistent_tree}/ctable.dat")).map_err(RunFailure::write)?;
     if stale.exists() {
-        clear_readonly(&stale);
+        clear_readonly_before_delete(&stale);
         std::fs::remove_file(&stale)
             .with_context(|| format!("delete {}", stale.display()))
             .map_err(RunFailure::write)?;
@@ -305,7 +306,7 @@ fn prerequisites(game_dir: &Path, exe_file_name: &str) -> Result<(), RunFailure>
             .with_context(|| format!("delete {}", dxsetup.display()))
             .map_err(RunFailure::write)?;
     } else if dxsetup.exists() {
-        clear_readonly(&dxsetup);
+        clear_readonly_before_delete(&dxsetup);
         std::fs::remove_file(&dxsetup)
             .with_context(|| format!("delete {}", dxsetup.display()))
             .map_err(RunFailure::write)?;
@@ -474,25 +475,15 @@ fn move_file(source: &Path, dest: &Path) -> anyhow::Result<bool> {
 /// Clear the read-only bit on this one prerequisite before deleting it.
 /// Tree-wide stripping is never done; only the file about to be removed is
 /// touched (the same per-path discipline, applied to the stale launcher state).
-fn clear_readonly(path: &Path) {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return;
-    };
-    let mut permissions = meta.permissions();
-    if permissions.readonly() {
-        // The file is already read-only and is about to be replaced; this
-        // clears that one attribute, not a tree-wide permission change.
-        #[allow(clippy::permissions_set_readonly_false)]
-        {
-            permissions.set_readonly(false);
-        }
-        if let Err(e) = std::fs::set_permissions(path, permissions) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "could not clear read-only before deleting a stale persistent prerequisite"
-            );
-        }
+/// A failed clear is warned about rather than propagated: the delete below is
+/// still attempted, and the caller decides how a failed prerequisite counts.
+fn clear_readonly_before_delete(path: &Path) {
+    if let ReadOnlyOutcome::SetFailed(e) = clear_readonly(path) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "could not clear read-only before deleting a stale persistent prerequisite"
+        );
     }
 }
 
