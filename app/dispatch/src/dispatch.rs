@@ -12,6 +12,7 @@ use crate::proto::{DescriptorRow, parse_base_revision, parse_descriptor, parse_d
 use crate::url::{build_dispatcher_url, query_version, validate_dispatcher_url};
 use crate::{DispatchError, Result};
 use girpr_model::Region;
+use girpr_request_url::{AppendPathError, append_path_segments};
 use serde_json::Value;
 
 /// Plain GET of a metadata or dispatcher URL. Implemented by the caller; tests
@@ -178,25 +179,18 @@ fn trimmed_url(base: &str, name: &str) -> Result<String> {
     Ok(base.trim_end_matches('/').to_owned())
 }
 
-/// Append path segments to a CDN base with `Url`, so separators and escaping
-/// are the library's job rather than a second string URL grammar.
+/// Append path segments to a CDN base through the shared leaf, so separators
+/// and escaping stay the library's job rather than a second string URL grammar.
+/// This call site keeps its own `DispatchError` wording.
 fn cdn_url<'a>(base: &str, segments: impl IntoIterator<Item = &'a str>) -> Result<String> {
-    let mut url = url::Url::parse(base).map_err(|e| {
-        DispatchError::Metadata(format!("CDN base URL is not absolute: {base:?}: {e}"))
-    })?;
-    {
-        let mut path = url.path_segments_mut().map_err(|_| {
-            DispatchError::Metadata(format!("CDN base URL has an opaque path: {base:?}"))
-        })?;
-        for segment in segments {
-            for part in segment.split('/') {
-                if !part.is_empty() {
-                    path.push(part);
-                }
-            }
+    append_path_segments(base, segments).map_err(|e| match e {
+        AppendPathError::Parse(err) => {
+            DispatchError::Metadata(format!("CDN base URL is not absolute: {base:?}: {err}"))
         }
-    }
-    Ok(url.to_string())
+        AppendPathError::OpaquePath => {
+            DispatchError::Metadata(format!("CDN base URL has an opaque path: {base:?}"))
+        }
+    })
 }
 
 fn descriptor(

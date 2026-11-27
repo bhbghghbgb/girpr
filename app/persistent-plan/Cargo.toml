@@ -26,10 +26,10 @@ girpr-digest = { path = "../../crates/digest" }
 # owns only the decision over the values handed to it.
 girpr-chunk-verify = { path = "../chunk-verify" }
 girpr-util-path = { path = "../util-path" }
+# CDN asset URLs use the shared path-segment append mechanics. This crate
+# keeps its prefix selection, hotfix swap and `PlanError` wording local.
+girpr-request-url = { path = "../../crates/request-url" }
 # NDJSON is the manifest wire shape; serde's unknown-key tolerance is what
 # makes `isPatch`/`category`/`localName` parsed-but-ignored rather than fatal.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# CDN asset URLs are assembled with `Url`'s path-segment API, not a local
-# `format!` grammar (already in the lockfile via `url`/`reqwest`).
-url = "2.5.9"

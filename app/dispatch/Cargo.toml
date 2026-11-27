@@ -29,6 +29,9 @@ quick-xml = { version = "0.42.0", features = ["serialize"] }
 # injectable seam, and depending on it would close the graph.
 girpr-model = { path = "../../crates/model" }
 girpr-digest = { path = "../../crates/digest" }
+# The CDN path-segment append mechanics are shared with the persistent plan;
+# the error wording, prefix selection and `DispatchError` type stay here.
+girpr-request-url = { path = "../../crates/request-url" }
 # JSON is the metadata/envelope format; the descriptor rows use serde's derive.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

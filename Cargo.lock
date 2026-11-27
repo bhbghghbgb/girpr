@@ -1272,6 +1272,7 @@ dependencies = [
  "brotli",
  "girpr-digest",
  "girpr-model",
+ "girpr-request-url",
  "prost",
  "quick-xml",
  "rand 0.10.4",
@@ -1399,10 +1400,10 @@ dependencies = [
  "girpr-chunk-verify",
  "girpr-digest",
  "girpr-dispatch",
+ "girpr-request-url",
  "girpr-util-path",
  "serde",
  "serde_json",
- "url",
 ]
 
 [[package]]
