@@ -12,12 +12,12 @@
 //! byte format cannot leave a second, stale codec here.
 
 use anyhow::{Context, Result, bail};
+use girpr_util_path::atomic::ClaimedTemp;
 use girsync_cache::{CACHE_VERSION, CacheOpen};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
-use tempfile::NamedTempFile;
 
 use crate::ndjson::{self, EntryLine, Line, MetaLine};
 
@@ -205,7 +205,9 @@ pub fn import_cache<R: BufRead>(input: R, cache_path: &Path, force: bool) -> Res
     // stream leaves the same thing behind as any other failure: nothing of
     // this run at the destination. Its name is random and inside the tool's
     // namespace, and dropping the handle on an error removes the file.
-    let temp = claim_temp_sibling(cache_path)?;
+    let parent = cache_path.parent().unwrap_or_else(|| Path::new("."));
+    let temp = ClaimedTemp::claim(parent, JSON_TEMP_PREFIX, ".redb")
+        .with_context(|| format!("claim import temporary in {}", parent.display()))?;
     let temp_path = temp.path().to_path_buf();
     let stats = match build_cache(&temp_path, &mut stream, &state, case_sensitive) {
         Ok(stats) => stats,
@@ -275,32 +277,18 @@ fn build_cache(
     Ok(stats)
 }
 
-/// Claim a free temporary sibling next to `dst`.
-///
-/// `tempfile` creates it atomically with a random middle and retries on a
-/// collision, so two imports into one folder cannot share a temporary. The
-/// handle owns the file: dropping it on any error path removes it.
-fn claim_temp_sibling(dst: &Path) -> Result<NamedTempFile> {
-    let parent = dst.parent().unwrap_or_else(|| Path::new("."));
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(JSON_TEMP_PREFIX).suffix(".redb");
-    builder
-        .tempfile_in(parent)
-        .with_context(|| format!("claim import temporary in {}", parent.display()))
-}
-
-/// Move the finished temporary onto the destination.
+/// Move the finished claimed sibling onto the destination.
 ///
 /// An existing file is replaced by one rename, so the destination is either
 /// the old cache or the new one, never a half-written mixture. A fresh file is
 /// published with a no-clobber rename, which refuses a destination that
 /// appeared after the initial check.
-fn replace_destination(temp: NamedTempFile, dst: &Path) -> Result<()> {
+fn replace_destination(temp: ClaimedTemp, dst: &Path) -> Result<()> {
     let temp_display = temp.path().display().to_string();
     let result = if dst.is_file() {
-        temp.persist(dst).map(|_| ())
+        temp.persist(dst)
     } else {
-        temp.persist_noclobber(dst).map(|_| ())
+        temp.persist_noclobber(dst)
     };
     result.with_context(|| {
         format!(

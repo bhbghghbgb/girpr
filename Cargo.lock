@@ -1646,10 +1646,10 @@ dependencies = [
  "girpr-cli",
  "girpr-digest",
  "girpr-tempdir",
+ "girpr-util-path",
  "girsync-cache",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
