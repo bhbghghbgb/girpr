@@ -70,7 +70,7 @@ pub trait BodyFile: RestartableWrite + Send {}
 
 impl<T: RestartableWrite + Send + ?Sized> BodyFile for T {}
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 // md-5 and sha2 re-export the same `digest::Digest` trait, so one import
 // brings `digest()` into scope for both hashers.
 use md5::Digest as _;
@@ -165,176 +165,144 @@ pub fn parse_xxhash64_hex(text: &str) -> Result<u64, hex::FromHexError> {
     Ok(u64::from_be_bytes(bytes))
 }
 
-/// A 16-byte MD5 digest.
-///
-/// The manifest's spelling is not canonical — either case is legal — so the
-/// digest is parsed once at the boundary and compared as bytes from then on.
-/// [`Md5::parse_hex`] is the only way in from a `String`; [`Md5::to_hex`] is
-/// the only way back out. A string that is not 32 hex digits (the empty string
-/// above all) is not a digest, which keeps "an empty MD5 is unknown, not a
-/// match" an `Option<Md5>` rather than a string sentinel.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Md5([u8; 16]);
+macro_rules! digest_newtype {
+    (
+        $(#[$meta:meta])*
+        $name:ident, $name_str:literal, $label:literal,
+        $byte_len:literal, $hex_len:literal,
+        $wrong_len:literal, $bad_hex:literal,
+        $empty:expr, $output:ty
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name([u8; $byte_len]);
 
-impl Md5 {
-    /// The MD5 of the empty file, as a digest.
-    pub const EMPTY: Self = Self([
+        impl $name {
+            /// The empty-file digest, as bytes.
+            pub const EMPTY: Self = Self($empty);
+
+            #[doc = concat!("Parse a hex ", $label, " into the ", stringify!($byte_len), " bytes it spells.")]
+            ///
+            /// Either case is accepted; exactly the right width is required.
+            /// Callers that only want "is this a digest" should use
+            /// [`Self::try_parse_hex`] instead: this one builds an `anyhow::Error`
+            /// describing the bad spelling, which those callers discard.
+            pub fn parse_hex(s: &str) -> Result<Self> {
+                Self::try_parse_hex(s).ok_or_else(|| {
+                    if s.len() != $hex_len {
+                        anyhow!($wrong_len, s.len())
+                    } else {
+                        anyhow!($bad_hex, s)
+                    }
+                })
+            }
+
+            #[doc = concat!("Parse a hex ", $label, " without allocating on failure.")]
+            ///
+            /// The same spelling rule as [`Self::parse_hex`] — either case,
+            /// exactly the right number of hex digits — but returns `None`
+            /// instead of an `anyhow::Error`, so the common "unknown digest"
+            /// path allocates nothing. Both parses share this one implementation.
+            pub fn try_parse_hex(s: &str) -> Option<Self> {
+                if s.len() != $hex_len {
+                    return None;
+                }
+                let mut out = [0u8; $byte_len];
+                hex::decode_to_slice(s, &mut out).ok()?;
+                Some(Self(out))
+            }
+
+            /// The digest as lowercase hex.
+            pub fn to_hex(self) -> String {
+                encode_hex(&self.0)
+            }
+
+            /// The digest bytes, for a key or a byte comparison.
+            pub fn as_bytes(&self) -> &[u8; $byte_len] {
+                &self.0
+            }
+
+            /// Does `s` spell this digest? Either case is accepted; a string
+            /// that is not a digest matches nothing.
+            pub fn matches_hex(self, s: &str) -> bool {
+                Self::try_parse_hex(s).is_some_and(|other| other == self)
+            }
+        }
+
+        impl fmt::Display for $name {
+            /// Lowercase hex, without allocating an intermediate `String`.
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut buf = [0u8; $hex_len];
+                hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
+                f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, concat!($name_str, "({})"), self)
+            }
+        }
+
+        impl From<$output> for $name {
+            fn from(digest: $output) -> Self {
+                let mut bytes = [0u8; $byte_len];
+                bytes.copy_from_slice(&digest);
+                Self(bytes)
+            }
+        }
+
+        /// Build the newtype from raw digest bytes — the shape a streaming sink yields.
+        impl From<[u8; $byte_len]> for $name {
+            fn from(bytes: [u8; $byte_len]) -> Self {
+                Self(bytes)
+            }
+        }
+    };
+}
+
+digest_newtype!(
+    #[doc = " A 16-byte MD5 digest."]
+    #[doc = ""]
+    #[doc = " The manifest's spelling is not canonical — either case is legal — so"]
+    #[doc = " the digest is parsed once at the boundary and compared as bytes from"]
+    #[doc = " then on. `parse_hex` is the only way in from a `String`; `to_hex` is the"]
+    #[doc = " only way back out. A string that is not 32 hex digits is not a digest,"]
+    #[doc = " which keeps an unknown MD5 an `Option<Md5>` rather than a string sentinel."]
+    Md5,
+    "Md5",
+    "MD5",
+    16,
+    32,
+    "an MD5 is 32 hex digits, not {} bytes",
+    "not a hex MD5: {:?}",
+    [
         0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42,
         0x7e,
-    ]);
+    ],
+    md5::digest::Output<md5::Md5>
+);
 
-    /// Parse a hex MD5 into the 16 bytes it spells.
-    ///
-    /// Either case is accepted. Anything that is not exactly 32 hex digits is
-    /// an error, so a caller that wants "unknown" can turn it into `None`.
-    /// Callers that only want "is this a digest" should use
-    /// [`Self::try_parse_hex`] instead: this one builds an `anyhow::Error`
-    /// describing the bad spelling, which those callers immediately discard.
-    pub fn parse_hex(s: &str) -> Result<Self> {
-        Self::try_parse_hex(s).ok_or_else(|| {
-            if s.len() != 32 {
-                anyhow!("an MD5 is 32 hex digits, not {} bytes", s.len())
-            } else {
-                anyhow!("not a hex MD5: {s:?}")
-            }
-        })
-    }
-
-    /// Parse a hex MD5 into the 16 bytes it spells, without allocating on
-    /// failure.
-    ///
-    /// The same spelling rule as [`Self::parse_hex`] — either case, exactly 32
-    /// hex digits — but returns `None` instead of an `anyhow::Error`, so the
-    /// common "unknown digest" path allocates nothing. The two are kept in
-    /// lockstep by sharing this one parse: `parse_hex` only adds the reason.
-    pub fn try_parse_hex(s: &str) -> Option<Self> {
-        if s.len() != 32 {
-            return None;
-        }
-        let mut out = [0u8; 16];
-        hex::decode_to_slice(s, &mut out).ok()?;
-        Some(Self(out))
-    }
-
-    /// The digest as lowercase hex.
-    pub fn to_hex(self) -> String {
-        encode_hex(&self.0)
-    }
-
-    /// The digest bytes, for a key or a byte comparison.
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-
-    /// Does `s` spell this digest?
-    ///
-    /// Either case is accepted; a string that is not a digest (the empty MD5
-    /// above all) matches nothing.
-    pub fn matches_hex(self, s: &str) -> bool {
-        Self::try_parse_hex(s).is_some_and(|other| other == self)
-    }
-}
-
-impl fmt::Display for Md5 {
-    /// Lowercase hex, without allocating an intermediate `String`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; 32];
-        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
-        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
-    }
-}
-
-impl fmt::Debug for Md5 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Md5({self})")
-    }
-}
-
-impl From<md5::digest::Output<md5::Md5>> for Md5 {
-    fn from(digest: md5::digest::Output<md5::Md5>) -> Self {
-        let mut bytes = [0u8; 16];
-        bytes.copy_from_slice(&digest);
-        Self(bytes)
-    }
-}
-
-/// Build the newtype from raw digest bytes — the shape a streaming sink yields.
-impl From<[u8; 16]> for Md5 {
-    fn from(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-}
-
-/// A 32-byte SHA-256 digest, with the same hex mechanics as [`Md5`].
-///
-/// girpr does not use this newtype — it only needs the MD5 one — but gircap
-/// publishes SHA-256 hex too, so the spelling and the empty-file oracle live
-/// here alongside the MD5 ones rather than in a third copy.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sha256([u8; 32]);
-
-impl Sha256 {
-    /// The SHA-256 of the empty file, as a digest.
-    pub const EMPTY: Self = Self([
+digest_newtype!(
+    #[doc = " A 32-byte SHA-256 digest, with the same hex mechanics as `Md5`."]
+    #[doc = ""]
+    #[doc = " girpr does not use this newtype — it only needs the MD5 one — but gircap"]
+    #[doc = " publishes SHA-256 hex too, so the spelling and the empty-file oracle live"]
+    #[doc = " here alongside the MD5 ones rather than in a third copy."]
+    Sha256,
+    "Sha256",
+    "SHA-256",
+    32,
+    64,
+    "a SHA-256 is 64 hex digits, not {} bytes",
+    "not a hex SHA-256: {:?}",
+    [
         0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
         0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
         0xb8, 0x55,
-    ]);
-
-    /// Parse a hex SHA-256 into the 32 bytes it spells. Either case is accepted.
-    pub fn parse_hex(s: &str) -> Result<Self> {
-        if s.len() != 64 {
-            bail!("a SHA-256 is 64 hex digits, not {} bytes", s.len());
-        }
-        let mut out = [0u8; 32];
-        hex::decode_to_slice(s, &mut out).map_err(|_| anyhow!("not a hex SHA-256: {s:?}"))?;
-        Ok(Self(out))
-    }
-
-    /// The digest as lowercase hex.
-    pub fn to_hex(self) -> String {
-        encode_hex(&self.0)
-    }
-
-    /// The digest bytes, for a key or a byte comparison.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// Does `s` spell this digest? Either case is accepted.
-    pub fn matches_hex(self, s: &str) -> bool {
-        Self::parse_hex(s).is_ok_and(|other| other == self)
-    }
-}
-
-impl fmt::Display for Sha256 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; 64];
-        hex::encode_to_slice(self.0, &mut buf).map_err(|_| fmt::Error)?;
-        f.write_str(std::str::from_utf8(&buf).map_err(|_| fmt::Error)?)
-    }
-}
-
-impl fmt::Debug for Sha256 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Sha256({self})")
-    }
-}
-
-impl From<sha2::digest::Output<sha2::Sha256>> for Sha256 {
-    fn from(digest: sha2::digest::Output<sha2::Sha256>) -> Self {
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&digest);
-        Self(bytes)
-    }
-}
-
-/// Build the newtype from raw digest bytes — the shape a streaming sink yields.
-impl From<[u8; 32]> for Sha256 {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
+    ],
+    sha2::digest::Output<sha2::Sha256>
+);
 
 /// Published digest vectors, shared so each implementation is checked against
 /// the same oracles instead of a copy that can drift.
