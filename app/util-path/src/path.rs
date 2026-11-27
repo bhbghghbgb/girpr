@@ -11,6 +11,70 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// What one `metadata` result found.
+///
+/// Every caller of a stat needs a subset of the same facts: its length,
+/// whether it names a regular file, and — critically — whether the path is
+/// *absent* (`NotFound`) or merely *could not be statted*. The last two must
+/// never collapse: an ACL failure is not "the file is missing", and it is not
+/// "the file is not a file" either. The original error is kept on both failure
+/// arms so a caller that propagates the stat can return it unchanged; callers
+/// that only need one fact take a thin view ([`Self::file_len`],
+/// [`Self::is_file`]).
+#[derive(Debug)]
+pub enum MetadataFact {
+    /// Metadata was read: the length and whether this is a regular file.
+    Found { len: u64, is_file: bool },
+    /// The path is not there. The `NotFound` error is kept for callers that
+    /// propagate the stat rather than asking a presence question.
+    Absent(std::io::Error),
+    /// The path could not be statted, so its presence is unknown.
+    Unreadable(std::io::Error),
+}
+
+impl MetadataFact {
+    /// The length half, keeping absence and an unreadable stat distinct.
+    pub fn file_len(self) -> FileLen {
+        match self {
+            Self::Found { len, .. } => FileLen::Present(len),
+            Self::Absent(_) => FileLen::Absent,
+            Self::Unreadable(e) => FileLen::Unreadable(e),
+        }
+    }
+
+    /// The in-place-capable verdict a mode decision reads from this stat.
+    ///
+    /// A regular file can be written where it lies. A path that is not there
+    /// yet can be created there, and a stat that failed is decided by the
+    /// open rather than guessed from metadata — both take the in-place branch
+    /// until the write says otherwise. This is the same `Err(_) => true` the
+    /// repair policy applies to `symlink_metadata`.
+    pub fn is_file(&self) -> bool {
+        match self {
+            Self::Found { is_file, .. } => *is_file,
+            Self::Absent(_) | Self::Unreadable(_) => true,
+        }
+    }
+}
+
+/// Classify one `metadata` result once, for every caller of the same stat.
+///
+/// [`NotFound`] is the only absence; every other error leaves presence
+/// unknown. Splitting the classifier from the I/O keeps each arm testable with
+/// an injected `io::Error` instead of a host-dependent fixture.
+///
+/// [`NotFound`]: std::io::ErrorKind::NotFound
+pub fn classify_metadata(stat: std::io::Result<std::fs::Metadata>) -> MetadataFact {
+    match stat {
+        Ok(m) => MetadataFact::Found {
+            len: m.len(),
+            is_file: m.is_file(),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => MetadataFact::Absent(e),
+        Err(e) => MetadataFact::Unreadable(e),
+    }
+}
+
 /// What a file-length probe found.
 ///
 /// `Absent` is exactly `NotFound`. Every other `metadata` error — a denied
@@ -28,21 +92,9 @@ pub enum FileLen {
     Unreadable(std::io::Error),
 }
 
-/// Classify one `metadata` result.
-///
-/// Split from [`file_len`] so the absent/unreadable split can be pinned with
-/// an injected `io::Error`, the way `post::classify_deprecated` is.
-fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> FileLen {
-    match stat {
-        Ok(m) => FileLen::Present(m.len()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileLen::Absent,
-        Err(e) => FileLen::Unreadable(e),
-    }
-}
-
 /// Length of a path with absence and an unreadable stat kept distinct.
 pub fn file_len(path: &Path) -> FileLen {
-    classify_len(std::fs::metadata(path))
+    classify_metadata(std::fs::metadata(path)).file_len()
 }
 
 /// Validate a **server-controlled relative path** and return it in `/` form.
@@ -542,6 +594,40 @@ mod tests {
     #[cfg(unix)]
     use crate::symlink_support::{require_symlink, symlink_fixture_decision, try_symlink_dir};
     use crate::test_support::FixtureRefusal;
+
+    /// The four outcomes of one stat stay distinct through both thin views:
+    /// a non-file is not a failed stat, and a failed stat is not absence.
+    #[test]
+    fn classify_metadata_keeps_absence_failure_and_shape_distinct() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_classify", "metadata");
+        let file = dir.join("a.dat");
+        std::fs::write(&file, b"12345").unwrap();
+        let fact = classify_metadata(std::fs::metadata(&file));
+        assert!(fact.is_file());
+        assert!(matches!(fact.file_len(), FileLen::Present(5)));
+
+        let fact = classify_metadata(std::fs::metadata(&dir));
+        assert!(!fact.is_file());
+        assert!(matches!(fact.file_len(), FileLen::Present(_)));
+
+        let fact = classify_metadata(std::fs::metadata(&dir.join("missing.dat")));
+        assert!(
+            matches!(&fact, MetadataFact::Absent(e) if e.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(fact.is_file());
+        assert!(matches!(fact.file_len(), FileLen::Absent));
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let fact = classify_metadata(Err(denied));
+        assert!(
+            matches!(&fact, MetadataFact::Unreadable(e) if e.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+        assert!(fact.is_file());
+        match fact.file_len() {
+            FileLen::Unreadable(e) => assert_eq!(e.to_string(), "denied"),
+            other => panic!("a failed stat is not absence or a length: {other:?}"),
+        }
+    }
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
     /// be refused; `a/b.dat` is the only legitimate shape.
@@ -1252,9 +1338,15 @@ mod tests {
         assert!(matches!(file_len(&dir.join("missing")), FileLen::Absent));
 
         let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert!(matches!(classify_len(Err(denied)), FileLen::Unreadable(_)));
+        assert!(matches!(
+            classify_metadata(Err(denied)).file_len(),
+            FileLen::Unreadable(_)
+        ));
         let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
-        assert!(matches!(classify_len(Err(gone)), FileLen::Absent));
+        assert!(matches!(
+            classify_metadata(Err(gone)).file_len(),
+            FileLen::Absent
+        ));
 
         // A NUL cannot be statted (`InvalidInput` on Unix and Windows), so it
         // reaches the unreadable arm without a deny ACL.

@@ -1,8 +1,9 @@
 //! Path primitives: server-controlled path containment and atomic publishes.
 //!
-//! - [`path`] — `contained_rel`, `clean_rel`, `contained_join`, `PathRoot`,
-//!   `file_len`, `FileLen`, `rel_from_base`, `rel_pair_from_base`, `join_rel`:
-//!   lexical + filesystem checks and `/`-form rel spellings.
+//! - [`path`] — `classify_metadata`, `MetadataFact`, `file_len`, `FileLen`,
+//!   `contained_rel`, `clean_rel`, `contained_join`, `PathRoot`,
+//!   `rel_from_base`, `rel_pair_from_base`, `join_rel`: one stat classification
+//!   with thin views, lexical + filesystem checks and `/`-form rel spellings.
 //! - [`atomic`] — `write_atomic`: temp-sibling-then-rename publishing for every
 //!   artifact girpr writes.
 //! - [`readonly`] — `clear_readonly` and `ReadOnlyOutcome`: the stat → check →
@@ -32,7 +33,9 @@ pub mod junction_support;
 #[cfg(any(test, feature = "test-support"))]
 pub mod symlink_support;
 
-pub use self::path::{FileLen, PathRoot, clean_rel, contained_join, file_len};
+pub use self::path::{
+    FileLen, MetadataFact, PathRoot, classify_metadata, clean_rel, contained_join, file_len,
+};
 
 /// Test-only helpers shared with the product's test seam.
 ///
