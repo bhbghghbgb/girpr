@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::summary::Summary;
-use girpr_util_counter::add_saturating;
+use girpr_util_counter::{add_saturating, try_charge, try_refund};
 
 /// Which runtime ceiling bound, if any.
 ///
@@ -211,20 +211,10 @@ impl Meter {
             add_saturating(&self.live, n);
             return true;
         }
-        let mut cur = self.live.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_add(n);
-            if next > limit {
-                return false;
-            }
-            match self
-                .live
-                .compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => return true,
-                Err(actual) => cur = actual,
-            }
-        }
+        // The ceiling test and the charge are one compare-exchange in the
+        // shared leaf, so two reservations that both see room cannot both
+        // commit past the limit.
+        try_charge(&self.live, n, limit).committed
     }
 
     /// Give `n` charged bytes back: the resource turned out to deliver nothing
@@ -240,25 +230,13 @@ impl Meter {
     /// warning keeps the caller's logic error visible without panicking a
     /// release run.
     pub fn refund_live(&self, n: u64) {
-        let mut cur = self.live.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_sub(n);
-            match self
-                .live
-                .compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => {
-                    if cur < n {
-                        tracing::warn!(
-                            refund = n,
-                            live = cur,
-                            "refund exceeds the live byte figure; saturating at zero"
-                        );
-                    }
-                    return;
-                }
-                Err(actual) => cur = actual,
-            }
+        let outcome = try_refund(&self.live, n);
+        if outcome.saturated {
+            tracing::warn!(
+                refund = n,
+                live = outcome.previous,
+                "refund exceeds the live byte figure; saturating at zero"
+            );
         }
     }
 
@@ -301,19 +279,10 @@ impl Meter {
             add_saturating(&self.settled, n);
             return true;
         }
-        let mut cur = self.settled.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_add(n);
-            match self.settled.compare_exchange_weak(
-                cur,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return next <= limit,
-                Err(actual) => cur = actual,
-            }
-        }
+        // A settle always charges, even past the ceiling: the bytes were spent.
+        // Charge with no ceiling in the leaf, then apply this meter's own
+        // within-limit verdict to the value that actually committed.
+        try_charge(&self.settled, n, u64::MAX).next <= limit
     }
 
     /// The bytes the run has spent.
