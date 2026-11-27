@@ -43,6 +43,10 @@ serde = "1.0.229"
 # Request queries are decoded by the shared grammar leaf rather than a local
 # `%XX`/`+` loop; the leaf borrows `url`'s form decoder (already in the lockfile).
 girpr-request-url = { path = "../../../crates/request-url" }
+# The `gircap` sentinel prepended to dispatched argv is supplied by this call
+# site to the shared helper: capture records the full vector in
+# `MANIFEST.json → tool_argv`, so its spelling is a byte contract owned here.
+girpr-cli = { path = "../../../crates/cli" }
 # The canned manifest bodies are protobuf frames the mock encodes by hand.
 prost = "0.14.6"
 # axum owns the mock's listener, HTTP parsing, keep-alive, routing and header

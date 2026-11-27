@@ -143,9 +143,8 @@ pub fn dispatch_with(argv: &[&str], http: Option<Arc<dyn HttpTransport>>) -> Dis
     // for argv[0], and record it so `MANIFEST.json → tool_argv` carries the same
     // shape a spawned run would (byte-exact gates normalise only the `--out`
     // root, so this spelling must be stable across calls).
-    let full: Vec<OsString> = std::iter::once(OsString::from("gircap"))
-        .chain(argv.iter().map(OsString::from))
-        .collect();
+    let full: Vec<OsString> =
+        girpr_cli::argv_with_program("gircap", argv.iter().copied()).collect();
     let cli = parse_from(full.iter().cloned()).expect("a valid gircap command");
     let event = match &cli.cmd {
         Cmd::Capture(_) => "capture",

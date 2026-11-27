@@ -27,8 +27,11 @@ all = "warn"
 # dev-dependency.
 girsync = { path = ".." }
 serde_json = "1.0.154"
-# The in-process CLI runner glue parses argv through clap's `Parser` trait.
+# The in-process CLI runner glue parses argv through clap's `Parser` trait, and
+# the full-argv spelling it hands the parser is the shared `argv_with_program`
+# helper (the caller supplies the `girsync` sentinel).
 clap = "4.6.10"
+girpr-cli = { path = "../../../crates/cli" }
 # The logged runner installs girsync's subscriber and renders the console into a
 # shared buffer, so it names `tracing`/`tracing-subscriber` directly. These are
 # already in girsync's graph; naming them here only makes the dependency real.

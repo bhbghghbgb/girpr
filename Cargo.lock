@@ -1122,6 +1122,7 @@ dependencies = [
  "fs2",
  "gircap",
  "girpr-chunk-cost",
+ "girpr-cli",
  "girpr-request-url",
  "girpr-tempdir",
  "prost",
@@ -1691,6 +1692,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "filetime",
+ "girpr-cli",
  "girpr-log",
  "girpr-tempdir",
  "girsync",

@@ -616,8 +616,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     run_cli(Cli::try_parse_from(argv).expect("valid CLI args"))
 }
 
@@ -628,8 +627,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     run_cli_mem(Cli::try_parse_from(argv).expect("valid CLI args"))
 }
 
@@ -640,8 +638,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     run_cli_with_hooks_mem(Cli::try_parse_from(argv).expect("valid CLI args"), hooks)
 }
 
@@ -652,8 +649,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     run_cli_with_hooks(Cli::try_parse_from(argv).expect("valid CLI args"), hooks)
 }
 
@@ -666,8 +662,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     match Cli::try_parse_from(argv) {
         Err(e) => (2, e.to_string()),
         Ok(cli) => {
@@ -684,8 +679,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     match Cli::try_parse_from(argv) {
         Err(e) => (2, e.to_string()),
         Ok(cli) => {
@@ -722,8 +716,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     let cli = Cli::try_parse_from(argv).expect("valid CLI args");
     let format = cli.output;
     let out = run_cli(cli);
@@ -737,8 +730,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     let cli = Cli::try_parse_from(argv).expect("valid CLI args");
     let format = cli.output;
     let out = run_cli_mem(cli);
@@ -789,8 +781,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let argv = std::iter::once(std::ffi::OsString::from("girsync"))
-        .chain(args.into_iter().map(Into::into));
+    let argv = girpr_cli::argv_with_program("girsync", args);
     let cli = Cli::try_parse_from(argv).expect("valid CLI args");
     for (key, value) in env {
         unsafe { std::env::set_var(key, value) };

@@ -13,9 +13,11 @@
 //! help text passed in as data. See [`global_args!`] for why an item-level
 //! macro rather than a flattened struct.
 
+mod argv;
 mod global;
 mod shims;
 
+pub use argv::argv_with_program;
 pub use girpr_log::{Level, parse_level};
 pub use girpr_report_core::OutputFormat;
 pub use global::output_format_parser;
