@@ -28,8 +28,8 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
 | T15 | `tasks/T15-fs-path-helpers.md` | completed | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 kept |
 | T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
-| T17 | `tasks/T17-subscriber-and-log-internals.md` | pending review | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 batch |
-| T18 | `tasks/T18-report-core.md` | pending review | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 batch complete |
+| T17 | `tasks/T17-subscriber-and-log-internals.md` | completed | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 kept |
+| T18 | `tasks/T18-report-core.md` | completed | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 kept |
 | T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
 | T20 | `tasks/T20-test-http-servers.md` | todo | — | |
 | T21 | `tasks/T21-hyp-wire.md` | todo | — | |
@@ -46,7 +46,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | CP3 | T08–T11 | done | all kept; T10 clippy drop fix in review |
 | CP4 | T12–T14 | done | all kept; no fixes or reverts |
 | CP5 | T15–T16 | done | T15 kept; T16 kept with clippy bound fix |
-| CP6 | T17–T18 | open | |
+| CP6 | T17–T18 | done | all kept; no fixes or reverts |
 | CP7 | T19–T20 | open | |
 | CP8 | T21–T22 | open | |
 | CP9 | T23–T24 | open | |
@@ -136,3 +136,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP5 done: T15 kept; T16 kept after removing redundant parser bounds; workspace 2339 passed / 8 skipped; only one trycmd help golden (`tests/cmd/help.trycmd`, girpr --help) exists; sync/capture assert help semantically.
 - T17: `subscriber_for` takes `ConsoleSpec<W>`, `FileFormat`, `SpanFields` and `open_file`; `FileFormat::Json` behind a new girpr-log `json` feature used by the tools; girpr passes `ansi: None` to preserve its NO_COLOR behavior.
 - T18: broken-pipe policy stays parameterized by the caller via `io::Result`; each plane keeps its own `Val` vocabulary, layout, field order and event derivation.
+- CP6 done: T17/T18 kept; no fixes or reverts; workspace 2345 passed / 8 skipped; clippy clean when allowing the out-of-batch chunk-layout warning.
