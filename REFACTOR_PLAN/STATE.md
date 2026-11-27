@@ -103,7 +103,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | accepted (B1) |
 | F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | declined |
 | F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | declined |
-| F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | accepted (B6) |
+| F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | done |
 | F47 | T19 | `app/lock::field` stays local (scans whole `key=value` lines, unlike whitespace-token `field_token`); consolidation needs an explicit decision on values containing spaces. | declined |
 | F48 | T19 | Capture-side `read_json`/`write_json` helpers use generic deserialization and different error policies; left local by contract. | declined |
 | F49 | T19 | `ctx_default` bakes `jobs = 1` and `backoff = none()`; a parameterized variant is only worth adding if a third fixture needs different defaults. | declined |
@@ -188,3 +188,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - B3 done: F01 kept in review; all named clamp sites now use chunk-cost primitives except those already folded or deliberately not clamps; workspace 2366 passed / 8 skipped.
 - B4 done: F15 kept in review; `promote_tmp` routes through `verify_whole_file` with delete-and-bail and all published strings unchanged; workspace 2366 passed / 8 skipped.
 - B5 done: F20 kept in review; test-only thread-local `set_permissions` failure guard covers SetFailed at the leaf and all three callers; warning/error wording unchanged.
+- B6 done: F46 kept in review; production now uses `girpr-cache-names`; prefix spelling and Windows case fold byte-identical; only two expected Cargo.lock edges added.
