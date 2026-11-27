@@ -106,8 +106,11 @@
 
 #[path = "artifact_repair_bridge/bundle.rs"]
 mod bundle;
-#[path = "common/run_lock.rs"]
-mod run_lock;
+// The binary runner lives with the other shared integration helpers; this root
+// only needs that one surface from it (the run-lock cleanup travels with the
+// spawn so a case cannot forget it).
+#[path = "common/mod.rs"]
+mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -544,14 +547,8 @@ impl Run {
 /// Run the real binary (`CARGO_BIN_EXE_girpr` — this is the whole reason the
 /// bridge is an integration test in this package and not a separate crate).
 async fn girpr(args: &[String]) -> Run {
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args(args)
-        .output()
-        .await
-        .expect("spawn girpr");
-    run_lock::remove_run_lock_for_args(args);
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let (code, stdout, stderr) =
+        common::run_binary_with(args, &[], common::StdoutPolicy::Captured).await;
     let mut records = BTreeMap::new();
     for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
         let v: serde_json::Value = serde_json::from_str(line)
@@ -563,7 +560,7 @@ async fn girpr(args: &[String]) -> Run {
         }
     }
     Run {
-        code: out.status.code().expect("process must exit normally"),
+        code,
         records,
         stdout,
         stderr,

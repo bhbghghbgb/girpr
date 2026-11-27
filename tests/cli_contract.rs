@@ -39,8 +39,8 @@ use girpr_tempdir::TempDir;
 use predicates::prelude::*;
 
 use crate::common::{
-    MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
-    remove_run_lock_for_args, strip_ansi, temp_dir, write_game_file,
+    MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, StdoutPolicy, build_fixture, read_game_file,
+    run_binary_with, strip_ansi, temp_dir, write_game_file,
 };
 
 /// Spawn the binary and hand its captured output to the caller's assertions.
@@ -1120,21 +1120,14 @@ async fn run_data_plane_as(
     ];
     args.extend(extra.iter().map(|arg| (*arg).to_string()));
 
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args(&args)
-        .output()
-        .await
-        .expect("run girpr");
-    remove_run_lock_for_args(&args);
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let (code, stdout, stderr) = run_binary_with(&args, &[], StdoutPolicy::Captured).await;
     let records = match output {
         "json" => json_records(&stdout),
         "text" => text_records(&stdout),
         other => panic!("unknown output plane {other}"),
     };
     DataPlaneRun {
-        code: out.status.code().expect("process must exit normally"),
+        code,
         records,
         stdout,
         stderr,

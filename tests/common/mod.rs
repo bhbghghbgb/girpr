@@ -7,7 +7,7 @@
 //! and skips doctests, so inlining either library here with `mod common;` would
 //! compile it into every integration binary; only this shim is inlined now.
 //!
-//! `run_binary` stays here because `CARGO_BIN_EXE_girpr` is bound only into an
+//! `run_binary*` stays here because `CARGO_BIN_EXE_girpr` is bound only into an
 //! integration-test target, not into a library dependency.
 
 // Each binary uses a different part of this shared surface, so most of it is
@@ -47,24 +47,69 @@ mod digest;
 
 pub use digest::md5hex;
 
-/// Run the shipped binary. The endpoint overrides are the only seam a
+/// How the child's stdout is handled by [`run_binary_with`]. Every policy
+/// still collects stderr and cleans up the run lock; only the stdout seam
+/// differs, which is what the closed-consumer case is testing.
+pub enum StdoutPolicy {
+    /// `Command::output`: collect stdout and stderr into the returned strings.
+    Captured,
+    /// Pipe stdout and drop the reading end immediately, so the run's first
+    /// data-plane write meets a closed consumer. The returned stdout is empty.
+    Closed,
+}
+
+/// Spawn the shipped binary with the caller's argv/env and the chosen stdout
+/// seam, then clean up the run lock. The endpoint overrides are the only seam a
 /// *binary-level* test can use, and this is where that seam is exercised: the
-/// library tests inject `RunCtx::hyp_base_override` directly,
-/// which proves nothing about whether a flag reaches `HypClient`.
+/// library tests inject `RunCtx::hyp_base_override` directly, which proves
+/// nothing about whether a flag reaches `HypClient`.
 ///
 /// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
-/// the single runtime thread the mock server needs to answer on.
-pub async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+/// the single runtime thread the mock server needs to answer on. `A` is generic
+/// so both the `&[&str]` call sites and the ones that build `Vec<String>` argv
+/// can share the one spawn/lock-cleanup body.
+pub async fn run_binary_with<A: AsRef<str> + AsRef<std::ffi::OsStr>>(
+    args: &[A],
+    env: &[(&str, &str)],
+    stdout_policy: StdoutPolicy,
+) -> (i32, String, String) {
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
     cmd.args(args);
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let out = cmd.output().await.expect("run girpr");
+    let (status, stdout, stderr) = match stdout_policy {
+        StdoutPolicy::Captured => {
+            let out = cmd.output().await.expect("run girpr");
+            (out.status, out.stdout, out.stderr)
+        }
+        StdoutPolicy::Closed => {
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            let mut child = cmd.spawn().expect("spawn girpr");
+            drop(child.stdout.take());
+            let out = child.wait_with_output().await.expect("wait for girpr");
+            // The reading end was taken above, so there are no stdout bytes to
+            // collect; `wait_with_output` still gathers stderr for the caller.
+            (out.status, Vec::new(), out.stderr)
+        }
+    };
     remove_run_lock_for_args(args);
     (
-        out.status.code().expect("process must exit normally"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
+        status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
     )
+}
+
+/// The usual binary run: both streams captured.
+pub async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    run_binary_with(args, env, StdoutPolicy::Captured).await
+}
+
+/// The closed-stdout case, keeping its `(code, stderr)` shape for the one call
+/// site that asserts a run against a consumer that went away.
+pub async fn run_binary_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
+    let (code, _, stderr) = run_binary_with(args, env, StdoutPolicy::Closed).await;
+    (code, stderr)
 }

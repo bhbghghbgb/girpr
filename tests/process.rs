@@ -6,7 +6,8 @@
 
 use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, GameFixture, LATEST_TAG, Lies, MockOpts, MockServer,
-    build_fixture, build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
+    build_fixture, build_fixture_spec, read_game_file, run_binary, run_binary_closed_stdout,
+    temp_dir, write_game_file,
 };
 use girpr_tempdir::TempDir;
 
@@ -15,29 +16,6 @@ type PrecedenceRow<'a> = (&'a str, Vec<&'a str>, Vec<(&'a str, &'a str)>);
 
 /// One phase row: its label, flags, log name and assertion.
 type PhaseRow<'a> = (&'a str, &'a [&'a str], &'a str, fn(&str, &GameFixture));
-
-/// Run the shipped binary with the reading end of its stdout pipe gone.
-///
-/// The pipe is dropped immediately after the child exists, so the run's first
-/// data-plane write meets the closed consumer. stderr is still collected; stdout
-/// is deliberately not, because there is no reader left to collect it.
-async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
-    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
-    cmd.args(args);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let mut child = cmd.spawn().expect("spawn girpr");
-    drop(child.stdout.take());
-    let out = child.wait_with_output().await.expect("wait for girpr");
-    crate::common::remove_run_lock_for_args(args);
-    (
-        out.status.code().expect("process must exit normally"),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
 
 /// The standard fixture as a running mock plus a fresh install holding that
 /// fixture's files, ready for a run.
@@ -71,7 +49,7 @@ async fn a_closed_stdout_does_not_change_the_exit_code_or_the_repair() {
     let log = dir.join("run.log");
     let log_arg = log.to_string_lossy().into_owned();
 
-    let (code, stderr) = run_binary_with_closed_stdout(
+    let (code, stderr) = run_binary_closed_stdout(
         &[
             "--game-path",
             &game,
