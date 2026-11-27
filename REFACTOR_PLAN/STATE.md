@@ -26,8 +26,8 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T12 | `tasks/T12-request-url.md` | completed | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 kept |
 | T13 | `tasks/T13-line-and-bom-readers.md` | completed | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 kept |
 | T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
-| T15 | `tasks/T15-fs-path-helpers.md` | pending review | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 batch |
-| T16 | `tasks/T16-global-cli-and-format.md` | pending review | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 batch complete; before T18 |
+| T15 | `tasks/T15-fs-path-helpers.md` | completed | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 kept |
+| T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
 | T18 | `tasks/T18-report-core.md` | todo | — | after T16 |
 | T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
@@ -45,7 +45,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | CP2 | T05–T07 | done | all kept; no fixes or reverts |
 | CP3 | T08–T11 | done | all kept; T10 clippy drop fix in review |
 | CP4 | T12–T14 | done | all kept; no fixes or reverts |
-| CP5 | T15–T16 | open | |
+| CP5 | T15–T16 | done | T15 kept; T16 kept with clippy bound fix |
 | CP6 | T17–T18 | open | |
 | CP7 | T19–T20 | open | |
 | CP8 | T21–T22 | open | |
@@ -94,6 +94,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F35 | T16 | `global_args!` has two arms duplicating the five field declarations; a tt-muncher could reduce this to one textual declaration if strictly required. | proposed |
 | F36 | T16 | Capture's `FromStr` wording is now byte-identical but defined in `girpr-report-core`; if strict locality is wanted, replace it with a capture-local parse helper. | proposed |
 | F37 | T16 | `girpr-cli` now links `girpr-log` and `girpr-report-core`; consider whether re-exporting `Level`/`OutputFormat` from it is the preferred seam versus direct imports. | proposed |
+| F38 | T16 | The `clap` feature on `girpr-report-core` (and forwarding features on app/report, tools/sync, tools/capture) is now unused since `--output` uses `PossibleValuesParser`; could be retired later. | proposed |
+| F39 | T16 | girpr's `--output` was previously `global = true`; the shared macro emits `global = false` — behavior-neutral today (no subcommands) but note if subcommands are added. | proposed |
 
 ## Persistent context
 
@@ -125,3 +127,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP4 done: T12/T13/T14 kept; no fixes or reverts; workspace 2332 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
 - T15: `Absent` carries the original `NotFound` error; `util-hash`'s `Md5` re-export left intact; prefix helpers imported directly from `girsync_leaves::link` so the disk-question scanner still sees only real disk calls.
 - T16: shared CLI uses an item-level `global_args!` macro (two arms) rather than a flattened struct to preserve each binary's help order and public struct literals; --help/exit bytes verified identical against the pre-T16 tree.
+- CP5 done: T15 kept; T16 kept after removing redundant parser bounds; workspace 2339 passed / 8 skipped; only one trycmd help golden (`tests/cmd/help.trycmd`, girpr --help) exists; sync/capture assert help semantically.
