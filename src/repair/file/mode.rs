@@ -1,12 +1,14 @@
 //! File-open helpers for the in-place repair path.
 //!
 //! `open_inplace` is `pub(super)` so `inplace.rs` (a sibling under `file`)
-//! can call it via `super::mode::open_inplace`; `open_rw`/`clear_readonly`
-//! stay private (used only within mode.rs).
+//! can call it via `super::mode::open_inplace`; `open_rw` stays private (used
+//! only within mode.rs). The read-only clearing itself comes from the shared
+//! fs leaf; this module keeps the in-place path's propagate policy and wording.
 
 use std::fs::File;
 
 use anyhow::{Context, Result};
+use girpr_util_path::readonly::{ReadOnlyOutcome, clear_readonly};
 
 use super::FileCtx;
 
@@ -38,7 +40,23 @@ pub(super) fn open_inplace(ctx: &FileCtx, path: &std::path::Path) -> Result<Opti
                 error = %first,
                 "in-place open failed -> clearing the read-only attribute"
             );
-            clear_readonly(path)?;
+            match clear_readonly(path) {
+                ReadOnlyOutcome::Cleared => {
+                    tracing::debug!(path = %path.display(), "read-only attribute cleared");
+                }
+                ReadOnlyOutcome::NotReadOnly => {}
+                // Unlike the publisher and the prerequisite cleanup, the
+                // in-place path cannot proceed without this one attribute:
+                // both a failed stat and a failed set are fatal here.
+                ReadOnlyOutcome::StatFailed(e) => {
+                    return Err(e).with_context(|| format!("stat {}", path.display()));
+                }
+                ReadOnlyOutcome::SetFailed(e) => {
+                    return Err(e).with_context(|| {
+                        format!("clear the read-only attribute of {}", path.display())
+                    });
+                }
+            }
             let f =
                 open_rw(path).with_context(|| format!("open for writing {}", path.display()))?;
             Ok(Some(f))
@@ -55,29 +73,4 @@ pub(super) fn open_rw(path: &std::path::Path) -> std::io::Result<File> {
         .create(true)
         .truncate(false)
         .open(path)
-}
-
-/// Clear the read-only attribute of a file.
-///
-/// On Windows this is the attribute that stops a write; on Unix it is the
-/// write bit, and clearing it is what makes the file writable by its owner
-/// — which it has to be for the repair to happen at all.
-fn clear_readonly(path: &std::path::Path) -> Result<()> {
-    let mut perms = std::fs::metadata(path)
-        .with_context(|| format!("stat {}", path.display()))?
-        .permissions();
-    if !perms.readonly() {
-        return Ok(());
-    }
-    // The lint is about the blanket "make it writable" reflex. This is the
-    // opposite: the file is *already* read-only, and the repair has to
-    // write to it, so the attribute is cleared and nothing else is touched.
-    #[allow(clippy::permissions_set_readonly_false)]
-    {
-        perms.set_readonly(false);
-    }
-    std::fs::set_permissions(path, perms)
-        .with_context(|| format!("clear the read-only attribute of {}", path.display()))?;
-    tracing::debug!(path = %path.display(), "read-only attribute cleared");
-    Ok(())
 }
