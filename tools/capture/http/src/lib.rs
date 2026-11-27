@@ -2,7 +2,9 @@
 //!
 //! This crate owns `reqwest` and the fetcher/transport/request-log mechanics:
 //! retries, timeout, headers, the request provenance record and the error-body
-//! retention budget. It holds no program policy — no exit codes, no version
+//! retention budget. [`bounded_store`] holds the mutex-backed row mechanics
+//! that budget and gircap's other run-wide stores share; each store injects its
+//! own admission key, caps and ordering. It holds no program policy — no exit codes, no version
 //! pairs, no region resolution, no probe decisions, no artifact writing. Those
 //! stay in the `gircap` package, which depends on this crate directly so that an
 //! edit to `emit`/`blobs`/`manifest` leaves this crate (and its native `reqwest`
@@ -44,6 +46,7 @@
 //! capped; there is no jitter, because a capture that adds randomness to its own
 //! request log is harder to diff against a previous one.
 
+pub mod bounded_store;
 pub mod error;
 pub mod error_bodies;
 pub mod fetcher;

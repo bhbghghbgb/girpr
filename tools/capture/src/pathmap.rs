@@ -23,9 +23,7 @@
 //! empty `entries` list, which is the honest statement "nothing needed
 //! escaping" — the same reason `diagnostics/rejections.json` is always written.
 
-use std::collections::BTreeMap;
-use std::sync::Mutex;
-
+use crate::http::bounded_store::BoundedStore;
 use serde::{Deserialize, Serialize};
 
 /// The artifact-relative name of the mapping document.
@@ -67,9 +65,14 @@ impl PathMapDocument {
 }
 
 /// The run-wide set of paths that were written under an escaped name.
+///
+/// Rows are kept in `logical` key order by the inserts below, so the document
+/// is a clone of them and needs no sort of its own. The mutex and row storage
+/// are shared mechanics; the "record only when they differ" rule is this
+/// store's policy.
 #[derive(Debug, Default)]
 pub struct PathMap {
-    entries: Mutex<BTreeMap<String, String>>,
+    inner: BoundedStore<PathMapEntry>,
 }
 
 impl PathMap {
@@ -94,13 +97,25 @@ impl PathMap {
         if logical == on_disk {
             return;
         }
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.insert(logical.to_string(), on_disk.to_string());
+        let row = PathMapEntry {
+            logical: logical.to_string(),
+            on_disk: on_disk.to_string(),
+        };
+        let mut state = self.inner.lock();
+        // The same overwrite-on-equal-key rule a `BTreeMap` gave, in the same
+        // key order: a later writer that owns the escaping rule wins.
+        match state
+            .rows
+            .binary_search_by(|other| other.logical.as_str().cmp(logical))
+        {
+            Ok(pos) => state.rows[pos] = row,
+            Err(pos) => state.rows.insert(pos, row),
+        }
     }
 
     /// How many paths were escaped.
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.inner.lock().rows.len()
     }
 
     /// Whether nothing needed escaping.
@@ -110,16 +125,9 @@ impl PathMap {
 
     /// The document to write.
     pub fn document(&self) -> PathMapDocument {
-        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         PathMapDocument {
             schema_version: crate::SCHEMA_VERSION,
-            entries: entries
-                .iter()
-                .map(|(logical, on_disk)| PathMapEntry {
-                    logical: logical.clone(),
-                    on_disk: on_disk.clone(),
-                })
-                .collect(),
+            entries: self.inner.snapshot(|_| {}),
         }
     }
 }
@@ -128,10 +136,10 @@ impl PathMap {
 mod tests {
     use super::*;
 
-    /// The interior mutability is a `Mutex<BTreeMap<..>>`: `Mutex<T>` is `Sync`
-    /// when `T: Send` and `BTreeMap<String, String>` is `Send`, so `PathMap` is
-    /// safe to share by reference across parallel workers. `document()` takes
-    /// the same lock and iterates the `BTreeMap` in key order, so even concurrent
+    /// The interior mutability is a mutex over key-ordered rows: `Mutex<T>` is
+    /// `Sync` when `T: Send` and `PathMapEntry` is `Send`, so `PathMap` is safe
+    /// to share by reference across parallel workers. `document()` takes the
+    /// same lock and clones the rows in key order, so even concurrent
     /// `record()` calls produce a byte-identical document. Capture's assembly
     /// keeps the writes on one thread today; this pins that the shared state
     /// would be sound if that ever changes.

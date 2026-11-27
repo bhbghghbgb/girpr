@@ -26,8 +26,7 @@
 //! [`ErrorBodies::snapshot`] sorts by it, so two captures of one fixture write
 //! the same document regardless of which download won a race.
 
-use std::sync::Mutex;
-
+use super::bounded_store::{self, BoundedStore};
 use serde::{Deserialize, Serialize};
 
 /// How many bytes of incidental error bodies one run keeps.
@@ -116,14 +115,7 @@ pub struct ErrorResponses {
 #[derive(Debug)]
 pub struct ErrorBodies {
     budget: u64,
-    state: Mutex<State>,
-}
-
-#[derive(Debug, Default)]
-struct State {
-    /// Bytes already promised to rows in `rows` or to live [`Reservation`]s.
-    used: u64,
-    rows: Vec<ErrorBody>,
+    inner: BoundedStore<ErrorBody>,
 }
 
 /// A charge against the retention budget, held while a body is being read.
@@ -149,8 +141,8 @@ impl Reservation<'_> {
 impl Drop for Reservation<'_> {
     fn drop(&mut self) {
         if !self.consumed {
-            let mut state = self.store.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.used = state.used.saturating_sub(self.granted);
+            let mut state = self.store.inner.lock();
+            bounded_store::settle(&mut state.used, self.granted, 0);
         }
     }
 }
@@ -160,7 +152,7 @@ impl ErrorBodies {
     pub fn new(budget: u64) -> Self {
         ErrorBodies {
             budget,
-            state: Mutex::new(State::default()),
+            inner: BoundedStore::new(),
         }
     }
 
@@ -177,7 +169,7 @@ impl ErrorBodies {
     /// and `Self::push_reserved` keep the final total exact by truncating
     /// whichever row arrives later.
     pub fn remaining(&self) -> u64 {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.inner.lock();
         self.budget.saturating_sub(state.used)
     }
 
@@ -193,10 +185,8 @@ impl ErrorBodies {
     /// budget rather than each seeing all of it. Drop the reservation without
     /// pushing to refund the charge.
     pub(crate) fn reserve(&self, max: u64) -> Reservation<'_> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let room = self.budget.saturating_sub(state.used);
-        let granted = room.min(max);
-        state.used = state.used.saturating_add(granted);
+        let mut state = self.inner.lock();
+        let granted = bounded_store::charge(self.budget, &mut state.used, max);
         Reservation {
             store: self,
             granted,
@@ -221,8 +211,8 @@ impl ErrorBodies {
         // Consume before touching `used`, so the reservation's Drop is a no-op
         // and the accounting below is the only refund.
         reservation.consumed = true;
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.used = state.used.saturating_sub(granted).saturating_add(retained);
+        let mut state = self.inner.lock();
+        bounded_store::settle(&mut state.used, granted, retained);
         state.rows.push(row);
     }
 
@@ -241,19 +231,12 @@ impl ErrorBodies {
 
     /// Every row, in `seq` order.
     pub fn snapshot(&self) -> Vec<ErrorBody> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let mut rows = state.rows.clone();
-        rows.sort_by_key(|r| r.seq);
-        rows
+        self.inner.snapshot(|rows| rows.sort_by_key(|r| r.seq))
     }
 
     /// How many rows have been recorded.
     pub fn len(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .rows
-            .len()
+        self.inner.lock().rows.len()
     }
 
     /// Whether nothing has been recorded.

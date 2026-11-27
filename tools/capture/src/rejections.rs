@@ -33,8 +33,7 @@
 //! quote in a path cannot break the document. The value is text rather than a
 //! path, and nothing here ever joins it to a filesystem path.
 
-use std::sync::Mutex;
-
+use crate::http::bounded_store::BoundedStore;
 use serde::{Deserialize, Serialize};
 
 /// Longest value kept in a rejection row, in bytes.
@@ -88,15 +87,12 @@ pub struct RejectionsDocument {
 }
 
 /// The run-wide store of refused values, shared by every fetch task.
+///
+/// The mutex, row storage and refusal counter are the shared mechanics; this
+/// store injects the keyed retention policy below.
 #[derive(Debug, Default)]
 pub struct Rejections {
-    state: Mutex<State>,
-}
-
-#[derive(Debug, Default)]
-struct State {
-    rows: Vec<Rejection>,
-    omitted: u64,
+    inner: BoundedStore<Rejection>,
 }
 
 impl Rejections {
@@ -122,7 +118,7 @@ impl Rejections {
         value: &str,
         rule: impl Into<String>,
     ) -> Rejection {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.inner.lock();
         let (value, truncated) = cap_value(value);
         let row = Rejection {
             source: source.into(),
@@ -162,25 +158,25 @@ impl Rejections {
 
     /// Every retained row, in the order the document writes them.
     pub fn snapshot(&self) -> Vec<Rejection> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.rows.clone()
+        // Inserts keep `rows` in key order; no sort is needed on the way out.
+        self.inner.snapshot(|_| {})
     }
 
     /// How many rows have been recorded, including rows the cap dropped.
     pub fn len(&self) -> usize {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.inner.lock();
         state.rows.len() + usize::try_from(state.omitted).unwrap_or(usize::MAX)
     }
 
     /// Whether nothing has been refused.
     pub fn is_empty(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.inner.lock();
         state.rows.is_empty() && state.omitted == 0
     }
 
     /// The document to write, built from the rows recorded so far.
     pub fn document(&self) -> RejectionsDocument {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.inner.lock();
         RejectionsDocument {
             schema_version: crate::SCHEMA_VERSION,
             cap_bytes: MAX_RETAINED_VALUE_BYTES as u64,
