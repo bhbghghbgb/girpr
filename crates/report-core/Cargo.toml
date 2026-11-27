@@ -17,6 +17,9 @@ workspace = true
 # for the CLI-facing consumers that want it as a flag type; a report plane that
 # only renders records compiles no CLI framework.
 clap = ["dep:clap"]
+# Off by default: a byte-level key-order scanner used only by report-plane
+# tests. It is std-only, so enabling it adds no dependency to any build.
+test_support = []
 
 [dependencies]
 # Only the `Serialize`/`SerializeMap`/`Serializer` traits are used. No derive,

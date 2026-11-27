@@ -67,10 +67,19 @@ pub mod artifact_server;
 // small facade-free helpers used by the fixture builders and their callers
 // ---------------------------------------------------------------------------
 
+/// The value of one `name=value` token among whitespace-separated fields.
+///
+/// The token scan itself, with no policy attached: it returns `None` when the
+/// name is absent. The parse-or-panic wrappers stay at their call sites, where
+/// the expected value type and the failure message belong to the test.
+pub fn field_token<'a>(body: &'a str, name: &str) -> Option<&'a str> {
+    body.split_whitespace()
+        .find_map(|kv| kv.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
+}
+
 /// The value of one `key=value` field on a `key=value` line.
 pub fn field(line: &str, name: &str) -> u64 {
-    line.split_whitespace()
-        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+    field_token(line, name)
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| panic!("no {name} in {line}"))
 }
@@ -193,7 +202,40 @@ mod digest;
 
 pub use digest::md5hex;
 
-fn zstd_bytes(data: &[u8]) -> Vec<u8> {
+// ---------------------------------------------------------------------------
+// Bundle fixture I/O
+// ---------------------------------------------------------------------------
+//
+// The bridge and artifact-server tests used to keep these four byte-for-byte
+// in their own `tests/` directories. They are pure fixture I/O — read/write a
+// JSON document and ask a `Value` for one of its string fields — with no bundle
+// schema in them: which fields a bundle must carry stays at each caller.
+
+/// Read a JSON fixture, with the path in both error messages so a broken
+/// fixture names itself.
+pub fn read_json(path: &std::path::Path) -> serde_json::Value {
+    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+}
+
+/// The string field at `v`, with the fixture path in the failure message.
+pub fn str_field(v: &serde_json::Value, path: &std::path::Path) -> String {
+    v.as_str()
+        .unwrap_or_else(|| panic!("{} is missing a string field", path.display()))
+        .to_string()
+}
+
+/// Write a pretty JSON fixture, failing with the destination in the message.
+pub fn write_json(path: &std::path::Path, value: &serde_json::Value) {
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(value).expect("serialize the body"),
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+}
+
+/// Compress fixture bytes with the level the recorded bundles were made at.
+pub fn zstd_bytes(data: &[u8]) -> Vec<u8> {
     zstd::stream::encode_all(std::io::Cursor::new(data), 3).expect("zstd encode fixture")
 }
 

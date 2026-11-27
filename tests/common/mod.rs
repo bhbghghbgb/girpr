@@ -19,9 +19,15 @@ pub use girpr_test_fixtures::{
     BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureChunk, FixtureFile,
     FixtureLatestManifest, FixtureManifest, FixtureSpec, GameFixture, LATEST_TAG, LOCAL_TAG, Lies,
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, UNSERVED_TAG, absent_game_dir, build_fixture,
-    build_fixture_spec, build_fixture_with_lies, build_moved_fixture, field, lay_out, logs_of,
-    read_game_file, temp_dir, write_game_file,
+    build_fixture_spec, build_fixture_with_lies, build_moved_fixture, field, field_token, lay_out,
+    logs_of, read_game_file, read_json, str_field, temp_dir, write_game_file, write_json,
+    zstd_bytes,
 };
+
+// Console captures are compared as plain text. The escape grammar belongs to
+// the tempdir test-support leaf; re-exporting it here keeps every call site's
+// `common::strip_ansi(..)` spelling unchanged.
+pub use girpr_tempdir::test_support::{set_mtime, strip_ansi};
 
 // The facade-coupled glue, also compiled once in its library.
 pub use girpr_test_support::{

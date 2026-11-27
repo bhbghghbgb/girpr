@@ -1,0 +1,17 @@
+[package]
+name = "girpr-cache-names"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The girpr-cache name reservation: one prefix and the predicates that recognise it, shared by test fixtures and their production counterparts"
+
+[lib]
+name = "girpr_cache_names"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Deliberately std-only. `girpr-tempdir` is a girsync-free leaf and cannot
+# depend on `girsync-cache`, so the one spelling of the cache reservation this
+# its test helpers need lives here rather than in a crate that pulls in redb.

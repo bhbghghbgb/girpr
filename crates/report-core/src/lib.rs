@@ -546,3 +546,95 @@ mod tests {
         }
     }
 }
+
+/// Test-only helpers that read emitted JSON back as bytes. Gated behind the
+/// `test_support` feature so no shipped report plane links them.
+#[cfg(feature = "test_support")]
+pub mod test_support {
+    // A fixture helper: panicking on a malformed fixture is the point. The
+    // workspace lint exists for code a user runs, not for test seams.
+    #![allow(clippy::expect_used)]
+
+    /// The top-level keys of a flat JSON object, in the line's own byte order.
+    ///
+    /// `serde_json::Map` is a `BTreeMap` unless the workspace opts into
+    /// `preserve_order`, and a parsed `Value` therefore cannot answer "in what
+    /// order were these keys written". This scanner reads the bytes instead, so
+    /// the assertion it feeds checks the one property under test rather than
+    /// passing on an alphabetically sorted map. It handles nested values and
+    /// escaped strings; the caller has already validated the line as JSON.
+    pub fn json_keys_in_order(line: &str) -> Vec<String> {
+        let bytes = line.as_bytes();
+        let mut i = skip_whitespace(bytes, 0);
+        assert_eq!(bytes.get(i), Some(&b'{'), "not a JSON object: {line}");
+        i += 1;
+        let mut keys = Vec::new();
+        loop {
+            i = skip_whitespace(bytes, i);
+            match bytes.get(i) {
+                Some(b'}') => break,
+                Some(b',') => i += 1,
+                Some(b'"') => {
+                    let (key, next) = json_string(bytes, i);
+                    keys.push(key);
+                    i = skip_whitespace(bytes, next);
+                    assert_eq!(bytes.get(i), Some(&b':'), "a key without a value: {line}");
+                    i = skip_json_value(bytes, i + 1);
+                }
+                _ => panic!("expected a key or the object's end in: {line}"),
+            }
+        }
+        keys
+    }
+
+    /// Read one JSON string starting at its opening quote, returning it and the
+    /// index just past its closing quote. Keys and language tags are static
+    /// ASCII, so no `\u` escape can arise here; the two that can are handled.
+    fn json_string(bytes: &[u8], start: usize) -> (String, usize) {
+        let mut out = Vec::new();
+        let mut i = start + 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' => return (String::from_utf8(out).expect("a UTF-8 key"), i + 1),
+                b'\\' => {
+                    i += 1;
+                    if let Some(escaped) = bytes.get(i) {
+                        out.push(*escaped);
+                    }
+                }
+                byte => out.push(byte),
+            }
+            i += 1;
+        }
+        panic!("unterminated JSON string")
+    }
+
+    /// Skip one JSON value and return the index of the comma or closing brace
+    /// that follows it. Values are primitives; nested containers are skipped
+    /// for safety.
+    fn skip_json_value(bytes: &[u8], start: usize) -> usize {
+        let mut i = skip_whitespace(bytes, start);
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' => {
+                    i = json_string(bytes, i).1;
+                    continue;
+                }
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' if depth > 0 => depth -= 1,
+                b'}' | b']' | b',' if depth == 0 => return i,
+                _ => {}
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    }
+}

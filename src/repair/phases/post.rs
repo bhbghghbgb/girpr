@@ -865,12 +865,7 @@ mod tests {
     /// The names left in a directory, so a test can assert that no temp file
     /// outlives a publish without knowing the temp name the crate picked.
     fn entries(path: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(path)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
+        girpr_tempdir::test_support::entry_names_with(path, |_| true)
     }
 
     fn config(cache: &str, res: &str) -> GameConfig {
@@ -1590,32 +1585,7 @@ mod tests {
     }
 
     fn purge_ctx(game_dir: std::path::PathBuf) -> RunCtx {
-        RunCtx {
-            game_dir,
-            biz: crate::biz::Biz::Hk4eGlobal,
-            audio: std::collections::HashSet::new(),
-            audio_explicit: false,
-            path_scope: PathScope::default(),
-            limits: crate::repair::scope::Limits::default(),
-            repair_mode: girpr_repair_policy::RepairMode::Auto,
-            repair_mode_explicit: false,
-            jobs: 1,
-            with_persistent: false,
-            persistent_dispatch_override: None,
-            check_only: false,
-            scan: false,
-            purge_only: false,
-            fail_fast: false,
-            dry_run: false,
-            print_plan: false,
-            plan_out: None,
-            purge_after: false,
-            purge_before: false,
-            output: crate::report::OutputFormat::Text,
-            hyp_base_override: None,
-            sophon_base_override: None,
-            backoff: crate::retry::BackoffPolicy::none(),
-        }
+        crate::test_support::ctx_default(game_dir)
     }
 
     fn purge_keys() -> Arc<PurgeKeys> {

@@ -1,5 +1,9 @@
 use super::*;
 use crate::encoding::percent_encode;
+// A flat JSON object's keys must be read off the bytes: a parsed `Value` is a
+// `BTreeMap` without `preserve_order`, so it cannot answer write order. The
+// scanner lives once behind the core's test-only feature.
+use girpr_report_core::test_support::json_keys_in_order;
 use serde_json::Value as Json;
 
 fn sample() -> Record {
@@ -53,70 +57,6 @@ fn the_two_renderings_carry_the_same_fields_in_the_same_order() {
         json_keys_in_order(&s.to_json_line()),
         "text and json disagree on the field set or its order"
     );
-}
-
-/// Reads the top-level keys of a flat JSON object **in the order they appear
-/// in the bytes**.
-///
-/// Not `serde_json::from_str` into a `Value`: that map is a `BTreeMap`, so it
-/// would report the keys alphabetically and the assertion would pass no
-/// matter what order the emitter wrote. This is the one property under test
-/// here, so it has to be read off the bytes.
-fn json_keys_in_order(line: &str) -> Vec<String> {
-    let b: Vec<char> = line.chars().collect();
-    let mut keys = Vec::new();
-    let mut i = 1; // skip '{'
-    loop {
-        while i < b.len() && b[i].is_whitespace() {
-            i += 1;
-        }
-        if i >= b.len() || b[i] == '}' {
-            break;
-        }
-        assert_eq!(b[i], '"', "expected a key at {i} in {line}");
-        i += 1;
-        let mut key = String::new();
-        while b[i] != '"' {
-            if b[i] == '\\' {
-                i += 1;
-            }
-            key.push(b[i]);
-            i += 1;
-        }
-        i += 1;
-        keys.push(key);
-
-        while i < b.len() && b[i] != ':' {
-            i += 1;
-        }
-        i += 1;
-        while i < b.len() && b[i].is_whitespace() {
-            i += 1;
-        }
-        if b[i] == '"' {
-            i += 1;
-            while b[i] != '"' {
-                if b[i] == '\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            i += 1;
-        } else {
-            while i < b.len() && b[i] != ',' && b[i] != '}' {
-                i += 1;
-            }
-        }
-        while i < b.len() && b[i].is_whitespace() {
-            i += 1;
-        }
-        if i < b.len() && b[i] == ',' {
-            i += 1;
-            continue;
-        }
-        break;
-    }
-    keys
 }
 
 /// A value carrying a quote is the only thing that forces the escaping path,

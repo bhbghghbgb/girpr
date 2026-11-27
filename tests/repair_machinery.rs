@@ -52,11 +52,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crate::common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, ctx_for,
-    field, lay_out, md5hex, scope, stamp_ago, stamp_ahead, temp_dir,
+    field, lay_out, md5hex, scope, set_mtime, stamp_ago, stamp_ahead, temp_dir,
 };
 use girpr::test_support::{RepairDiagnostics, summary_record, take_repair_diagnostics};
 use girpr::{RunExit, Summary};
@@ -135,9 +135,7 @@ impl LibRun {
     }
 
     fn word(&self, _event: &str, key: &str) -> String {
-        self.stdout
-            .split_whitespace()
-            .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+        crate::common::field_token(&self.stdout, key)
             .unwrap_or_else(|| panic!("no {key} in {}", self.stdout))
             .to_string()
     }
@@ -580,17 +578,6 @@ async fn a_disjoint_file_is_repaired_byte_exactly_through_the_fetch_window() {
         want,
         "the windowed writes land at the same offsets as the sequential path"
     );
-}
-
-/// Set a fixture file's mtime explicitly, so a test never depends on how a
-/// write advances a coarse filesystem's clock.
-fn set_mtime(path: &Path, stamp: SystemTime) {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .expect("open to set mtime")
-        .set_modified(stamp)
-        .expect("set mtime");
 }
 
 /// Whether a fixture's mtime carries the age the reuse guard needs.

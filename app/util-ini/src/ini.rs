@@ -649,12 +649,7 @@ mod tests {
     /// The names left in a directory, so a test can assert that no temp file
     /// outlives a config write without knowing the temp name the crate picked.
     fn entries(path: &std::path::Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(path)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
+        girpr_tempdir::test_support::entry_names_with(path, |_| true)
     }
 
     #[test]

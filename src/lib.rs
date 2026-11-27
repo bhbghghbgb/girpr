@@ -165,6 +165,44 @@ pub mod test_support {
     // straight into the junction/symlink classifiers.
     pub use girpr_util_path::test_support::{FixtureRefusal, skip_fixture_refusal};
 
+    /// A default `RunCtx` for tests: the same field values every fixture used
+    /// to spell out in a full 24-field literal.
+    ///
+    /// This is a fixture value, not a CLI policy. It does not run
+    /// `Args::into_ctx` validation and carries none of that constructor's
+    /// warning/exit ordering; callers that need the mock's endpoints set the
+    /// two `*_base_override` fields afterwards, keeping that replay at the
+    /// call site. Jobs default to `1`, endpoint overrides to `None`, and retry
+    /// backoff to `none()` so a failed fetch is retried immediately.
+    pub fn ctx_default(game_dir: std::path::PathBuf) -> crate::RunCtx {
+        crate::RunCtx {
+            game_dir,
+            biz: crate::Biz::Hk4eGlobal,
+            audio: std::collections::HashSet::new(),
+            audio_explicit: false,
+            path_scope: girpr_repair_plan::PathScope::default(),
+            limits: Limits::default(),
+            repair_mode: girpr_repair_policy::RepairMode::Auto,
+            repair_mode_explicit: false,
+            jobs: 1,
+            with_persistent: false,
+            persistent_dispatch_override: None,
+            check_only: false,
+            scan: false,
+            purge_only: false,
+            fail_fast: false,
+            dry_run: false,
+            print_plan: false,
+            plan_out: None,
+            purge_after: false,
+            purge_before: false,
+            output: crate::report::OutputFormat::Text,
+            hyp_base_override: None,
+            sophon_base_override: None,
+            backoff: BackoffPolicy::none(),
+        }
+    }
+
     /// `now` minus `age`, or `None` when this platform cannot represent the
     /// result.
     ///

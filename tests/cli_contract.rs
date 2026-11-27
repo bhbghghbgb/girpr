@@ -40,7 +40,7 @@ use predicates::prelude::*;
 
 use crate::common::{
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
-    remove_run_lock_for_args, temp_dir, write_game_file,
+    remove_run_lock_for_args, strip_ansi, temp_dir, write_game_file,
 };
 
 /// Spawn the binary and hand its captured output to the caller's assertions.
@@ -60,17 +60,6 @@ fn run(args: &[&str]) -> Assert {
             log.to_str().expect("the scratch path is utf-8"),
         ])
         .assert()
-}
-
-/// The console's records, with the colour taken out.
-///
-/// `tracing`'s human format colours the level and the target separately, and
-/// the escape sequences land *between* them: the text is `INFO`, then an
-/// escape, then `girpr::logging`. A substring that spans one is not a
-/// substring at all — and an assertion that a coloured string does *not*
-/// contain one passes for the wrong reason, which is worse than no assertion.
-fn strip_ansi(s: &str) -> String {
-    strip_ansi_escapes::strip_str(s)
 }
 
 /// The message from a panic a parser raises for input it cannot read.
@@ -1163,7 +1152,9 @@ fn json_records(stdout: &str) -> Vec<(String, Vec<String>)> {
                 .as_str()
                 .unwrap_or_else(|| panic!("no event name in: {line}"))
                 .to_string();
-            let mut keys = json_object_keys(line);
+            // `serde_json::Map` is a `BTreeMap` unless the workspace opts into
+            // `preserve_order`, so write order must be read off the bytes.
+            let mut keys = girpr_report_core::test_support::json_keys_in_order(line);
             assert_eq!(keys.first().map(String::as_str), Some("event"), "{line}");
             keys.remove(0);
             (event, keys)
@@ -1535,87 +1526,6 @@ fn the_golden_rejects_a_reorder_a_duplicate_a_misplaced_progress_and_a_rename() 
         check_golden(&no_plan, without_plan).is_ok(),
         "a run without PLAN has its PROGRESS window between REPORT and SUMMARY"
     );
-}
-
-/// The top-level keys of a flat JSON object, in the line's own order.
-///
-/// `serde_json::Map` is a `BTreeMap` unless the workspace opts into
-/// `preserve_order`, and a parsed `Value` therefore cannot answer "in what
-/// order were these keys written". The records are flat objects of primitives
-/// (`Record` has no nested field), so a small scanner is enough — and the line
-/// has already been validated as JSON by the caller.
-fn json_object_keys(line: &str) -> Vec<String> {
-    let bytes = line.as_bytes();
-    let mut i = skip_whitespace(bytes, 0);
-    assert_eq!(bytes.get(i), Some(&b'{'), "not a JSON object: {line}");
-    i += 1;
-    let mut keys = Vec::new();
-    loop {
-        i = skip_whitespace(bytes, i);
-        match bytes.get(i) {
-            Some(b'}') => break,
-            Some(b',') => i += 1,
-            Some(b'"') => {
-                let (key, next) = json_string(bytes, i);
-                keys.push(key);
-                i = skip_whitespace(bytes, next);
-                assert_eq!(bytes.get(i), Some(&b':'), "a key without a value: {line}");
-                i = skip_json_value(bytes, i + 1);
-            }
-            _ => panic!("expected a key or the object's end in: {line}"),
-        }
-    }
-    keys
-}
-
-/// Read one JSON string starting at its opening quote, returning it and the
-/// index just past its closing quote. Keys and language tags are static ASCII,
-/// so no `\u` escape can arise here; the two that can are handled.
-fn json_string(bytes: &[u8], start: usize) -> (String, usize) {
-    let mut out = Vec::new();
-    let mut i = start + 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => return (String::from_utf8(out).expect("a UTF-8 key"), i + 1),
-            b'\\' => {
-                i += 1;
-                if let Some(escaped) = bytes.get(i) {
-                    out.push(*escaped);
-                }
-            }
-            byte => out.push(byte),
-        }
-        i += 1;
-    }
-    panic!("unterminated JSON string")
-}
-
-/// Skip one JSON value and return the index of the comma or closing brace that
-/// follows it. Values are primitives; nested containers are skipped for safety.
-fn skip_json_value(bytes: &[u8], start: usize) -> usize {
-    let mut i = skip_whitespace(bytes, start);
-    let mut depth = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i = json_string(bytes, i).1;
-                continue;
-            }
-            b'{' | b'[' => depth += 1,
-            b'}' | b']' if depth > 0 => depth -= 1,
-            b'}' | b']' | b',' if depth == 0 => return i,
-            _ => {}
-        }
-        i += 1;
-    }
-    i
-}
-
-fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    i
 }
 
 /// A damaged copy of the two-file fixture: one clean file, one corrupt file.

@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::common::{write_json, zstd_bytes};
 use girpr_tempdir::TempDir;
 use girpr_test_fixtures::artifact_server as server;
 use server::{Bridge, Bundle, HitKind};
@@ -383,18 +384,6 @@ fn build_body(
             "manifests": [manifest(game_manifest, "game"), manifest(audio_manifest, "en-us")],
         }
     })
-}
-
-fn write_json(path: &Path, value: &serde_json::Value) {
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(value).expect("serialize the body"),
-    )
-    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
-}
-
-fn zstd_bytes(data: &[u8]) -> Vec<u8> {
-    zstd::stream::encode_all(std::io::Cursor::new(data), 3).expect("zstd encode fixture")
 }
 
 // ---------------------------------------------------------------------------

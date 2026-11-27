@@ -19,12 +19,8 @@
 // Test glue asserts with `expect`; these are not production paths.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashSet;
-
-use girpr::test_support::{BackoffPolicy, Limits};
-use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
+use girpr::{Biz, RunCtx, RunExit, RunFailure, Summary};
 use girpr_repair_plan::PathScope;
-use girpr_repair_policy::RepairMode;
 
 // Host-relative fixture timestamps. The implementation lives behind the
 // facade's test seam so unit and integration tests share one definition; this
@@ -54,33 +50,12 @@ pub fn ctx_for_biz(
     jobs: usize,
     biz: Biz,
 ) -> RunCtx {
-    RunCtx {
-        game_dir,
-        biz,
-        audio: HashSet::new(),
-        audio_explicit: false,
-        path_scope: PathScope::default(),
-        limits: Limits::default(),
-        repair_mode: RepairMode::Auto,
-        repair_mode_explicit: false,
-        jobs,
-        with_persistent: false,
-        persistent_dispatch_override: None,
-        check_only: false,
-        scan: false,
-        purge_only: false,
-        fail_fast: false,
-        dry_run: false,
-        print_plan: false,
-        plan_out: None,
-        purge_after: false,
-        purge_before: false,
-        output: OutputFormat::Text,
-        hyp_base_override: Some(mock.hyp_base.clone()),
-        sophon_base_override: Some(mock.sophon_base.clone()),
-        // Tests skip retry backoff: a failed fetch is retried immediately.
-        backoff: BackoffPolicy::none(),
-    }
+    let mut ctx = girpr::test_support::ctx_default(game_dir);
+    ctx.biz = biz;
+    ctx.jobs = jobs;
+    ctx.hyp_base_override = Some(mock.hyp_base.clone());
+    ctx.sophon_base_override = Some(mock.sophon_base.clone());
+    ctx
 }
 
 /// The five counters a test asserts on, read atomically from a [`Summary`].

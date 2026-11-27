@@ -115,7 +115,7 @@ use std::path::{Path, PathBuf};
 use bundle::{Capture, Patchmaps};
 use girpr_tempdir::TempDir;
 use girpr_test_fixtures::artifact_server as server;
-use girpr_test_fixtures::md5hex;
+use girpr_test_fixtures::{md5hex, write_json};
 use server::{Bridge, Bundle, HitKind, Origins};
 
 // ---------------------------------------------------------------------------
@@ -1017,12 +1017,4 @@ async fn the_sophon_listener_serves_an_empty_patch_build_and_logs_it() {
             .any(|h| h.kind == HitKind::Build && h.id == "7.1.0"),
         "a normal getBuild must still be a Build hit: {hits:?}"
     );
-}
-
-fn write_json(path: &Path, value: &serde_json::Value) {
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(value).expect("serialize the body"),
-    )
-    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }

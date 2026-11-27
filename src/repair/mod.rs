@@ -1713,8 +1713,8 @@ fn normalize_deprecated(list: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunCtx, RunExit, Summary, build_stale_list, failed_file_outranks_limit, fetch_deprecated,
-        finish, normalize_deprecated, note_stopped, phases, prepare_install, spawn_blocking_traced,
+        RunExit, Summary, build_stale_list, failed_file_outranks_limit, fetch_deprecated, finish,
+        normalize_deprecated, note_stopped, phases, prepare_install, spawn_blocking_traced,
     };
     use crate::Biz;
     use crate::hyp::HypClient;
@@ -1916,44 +1916,12 @@ mod tests {
     /// the caller can tell a full disk or a permissions problem from a typo.
     #[test]
     fn a_failed_game_dir_creation_is_a_write_failure_naming_the_path() {
-        use std::collections::HashSet;
-
-        use crate::repair::scope::Limits;
-        use crate::report::OutputFormat;
-        use girpr_repair_plan::PathScope;
-        use girpr_repair_policy::RepairMode;
-
         let dir = girpr_tempdir::TempDir::new("girpr_test_repair", "mkdir_fail");
         let blocker = dir.join("blocker");
         std::fs::write(&blocker, b"not a directory").expect("a regular file, not a directory");
         let game_dir = blocker.join("child");
 
-        let ctx = RunCtx {
-            game_dir: game_dir.clone(),
-            biz: Biz::Hk4eGlobal,
-            audio: HashSet::new(),
-            audio_explicit: false,
-            path_scope: PathScope::default(),
-            limits: Limits::default(),
-            repair_mode: RepairMode::Auto,
-            repair_mode_explicit: false,
-            jobs: 1,
-            with_persistent: false,
-            persistent_dispatch_override: None,
-            check_only: false,
-            scan: false,
-            purge_only: false,
-            fail_fast: false,
-            dry_run: false,
-            print_plan: false,
-            plan_out: None,
-            purge_after: false,
-            purge_before: false,
-            output: OutputFormat::Text,
-            hyp_base_override: None,
-            sophon_base_override: None,
-            backoff: BackoffPolicy::none(),
-        };
+        let ctx = crate::test_support::ctx_default(game_dir.clone());
 
         let err = prepare_install(&ctx, game_dir.clone(), false)
             .expect_err("a path under a regular file cannot be created");

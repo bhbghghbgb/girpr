@@ -24,6 +24,10 @@ tempfile = "3.27.0"
 # The game-tree fixture helpers spell `/`-separated rels with the host
 # separator. The rewrite is the shared name mechanic rather than a fourth copy.
 girpr-fs-names = { path = "../fs-names" }
+# The `girpr-cache*` reservation the fixture's `entry_names` filters out. The
+# std-only leaf states the prefix and the Windows case-fold once, so the fixture
+# agrees with the product's spelling without depending on girsync.
+girpr-cache-names = { path = "../cache-names" }
 # Deliberately no dependency on girsync (or serde_json): the girsync-coupled
 # option/cache/planner fixtures used to live in `test_support`, which made every
 # program that took this crate as a dev-dependency inherit girsync's rebuilds.

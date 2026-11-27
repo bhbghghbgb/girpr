@@ -498,44 +498,17 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::scope::Limits;
-    use crate::report::OutputFormat;
-    use crate::retry::BackoffPolicy;
     use crate::test_origin::{Reply, TestServer};
-    use girpr_repair_plan::PathScope;
-    use girpr_repair_policy::RepairMode;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A `RunCtx` pointed at one loopback base, with every flag at its
     /// default so only the metadata phase is exercised.
     fn ctx(game_dir: std::path::PathBuf, base: String) -> RunCtx {
-        RunCtx {
-            game_dir,
-            biz: crate::Biz::Hk4eGlobal,
-            audio: HashSet::new(),
-            audio_explicit: false,
-            path_scope: PathScope::default(),
-            limits: Limits::default(),
-            repair_mode: RepairMode::Auto,
-            repair_mode_explicit: false,
-            jobs: 1,
-            with_persistent: false,
-            persistent_dispatch_override: None,
-            check_only: false,
-            scan: false,
-            purge_only: false,
-            fail_fast: false,
-            dry_run: false,
-            print_plan: false,
-            plan_out: None,
-            purge_after: false,
-            purge_before: false,
-            output: OutputFormat::Text,
-            hyp_base_override: Some(base.clone()),
-            sophon_base_override: Some(base),
-            backoff: BackoffPolicy::none(),
-        }
+        let mut ctx = crate::test_support::ctx_default(game_dir);
+        ctx.hyp_base_override = Some(base.clone());
+        ctx.sophon_base_override = Some(base);
+        ctx
     }
 
     /// Run `f` with a debug-level subscriber whose lines are captured.

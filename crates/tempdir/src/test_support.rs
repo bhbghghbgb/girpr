@@ -250,19 +250,44 @@ pub fn read_game_file(root: &Path, rel: &str) -> Option<Vec<u8>> {
     std::fs::read(root.join(rel_fs)).ok()
 }
 
-/// Actual directory entry names, excluding `girpr-cache*`.
+/// Actual directory entry names, keeping only those the caller accepts.
 ///
 /// Path existence cannot answer casing questions on a case-insensitive
-/// filesystem: `data.txt` and `Data.txt` resolve to the same entry there.
-pub fn entry_names(dir: &Path) -> Vec<String> {
+/// filesystem: `data.txt` and `Data.txt` resolve to the same entry there. The
+/// predicate is a parameter because suites disagree about what to keep: the
+/// girsync fixture drops `girpr-cache*` tool state, while the atomic-write,
+/// config, and repair fixtures keep every entry so they can assert that no temp
+/// file outlives a publish. Callers that only need the sorted names pass
+/// `|_| true`.
+pub fn entry_names_with(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with("girpr-cache"))
+        .filter(|n| keep(n))
         .collect();
     names.sort();
     names
+}
+
+/// Actual directory entry names, excluding `girpr-cache*` tool state.
+///
+/// The predicate comes from [`girpr_cache_names`], which spells the reservation
+/// the same way production does (ASCII case folded on Windows only). A fixture
+/// that wants every entry uses [`entry_names_with`] with `|_| true`.
+pub fn entry_names(dir: &Path) -> Vec<String> {
+    entry_names_with(dir, |n| !girpr_cache_names::has_cache_prefix(n))
+}
+
+/// Pin `path`'s mtime to `stamp`, so a test never depends on how a write
+/// advances a coarse filesystem's clock.
+pub fn set_mtime(path: &Path, stamp: std::time::SystemTime) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(stamp)
+        .unwrap();
 }
 
 /// Pin `target`'s mtime to `source`'s, so two identical-content files compare

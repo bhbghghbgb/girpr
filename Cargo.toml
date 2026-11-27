@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crates/chunk-cost", "crates/line-reader", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "crates/request-url", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-io", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
+members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crates/cache-names", "crates/chunk-cost", "crates/line-reader", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "crates/request-url", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-io", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -230,9 +230,6 @@ predicates = "3.1.4"
 # trycmd runs it and compares the output byte for byte (with newlines and the
 # executable suffix normalized).
 trycmd = "1.2.1"
-# Console captures are compared as plain text; the library knows the full escape
-# grammar, including the sequences the old hand-written loop skipped.
-strip-ansi-escapes = "0.2.1"
 # The shared offline HYP/Sophon mock, fixture builders and lock-cleanup
 # helpers for the root integration binaries. They used to be inlined by
 # `mod common;` into every binary; the public library surface lets each binary
@@ -260,6 +257,9 @@ girpr-fetch = { path = "app/fetch", features = ["test-support"] }
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
+# The byte-level key-order scanner the CLI contract's data-plane goldens use,
+# behind the core's test-only feature so no shipped report plane links it.
+girpr-report-core = { path = "crates/report-core", features = ["test_support"] }
 # The junction/symlink fixture helpers and the slice-digest helpers the repair
 # tests share with the narrow crates' own unit tests. The features are off in
 # the normal dependencies above.

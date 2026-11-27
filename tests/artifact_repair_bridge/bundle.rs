@@ -27,6 +27,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
+// The bundle's JSON I/O lives once in the fixture library; the patchmap schema
+// requirements stay here.
+use girpr_test_fixtures::{read_json, str_field};
+
 /// One entry of the capture matrix: a `patchmaps/<id>.json` plus the identity
 /// its driver needs.
 #[derive(Clone, Debug)]
@@ -275,15 +279,4 @@ fn read_capture(path: &Path) -> Capture {
             })
             .unwrap_or_default(),
     }
-}
-
-fn read_json(path: &Path) -> Value {
-    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
-}
-
-fn str_field(v: &Value, path: &Path) -> String {
-    v.as_str()
-        .unwrap_or_else(|| panic!("{} is missing a string field", path.display()))
-        .to_string()
 }

@@ -112,15 +112,17 @@ pub fn remove_run_lock(game_dir: &Path) {
 
 /// Whether a run with these read-only flags takes the lock.
 ///
-/// This mirrors the run's own rule: `--dry-run` and `--check-only` are the
-/// read-only modes (`RunCtx::readonly`), and `--print-plan` returns before the
-/// execution phase. `--purge-only` mutates and does take the lock.
+/// This delegates to the run's own rule in `girpr_lock`: `--dry-run` and
+/// `--check-only` are the read-only modes (`RunCtx::readonly`), and
+/// `--print-plan` returns before the execution phase. `--purge-only` mutates
+/// and does take the lock. The rule now has one home, so a fixture cannot
+/// disagree with the binary about it.
 ///
 /// The bridge binary includes this module only for the argument cleanup, so
 /// the mode mirror is dead there while its other callers use it.
 #[allow(dead_code)]
 pub fn mode_takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> bool {
-    !readonly && !check_only && !print_plan
+    girpr_lock::takes_lock(readonly, check_only, print_plan)
 }
 
 /// Whether a binary argument list names a mode that takes the lock.

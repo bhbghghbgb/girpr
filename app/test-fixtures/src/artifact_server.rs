@@ -81,6 +81,10 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use serde_json::Value;
 
+// The bundle fixture's JSON I/O lives once at the crate root; the bundle's
+// schema requirements stay here.
+use crate::{read_json, str_field};
+
 // ---------------------------------------------------------------------------
 // request log (`docs/06` §4.7)
 // ---------------------------------------------------------------------------
@@ -219,17 +223,6 @@ impl Bundle {
             .join(format!("{id}.zst"));
         p.is_file().then_some(p)
     }
-}
-
-fn read_json(path: &Path) -> Value {
-    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
-}
-
-fn str_field(v: &Value, path: &Path) -> String {
-    v.as_str()
-        .unwrap_or_else(|| panic!("{} is missing a string field", path.display()))
-        .to_string()
 }
 
 // ---------------------------------------------------------------------------

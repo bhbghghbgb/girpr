@@ -1824,15 +1824,6 @@ mod tests {
         }
     }
 
-    fn set_modified(path: &std::path::Path, stamp: SystemTime) {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .unwrap()
-            .set_modified(stamp)
-            .unwrap();
-    }
-
     /// A stamp a given age before the current clock, or `None` after
     /// reporting the skip when this host cannot represent that age.
     ///
@@ -1866,7 +1857,7 @@ mod tests {
         let scanned_at = SystemTime::now();
         let recorded = coarse_tick_of(scanned_at);
         std::fs::write(&path, &good).unwrap();
-        set_modified(&path, recorded);
+        girpr_tempdir::test_support::set_mtime(&path, recorded);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert!(
             scanned_at.duration_since(recorded).unwrap() <= COARSE_MTIME_TICK,
@@ -1897,7 +1888,7 @@ mod tests {
         let mut changed = good.clone();
         changed[1] ^= 0xff;
         std::fs::write(&path, &changed).unwrap();
-        set_modified(&path, recorded);
+        girpr_tempdir::test_support::set_mtime(&path, recorded);
 
         let sources = [None, None];
         let (dest, src, owner) = scan_ranges(&file.chunks, &sources);
@@ -1933,7 +1924,7 @@ mod tests {
         let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
             return;
         };
-        set_modified(&path, stamp);
+        girpr_tempdir::test_support::set_mtime(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
         let scanned_at = SystemTime::now();
         assert!(
@@ -1966,7 +1957,7 @@ mod tests {
         changed[1] ^= 0xff;
         changed[5] ^= 0xff;
         std::fs::write(&path, &changed).unwrap();
-        set_modified(&path, recorded);
+        girpr_tempdir::test_support::set_mtime(&path, recorded);
 
         let sources = [None, None];
         let (dest, src, owner) = scan_ranges(&file.chunks, &sources);
@@ -2013,12 +2004,7 @@ mod tests {
         let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
             return;
         };
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(stamp)
-            .unwrap();
+        girpr_tempdir::test_support::set_mtime(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
 
         let file = PlannedFile {
@@ -2095,12 +2081,7 @@ mod tests {
         let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
             return;
         };
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(stamp)
-            .unwrap();
+        girpr_tempdir::test_support::set_mtime(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
 
         let file = PlannedFile {
@@ -2129,12 +2110,7 @@ mod tests {
         );
 
         // A changed modification time, with the length held fixed.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(recorded + Duration::from_secs(1))
-            .unwrap();
+        girpr_tempdir::test_support::set_mtime(&path, recorded + Duration::from_secs(1));
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
             reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
@@ -2143,12 +2119,7 @@ mod tests {
 
         // A changed length, with the recorded mtime restored.
         std::fs::write(&path, b"abcdefg").unwrap();
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(recorded)
-            .unwrap();
+        girpr_tempdir::test_support::set_mtime(&path, recorded);
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
             reusable_verdict(&ctx, id, &file, handle.metadata()).is_none(),
@@ -2157,12 +2128,7 @@ mod tests {
 
         // The same file again, but the report has no verdict for it.
         std::fs::write(&path, bytes).unwrap();
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(recorded)
-            .unwrap();
+        girpr_tempdir::test_support::set_mtime(&path, recorded);
         let handle = std::fs::File::open(&path).unwrap();
         let no_verdict = test_ctx(Some(Arc::new(ScanReport::default())));
         assert!(
