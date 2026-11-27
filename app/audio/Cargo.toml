@@ -1,7 +1,7 @@
 [package]
 name = "girpr-audio"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The audio scan-file read/write and effective-selection mechanics the girpr repair pipeline uses"
 
@@ -15,8 +15,8 @@ workspace = true
 [dependencies]
 # The error/context wrappers and the malformed-selection, unknown-line and
 # resolution warnings this boundary emits.
-anyhow = "1.0.105"
-tracing = "0.1.44"
+anyhow = { workspace = true }
+tracing = { workspace = true }
 # The four code/display-name pairs, their canonical order, the caller-supplied
 # reverse lookup and the canonical join. This crate keeps the read/write and
 # selection policy and passes its own trailing-newline and alias parameters;

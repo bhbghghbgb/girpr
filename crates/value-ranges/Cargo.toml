@@ -1,7 +1,7 @@
 [package]
 name = "girpr-value-ranges"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "Pure inclusive-range facts shared by the three programs' CLI value checks"
 

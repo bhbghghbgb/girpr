@@ -1,7 +1,7 @@
 [package]
 name = "girpr-dispatch"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "Collapse dispatcher metadata unwrap, query and protobuf decode for girpr"
 
@@ -17,13 +17,13 @@ workspace = true
 # CLI leaves all of it cached; none of those crates can reach these types.
 # `rsa` needs `pkcs1v15` for both the metadata master key and the dispatcher
 # response — the default features alone do not enable decryption.
-rsa = { version = "0.10.0", features = ["pkcs1v15"] }
-brotli = "9.1.3"
-base64 = "0.23.1"
-prost = "0.14.6"
+rsa = { workspace = true, features = ["pkcs1v15"] }
+brotli = { workspace = true }
+base64 = { workspace = true }
+prost = { workspace = true }
 # The dispatcher key arrives as .NET `RSAKeyValue` XML; the `serialize`
 # feature is what provides `quick_xml::de::from_str`.
-quick-xml = { version = "0.42.0", features = ["serialize"] }
+quick-xml = { workspace = true, features = ["serialize"] }
 # The `--biz` values and the digest/hex spelling come from the existing
 # value/mechanics leaves. No `girpr-fetch`: its transport is this crate's own
 # injectable seam, and depending on it would close the graph.
@@ -36,15 +36,15 @@ girpr-line-reader = { path = "../../crates/line-reader" }
 # the error wording, prefix selection and `DispatchError` type stay here.
 girpr-request-url = { path = "../../crates/request-url" }
 # JSON is the metadata/envelope format; the descriptor rows use serde's derive.
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # The dispatcher template's authority is forced and its fixed query parameters
 # are checked with `Url` / `Url::query_pairs`, not local string splitting.
-url = "2.5.9"
+url = { workspace = true }
 # Opaque wire fields are reported at debug level, never used to place files.
-tracing = "0.1.44"
+tracing = { workspace = true }
 
 [dev-dependencies]
 # Only the offline tests build PKCS#1 v1.5 ciphertext to feed the injected
 # fetcher; no shipped code depends on an RNG.
-rand = "0.10.4"
+rand = { workspace = true }

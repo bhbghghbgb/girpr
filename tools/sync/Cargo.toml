@@ -1,7 +1,7 @@
 [package]
 name = "girsync"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with redb hash cache"
 
@@ -36,7 +36,7 @@ path = "benches/tree_shapes.rs"
 harness = false
 
 [dependencies]
-clap = { version = "4.6.10", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 # The log-file and log-level policy, shared with the repair binary and with
 # `gircap`. It is a leaf crate with no dependency on any of the three
 # programs, so sharing it couples nothing that matters.
@@ -56,8 +56,8 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # offending value; girsync keeps its own `{flag}` wording and deliberately keeps
 # a zero-refusal outside clap so it exits 3, not clap's parse-error 2.
 girpr-value-ranges = { path = "../../crates/value-ranges" }
-anyhow = "1.0.105"
-walkdir = "2.5.1"
+anyhow = { workspace = true }
+walkdir = { workspace = true }
 # The redb cache (with `redb`, its positional `postcard` codec and `tempfile`
 # working names) now lives in its own crate below this lib. This binary and its
 # tests depend on it directly, so an edit to the planner, commands or other
@@ -75,9 +75,9 @@ girsync-leaves = { path = "leaves" }
 # Path canonicalization for identity and link-target checks. It resolves links
 # like `std::fs::canonicalize` but omits the Windows `\\?\` prefix, so a
 # canonical path can be compared with a link's own spelling without stripping.
-dunce = "1.0.5"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+dunce = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # The digest vocabulary and streaming sink live in `girsync-cache` (above),
 # which pins them in its wire format; `md-5` remains a dev-dependency for the
 # tests that build digests by hand.
@@ -88,23 +88,23 @@ girpr-filter = { path = "../../crates/filter" }
 # crate keeps its own alphabetical key order, `serde_json::Value` fields and
 # record layouts; the leaf only writes the object in the order asked for.
 girpr-report-core = { path = "../../crates/report-core", features = ["clap"] }
-rayon = "1.12.0"
+rayon = { workspace = true }
 # The case-fix rename claims its short temporary sibling through the shared
 # atomic claim primitive, so the claim and its cleanup have one home.
 girpr-util-path = { path = "../../app/util-path" }
 # The unit tests build scratch directories with tempfile directly.
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 # Lexical normalization of junction/symlink target text. `Path::clean()` collapses
 # `.`/`..` without asking the filesystem and keeps a leading `..`, which is what
 # lets the plan refuse a target that escapes the root. Dependency-free.
-path-clean = "1.0.1"
+path-clean = { workspace = true }
 # Timestamps in the cache are exact nanoseconds since the epoch; filetime owns
 # the seconds/nanos split and the platform-specific stamp mechanics (already a
 # transitive package, promoted here for the shipped library).
-filetime = "0.2.30"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
-tracing-appender = "0.2.5"
+filetime = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+tracing-appender = { workspace = true }
 
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.
@@ -113,14 +113,14 @@ tracing-appender = "0.2.5"
 # assert on a rendered log line write into `CaptureBuffer` and read its snapshot
 # back as lossy text. Test-only — the shipped library keeps no test surface.
 girpr-log = { path = "../../crates/log", features = ["test-support"] }
-md-5 = "0.11.0"
+md-5 = { workspace = true }
 # The stdout assertions read `--output json` records, so they build the expected
 # ones with `json!` rather than comparing rendered text.
-serde_json = "1.0.154"
+serde_json = { workspace = true }
 # `tests/rw_threads.rs` checks the flag surface with `Cli::try_parse_from` rather
 # than spawning the binary, so a mutual-exclusion table can be stated exhaustively
 # for the price of a table. Same crate the lib already uses, so it costs no build.
-clap = { version = "4.6.10", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 # The scratch-directory helper, shared with the repair binary and with
 # `gircap`: one name, one construction and one cleanup for every test in the
 # workspace. A dev-dependency, because nothing that ships creates a scratch
@@ -133,4 +133,4 @@ girpr-tempdir = { path = "../../crates/tempdir" }
 girsync-test-support = { path = "test-support" }
 # Statistics-driven harness for the tree-shape benchmark. Dev-only: nothing in
 # the shipped library or binary links against it.
-criterion = "0.8.2"
+criterion = { workspace = true }

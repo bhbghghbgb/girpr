@@ -1,7 +1,7 @@
 [package]
 name = "girpr-filter"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared --include/--exclude glob-filtering rules used by girpr and girsync"
 
@@ -15,9 +15,9 @@ workspace = true
 [dependencies]
 # One glob version for both filters. Re-exported so a filter (and a caller of
 # girsync's public surface) names the exact library this crate compiled.
-globset = "0.4.22"
+globset = { workspace = true }
 # Compile-time reporting of the offending user-written glob.
-anyhow = "1.0.105"
+anyhow = { workspace = true }
 # The backslash→slash spelling is the shared name mechanic. The `Cow` shape is
 # this crate's contract — an escaped glob stays borrowed — so only the owned
 # arm goes through the helper.

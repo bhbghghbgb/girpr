@@ -1,7 +1,7 @@
 [package]
 name = "girpr-request-url"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared HYP/Sophon query grammar and CDN path-append mechanics"
 
@@ -16,8 +16,8 @@ workspace = true
 # The exact byte table both programs send verbatim. This leaf owns the grammar
 # mechanics; the table stays in the value leaf so no program can re-spell it.
 girpr-model = { path = "../model" }
-percent-encoding = "2.3.2"
+percent-encoding = { workspace = true }
 # Only `Url`'s path-segment API and its re-exported form decoder are borrowed.
 # Query rewriting stays string-based: a `Url` query serializer would escape the
 # literal `game_ids[]` key and change recorded request bytes.
-url = "2.5.9"
+url = { workspace = true }

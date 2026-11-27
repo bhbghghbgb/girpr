@@ -1,7 +1,7 @@
 [package]
 name = "gircap"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "Dev-only live-artifact capture tool: builds self-contained fixture bundles (real game_dir, real API bodies, real chunk blobs) plus offline ground truth, for testing the repair binary"
 
@@ -145,10 +145,10 @@ gircap-http = { path = "http" }
 # gzip threshold flag, the report bytes and every call site here; it depends on
 # no program crate and invokes no binary (docs/00-spec.md §2).
 gircap-hash = { path = "hash" }
-clap = { version = "4.6.10", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
-thiserror = "2.0.21"
+thiserror = { workspace = true }
 # The clamped exponential retry schedule and the sleep hook both come from the
 # leaf; gircap passes `0.0` jitter so capture artifacts stay byte-stable and
 # diffable, and keeps its own side-effectful attempt loop local.
@@ -193,7 +193,7 @@ girpr-value-ranges = { path = "../../crates/value-ranges" }
 # dependency tree still enables tokio's empty `default` feature, which adds
 # nothing. `spawn`/`spawn_blocking`/`JoinSet` come with `rt`, which
 # `rt-multi-thread` already includes.
-tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # URL parsing for `config::validate_base`: the absolute/https/loopback checks on
 # the two API base overrides. This is the same `url` crate that `reqwest`
 # re-exports as `Url` (already in the lockfile), so parsing, `scheme()`,
@@ -201,18 +201,18 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 # hyper tree are owned solely by `gircap-http`; gircap no longer takes a direct
 # `reqwest` dependency. No `json` and no `stream` were requested here either:
 # every body is decoded with `serde_json::from_slice` or handed on as raw bytes.
-url = "2.5.9"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+url = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # TSV sidecars are written by `csv` with a tab delimiter: it owns field
 # quoting and the LF terminator, while the pinned headers and sort stay local.
-csv = "1.4.0"
+csv = { workspace = true }
 # Strict `major.minor.patch` parsing for the legacy staleness comparison. Already
 # in the lockfile through `rustc_version`; gircap only compares `.major`, keeps
 # `checked_sub` and the `(u64, Vec<String>)` return, and leaves the dispatcher's
 # permissive version spellings (which semver rejects) untouched.
-semver = "1.0.28"
-prost = "0.14.6"
+semver = { workspace = true }
+prost = { workspace = true }
 # The shared Sophon wire types: one byte layout for the three protobuf messages
 # both programs decode. The leaf owns tags and field names only; gircap's dump
 # key names are preserved and every measurement/validation helper stays local.
@@ -271,29 +271,29 @@ girpr-audio-language = { path = "../../crates/audio-language" }
 girpr-report-core = { path = "../../crates/report-core", features = ["clap"] }
 # Percent-escape spelling for query values and the stdout text form. Already in
 # the lockfile through `reqwest`/`url`; named here so this crate uses it directly.
-percent-encoding = "2.3.2"
+percent-encoding = { workspace = true }
 # SHA-256 is computed inside `girpr-digest`, shared by all three programs;
 # this crate only publishes its lowercase hex, so it no longer depends on the
 # hasher directly.
-flate2 = "1.1.11"
+flate2 = { workspace = true }
 # Directory walks in the index and inventory passes. Already in the shared
 # lockfile through the other workspace members; no new dependency is fetched.
-walkdir = "2.5.1"
+walkdir = { workspace = true }
 # The shared pure `game_version` line scan. gircap passes its own FIRST-match,
 # `[General]`-only selection and keeps its A13 failure wording; the repair
 # binary passes LAST-match, no-section. No INI parser dependency is needed here.
 girpr-util-ini = { path = "../../app/util-ini" }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 # Only the `non_blocking` writer guard, which is what flushes the tail of a
 # --log-file run. No rolling: a capture writes one log, it is not a daemon.
-tracing-appender = "0.2.5"
-chrono = { version = "0.4.45", features = ["clock"] }
+tracing-appender = { workspace = true }
+chrono = { workspace = true, features = ["clock"] }
 # Bounded CPU parallelism for the two independent per-item loops: verify's A6
 # per-blob measure and capture's per-capture assembly. Already in the workspace
 # lockfile through girsync, so this adds no new crate to the graph. Both loops
 # collect results in input order and do every ordered write on the caller thread.
-rayon = "1.12.0"
+rayon = { workspace = true }
 
 [dev-dependencies]
 # The report-plane tests read emitted keys back in byte order through the
@@ -303,11 +303,11 @@ girpr-report-core = { path = "../../crates/report-core", features = ["test_suppo
 # encoder that stays out of the shipped crate unless this feature is opted into.
 gircap-hash = { path = "hash", features = ["test-support"] }
 # `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
-serde_json = "1.0.154"
+serde_json = { workspace = true }
 # Only the unit/integration tests build zstd frames to feed the decode helpers.
 # Production zstd lives in `gircap-hash`, which gircap depends on directly, so
 # this native tree is not rebuilt when emit/blobs/manifest change.
-zstd = "0.14.5"
+zstd = { workspace = true }
 # The self-contained offline capture mock and fixture builders, reached through
 # the thin `tests/common/mod.rs` shim so they compile once for all integration
 # binaries. A gircap-only dev library: it depends on this package's public

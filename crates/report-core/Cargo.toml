@@ -1,7 +1,7 @@
 [package]
 name = "girpr-report-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared ordered-JSON, line-writing and output-format mechanics used by the three report planes"
 
@@ -26,13 +26,13 @@ test_support = []
 # no `serde_json`, and in particular no `preserve_order`: emission order is
 # produced by `serialize_entry` here regardless of how the workspace unifies
 # that feature for `serde_json::Map`/`Value` elsewhere.
-serde = "1.0.229"
+serde = { workspace = true }
 # Optional: the `ValueEnum` derive on `OutputFormat`. The spelling, the
 # possible-value descriptions and the CLI parse boundary stay at each caller,
 # so enabling this changes no published help or error bytes.
-clap = { version = "4.6.10", features = ["derive"], optional = true }
+clap = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
 # Byte-level tests render the core to a string. This is a dev-only dependency
 # of a logic-free leaf, so it cannot couple any program to another.
-serde_json = "1.0.154"
+serde_json = { workspace = true }

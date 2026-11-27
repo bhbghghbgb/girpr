@@ -1,7 +1,7 @@
 [package]
 name = "girpr-test-support"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The facade-coupled run glue used by the girpr integration tests"
 

@@ -1,7 +1,7 @@
 [package]
 name = "girpr-util-io"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "Bounded byte-copy, zero-fill and reserved-capacity capture mechanics shared by the repair writers"
 
@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 # The error/context wrapper carried by the write callbacks.
-anyhow = "1.0.105"
+anyhow = { workspace = true }
 # The reserved-capacity bounded read is the single implementation promoted in
 # util-hash; the capture loop composes it rather than repeating the read.
 girpr-util-hash = { path = "../util-hash" }

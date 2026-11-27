@@ -1,7 +1,7 @@
 [package]
 name = "girpr-fetch"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The HYP and Sophon fetch mechanics the girpr repair pipeline reads with"
 
@@ -20,25 +20,25 @@ workspace = true
 test-support = []
 
 [dependencies]
-anyhow = "1.0.105"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # The HYP/Sophon JSON calls and the streamed downloads. These are the
 # heavy dependencies this crate isolates: an edit to the repair, report or CLI
 # modules above leaves this crate (and its reqwest/zstd/prost tree) cached.
-reqwest = { version = "0.13.5", features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 # The shared query grammar: pair/encoding/URL-build mechanics spelled exactly
 # as the recorded requests. This crate keeps its HYP spelling (hardcoded
 # language, unencoded ids) and its request policy at its own call sites.
 girpr-request-url = { path = "../../crates/request-url" }
 # The idle window on the two buffered JSON body reads uses the timer directly;
 # a client-wide total timeout would abort large streamed bodies instead.
-tokio = { version = "1.54.1", default-features = false, features = ["time"] }
-prost = "0.14.6"
-zstd = "0.14.5"
+tokio = { workspace = true, default-features = false, features = ["time"] }
+prost = { workspace = true }
+zstd = { workspace = true }
 # `StreamExt` combinators and the `Stream` trait the chunk sink is driven with.
-futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
-tracing = "0.1.44"
+futures-util = { workspace = true, default-features = false, features = ["std"] }
+tracing = { workspace = true }
 # The region values, the digest/hex and protobuf byte mechanics, the shared
 # retry schedule and the low-level scan/digest helpers. This crate keeps its
 # own request policy, decode/verify seam and attempt loops; only the leaves
@@ -76,7 +76,7 @@ girpr-persistent-plan = { path = "../persistent-plan" }
 girpr-chunk-verify = { path = "../chunk-verify" }
 girpr-util-hash = { path = "../util-hash" }
 # The downloader writes a verified body to a temp sibling before publishing it.
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
 # not the config writer, so an ini edit leaves this fetch tree cached.
 girpr-util-path = { path = "../util-path" }
@@ -90,4 +90,4 @@ girpr-loopback-mock = { path = "../../crates/loopback-mock" }
 girpr-tempdir = { path = "../../crates/tempdir" }
 # The `#[tokio::test]` driver. `reqwest` enables the network surface in every
 # build; naming it here keeps the tests' own requirement explicit.
-tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }

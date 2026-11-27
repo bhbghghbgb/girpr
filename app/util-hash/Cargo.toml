@@ -1,7 +1,7 @@
 [package]
 name = "girpr-util-hash"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The one-read MD5 scan and digest helpers the girpr workspace hashes files with"
 
@@ -19,10 +19,10 @@ test-support = []
 
 [dependencies]
 # The error/context wrappers the scan carries.
-anyhow = "1.0.105"
+anyhow = { workspace = true }
 # The one-read-pass file scanner's hasher. `Md5`/`EMPTY_MD5` themselves are
 # re-exported from `girpr-digest`; this is only the hasher behind them.
-md-5 = "0.11.0"
+md-5 = { workspace = true }
 # Hex spelling and the fixed-width digest newtype. This crate keeps the scan
 # semantics; the leaf owns the byte/hex mechanics.
 girpr-digest = { path = "../../crates/digest" }

@@ -1,7 +1,7 @@
 [package]
 name = "girpr-fs-names"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared Windows path-name and canonical-path mechanics, each parameterised by the caller's rule: device names, trailing dot/space, ASCII case fold, forward slash and verbatim-free canonicalization"
 
@@ -17,4 +17,4 @@ workspace = true
 # cannot be compared component-wise with a junction's own `read_link` target.
 # `dunce` resolves links identically but omits that prefix. It is kept here, in
 # the leaf, so every program that needs a canonical path shares one spelling.
-dunce = "1.0.5"
+dunce = { workspace = true }

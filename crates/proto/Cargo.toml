@@ -1,7 +1,7 @@
 [package]
 name = "girpr-proto"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared Sophon chunk-manifest protobuf wire types the girpr workspace decodes"
 
@@ -14,18 +14,18 @@ workspace = true
 
 [dependencies]
 # The wire layout: message derive and the `alloc` Vec/String it generates.
-prost = "0.14.6"
+prost = { workspace = true }
 # The derive behind the full-decode dump's JSON key names. These keys are part
 # of the artifact's byte layout, not a program's report format.
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 
 [build-dependencies]
 # Generate the message types from the vendored `.proto` instead of maintaining
 # tags by hand. The bundled protoc means neither Windows nor Linux needs a
 # system protobuf installation.
-prost-build = "0.14.6"
-protoc-bin-vendored = "3.3.0"
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
 
 [dev-dependencies]
 # The dump-key regression serializes a generated message to a JSON value.
-serde_json = "1.0.154"
+serde_json = { workspace = true }

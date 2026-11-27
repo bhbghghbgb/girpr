@@ -1,7 +1,7 @@
 [package]
 name = "girpr-test-fixtures"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The offline HYP/Sophon mock and fixture builders for the girpr integration tests"
 
@@ -34,20 +34,20 @@ girpr-tempdir = { path = "../../crates/tempdir" }
 # async surface (which implies the synchronous one).
 girpr-log = { path = "../../crates/log", features = ["test-support-async"] }
 # The mock's canned JSON answers and their tweaks.
-serde_json = "1.0.154"
+serde_json = { workspace = true }
 # The mock reads the request's query with the shared grammar leaf's form
 # decoder instead of a local `%XX` loop; the leaf borrows `url`'s decoder
 # (already in the lockfile).
 girpr-request-url = { path = "../../crates/request-url" }
 # The manifest body is protobuf; `Message` is the encode trait the fixture needs.
-prost = "0.14.6"
+prost = { workspace = true }
 # The patch-manifest wire shape the mock encodes for a scripted `getPatchBuild`
 # delete list. The leaf owns only the byte layout, so this stays a direct,
 # in-workspace dependency rather than going through the product facade.
 girpr-proto = { path = "../../crates/proto" }
 # Manifests and chunk payloads are zstd frames on the wire.
-zstd = "0.14.5"
+zstd = { workspace = true }
 # The mock is a small accept loop on an ephemeral loopback port. `rt` runs the
 # spawned task, `net`/`io-util` serve the socket and `sync` holds the watch the
 # branch/config ordering seam uses.
-tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "io-util", "sync"] }
+tokio = { workspace = true, default-features = false, features = ["rt", "net", "io-util", "sync"] }

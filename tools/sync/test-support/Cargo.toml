@@ -1,7 +1,7 @@
 [package]
 name = "girsync-test-support"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The girsync-owned test fixtures: builders for the option, cache and planner types the dev tools' tests hand to girsync"
 
@@ -26,17 +26,17 @@ all = "warn"
 # out of girsync's rebuild cascade. Only girsync takes this crate as a
 # dev-dependency.
 girsync = { path = ".." }
-serde_json = "1.0.154"
+serde_json = { workspace = true }
 # The in-process CLI runner glue parses argv through clap's `Parser` trait, and
 # the full-argv spelling it hands the parser is the shared `argv_with_program`
 # helper (the caller supplies the `girsync` sentinel).
-clap = "4.6.10"
+clap = { workspace = true }
 girpr-cli = { path = "../../../crates/cli" }
 # The logged runner installs girsync's subscriber and renders the console into a
 # shared buffer, so it names `tracing`/`tracing-subscriber` directly. These are
 # already in girsync's graph; naming them here only makes the dependency real.
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 # The fixture trees are still named and removed by the shared scratch-directory
 # policy; re-exported below so every call site keeps the same surface.
 girpr-tempdir = { path = "../../../crates/tempdir" }
@@ -46,4 +46,4 @@ girpr-tempdir = { path = "../../../crates/tempdir" }
 girpr-log = { path = "../../../crates/log", features = ["test-support"] }
 # `age()` moves fixture mtimes by a whole number of seconds without rounding
 # away the existing sub-second part; filetime owns that arithmetic.
-filetime = "0.2.30"
+filetime = { workspace = true }

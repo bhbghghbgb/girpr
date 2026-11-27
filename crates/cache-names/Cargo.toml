@@ -1,7 +1,7 @@
 [package]
 name = "girpr-cache-names"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The girpr-cache name reservation: one prefix and the predicates that recognise it, shared by test fixtures and their production counterparts"
 

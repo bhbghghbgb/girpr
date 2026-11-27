@@ -1,7 +1,7 @@
 [package]
 name = "girpr-cli"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The shared clap-error/exit, global-flag and log-announcement mechanics, parameterised by each caller's own policy"
 
@@ -16,7 +16,7 @@ workspace = true
 # `ErrorKind` separates an answer (`--help` / `--version`) from a usage error;
 # the possible-value parser carries the caller's `--output` descriptions. No
 # exit table, no exit code of any program and no process boundary live here.
-clap = "4.6.10"
+clap = { workspace = true }
 # `Level`, `parse_level` and `LogPlan::named_file` are the shared policy and
 # plan the five global flags and the announcement are expressed in. The leaf
 # owns the verbosity names, environment variables and default levels; no

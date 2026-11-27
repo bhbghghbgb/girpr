@@ -1,7 +1,7 @@
 [package]
 name = "girpr"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Integration tests are declared explicitly below. One root per group shares
 # a single `common` module and one link of the workspace tree; auto-discovery
 # would bring back a separate binary for every file under `tests/`.
@@ -43,6 +43,70 @@ members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crat
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.105"
+assert_cmd = "2.2.2"
+async-trait = "0.1.92"
+axum = "0.8.9"
+backoff = "0.4"
+base64 = "0.23.1"
+bitflags = "=2.13.2"
+brotli = "9.1.3"
+bytes = "1.12.2"
+chrono = "0.4.45"
+clap = "4.6.10"
+criterion = "0.8.2"
+csv = "1.4.0"
+dunce = "1.0.5"
+filetime = "0.2.30"
+flate2 = "1.1.11"
+fnv = "1.0.7"
+fs2 = "0.4.3"
+futures = "0.3.34"
+futures-util = "0.3.34"
+globset = "0.4.22"
+hex = "0.4.3"
+junction = "2.1.0"
+md-5 = "0.11.0"
+path-clean = "1.0.1"
+percent-encoding = "2.3.2"
+postcard = "1.2.0"
+predicates = "3.1.4"
+prost = "0.14.6"
+prost-build = "0.14.6"
+protoc-bin-vendored = "3.3.0"
+quick-xml = "0.42.0"
+rand = "0.10.4"
+rayon = "1.12.0"
+redb = "=5.0.0"
+reqwest = "0.13.5"
+rsa = "0.10.0"
+rust-ini = "0.21.3"
+same-file = "1.0.6"
+semver = "1.0.28"
+serde = "1.0.229"
+serde_json = "1.0.154"
+sha2 = "0.11.2"
+strip-ansi-escapes = "0.2.1"
+strum = "0.28.0"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = "1.54.1"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = "0.3.23"
+trycmd = "1.2.1"
+url = "2.5.9"
+walkdir = "2.5.1"
+winapi-util = "0.1.11"
+wiremock = "0.6.5"
+xxhash-rust = "0.8.21"
+zstd = "0.14.5"
+
 # The shared policy for packages that opt in with `[lints] workspace = true`.
 # Deliberately small: a lint joins this table only when a real class of bug
 # motivates it. Warnings stay warnings; CI decides whether to deny them.
@@ -63,7 +127,7 @@ expect_used = "warn"
 workspace = true
 
 [dependencies]
-clap = { version = "4.6.10", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 # The log-file and log-level policy, shared with the two dev tools so that
 # `--log-file`, the env vars and the default levels mean the same thing in
 # all three.
@@ -107,10 +171,10 @@ girpr-value-ranges = { path = "crates/value-ranges" }
 # `default-features = false` withholds nothing on its own: tokio's `default`
 # set is empty. `reqwest`'s tree enables it anyway, so the resolved graph still
 # lists `default`, but it adds no feature or crate.
-tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
-reqwest = { version = "0.13.5", features = ["json", "stream"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+tokio = { workspace = true, default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # The shared Sophon wire types: one set of protobuf tags, misspelled `chuncks`
 # and opaque tag 6 as both programs decode them. The leaf owns only the byte
 # layout; this binary keeps its own wrapper and validation around it.
@@ -148,12 +212,12 @@ girpr-model = { path = "crates/model", features = ["clap"] }
 # Hex spelling and fixed-width digest mechanics, shared with the dev tools
 # that cross the same digest/text boundary. A leaf crate with no program logic.
 girpr-digest = { path = "crates/digest" }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 # The file layer's writer: a non-blocking queue drained by a worker thread, so
 # logging never blocks the run and the worker guard flushes the tail on exit.
-tracing-appender = "0.2.5"
-anyhow = "1.0.105"
+tracing-appender = { workspace = true }
+anyhow = { workspace = true }
 # The retry schedule factory and the injectable sleep driver. The leaf owns
 # `backoff` and the ±50 % jitter is this program's choice, passed in as a
 # parameter, so its retry waits stay exactly as before.
@@ -163,11 +227,11 @@ girpr-retry = { path = "crates/retry" }
 # `spawn_blocking` entry point; every repair phase keeps its own failure policy
 # and its own thread-setup (dispatcher, diagnostics owner) at the call site.
 girpr-async-join = { path = "crates/async-join" }
-walkdir = "2.5.1"
+walkdir = { workspace = true }
 # Owns the purge stage's bounded parallel stat/delete: rayon's indexed collect
 # returns one result per candidate in input order, so the caller still emits
 # every purge line in plan order on its own tracing dispatcher.
-rayon = "1.12.0"
+rayon = { workspace = true }
 # The shared --include/--exclude glob rules, used by this crate's repair scope
 # and by girsync. One glob version and one set of matching rules for both.
 girpr-filter = { path = "crates/filter" }
@@ -211,25 +275,25 @@ girpr-util-ini = { path = "app/util-ini" }
 # `join!`/`select!`-style macros, so the default `async-await-macro` feature
 # (and its `futures-macro` proc-macro) is not compiled. `std` is still needed:
 # it carries the `StreamExt` combinators, and it pulls `slab` along with it.
-futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+futures-util = { workspace = true, default-features = false, features = ["std"] }
 # Atomic publish for the clean artifacts (config, scan, plan, and the audio
 # copy fallback): a temp file in the target's directory whose `persist()` is an
 # atomic rename (MoveFileEx + MOVEFILE_REPLACE_EXISTING on Windows). The resume
 # `_tmp` files are deliberately not built on this - see the file writer.
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 
 [dev-dependencies]
 # Process-level CLI assertions capture stdout, stderr and the exit code and
 # compare them with predicates matchers instead of hand-built output tuples.
 # Only the synchronous binary cases use this; the mock-backed tests keep their
 # tokio process seam because they share the runtime with the mock server.
-assert_cmd = "2.2.2"
-predicates = "3.1.4"
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 # CLI help is snapshotted as the whole rendered output instead of parsing clap's
 # layout by hand. The binary is already built for the other integration tests;
 # trycmd runs it and compares the output byte for byte (with newlines and the
 # executable suffix normalized).
-trycmd = "1.2.1"
+trycmd = { workspace = true }
 # The shared offline HYP/Sophon mock, fixture builders and lock-cleanup
 # helpers for the root integration binaries. They used to be inlined by
 # `mod common;` into every binary; the public library surface lets each binary
@@ -274,7 +338,7 @@ girpr-util-hash = { path = "app/util-hash", features = ["test-support"] }
 # the normal dependency above; tokio's `default` set is empty, so this withholds
 # no test feature. Paused-time tests live in `girpr-report`, which declares its
 # own `test-util` dev feature; root tests never pause the clock.
-tokio = { version = "1.54.1", default-features = false, features = ["process", "net", "io-util"] }
+tokio = { workspace = true, default-features = false, features = ["process", "net", "io-util"] }
 # The wiremock-backed loopback server behind the canned-reply unit tests. The
 # local helper keeps this product's own body-scripting contract; the fetch and
 # capture tests script the same leaf with their own replies and assertions.
@@ -283,13 +347,13 @@ girpr-loopback-mock = { path = "crates/loopback-mock" }
 # the tokio service are needed; axum owns parsing, keep-alive and framing while
 # the test-supplied route keeps its reply scripting. The socket/stop/gate
 # mechanics it shares with the other axum test servers live in `girpr-test-http`.
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
 girpr-test-http = { path = "crates/test-http" }
 # The artifact-server fixture tests build zstd frames for their replay bodies;
 # the production paths do their prost/zstd work in `girpr-fetch`. The root's
 # canned manifest bodies are frozen bytes in manifest.rs, so this crate needs
 # no direct prost dependency.
-zstd = "0.14.5"
+zstd = { workspace = true }
 
 # Debug/test builds are link-bound on low-core HDD hosts: the default of 256
 # codegen units produces hundreds of object files per crate for the linker to

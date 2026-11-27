@@ -1,7 +1,7 @@
 [package]
 name = "girpr-retry-driver"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The policy-free async retry loop over the shared schedule and sleep leaf"
 
@@ -21,4 +21,4 @@ girpr-retry = { path = "../retry" }
 # Only for `#[tokio::test]` in the leaf's own wait-rule tests. A workspace build
 # unifies this with the programs' tokio features, but the leaf must also compile
 # and test on its own.
-tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "time"] }

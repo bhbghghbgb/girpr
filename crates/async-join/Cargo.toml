@@ -1,7 +1,7 @@
 [package]
 name = "girpr-async-join"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The indexed bounded async-join window and panic-payload recovery mechanics"
 
@@ -15,14 +15,14 @@ workspace = true
 [dependencies]
 # The buffered window in one place: the library owns the concurrency bound and
 # the completion signal; the slot restoration and the failure outcome stay here.
-futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+futures-util = { workspace = true, default-features = false, features = ["std"] }
 # The blocking-pool entry point and the `JoinError` this leaf renders. No
 # runtime features are requested beyond `rt`: a caller brings its own runtime.
-tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
+tokio = { workspace = true, default-features = false, features = ["rt"] }
 # The one diagnostic a caught panic emits. The caller's dispatcher applies.
-tracing = "0.1.44"
+tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "time"] }
 # The cancellation test needs an in-flight signal from each buffered future.
-futures = "0.3.34"
+futures = { workspace = true }

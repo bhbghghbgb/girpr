@@ -1,7 +1,7 @@
 [package]
 name = "girsync-cache"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The girsync-owned redb-backed hash cache that the girsync mirror reads and writes with"
 
@@ -24,25 +24,25 @@ all = "warn"
 # `postcard` and `tempfile` — cached instead of recompiling them.
 # The hash cache file itself; pinned to the version the byte contract was
 # validated against (the sidecar lock keeps fail-fast open behaviour).
-redb = "=5.0.0"
+redb = { workspace = true }
 # The positional wire codec for the two cache rows. Only the serde-based
 # `to_extend` / `take_from_bytes` helpers are used, so the default heapless/cobs
 # surface is not needed; serde's `std` supplies String/Vec.
-postcard = { version = "1.2.0", default-features = false }
+postcard = { workspace = true, default-features = false }
 # The shared claim primitive owns the working name's unique creation and its
 # cleanup; this crate still owns the copy/flush/publish steps and its record
 # protocol.
 girpr-util-path = { path = "../../../app/util-path" }
-anyhow = "1.0.105"
+anyhow = { workspace = true }
 # `FileRec` and `Meta` derive their serde impls; the hash vocabulary's own
 # serde impl is the cache wire format and must not change.
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 # Owns the command-line algorithm names and their parsing; the derived helpers
 # never touch serde, so the postcard wire spelling stays byte-identical.
-strum = { version = "0.28.0", features = ["derive"] }
+strum = { workspace = true, features = ["derive"] }
 # Owns the `AlgoSet` bitfield mechanics (masks and set arithmetic); no features
 # are enabled, so nothing reaches serde or changes the postcard row layout.
-bitflags = "=2.13.2"
+bitflags = { workspace = true }
 # Backup and snapshot names use the workspace's one compact stamp format.
 girpr-time = { path = "../../../crates/time" }
 # The cache's name-claim identity is the same handle-backed identity the plan
@@ -51,7 +51,7 @@ girpr-fs-identity = { path = "../../../crates/fs-identity" }
 # The streaming hash sink behind the row-digest vocabulary.
 girpr-digest = { path = "../../../crates/digest" }
 # Structured narration from open/publish/write.
-tracing = "0.1.44"
+tracing = { workspace = true }
 
 [dev-dependencies]
 # The cache's unit tests build fixture trees with the workspace's one scratch

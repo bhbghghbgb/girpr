@@ -1,7 +1,7 @@
 [package]
 name = "girpr-tempdir"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The scratch-directory policy every project in the girpr workspace follows: a name nothing collides with, and a tree removed when the test ends"
 
@@ -16,11 +16,11 @@ workspace = true
 # The shared test-support module turns console captures into plain text before
 # comparing them. The library owns escape-sequence recognition; this crate only
 # keeps the helper's signature for its existing callers.
-strip-ansi-escapes = "0.2.1"
+strip-ansi-escapes = { workspace = true }
 # Random names and best-effort cleanup for the scratch trees this crate hands
 # out. tempfile owns the created directories; this crate stays a thin policy
 # wrapper around the shared root and the recognizable name prefix.
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 # The game-tree fixture helpers spell `/`-separated rels with the host
 # separator. The rewrite is the shared name mechanic rather than a fourth copy.
 girpr-fs-names = { path = "../fs-names" }
@@ -38,4 +38,4 @@ girpr-cache-names = { path = "../cache-names" }
 # The `dir_link` junction fallback delegates the reparse-point mechanics to
 # this Windows-only crate; default features are off so it does not request
 # backup/restore privileges for an ordinary test fixture.
-junction = { version = "2.1.0", default-features = false }
+junction = { workspace = true, default-features = false }

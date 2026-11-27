@@ -1,7 +1,7 @@
 [package]
 name = "gircap-hash"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The logic-free digest and zstd mechanics owned by gircap: one-pass and one-shot digests, hex spelling, the gzip rule and bounded zstd decode/measure"
 
@@ -33,20 +33,20 @@ all = "warn"
 # algorithm choice; no flag, exit code or published shape crosses the boundary.
 girpr-digest = { path = "../../../crates/digest" }
 # MD5 is the manifest/CDN language; SHA-256 is what checksums.json publishes.
-md-5 = "0.11.0"
+md-5 = { workspace = true }
 # Bounded zstd decode and streaming measurement. This crate is the sole owner
 # of zstd for gircap's production path, so an edit to emit/blobs/manifest leaves
 # this crate and the native zstd tree cached.
-zstd = "0.14.5"
+zstd = { workspace = true }
 # The gzip rule's reference/reader path; the streaming writer stays in gircap's
 # emit module. It owns no program policy here.
-flate2 = "1.1.11"
+flate2 = { workspace = true }
 # The `Encoding` wire enum's derives.
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 # The `Encoding` wire-spelling test serialises a value.
-serde_json = "1.0.154"
+serde_json = { workspace = true }
 # The scratch-directory helper, shared with the repair binary and girsync, so
 # the tree a test writes into is named and removed the same way everywhere.
 girpr-tempdir = { path = "../../../crates/tempdir" }

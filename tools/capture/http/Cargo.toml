@@ -1,7 +1,7 @@
 [package]
 name = "gircap-http"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The logic-free HTTP mechanics owned by gircap: the reqwest transport, the retrying fetcher, the request log and the error-body budget"
 
@@ -40,29 +40,29 @@ girpr-async-join = { path = "../../../crates/async-join" }
 girpr-digest = { path = "../../../crates/digest" }
 # The zero-copy chunk type reqwest yields. Naming it directly lets the transport
 # hand body bytes to the sinks without copying every chunk into a fresh `Vec`.
-bytes = "1.12.2"
+bytes = { workspace = true }
 # The transport, the client and header maps. This crate is now the sole owner of
 # reqwest for gircap: the parent package used to take a direct reqwest dep only
 # for `config::validate_base`'s `Url`, which parses with the `url` crate itself.
 # The fetcher/transport mechanics compile once here and stay cached across edits
 # to emit/blobs/manifest in the parent package.
-reqwest = "0.13.5"
+reqwest = { workspace = true }
 # The runtime for the injectable timers the backoff awaits and for the blocking
 # joins; no `fs`/`io`/`net`/`process` features are requested here.
-tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # Derive `Display`/`Error` for `ApiError` without changing its format strings.
-thiserror = "2.0.21"
-serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.154"
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
 # The millisecond RFC 3339 spelling in the request log is a named format in the
 # time leaf; this crate keeps only the seam its callers already use.
 girpr-time = { path = "../../../crates/time" }
-tracing = "0.1.44"
+tracing = { workspace = true }
 
 [dev-dependencies]
 # The join tests need an in-flight signal channel; the window itself lives in
 # the shared leaf, so `futures` is a test-only dependency of this crate now.
-futures = "0.3.34"
+futures = { workspace = true }
 # The mechanics tests build scratch directories and script canned replies on a
 # loopback server. Neither is needed by a shipped build of this crate; gircap's
 # own canned mock encodes different contracts and is deliberately not borrowed

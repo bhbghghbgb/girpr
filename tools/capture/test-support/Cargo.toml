@@ -1,7 +1,7 @@
 [package]
 name = "gircap-test-support"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
 description = "The self-contained offline capture mock and fixture builders shared by the gircap integration tests"
 
@@ -34,12 +34,12 @@ girpr-chunk-cost = { path = "../../../crates/chunk-cost" }
 girpr-tempdir = { path = "../../../crates/tempdir" }
 # The shared bundle is published under a cross-process file lock; every test
 # process must agree on the one on-disk tree.
-fs2 = "0.4.3"
-serde_json = "1.0.154"
+fs2 = { workspace = true }
+serde_json = { workspace = true }
 # The ordered fixture value implements `serde::Serialize` itself so keys keep
 # insertion order without `serde_json/preserve_order` (which would reorder
 # `Value` objects for unrelated consumers in this workspace).
-serde = "1.0.229"
+serde = { workspace = true }
 # Request queries are decoded by the shared grammar leaf rather than a local
 # `%XX`/`+` loop; the leaf borrows `url`'s form decoder (already in the lockfile).
 girpr-request-url = { path = "../../../crates/request-url" }
@@ -48,20 +48,20 @@ girpr-request-url = { path = "../../../crates/request-url" }
 # `MANIFEST.json → tool_argv`, so its spelling is a byte contract owned here.
 girpr-cli = { path = "../../../crates/cli" }
 # The canned manifest bodies are protobuf frames the mock encodes by hand.
-prost = "0.14.6"
+prost = { workspace = true }
 # axum owns the mock's listener, HTTP parsing, keep-alive, routing and header
 # writing. A regular dependency, not a dev-dependency: this crate is consumed as
 # a library by gircap's integration tests, and a dev-dependency of a library is
 # not linked into those consumers. Only `http1`/`tokio` are needed (the mock is
 # HTTP/1.1); the rest of the workspace already resolves the same axum 0.8.9.
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
 # `block_on` drives gircap's async command dispatch on a current-thread runtime;
 # `net`/`time`/`sync` drive the axum server's listener, idle connections and
 # shutdown signal on its own current-thread runtime.
-tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "sync"] }
+tokio = { workspace = true, default-features = false, features = ["rt", "net", "time", "sync"] }
 # Chunk and manifest bodies are zstd frames on the wire.
-zstd = "0.14.5"
+zstd = { workspace = true }
 # 64-bit FNV-1a for the shared bundle cache key; only change detection matters.
-fnv = "1.0.7"
+fnv = { workspace = true }
 # Recursive source/bundle discovery with deterministic per-directory ordering.
-walkdir = "2.5.1"
+walkdir = { workspace = true }
