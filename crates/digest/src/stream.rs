@@ -244,25 +244,58 @@ impl std::io::Write for Sink {
     }
 }
 
+/// Read from `reader` in caller-sized chunks, forward each chunk to `forward`
+/// **before** absorbing it into `sink`, and report how many bytes were read.
+///
+/// This is the one buffered read loop behind the file digesters and the copy
+/// path. It owns neither a file nor a write policy: `forward` is where a caller
+/// sends the same bytes onward (a copy does), and a hash-only caller passes a
+/// no-op. Forward-before-absorb is the order a copy needs — a digest of bytes
+/// that never landed is worse than no digest at all.
+///
+/// The caller supplies the buffer, so its size stays the caller's policy. An
+/// empty buffer is refused: `read` would otherwise return 0 forever and look
+/// like EOF. Seeking and deciding when to reset the sink stay with the caller.
+pub fn copy_with_sink<R: Read>(
+    reader: &mut R,
+    sink: &mut Sink,
+    buf: &mut [u8],
+    mut forward: impl FnMut(&[u8]) -> std::io::Result<()>,
+) -> std::io::Result<u64> {
+    if buf.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "hash buffer must not be empty",
+        ));
+    }
+    let mut total = 0u64;
+    loop {
+        let n = reader.read(buf)?;
+        if n == 0 {
+            break;
+        }
+        let chunk = &buf[..n];
+        forward(chunk)?;
+        sink.update(chunk);
+        total += n as u64;
+    }
+    Ok(total)
+}
+
 /// Hash everything a reader yields, in caller-sized chunks.
 ///
 /// The caller supplies the read buffer, so the buffer size is its policy — a
 /// 64 KiB file-digest read and a 512 KiB chunk read drive the same sink. The
 /// reader starts wherever it currently is: seeking to the beginning (or not)
-/// is the caller's reset contract, not this function's.
+/// is the caller's reset contract, not this function's. The read loop itself is
+/// shared with the copy path through [`copy_with_sink`].
 pub fn hash_reader<R: Read>(
     mut reader: R,
     algos: Algorithms,
     buf: &mut [u8],
 ) -> std::io::Result<DigestBytes> {
     let mut sink = Sink::new(algos);
-    loop {
-        let n = reader.read(buf)?;
-        if n == 0 {
-            break;
-        }
-        sink.update(&buf[..n]);
-    }
+    copy_with_sink(&mut reader, &mut sink, buf, |_| Ok(()))?;
     Ok(sink.finish())
 }
 
@@ -381,6 +414,29 @@ mod tests {
         assert_eq!(sink.write(b"abc").unwrap(), 3);
         sink.flush().unwrap();
         assert_eq!(sink.finish().md5_hex().as_deref(), Some(want.as_str()));
+    }
+
+    /// The shared loop hands every byte onward as well as to the sink, and an
+    /// empty buffer is refused instead of reading zero forever.
+    #[test]
+    fn copy_with_sink_forwards_every_byte_and_refuses_an_empty_buffer() {
+        let data: Vec<u8> = (0..500).map(|i| (i % 251) as u8).collect();
+        let want = super::super::md5_hex(&data);
+        let mut sink = Sink::new(Algorithms::MD5);
+        let mut forwarded = Vec::new();
+        let mut buf = [0u8; 37];
+        let n = copy_with_sink(&mut data.as_slice(), &mut sink, &mut buf, |chunk| {
+            forwarded.extend_from_slice(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(n, data.len() as u64);
+        assert_eq!(forwarded, data);
+        assert_eq!(sink.finish().md5_hex().as_deref(), Some(want.as_str()));
+
+        let mut sink = Sink::new(Algorithms::MD5);
+        let err = copy_with_sink(&mut data.as_slice(), &mut sink, &mut [], |_| Ok(())).unwrap_err();
+        assert_eq!(err.to_string(), "hash buffer must not be empty");
     }
 
     #[test]

@@ -17,7 +17,7 @@
 
 mod stream;
 
-pub use stream::{Algorithms, DigestBytes, Sink, hash_reader};
+pub use stream::{Algorithms, DigestBytes, Sink, copy_with_sink, hash_reader};
 
 use std::fmt;
 

@@ -3,7 +3,7 @@
 //! and the test-only `test_no_fsync` hook — plus their unit tests.
 
 use anyhow::{Context, Result, bail};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Path;
 use tracing::{error, trace};
 
@@ -42,14 +42,9 @@ fn copy_and_digest(
     }
     let mut digests = Digests::new(algos);
     buf.resize(CHUNK, 0);
-    loop {
-        let n: usize = src.read(buf.as_mut_slice())?;
-        if n == 0 {
-            break;
-        }
-        dst.write_all(&buf[..n])?;
-        digests.update(&buf[..n]);
-    }
+    // The shared loop writes each chunk before it absorbs it; the `io::copy`
+    // fast path above stays here, and so does the choice of destination.
+    digests.absorb_reader(src, buf.as_mut_slice(), |chunk| dst.write_all(chunk))?;
     Ok(digests.finish())
 }
 

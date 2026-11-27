@@ -51,6 +51,19 @@ impl Digests {
         self.sink.update(chunk);
     }
 
+    /// Digest everything `reader` yields, sending each chunk through `forward`
+    /// before it is absorbed. The buffered read loop and the empty-buffer
+    /// refusal live in the digest leaf, so this and the copy path drive the
+    /// same sink in the same order.
+    pub fn absorb_reader<R: Read>(
+        &mut self,
+        reader: &mut R,
+        buf: &mut [u8],
+        forward: impl FnMut(&[u8]) -> std::io::Result<()>,
+    ) -> std::io::Result<u64> {
+        girpr_digest::copy_with_sink(reader, &mut self.sink, buf, forward)
+    }
+
     /// The digests of everything fed so far. Values are **raw** bytes (16 for
     /// md5, 32 for sha256, 8 for xxhash64), which is what the cache stores.
     ///
@@ -97,17 +110,8 @@ pub fn hash_file_with_buf(path: &Path, algos: &AlgoSet, buf: &mut [u8]) -> Resul
     if algos.is_empty() {
         return Ok(DigestSet::default());
     }
-    // A zero-length slice would make `read` return 0 forever rather than report
-    // EOF, so refuse it explicitly instead of spinning.
-    anyhow::ensure!(!buf.is_empty(), "hash buffer must not be empty");
     let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut digests = Digests::new(algos);
-    loop {
-        let n: usize = f.read(buf)?;
-        if n == 0 {
-            break;
-        }
-        digests.update(&buf[..n]);
-    }
+    digests.absorb_reader(&mut f, buf, |_| Ok(()))?;
     Ok(digests.finish())
 }
