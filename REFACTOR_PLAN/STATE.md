@@ -111,7 +111,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | declined |
 | F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | declined |
 | F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | accepted (B1) |
-| F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | accepted (B7) |
+| F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | done |
 | F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | accepted (B1) |
 | F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | declined |
 | F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | declined |
@@ -189,3 +189,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - B4 done: F15 kept in review; `promote_tmp` routes through `verify_whole_file` with delete-and-bail and all published strings unchanged; workspace 2366 passed / 8 skipped.
 - B5 done: F20 kept in review; test-only thread-local `set_permissions` failure guard covers SetFailed at the leaf and all three callers; warning/error wording unchanged.
 - B6 done: F46 kept in review; production now uses `girpr-cache-names`; prefix spelling and Windows case fold byte-identical; only two expected Cargo.lock edges added.
+- B7 done: F54 (triaged defect) kept in review; `entry_names_with` restores `unwrap()` fail-loud behavior; workspace 2370 passed / 8 skipped.
