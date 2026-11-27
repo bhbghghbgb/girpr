@@ -6,7 +6,54 @@
 //! and failure fatality stay at the call sites: a publisher that can use a
 //! temp sibling warns and continues, while an in-place writer propagates.
 
+use std::cell::Cell;
 use std::path::Path;
+
+thread_local! {
+    /// Injected permission-write failure. Production never sets this: a test
+    /// installs it for the life of a [`SetPermissionsFailureGuard`]. Thread
+    /// locality keeps parallel tests from seeing one another's override.
+    static SET_PERMISSIONS_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A scoped override that makes [`clear_readonly`] report [`ReadOnlyOutcome::SetFailed`].
+///
+/// The real `std::fs::set_permissions` call is skipped only while this guard is
+/// alive; dropping it restores the previous state, so guards may nest and a
+/// panicking test cannot leak the override into another one.
+#[doc(hidden)]
+#[must_use = "the injected failure is removed when the guard is dropped"]
+pub struct SetPermissionsFailureGuard {
+    previous: bool,
+}
+
+impl Drop for SetPermissionsFailureGuard {
+    fn drop(&mut self) {
+        SET_PERMISSIONS_FAILURE.with(|slot| slot.set(self.previous));
+    }
+}
+
+/// Force the permission write of [`clear_readonly`] to fail on this thread.
+///
+/// A test seam for the `SetFailed` outcome: no host ACL behaviour is consulted
+/// and no permission is actually changed. Production never installs one.
+#[doc(hidden)]
+pub fn inject_set_permissions_failure() -> SetPermissionsFailureGuard {
+    let previous = SET_PERMISSIONS_FAILURE.with(|slot| slot.replace(true));
+    SetPermissionsFailureGuard { previous }
+}
+
+/// The one permission write the leaf performs. An injected failure short-circuits
+/// it with a typed I/O error; otherwise the real host call is made unchanged.
+fn apply_set_permissions(path: &Path, permissions: std::fs::Permissions) -> std::io::Result<()> {
+    if SET_PERMISSIONS_FAILURE.with(Cell::get) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected set_permissions failure",
+        ));
+    }
+    std::fs::set_permissions(path, permissions)
+}
 
 /// What clearing the read-only bit on one path did.
 #[derive(Debug)]
@@ -41,7 +88,7 @@ pub fn clear_readonly(path: &Path) -> ReadOnlyOutcome {
     // cleared so the caller can write to it; nothing else is modified.
     #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);
-    match std::fs::set_permissions(path, permissions) {
+    match apply_set_permissions(path, permissions) {
         Ok(()) => ReadOnlyOutcome::Cleared,
         Err(e) => ReadOnlyOutcome::SetFailed(e),
     }
@@ -117,5 +164,31 @@ mod tests {
             other => panic!("expected a stat failure, got {other:?}"),
         }
         assert!(!path.exists(), "the leaf never creates a path");
+    }
+
+    /// The injected failure drives the `SetFailed` outcome without depending on
+    /// a host ACL, leaves the file untouched, and is undone when the guard drops.
+    #[test]
+    fn an_injected_set_failure_is_reported_without_mutating_the_file() {
+        let d = dir("injected_set_failure");
+        let path = make_file(&d, "target.blk", true);
+
+        let guard = inject_set_permissions_failure();
+        match clear_readonly(&path) {
+            ReadOnlyOutcome::SetFailed(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("expected an injected set failure, got {other:?}"),
+        }
+        assert!(
+            std::fs::metadata(&path).unwrap().permissions().readonly(),
+            "an injected failure changes no permission"
+        );
+        drop(guard);
+
+        assert!(
+            matches!(clear_readonly(&path), ReadOnlyOutcome::Cleared),
+            "the guard restores production behaviour on drop"
+        );
     }
 }

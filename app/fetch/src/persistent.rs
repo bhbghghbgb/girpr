@@ -949,4 +949,38 @@ mod tests {
         }
         assert!(path.is_dir(), "the unopenable target is left untouched");
     }
+
+    /// A target whose permission write is forced to fail takes the warn-and-
+    /// continue branch: the verified temp sibling still becomes the deliverable.
+    #[tokio::test]
+    async fn a_failed_read_only_clear_warns_and_keeps_the_temp_sibling() {
+        let row = fixture_row();
+        let server = ScriptedServer::start(vec![Reply::new(200, HOTFIX_A)]);
+        let dir = TempDir::new("girpr_test_fetch", "readonly_set_failed");
+        let path = target(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"old bytes").unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+
+        let guard = girpr_util_path::readonly::inject_set_permissions_failure();
+        let outcome = download(&server, &row, &path, &BackoffPolicy::none())
+            .await
+            .unwrap();
+        drop(guard);
+
+        match outcome {
+            DownloadOutcome::TempFallback { path: temp, bytes } => {
+                assert_eq!(bytes, 64);
+                assert_eq!(std::fs::read(&temp).unwrap(), HOTFIX_A);
+            }
+            other => panic!("expected a temp fallback, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"old bytes",
+            "the target was never cleared or overwritten"
+        );
+    }
 }

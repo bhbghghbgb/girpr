@@ -685,4 +685,39 @@ mod tests {
         assert_eq!(row.hash, Some(0xf7c6_7301_db67_13f0));
         assert_eq!(row.md5, asset.md5);
     }
+
+    /// A forced permission-write failure only warns here: the cleanup caller
+    /// does not escalate a failed clear into a prerequisite failure.
+    #[test]
+    fn a_failed_read_only_clear_only_warns_for_a_stale_prerequisite() {
+        let dir = TempDir::new("girpr_persistent_exec", "prereq_set_failed");
+        let stale = dir.join("ctable.dat");
+        std::fs::write(&stale, b"launcher artifact").unwrap();
+        let mut permissions = std::fs::metadata(&stale).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&stale, permissions).unwrap();
+
+        let logs = {
+            let guard = girpr_util_path::readonly::inject_set_permissions_failure();
+            let logs =
+                crate::repair::test_support::logs_of(|| clear_readonly_before_delete(&stale));
+            drop(guard);
+            logs
+        };
+
+        assert!(
+            logs.contains(
+                "could not clear read-only before deleting a stale persistent prerequisite"
+            ),
+            "the caller's warning wording is unchanged: {logs}"
+        );
+        assert!(
+            logs.contains("injected set_permissions failure"),
+            "the injected I/O error is what the warning reports: {logs}"
+        );
+        assert!(
+            std::fs::metadata(&stale).unwrap().permissions().readonly(),
+            "a failed clear leaves the permission alone; the caller only warns"
+        );
+    }
 }
