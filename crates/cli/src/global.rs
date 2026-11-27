@@ -31,7 +31,7 @@ use girpr_report_core::OutputFormat;
 pub fn output_format_parser(
     text_help: &'static str,
     json_help: &'static str,
-) -> impl TypedValueParser<Value = OutputFormat> + Clone + Send + Sync + 'static {
+) -> impl TypedValueParser<Value = OutputFormat> {
     PossibleValuesParser::new([
         PossibleValue::new("text").help(text_help),
         PossibleValue::new("json").help(json_help),
