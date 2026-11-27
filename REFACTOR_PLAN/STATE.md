@@ -32,7 +32,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T18 | `tasks/T18-report-core.md` | completed | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 kept |
 | T19 | `tasks/T19-test-fixture-helpers.md` | completed | 1 commit: fixture helper consolidation and cache-names leaf | CP7 kept; comment fix in review |
 | T20 | `tasks/T20-test-http-servers.md` | completed | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 kept; deferrals F50/F51 accepted; comment fix in review |
-| T21 | `tasks/T21-hyp-wire.md` | todo | — | |
+| T21 | `tasks/T21-hyp-wire.md` | pending review | 3 commits: hyp-wire leaf; fetch envelope/identity adoption; capture identity/envelope adoption | CP8 batch |
 | T22 | `tasks/T22-capture-emit-stores.md` | todo | — | |
 | T23 | `tasks/T23-girsync-heartbeat.md` | todo | — | |
 | T24 | `tasks/T24-workspace-inheritance.md` | todo | — | |
@@ -111,6 +111,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | proposed |
 | F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | proposed |
 | F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | proposed |
+| F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | proposed |
+| F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | proposed |
+| F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | proposed |
 
 ## Persistent context
 
@@ -149,3 +152,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T19: `girpr-cache-names` owns the Windows ASCII-case-fold rule; `entry_names_with` parameterizes the `girpr-cache*` predicate; `CARGO_BIN_EXE_girpr` remains integration-only; test roots unchanged.
 - T20 boundary: only axum socket/stop/gate mechanics moved; the three server contracts and per-test reply policies stayed distinct; `argv_with_program` takes the sentinel as a parameter and the binary runner stayed in integration roots.
 - CP7 done: T19/T20 kept; two stale comments fixed; workspace 2348 passed / 8 skipped; T20 deferrals F50/F51 accepted as justified follow-ups.
+- T21: chose a new `girpr-hyp-wire` leaf over extending `crates/proto` (protobuf tags and JSON envelopes are different wire contracts); shared `Envelope.retcode` is required as fetch's was — capture's former `#[serde(default)]` was unreachable because `get_json` rejects a body with no retcode first, and no test/golden covers it (flag for CP8).
