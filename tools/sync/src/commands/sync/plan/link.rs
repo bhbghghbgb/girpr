@@ -28,10 +28,14 @@ use path_clean::PathClean;
 
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
-use crate::link::{path_prefixes, strict_path_prefixes, try_is_link};
+// The prefix walks are pure leaf mechanics, not one of the disk-question
+// helpers `crate::link` re-exports; keep them on their own import so the
+// guard's disk-question seam still names only the calls that reach the disk.
+use crate::link::try_is_link;
 #[cfg(windows)]
 use crate::util::unicode_case_eq;
 use crate::util::{path_key, slash_rel};
+use girsync_leaves::link::{path_prefixes, strict_path_prefixes};
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
