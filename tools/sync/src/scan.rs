@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::{debug, info, trace};
 
+use girsync_leaves::heartbeat::Heartbeat;
+
 use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of, slash_rel};
 
 /// The production heartbeat period: how many entries the walk pushes between
@@ -124,6 +126,11 @@ pub fn walk_live_with(
     // halfway through. The caller passes either the environment-resolved
     // period (`walk_live`) or one injected through `ScanMode`.
     let heartbeat_period = heartbeat_entries.max(1);
+    // The shared heartbeat owns the rearming clock; this caller's trigger is
+    // the pure count period, so the clock plays no part in the decision. The
+    // period is copied into the trigger once, resolved above for the whole
+    // walk, and the `GIRSYNC_TEST_HEARTBEAT_ENTRIES` hook is untouched.
+    let mut heartbeat = Heartbeat::new(move |count, _| count % heartbeat_period == 0);
     // Counted as the entries are pushed, so the walk does not walk its own
     // output a second time to find out how many files it saw. A dir is the
     // other half of the count, and the two add up to the entries.
@@ -187,7 +194,8 @@ pub fn walk_live_with(
                 // Progress: trace every entry (file log), debug heartbeat every
                 // period's worth of entries. The period is resolved once per
                 // walk (see `walk_live_with`); the production default is
-                // HEARTBEAT_ENTRIES.
+                // HEARTBEAT_ENTRIES. The trigger decision lives in the shared
+                // heartbeat; the event's wording and fields stay here.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {
@@ -217,12 +225,12 @@ pub fn walk_live_with(
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
-                if out.len() % heartbeat_period == 0 {
+                if let Some(elapsed) = heartbeat.tick(out.len()) {
                     // The heartbeat names the walk, because the phases report
                     // their progress under their own names — and two progress
                     // events that share one name are told apart by the fields
                     // they carry, which is a thing a reader has to know.
-                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress: walk");
+                    debug!(root = %root.display(), entries = out.len(), elapsed_s = elapsed, "scan progress: walk");
                 }
             }
         }
