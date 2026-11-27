@@ -118,7 +118,10 @@ pub struct ConsoleSpec<W> {
     /// What the human-readable layer shows.
     pub filter: EnvFilter,
     /// Whether the human-readable layer uses ANSI escapes.
-    pub ansi: bool,
+    ///
+    /// `None` leaves the formatter's own default in place — including its
+    /// `NO_COLOR` handling — for callers that never chose either way.
+    pub ansi: Option<bool>,
 }
 
 /// Assemble the tracing stack a resolved plan describes, without installing it.
@@ -152,11 +155,12 @@ where
     FW: std::io::Write + Send + 'static,
     Open: FnMut(&Path) -> Option<FW>,
 {
-    let console_layer = fmt::layer()
-        .with_writer(console.writer)
-        .with_ansi(console.ansi)
-        .with_target(true)
-        .with_filter(console.filter);
+    let console_layer = fmt::layer().with_writer(console.writer).with_target(true);
+    let console_layer = match console.ansi {
+        Some(ansi) => console_layer.with_ansi(ansi),
+        None => console_layer,
+    }
+    .with_filter(console.filter);
 
     let file = plan.file_path().and_then(&mut open_file);
     let mut worker = None;
@@ -273,7 +277,7 @@ mod tests {
             ConsoleSpec {
                 writer: console.clone(),
                 filter: plan.console_filter(),
-                ansi: false,
+                ansi: Some(false),
             },
             FileFormat::Text,
             SpanFields::NONE,
@@ -311,7 +315,7 @@ mod tests {
             ConsoleSpec {
                 writer: console.clone(),
                 filter: plan.console_filter(),
-                ansi: false,
+                ansi: Some(false),
             },
             FileFormat::Text,
             SpanFields::NONE,
@@ -362,7 +366,7 @@ mod tests {
             ConsoleSpec {
                 writer: SharedBytes::default(),
                 filter: plan.console_filter(),
-                ansi: false,
+                ansi: Some(false),
             },
             FileFormat::Text,
             SpanFields::NONE,
@@ -400,7 +404,7 @@ mod tests {
             ConsoleSpec {
                 writer: SharedBytes::default(),
                 filter: plan.console_filter(),
-                ansi: false,
+                ansi: Some(false),
             },
             FileFormat::Json,
             SpanFields::ALL,

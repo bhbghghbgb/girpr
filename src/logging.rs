@@ -144,7 +144,9 @@ fn init_tracing_with(
         ConsoleSpec {
             writer: std::io::stderr,
             filter: plan.console_filter(),
-            ansi: true,
+            // The old layer never chose: tracing-subscriber's default still
+            // decides, so NO_COLOR keeps exactly the effect it had before.
+            ansi: None,
         },
         FileFormat::Text,
         SpanFields::NONE,

@@ -181,7 +181,7 @@ where
         ConsoleSpec {
             writer: console_writer,
             filter: console_filter,
-            ansi: true,
+            ansi: Some(true),
         },
         FileFormat::Json,
         SpanFields::ALL,

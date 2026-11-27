@@ -148,7 +148,7 @@ pub fn init(
         ConsoleSpec {
             writer: std::io::stderr,
             filter: console_filter,
-            ansi: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+            ansi: Some(std::io::IsTerminal::is_terminal(&std::io::stderr())),
         },
         FileFormat::Json,
         SpanFields::ALL,
