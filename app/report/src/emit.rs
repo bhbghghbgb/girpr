@@ -12,8 +12,8 @@
 //! tickers from interleaving into the same stream.
 //!
 //! [`emit`] is the only writer. Its policy for every record: render once,
-//! mirror the rendered line to the log, write stdout through `write_line`,
-//! never panic, and never change the exit code.
+//! mirror the rendered line to the log and write stdout through the shared
+//! sink, never panic, and never change the exit code.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -23,9 +23,11 @@ use std::time::Duration;
 use super::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
 use super::summary::{Summary, conditional_extras};
 
-// The newline-appending writer is shared with the other two report planes; it
-// stays nameable here because `emit` and the writer tests name it directly.
+// The writer tests name the newline-appending writer directly; `emit` uses the
+// sink built on it. The re-export exists only for those tests.
+#[cfg(test)]
 pub(super) use girpr_report_core::write_line;
+use girpr_report_core::write_record_line;
 
 /// Emit one record to **both** stdout and the log in the run's chosen plane, so
 /// unattended runs keep it regardless of which stream is captured.
@@ -40,11 +42,12 @@ pub(super) use girpr_report_core::write_line;
 pub fn emit(record: &Record, format: OutputFormat) {
     let line = record.render(format);
     // The log mirror is written first: a consumer that closed stdout must not
-    // also cost the run its record in the log.
-    tracing::info!("{line}");
-    // A closed stdout is the end of the data plane, not a failed run: the
-    // repair already happened and the exit code is the one it earned.
-    match write_line(&mut std::io::stdout().lock(), &line) {
+    // also cost the run its record in the log. The shared sink does both in one
+    // step; the broken-pipe policy stays here, where this binary's contract
+    // lives.
+    match write_record_line(&mut std::io::stdout().lock(), &line, |line| {
+        tracing::info!("{line}");
+    }) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
             tracing::debug!("stdout closed: {e}");

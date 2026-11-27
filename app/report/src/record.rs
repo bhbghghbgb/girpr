@@ -23,7 +23,7 @@ use std::borrow::Cow;
 
 use serde::ser::{Serialize, Serializer};
 
-use girpr_report_core::{Order, write_json_object};
+use girpr_report_core::{Order, Record as CoreRecord};
 
 /// How often the background reporter emits `PROGRESS` during long phases.
 pub const PROGRESS_INTERVAL_SECS: u64 = 10;
@@ -103,11 +103,7 @@ impl Serialize for Val {
 /// are still *names* — a consumer must read them by name, not by position — but
 /// the rendering does not depend on that.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Record {
-    /// Text label, e.g. `SUMMARY`. Lowercased to get the JSON `event`.
-    label: &'static str,
-    fields: Vec<(&'static str, Val)>,
-}
+pub struct Record(CoreRecord<Val>);
 
 impl Record {
     /// A record whose every field is keyed: `SUMMARY total=0 skipped=0 …`.
@@ -117,34 +113,31 @@ impl Record {
     /// produce a line whose leading value is unkeyed is a constructor that can
     /// be used to break the parse plane again.
     pub fn keyed(label: &'static str) -> Self {
-        Self {
-            label,
-            fields: Vec::new(),
-        }
+        Self(CoreRecord::new(label))
     }
 
     /// Append a field. Declaration order is report order, which is what both
     /// renderings preserve.
     pub fn put(mut self, key: &'static str, value: impl Into<Val>) -> Self {
-        self.fields.push((key, value.into()));
+        self.0.push(key, value.into());
         self
     }
 
     /// The text label, e.g. `SUMMARY`.
     pub fn label(&self) -> &'static str {
-        self.label
+        self.0.label()
     }
 
     /// The fields, in report order, without the `event` name.
     pub fn fields(&self) -> &[(&'static str, Val)] {
-        &self.fields
+        self.0.fields()
     }
 
     /// The human line for this record, without the trailing newline:
     /// `SUMMARY total=0 skipped=0`.
     pub fn text(&self) -> String {
-        let mut out = String::from(self.label);
-        for (k, v) in &self.fields {
+        let mut out = String::from(self.label());
+        for (k, v) in self.fields() {
             out.push(' ');
             out.push_str(k);
             out.push('=');
@@ -189,8 +182,9 @@ impl Serialize for Record {
         // `serde_json::Map`/`Value`, which this renderer never builds. The
         // event value is this label lowercased; no `Val` of this crate carries
         // a boolean, so a flag-shaped fact stays a `1`/`0` integer here.
-        let event = self.label.to_ascii_lowercase();
-        write_json_object(serializer, "event", &event, &self.fields, Order::EventFirst)
+        let event = self.label().to_ascii_lowercase();
+        self.0
+            .write_json(serializer, "event", &event, Order::EventFirst)
     }
 }
 
