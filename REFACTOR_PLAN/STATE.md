@@ -55,75 +55,88 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 
 Status values: `proposed`, `accepted`, `declined`, `done`.
 
+Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are grouped into batches B1–B7 below.
+
 | ID | Source task | Recommendation | Status |
 | --- | --- | --- | --- |
-| F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | proposed |
-| F02 | T01 | T02's half-open range/tiling leaf can consume `checked_end` directly; no change needed in T01. | done |
-| F03 | T02 | Give capture's A11 `Layout::of` a typed-problem adapter: adjacent-previous diagnostic semantics differ from the coverage cursor and its strings are published in `verify/selfcheck.json`, so it stayed local by contract. | proposed |
-| F04 | T02 | Decide explicitly what an unrepresentable signed chunk end means for tiling; the fold clamps at `i64::MAX` (matching capture's old behaviour) and plan-time validation rejects those ranges before layout. | proposed |
-| F05 | T04 | Evaluate composing `tools/capture/hash`'s `HashingFile::write` with the shared sink while keeping write-before-hash ordering at the call site. | proposed |
-| F06 | T05 | Optionally collapse the thin delegating wrappers (`fetch::retryable`, `RetryPolicy::should_retry_status`) into direct `girpr_retry::should_retry_status` calls; kept local to preserve the published `http` module surface and test seams. | proposed |
-| F07 | T06 | Optionally collapse `RetryPolicy::backoff()` / `BackoffPolicy::build()` schedule wrappers into direct `girpr_retry::Schedule::exponential(...)` calls once test seams are reviewed; kept local to preserve published module surfaces. | proposed |
-| F08 | T06 | If in-place (not by-value) state carry is ever needed in capture, consider an HRTB/boxed-future variant of the driver; not worth the per-attempt allocation now. | proposed |
-| F09 | T07 | Repair phases still render `Failed(JoinError)` with their own `Display` templates; switching to the payload-aware `join_failure` would change published error text and needs an explicit wording decision. | proposed |
-| F10 | T07 | `inplace.rs::bounded_window` stays local: an ordered buffered window with no index or panic recovery and file-local reservation semantics. | proposed |
-| F11 | T07 | Collapsing `spawn_blocking_traced` and the file driver's setup wrappers further would bury the load-bearing "capture at spawn time" documentation and the diagnostics-owner hook. | proposed |
-| F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | proposed |
-| F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | proposed |
-| F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | proposed |
-| F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | proposed |
-| F16 | T09 | Consider relocating the pure whole-file gate to a lower crate; `app/persistent-plan` now depends on `girpr-chunk-verify` (transitively proto/util-hash) for a gate that needs only `std`. | proposed |
-| F17 | T10 | `ChunkFileSink::write` in `temp.rs` is a decoder-fed sink, not a loop; its per-piece ceiling charge stayed local — a shared charge helper would touch the `sophon::ChunkSink` seam and retry/refund tests. | proposed |
-| F18 | T10 | Consider relocating `read_up_to`/`reserve_exact` into `util-io` to make the leaf dependency-free (currently `util-io` depends on `util-hash` for one read); moves a public primitive between crates. | proposed |
-| F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | proposed |
-| F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | proposed |
-| F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | proposed |
-| F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | proposed |
-| F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | proposed |
-| F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | proposed |
-| F25 | T12 | Consider a policy-parameterized HYP URL seam to unify fetch's and capture's HYP builders; deliberately not done because girpr's hardcoded/unencoded language spelling and capture's `needs_channel`/override policy are call-site contracts. | proposed |
-| F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | proposed |
-| F27 | T13 | Consider relocating the pure `game_version_from_text` scan into a logic-free leaf so gircap no longer depends on an `app/` crate that also owns the repair config writer. | proposed |
-| F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | proposed |
-| F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | proposed |
-| F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | proposed |
-| F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | proposed |
-| F32 | T15 | Consider a std-only home for `native_separator`/`forward_slash`: `girpr-tempdir` and `girpr-filter` now take a `girpr-fs-names` (dunce-backed) edge for a pure string rewrite. | proposed |
-| F33 | T15 | Decide whether `util-path` should keep re-exporting `fold_ascii_case`/`forward_slash`, or `persistent-plan` should depend on `girpr-fs-names` directly. | proposed |
-| F34 | T15 | `MetadataFact::is_file`'s "stat failed → in-place capable" default restates `girpr-repair-policy::resolve_mode`; consider one home for that rule if it ever changes. | proposed |
-| F35 | T16 | `global_args!` has two arms duplicating the five field declarations; a tt-muncher could reduce this to one textual declaration if strictly required. | proposed |
-| F36 | T16 | Capture's `FromStr` wording is now byte-identical but defined in `girpr-report-core`; if strict locality is wanted, replace it with a capture-local parse helper. | proposed |
-| F37 | T16 | `girpr-cli` now links `girpr-log` and `girpr-report-core`; consider whether re-exporting `Level`/`OutputFormat` from it is the preferred seam versus direct imports. | proposed |
-| F38 | T16 | The `clap` feature on `girpr-report-core` (and forwarding features on app/report, tools/sync, tools/capture) is now unused since `--output` uses `PossibleValuesParser`; could be retired later. | proposed |
-| F39 | T16 | girpr's `--output` was previously `global = true`; the shared macro emits `global = false` — behavior-neutral today (no subcommands) but note if subcommands are added. | proposed |
-| F40 | T17 | Consider an explicit `AnsiChoice` enum instead of `Option<bool>` if another program needs "formatter default" semantics. | proposed |
-| F41 | T17 | If a third file format appears, a caller-supplied formatter factory would avoid another cfg-gated enum arm in the shared function. | proposed |
-| F42 | T17 | `CaptureBuffer` and internal `SharedBytes` remain two byte sinks by design (public feature surface vs crate-private helper); revisit only if the feature surface is intentionally changed. | proposed |
-| F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | proposed |
-| F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | proposed |
-| F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | proposed |
-| F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | proposed |
-| F47 | T19 | `app/lock::field` stays local (scans whole `key=value` lines, unlike whitespace-token `field_token`); consolidation needs an explicit decision on values containing spaces. | proposed |
-| F48 | T19 | Capture-side `read_json`/`write_json` helpers use generic deserialization and different error policies; left local by contract. | proposed |
-| F49 | T19 | `ctx_default` bakes `jobs = 1` and `backoff = none()`; a parameterized variant is only worth adding if a third fixture needs different defaults. | proposed |
-| F50 | T20 | CAP-15 raw-scripted reply mode deferred: the three raw-socket servers have deliberately different policies; a dedicated task could add a parameterized raw-reply helper and migrate only the malformed shape. | proposed |
-| F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | proposed |
-| F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | proposed |
-| F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | proposed |
-| F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | proposed |
-| F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | proposed |
-| F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | proposed |
-| F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | proposed |
-| F58 | T22 | `bounded_store` is a public module of `gircap-http` solely because two crates need it; reconsider a dedicated gircap-owned mechanics crate if a fourth store appears. | proposed |
-| F59 | T22 | The count-first driver still walks the document twice (`json_len` then write); unifying it with the counted driver needs fresh performance and byte-equality validation. | proposed |
-| F60 | T22 | `gzip_from_reader` has one production caller; leave it until a second file-backed gzip path appears rather than changing a driver's measured behaviour. | proposed |
-| F61 | T21 | The shared number decoder trims whitespace on string-encoded numbers whereas serde-aux did not — a relaxation; no current field exercises it. Decide whether to pin the stricter behavior. | proposed |
-| F62 | T21 | Capture's `Wrapper<T>` alias field `message` changed from `String` to `Option<String>`; no consumer reads it, but it is a public surface change worth an explicit decision. | proposed |
-| F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | proposed |
-| F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | proposed |
-| F65 | T24 | Decide whether the two `tests/scripts/io-profile/*` helper crates (edition 2021, outside the workspace, own `redb` pin) should join inheritance; deliberately left untouched. | proposed |
-| F66 | T24 | Path dependencies remain local (versionless, with call-site comments); centralizing them in `[workspace.dependencies]` is a separate decision. | proposed |
-| F67 | T23 | Progress events' `elapsed_s` now originates at `Heartbeat` construction rather than the earlier `t_eff`/`t0`, making it marginally smaller and not sharing the phase's "done" zero; no test/golden asserts the value — consider a caller-supplied start `Instant` if strict parity is wanted. | proposed |
+| F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | accepted (B3) |
+| F03 | T02 | Give capture's A11 `Layout::of` a typed-problem adapter: adjacent-previous diagnostic semantics differ from the coverage cursor and its strings are published in `verify/selfcheck.json`, so it stayed local by contract. | declined |
+| F04 | T02 | Decide explicitly what an unrepresentable signed chunk end means for tiling; the fold clamps at `i64::MAX` (matching capture's old behaviour) and plan-time validation rejects those ranges before layout. | declined |
+| F05 | T04 | Evaluate composing `tools/capture/hash`'s `HashingFile::write` with the shared sink while keeping write-before-hash ordering at the call site. | declined |
+| F06 | T05 | Optionally collapse the thin delegating wrappers (`fetch::retryable`, `RetryPolicy::should_retry_status`) into direct `girpr_retry::should_retry_status` calls; kept local to preserve the published `http` module surface and test seams. | declined |
+| F07 | T06 | Optionally collapse `RetryPolicy::backoff()` / `BackoffPolicy::build()` schedule wrappers into direct `girpr_retry::Schedule::exponential(...)` calls once test seams are reviewed; kept local to preserve published module surfaces. | declined |
+| F08 | T06 | If in-place (not by-value) state carry is ever needed in capture, consider an HRTB/boxed-future variant of the driver; not worth the per-attempt allocation now. | declined |
+| F09 | T07 | Repair phases still render `Failed(JoinError)` with their own `Display` templates; switching to the payload-aware `join_failure` would change published error text and needs an explicit wording decision. | declined |
+| F10 | T07 | `inplace.rs::bounded_window` stays local: an ordered buffered window with no index or panic recovery and file-local reservation semantics. | declined |
+| F11 | T07 | Collapsing `spawn_blocking_traced` and the file driver's setup wrappers further would bury the load-bearing "capture at spawn time" documentation and the diagnostics-owner hook. | declined |
+| F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | declined |
+| F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | declined |
+| F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | declined |
+| F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | accepted (B4) |
+| F16 | T09 | Consider relocating the pure whole-file gate to a lower crate; `app/persistent-plan` now depends on `girpr-chunk-verify` (transitively proto/util-hash) for a gate that needs only `std`. | declined |
+| F17 | T10 | `ChunkFileSink::write` in `temp.rs` is a decoder-fed sink, not a loop; its per-piece ceiling charge stayed local — a shared charge helper would touch the `sophon::ChunkSink` seam and retry/refund tests. | declined |
+| F18 | T10 | Consider relocating `read_up_to`/`reserve_exact` into `util-io` to make the leaf dependency-free (currently `util-io` depends on `util-hash` for one read); moves a public primitive between crates. | declined |
+| F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | declined |
+| F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | accepted (B5) |
+| F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | declined |
+| F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | accepted (B1) |
+| F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | declined |
+| F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | accepted (B1) |
+| F25 | T12 | Consider a policy-parameterized HYP URL seam to unify fetch's and capture's HYP builders; deliberately not done because girpr's hardcoded/unencoded language spelling and capture's `needs_channel`/override policy are call-site contracts. | declined |
+| F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | accepted (B1) |
+| F27 | T13 | Consider relocating the pure `game_version_from_text` scan into a logic-free leaf so gircap no longer depends on an `app/` crate that also owns the repair config writer. | declined |
+| F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | declined |
+| F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | declined |
+| F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | declined |
+| F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | accepted (B2) |
+| F32 | T15 | Consider a std-only home for `native_separator`/`forward_slash`: `girpr-tempdir` and `girpr-filter` now take a `girpr-fs-names` (dunce-backed) edge for a pure string rewrite. | declined |
+| F33 | T15 | Decide whether `util-path` should keep re-exporting `fold_ascii_case`/`forward_slash`, or `persistent-plan` should depend on `girpr-fs-names` directly. | declined |
+| F34 | T15 | `MetadataFact::is_file`'s "stat failed → in-place capable" default restates `girpr-repair-policy::resolve_mode`; consider one home for that rule if it ever changes. | declined |
+| F35 | T16 | `global_args!` has two arms duplicating the five field declarations; a tt-muncher could reduce this to one textual declaration if strictly required. | declined |
+| F36 | T16 | Capture's `FromStr` wording is now byte-identical but defined in `girpr-report-core`; if strict locality is wanted, replace it with a capture-local parse helper. | declined |
+| F37 | T16 | `girpr-cli` now links `girpr-log` and `girpr-report-core`; consider whether re-exporting `Level`/`OutputFormat` from it is the preferred seam versus direct imports. | declined |
+| F38 | T16 | The `clap` feature on `girpr-report-core` (and forwarding features on app/report, tools/sync, tools/capture) is now unused since `--output` uses `PossibleValuesParser`; could be retired later. | declined |
+| F39 | T16 | girpr's `--output` was previously `global = true`; the shared macro emits `global = false` — behavior-neutral today (no subcommands) but note if subcommands are added. | declined |
+| F40 | T17 | Consider an explicit `AnsiChoice` enum instead of `Option<bool>` if another program needs "formatter default" semantics. | declined |
+| F41 | T17 | If a third file format appears, a caller-supplied formatter factory would avoid another cfg-gated enum arm in the shared function. | declined |
+| F42 | T17 | `CaptureBuffer` and internal `SharedBytes` remain two byte sinks by design (public feature surface vs crate-private helper); revisit only if the feature surface is intentionally changed. | declined |
+| F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | accepted (B1) |
+| F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | declined |
+| F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | declined |
+| F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | accepted (B6) |
+| F47 | T19 | `app/lock::field` stays local (scans whole `key=value` lines, unlike whitespace-token `field_token`); consolidation needs an explicit decision on values containing spaces. | declined |
+| F48 | T19 | Capture-side `read_json`/`write_json` helpers use generic deserialization and different error policies; left local by contract. | declined |
+| F49 | T19 | `ctx_default` bakes `jobs = 1` and `backoff = none()`; a parameterized variant is only worth adding if a third fixture needs different defaults. | declined |
+| F50 | T20 | CAP-15 raw-scripted reply mode deferred: the three raw-socket servers have deliberately different policies; a dedicated task could add a parameterized raw-reply helper and migrate only the malformed shape. | declined |
+| F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | declined |
+| F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | declined |
+| F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | accepted (B1) |
+| F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | accepted (B7) |
+| F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | accepted (B1) |
+| F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | declined |
+| F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | declined |
+| F58 | T22 | `bounded_store` is a public module of `gircap-http` solely because two crates need it; reconsider a dedicated gircap-owned mechanics crate if a fourth store appears. | declined |
+| F59 | T22 | The count-first driver still walks the document twice (`json_len` then write); unifying it with the counted driver needs fresh performance and byte-equality validation. | declined |
+| F60 | T22 | `gzip_from_reader` has one production caller; leave it until a second file-backed gzip path appears rather than changing a driver's measured behaviour. | declined |
+| F61 | T21 | The shared number decoder trims whitespace on string-encoded numbers whereas serde-aux did not — a relaxation; no current field exercises it. Decide whether to pin the stricter behavior. | declined |
+| F62 | T21 | Capture's `Wrapper<T>` alias field `message` changed from `String` to `Option<String>`; no consumer reads it, but it is a public surface change worth an explicit decision. | declined |
+| F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | accepted (B1) |
+| F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | declined |
+| F65 | T24 | Decide whether the two `tests/scripts/io-profile/*` helper crates (edition 2021, outside the workspace, own `redb` pin) should join inheritance; deliberately left untouched. | declined |
+| F66 | T24 | Path dependencies remain local (versionless, with call-site comments); centralizing them in `[workspace.dependencies]` is a separate decision. | declined |
+| F67 | T23 | Progress events' `elapsed_s` now originates at `Heartbeat` construction rather than the earlier `t_eff`/`t0`, making it marginally smaller and not sharing the phase's "done" zero; no test/golden asserts the value — consider a caller-supplied start `Instant` if strict parity is wanted. | declined |
+
+## Accepted batches
+
+| Batch | Follow-ups | Scope | Ordering |
+| --- | --- | --- | --- |
+| B1 | F22, F24, F26, F43, F53, F55, F63 | Backfill the README shared-leaf table and fix the report-core description/Cargo.toml. | Do last, after B2–B7. |
+| B2 | F31 | Move `tempfile` to `[dev-dependencies]` in `tools/sync/Cargo.toml`. | Independent. |
+| B3 | F01 | Fold remaining i64→u64 clamps through chunk-cost primitives. | Before B4. |
+| B4 | F15 | Route `promote_tmp`'s final length+MD5 gate through the shared gate. | After B3. |
+| B5 | F20 | Add an injectable `set_permissions` failure seam for `SetFailed` tests. | Independent. |
+| B6 | F46 | Adopt `girpr-cache-names` in production call sites. | Independent. |
+| B7 | F54 | Restore strict handling of unreadable directory entries (defect). | Independent. |
 
 ## Persistent context
 
@@ -167,4 +180,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP8 done: T21/T22 kept; the flagged `Envelope.retcode` default concern was verified unreachable and behavior-equal; workspace 2361 passed / 8 skipped.
 - T23: `Heartbeat<F>` owns only the clock/trigger; `elapsed_s`, wording, fields and levels stay at the three call sites.
 - T24: report's "39 members" is stale — the tree has 53 workspace members; all 58 external dependency versions inherited, lockfile and resolved graph byte-identical; tools' reduced lint tables and `[lib]` sections stayed local.
-- CP9 done: T23/T24 kept; no fixes or reverts; all 24 tasks are now terminal; workspace 2366 passed / 8 skipped. Next: follow-up batching review.
+- CP9 done: T23/T24 kept; no fixes or reverts; all 24 tasks are now terminal; workspace 2366 passed / 8 skipped.
+- Follow-up triage done: 13 accepted (B1–B7), 53 declined, F02 removed as stale/no remaining work (it merely recorded that T02 consumed checked_end); no new follow-ups.
+- F54 is the only triaged defect: `entry_names_with` silently skips unreadable directory entries where the retired local copies failed loud; accepted as B7. All other accepted items are enhancements/hygiene.
+- F59 was omitted from the triage's declined list; declined by the orchestrator by analogy with F60 (unifying the count-first driver needs fresh performance/byte-equality validation, no current need).
