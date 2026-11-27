@@ -28,7 +28,7 @@ use std::time::SystemTime;
 
 use futures_util::StreamExt;
 
-use girpr_chunk_cost::projected_download_bytes;
+use girpr_chunk_cost::{projected_download_bytes, saturating_nonneg_sum};
 use girpr_chunk_verify::{Verdict, scan_ranges, source_ok_by_chunk};
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
@@ -734,13 +734,12 @@ mod tests {
             .collect();
         let kept: Vec<&SophonChunk> = bad.iter().map(|&i| &chunks[i]).collect();
         let order = reuse::salvage_order_refs(&kept, &srcs, u64::MAX);
-        let downloaded: u64 = kept
-            .iter()
-            .enumerate()
-            .filter(|(k, _)| !order.live[*k])
-            .fold(0u64, |n, (_, c)| {
-                n.saturating_add(c.compressed_size.max(0) as u64)
-            });
+        let downloaded: u64 = saturating_nonneg_sum(
+            kept.iter()
+                .enumerate()
+                .filter(|(k, _)| !order.live[*k])
+                .map(|(_, c)| c.compressed_size),
+        );
         assert_eq!(
             downloaded, 20,
             "the writer's patch list and the estimate must agree"

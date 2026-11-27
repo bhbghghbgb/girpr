@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use girpr_chunk_cost::projected_download_bytes;
+use girpr_chunk_cost::{nonneg, projected_download_bytes};
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode_from_target};
 use serde::Serialize;
 
@@ -151,7 +151,7 @@ impl DiskPlan {
                 }
             };
             let on_disk = planned_on_disk(len, &f.rel, &path);
-            let size = f.size.max(0) as u64;
+            let size = nonneg(f.size);
             // `requested == Temp` forces the temp path; otherwise the injected
             // verdict decides. A directory/symlink is `in_place == false`.
             // The rule itself lives in the repair-policy leaf, so this seam
@@ -302,7 +302,7 @@ impl PlanTotals {
             max_chunk_bytes: plan
                 .iter()
                 .flat_map(|(_, f)| f.chunks.iter())
-                .map(|c| c.compressed_size.max(0) as u64)
+                .map(|c| nonneg(c.compressed_size))
                 .max()
                 .unwrap_or(0),
             scoped,
