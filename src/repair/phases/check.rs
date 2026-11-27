@@ -106,8 +106,13 @@ where
     let game_dir = game_dir.to_path_buf();
     let check = Arc::new(check);
     let mut outcomes: Vec<(usize, CheckOutcome)> = Vec::with_capacity(plan.len());
-    let mut checks = futures_util::stream::iter(0..plan.len())
-        .map(|idx| {
+    // The window comes from the shared leaf; this phase keeps its own failure
+    // policy: a broken verifier is a fatal run failure, never a damage verdict.
+    let mut checks = girpr_async_join::join_iter(
+        0..plan.len(),
+        jobs,
+        girpr_async_join::Wording::new("check", girpr_async_join::DEFAULT_FALLBACK),
+        |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.clone();
             let root = root.clone();
@@ -139,8 +144,8 @@ where
                 .await;
                 (idx, result)
             }
-        })
-        .buffer_unordered(jobs.max(1));
+        },
+    );
     // Fold each finished task into the live counters immediately. The ordered
     // pass below still owns the failure log, so its order stays deterministic.
     while let Some((idx, result)) = checks.next().await {
@@ -154,7 +159,7 @@ where
                     let _ = tx.send(outcomes.len());
                 }
             }
-            Err(e) => {
+            Err(girpr_async_join::JoinOutcome::Failed(e)) => {
                 // A panicked or cancelled task is a bug, not a damage verdict:
                 // the file was never shown to be bad. Report the same run
                 // failure class the purge tasks use instead of folding it into
@@ -169,6 +174,14 @@ where
                 // threaded through the read itself, which is a wider change
                 // than this failure path justifies.
                 return Err(RunFailure::write(anyhow::anyhow!("check task failed: {e}")));
+            }
+            Err(girpr_async_join::JoinOutcome::Lost { why }) => {
+                // The leaf recovered the payload; the same fatal class applies
+                // when a future never reported at all.
+                let why = why.unwrap_or_else(|| "the check task did not report".to_string());
+                return Err(RunFailure::write(anyhow::anyhow!(
+                    "check task failed: {why}"
+                )));
             }
         }
     }

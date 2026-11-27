@@ -512,14 +512,16 @@ fn arm_file_panic_gate() -> tokio::sync::oneshot::Receiver<()> {
 
 /// Spawn and join the file tasks, keeping at most `jobs` of them alive.
 ///
-/// `spawn` is called with a file index only when the in-flight window has
-/// room, so a plan of 100k files does not allocate 100k tasks and
-/// `JoinHandle`s up front. The window is drained in **completion order**, not
-/// spawn order: a failure (or a panic) has to be observed before the next file
-/// starts, or `--fail-fast` would keep starting files after the run already
-/// knew it had failed.
+/// The bounded window and the join's panic recovery belong to the shared
+/// `girpr-async-join` leaf; the fail-fast iterator and the failure counting
+/// stay here. `spawn` is called with a file index only when the window has
+/// room, so a plan of 100k files does not allocate 100k tasks and `JoinHandle`s
+/// up front. The window is drained in **completion order**, not spawn order: a
+/// failure (or a panic) has to be observed before the next file starts, or
+/// `--fail-fast` would keep starting files after the run already knew it had
+/// failed.
 ///
-/// A file task returns `()`, so its only `Err` is a panic or a cancellation —
+/// A file task returns `()`, so its join's `Err` is a panic or a cancellation —
 /// never an `anyhow::Error`. Dropping it would let a panicked file leave
 /// `files_failed == 0`: the run would bump `config.ini` and exit `0` with that
 /// file unrepaired, which is the launcher-desync failure the post-phase
@@ -537,20 +539,22 @@ where
     // sized from the host alone without `jobs` file tasks starving timers and
     // network polling. The blocking pool grows on demand and is capped
     // independently of `--jobs`; the network and timer drivers keep running on
-    // the runtime while a task is parked in `block_on`. The caller's tracing
-    // dispatcher is carried onto the pool thread so a file's lines still reach
-    // a scoped subscriber (the global one in production needs no carrying).
+    // the runtime while a task is parked in `block_on`. `Handle::block_on` is
+    // still called here — the leaf only supplies the blocking-pool entry point
+    // and the thread-setup hook, so cancellation/detachment semantics do not
+    // change.
     let handle = tokio::runtime::Handle::current();
+    // The caller's tracing dispatcher is captured here, at spawn time, and
+    // carried onto the pool thread so a file's lines still reach a scoped
+    // subscriber (the global one in production needs no carrying). File tasks
+    // also record structured diagnostics against this thread; the setup hook
+    // adopts that id on the pool thread for the life of the task.
     let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
-    // File tasks record structured diagnostics against the thread that
-    // started the repair loop; carry that id onto the pool thread as well.
     let diag_owner = std::thread::current().id();
-    // `buffer_unordered` owns the bounded window: it pulls a new `spawn`'d
-    // task only when a slot frees up, so a large plan never allocates a task
-    // per file up front. The iterator keeps the `--fail-fast` rule — once a
-    // file has failed, no further file is started; the unstarted ones are
-    // simply not counted (`done < total` in `PROGRESS`, `failed > 0` in
-    // `SUMMARY`). Tasks already in flight are drained in completion order.
+    // The iterator keeps the `--fail-fast` rule — once a file has failed, no
+    // further file is started; the unstarted ones are simply not counted
+    // (`done < total` in `PROGRESS`, `failed > 0` in `SUMMARY`). Tasks already
+    // in flight are drained in completion order by the shared window.
     let mut next = 0;
     let mut warned = false;
     let indices = std::iter::from_fn(|| {
@@ -571,39 +575,54 @@ where
         next += 1;
         Some(idx)
     });
-    let mut tasks = futures_util::stream::iter(indices)
-        .map(|idx| {
+    let mut tasks = girpr_async_join::join_iter(
+        indices,
+        limit,
+        girpr_async_join::Wording::new("repair file", girpr_async_join::DEFAULT_FALLBACK),
+        move |idx| {
             let handle = handle.clone();
             let dispatcher = dispatcher.clone();
             let fut = spawn(idx);
-            tokio::task::spawn_blocking(move || {
+            let setup = move || {
+                let _dispatch = tracing::dispatcher::set_default(&dispatcher);
                 let _diag = crate::repair::diagnostics::DiagnosticsOwner::adopt(diag_owner);
-                tracing::dispatcher::with_default(&dispatcher, || handle.block_on(fut))
-            })
-        })
-        .buffer_unordered(limit);
+                (_dispatch, _diag)
+            };
+            let result = girpr_async_join::spawn_blocking_with(setup, move || handle.block_on(fut));
+            async move { (idx, result.await) }
+        },
+    );
 
-    while let Some(result) = tasks.next().await {
-        if let Err(e) = result {
-            summary.files_failed.fetch_add(1, Ordering::Relaxed);
-            tracing::error!(error = %e, "repair task failed");
-            if summary.fail_fast() {
-                summary.abort();
-            }
-            // Test-only: signal a panic the instant the join loop observes it.
-            // This runs after `abort()` so a task waiting on the signal sees the
-            // flag already set. No production path installs a receiver.
-            #[cfg(test)]
-            {
-                if e.is_panic() {
-                    FILE_PANIC_GATE.with(|gate| {
-                        if let Some(tx) = gate.borrow_mut().take() {
-                            let _ = tx.send(());
-                        }
-                    });
-                }
+    while let Some((_idx, result)) = tasks.next().await {
+        let (error, panicked) = match result {
+            Ok(()) => continue,
+            Err(girpr_async_join::JoinOutcome::Failed(e)) => (format!("{e}"), e.is_panic()),
+            Err(girpr_async_join::JoinOutcome::Lost { why }) => (
+                why.unwrap_or_else(|| "the repair file task did not report".to_string()),
+                true,
+            ),
+        };
+        summary.files_failed.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(error = %error, "repair task failed");
+        if summary.fail_fast() {
+            summary.abort();
+        }
+        // Test-only: signal a panic the instant the join loop observes it.
+        // This runs after `abort()` so a task waiting on the signal sees the
+        // flag already set. No production path installs a receiver.
+        #[cfg(test)]
+        {
+            if panicked {
+                FILE_PANIC_GATE.with(|gate| {
+                    if let Some(tx) = gate.borrow_mut().take() {
+                        let _ = tx.send(());
+                    }
+                });
             }
         }
+        // `panicked` is only read by the test gate; keep it used in release
+        // builds without changing the failure policy above.
+        let _ = panicked;
     }
 }
 

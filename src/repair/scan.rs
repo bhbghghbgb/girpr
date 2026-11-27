@@ -301,8 +301,14 @@ pub async fn scan_plan(
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let total_files = plan.len();
     let plan_fingerprint = plan.fingerprint();
-    let mut stream = futures_util::stream::iter(0..total_files)
-        .map(move |idx| {
+    // The bounded window and the lost-task payload are the shared leaf's job;
+    // this phase keeps its own policy: scan failures are collected on the
+    // report, never turned into a damage verdict.
+    let mut stream = girpr_async_join::join_iter(
+        0..total_files,
+        jobs,
+        girpr_async_join::Wording::new("scan", girpr_async_join::DEFAULT_FALLBACK),
+        move |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.to_path_buf();
             let local_map = Arc::clone(&local_map);
@@ -320,8 +326,8 @@ pub async fn scan_plan(
                 .await;
                 (idx, result)
             }
-        })
-        .buffer_unordered(jobs.max(1));
+        },
+    );
 
     let mut out = ScanReport {
         scanned_at,
@@ -332,7 +338,7 @@ pub async fn scan_plan(
     while let Some((idx, res)) = stream.next().await {
         let scanned = match res {
             Ok(scanned) => scanned,
-            Err(e) => {
+            Err(girpr_async_join::JoinOutcome::Failed(e)) => {
                 // `scan_one` catches unreadable files itself and answers
                 // "nothing is correct", so the only error here is a panic or a
                 // cancellation. The estimate stays safe (an unreached file is
@@ -340,6 +346,13 @@ pub async fn scan_plan(
                 // must be collected and surfaced: a partial scan is not a
                 // clean one.
                 out.failures.push((idx, format!("scan task failed: {e:#}")));
+                continue;
+            }
+            Err(girpr_async_join::JoinOutcome::Lost { why }) => {
+                // A task that never reported still owes the report a reason.
+                // The leaf recovered the panic payload when there was one.
+                let why = why.unwrap_or_else(|| "the scan task did not report".to_string());
+                out.failures.push((idx, format!("scan task failed: {why}")));
                 continue;
             }
         };

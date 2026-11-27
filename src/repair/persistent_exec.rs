@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, anyhow};
-use futures_util::stream::{StreamExt, iter};
 use girpr_fetch::persistent::{
     DownloadOutcome, DownloadRequest, WriteCeilingStopped, download_hotfix, hotfix_is_intact,
 };
@@ -69,16 +68,49 @@ pub(crate) async fn repair(
     }
 
     let shared = Arc::new(summary);
-    let tasks = state.plan.assets.iter().map(|asset| {
-        let shared = Arc::clone(&shared);
-        let backoff = &ctx.backoff;
-        async move { download_one(backoff, http, game_dir, asset, &shared).await }
-    });
+    // The shared window's futures are `'static`: the per-run inputs are cloned
+    // once into shared values, not borrowed from this stack frame per asset.
+    let assets: Arc<[PersistentAsset]> = state.plan.assets.iter().cloned().collect();
+    let backoff = Arc::new(ctx.backoff.clone());
+    let http = Arc::new(http.clone());
+    let game_dir = Arc::new(game_dir.to_path_buf());
+    let task_shared = Arc::clone(&shared);
+    let task_assets = Arc::clone(&assets);
     // `--jobs` is the file-task window; a smaller value simply serialises more.
-    let _results = iter(tasks)
-        .buffer_unordered(ctx.jobs.max(1))
-        .collect::<Vec<_>>()
-        .await;
+    // This phase's failures are counted inside `download_one`; a task that
+    // never reported is collected here with the same policy.
+    let outcomes = girpr_async_join::join_indices(
+        assets.len(),
+        ctx.jobs,
+        girpr_async_join::Wording::new("persistent file", girpr_async_join::DEFAULT_FALLBACK),
+        move |i| {
+            let shared = Arc::clone(&task_shared);
+            let backoff = Arc::clone(&backoff);
+            let http = Arc::clone(&http);
+            let game_dir = Arc::clone(&game_dir);
+            let assets = Arc::clone(&task_assets);
+            async move {
+                let outcome =
+                    download_one(&backoff, &http, game_dir.as_path(), &assets[i], &shared).await;
+                (i, Ok::<AssetOutcome, tokio::task::JoinError>(outcome))
+            }
+        },
+    )
+    .await;
+    for (i, outcome) in outcomes.into_iter().enumerate() {
+        if let Err(girpr_async_join::JoinOutcome::Lost { why }) = outcome {
+            let why = why.unwrap_or_else(|| "the persistent file task did not report".to_string());
+            shared.files_failed.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                path = %assets[i].rel,
+                error = %why,
+                "persistent file task did not report"
+            );
+            if shared.fail_fast() {
+                shared.abort();
+            }
+        }
+    }
 
     let mut summary = Arc::try_unwrap(shared).unwrap_or_else(|a| a.snapshot());
     summary.flags.persistent_repaired = Some(summary.files_repaired.load(Ordering::Relaxed));

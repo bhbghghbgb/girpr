@@ -1366,7 +1366,11 @@ where
     R: Send + 'static,
 {
     let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
-    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f))
+    // The setup hook installs (and, through its guard, later restores) the
+    // dispatcher captured here, at the spawn call site. The leaf owns the one
+    // blocking-pool entry point; this call site keeps the capture-at-spawn-time
+    // rule and the documented eager-spawn/detach behaviour.
+    girpr_async_join::spawn_blocking_with(move || tracing::dispatcher::set_default(&dispatcher), f)
 }
 
 /// Step 5.2: the up-front files-cleanup.

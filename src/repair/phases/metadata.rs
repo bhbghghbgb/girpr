@@ -123,9 +123,15 @@ impl LocalRead {
     }
 
     /// The join failure for this read, with the read's label as context.
+    ///
+    /// The rendering goes through the shared leaf so a panicking read keeps
+    /// its own message: `JoinError`'s `Display` drops the panic payload, which
+    /// is the one text that says why the read failed.
     fn join_failure(self, error: JoinError) -> RunFailure {
-        self.class()
-            .failure(anyhow::anyhow!("{}: {error}", self.label()))
+        let wording =
+            girpr_async_join::Wording::new(self.label(), girpr_async_join::DEFAULT_FALLBACK);
+        let rendered = girpr_async_join::join_failure(error, &wording);
+        self.class().failure(anyhow::anyhow!("{rendered}"))
     }
 }
 
@@ -633,6 +639,18 @@ mod tests {
             let text = format!("{failure:#}");
             assert!(text.contains(label), "{read:?}: {text}");
         }
+    }
+
+    /// A panicking read keeps the payload that says why it failed: `JoinError`'s
+    /// `Display` would only say that a task panicked.
+    #[tokio::test]
+    async fn a_panicking_local_read_keeps_its_payload() {
+        let task = tokio::spawn(async { panic!("local read exploded") });
+        let error = task.await.expect_err("the task panicked");
+        let failure = LocalRead::Version.join_failure(error);
+        let text = format!("{failure:#}");
+        assert!(text.contains("local read exploded"), "{text}");
+        assert!(text.contains("read local game version"), "{text}");
     }
 
     /// A primary that settles first leaves the sibling unawaited: the caller
