@@ -88,7 +88,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | declined |
 | F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | declined |
 | F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | declined |
-| F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | accepted (B2) |
+| F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | done |
 | F32 | T15 | Consider a std-only home for `native_separator`/`forward_slash`: `girpr-tempdir` and `girpr-filter` now take a `girpr-fs-names` (dunce-backed) edge for a pure string rewrite. | declined |
 | F33 | T15 | Decide whether `util-path` should keep re-exporting `fold_ascii_case`/`forward_slash`, or `persistent-plan` should depend on `girpr-fs-names` directly. | declined |
 | F34 | T15 | `MetadataFact::is_file`'s "stat failed → in-place capable" default restates `girpr-repair-policy::resolve_mode`; consider one home for that rule if it ever changes. | declined |
@@ -184,3 +184,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - Follow-up triage done: 13 accepted (B1–B7), 53 declined, F02 removed as stale/no remaining work (it merely recorded that T02 consumed checked_end); no new follow-ups.
 - F54 is the only triaged defect: `entry_names_with` silently skips unreadable directory entries where the retired local copies failed loud; accepted as B7. All other accepted items are enhancements/hygiene.
 - F59 was omitted from the triage's declined list; declined by the orchestrator by analogy with F60 (unifying the count-first driver needs fresh performance/byte-equality validation, no current need).
+- B2 done: F31 kept in review; `tempfile` moved to dev-dependencies, lockfile unchanged, 464 tests passed.
