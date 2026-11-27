@@ -77,7 +77,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F17 | T10 | `ChunkFileSink::write` in `temp.rs` is a decoder-fed sink, not a loop; its per-piece ceiling charge stayed local — a shared charge helper would touch the `sophon::ChunkSink` seam and retry/refund tests. | declined |
 | F18 | T10 | Consider relocating `read_up_to`/`reserve_exact` into `util-io` to make the leaf dependency-free (currently `util-io` depends on `util-hash` for one read); moves a public primitive between crates. | declined |
 | F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | declined |
-| F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | accepted (B5) |
+| F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | done |
 | F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | declined |
 | F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | accepted (B1) |
 | F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | declined |
@@ -187,3 +187,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - B2 done: F31 kept in review; `tempfile` moved to dev-dependencies, lockfile unchanged, 464 tests passed.
 - B3 done: F01 kept in review; all named clamp sites now use chunk-cost primitives except those already folded or deliberately not clamps; workspace 2366 passed / 8 skipped.
 - B4 done: F15 kept in review; `promote_tmp` routes through `verify_whole_file` with delete-and-bail and all published strings unchanged; workspace 2366 passed / 8 skipped.
+- B5 done: F20 kept in review; test-only thread-local `set_permissions` failure guard covers SetFailed at the leaf and all three callers; warning/error wording unchanged.
