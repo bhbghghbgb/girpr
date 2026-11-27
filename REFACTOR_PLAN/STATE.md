@@ -19,7 +19,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T05 | `tasks/T05-retryable-status.md` | completed | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | CP2 kept |
 | T06 | `tasks/T06-async-retry-driver.md` | completed | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 kept |
 | T07 | `tasks/T07-bounded-join.md` | completed | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 kept |
-| T08 | `tasks/T08-ledger-cas-helpers.md` | todo | — | |
+| T08 | `tasks/T08-ledger-cas-helpers.md` | pending review | 3 commits: counter CAS primitives; meter charge/refund/settle; RAM reserve/release | CP3 batch |
 | T09 | `tasks/T09-whole-file-verify.md` | todo | — | |
 | T10 | `tasks/T10-bounded-byte-io.md` | todo | — | |
 | T11 | `tasks/T11-clear-readonly.md` | todo | — | |
@@ -70,6 +70,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F11 | T07 | Collapsing `spawn_blocking_traced` and the file driver's setup wrappers further would bury the load-bearing "capture at spawn time" documentation and the diagnostics-owner hook. | proposed |
 | F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | proposed |
 | F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | proposed |
+| F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | proposed |
 
 ## Persistent context
 
@@ -92,3 +93,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T06 observation: clippy reports one warning in `crates/chunk-layout` (T02's crate, already reviewed at CP1); not re-opened.
 - T07 guardrails held: capture's buffered-future panics and repair's `Handle::block_on` cancellation remain distinct; dispatcher and `DiagnosticsOwner` survive via the thread-setup hook; published fallback strings unchanged.
 - CP2 done: T05–T07 kept; no fixes or reverts; workspace 2297 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
+- T08 keeper: the remaining `stopped_by` CAS in `app/report/src/ledger.rs` is an idempotent first-wins flag, not a saturating tally; routed through no leaf deliberately.
