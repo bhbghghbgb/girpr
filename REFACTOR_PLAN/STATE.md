@@ -12,7 +12,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 
 | ID | Task file | Status | Commits | Notes |
 | --- | --- | --- | --- | --- |
-| T01 | `tasks/T01-chunk-cost-arithmetic.md` | todo | — | |
+| T01 | `tasks/T01-chunk-cost-arithmetic.md` | pending review | 4 commits: chunk-cost primitives; repair-plan/chunk-verify adoption; gircap manifest totals; repair scan/plan | resolves T02 dependency |
 | T02 | `tasks/T02-chunk-layout.md` | todo | — | depends on T01 |
 | T03 | `tasks/T03-xxh64-hex-boundary.md` | todo | — | |
 | T04 | `tasks/T04-digest-internals.md` | todo | — | depends on T03 |
@@ -57,7 +57,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 
 | ID | Source task | Recommendation | Status |
 | --- | --- | --- | --- |
-| — | — | none recorded | — |
+| F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | proposed |
+| F02 | T01 | T02's half-open range/tiling leaf can consume `checked_end` directly; no change needed in T01. | proposed |
 
 ## Persistent context
 
@@ -66,4 +67,6 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - LF-14's cross-reference to X14 is a pointer, not a grouping; LF-14 is in T17.
 - Findings are static readings; implementers must validate against current code.
 - These plan files and the report must not be referenced from code or permanent docs.
-- No task is started; no commits have been made for this refactor.
+- Report line numbers are shifted relative to the current tree; implementers validate named sites against code, not cited lines.
+- F01's remaining single i64→u64 clamps overlap other task boundaries; they were left local in T01.
+- T01 implemented and validated (see task table); awaiting CP1 review.
