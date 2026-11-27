@@ -109,16 +109,39 @@ pub fn file_link(target: &Path, link: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Create a link to a directory, falling back to a junction on Windows.
+/// How a refused directory symlink falls back to a junction on Windows.
 ///
-/// `junction::create` creates a directory reparse point without a shell, and
-/// the walk and the deletion guard treat it as a link either way
-/// (`girsync::link::try_is_link`). It takes the target first and the junction
-/// path second. If both calls fail, the original symlink error is kept as the
-/// context of the junction error so the caller can report why it skipped.
+/// Both mechanisms create the same kind of directory reparse point — the walk
+/// and the deletion guard treat it as a link either way — but they reach it
+/// differently, and a caller may need either one. The choice is a parameter,
+/// never a replacement: on a host that refuses both, the original symlink error
+/// stays as the context of the junction error so the caller can say why it
+/// skipped.
+#[derive(Clone, Copy, Debug)]
+pub enum JunctionFallback {
+    /// Create the reparse point through the `junction` crate, with no shell.
+    Crate,
+    /// Create it through `cmd /C mklink /J`, with native separators (the `cmd`
+    /// builtin reads a forward slash as a switch).
+    Mklink,
+}
+
+/// Create a link to a directory, falling back through the `junction` crate on
+/// Windows. Kept as the default so every existing `dir_link(..)` call site
+/// keeps its mechanism and its error wording.
 pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    dir_link_with(target, link, JunctionFallback::Crate)
+}
+
+/// [`dir_link`] with the fallback strategy supplied by the caller.
+pub fn dir_link_with(
+    target: &Path,
+    link: &Path,
+    fallback: JunctionFallback,
+) -> std::io::Result<()> {
     #[cfg(unix)]
     {
+        let _ = fallback;
         std::os::unix::fs::symlink(target, link)
     }
     #[cfg(windows)]
@@ -127,16 +150,41 @@ pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        junction::create(target, link).map_err(|e| {
-            std::io::Error::new(
-                first.kind(),
-                format!("{first}; junction fallback failed: {e}"),
-            )
-        })
+        match fallback {
+            JunctionFallback::Crate => junction::create(target, link).map_err(|e| {
+                std::io::Error::new(
+                    first.kind(),
+                    format!("{first}; junction fallback failed: {e}"),
+                )
+            }),
+            JunctionFallback::Mklink => {
+                let native = |p: &Path| {
+                    std::path::PathBuf::from(girpr_fs_names::native_separator(
+                        &p.to_string_lossy(),
+                        true,
+                    ))
+                };
+                let created = std::process::Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(native(link))
+                    .arg(native(target))
+                    .output();
+                match created {
+                    Ok(out) if out.status.success() => Ok(()),
+                    Ok(out) => Err(std::io::Error::other(format!(
+                        "{first}; junction fallback failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ))),
+                    Err(e) => Err(std::io::Error::other(format!(
+                        "{first}; junction fallback failed: {e}"
+                    ))),
+                }
+            }
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (target, link);
+        let _ = (target, link, fallback);
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "no link API",

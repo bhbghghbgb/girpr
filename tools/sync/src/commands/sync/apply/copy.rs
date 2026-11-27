@@ -523,50 +523,18 @@ mod tests {
     }
 
     /// Create a link to a directory: a symlink where the platform allows one,
-    /// and a junction on Windows, which needs no elevation.
+    /// and a `cmd /C mklink /J` junction on Windows, which needs no elevation.
     ///
-    /// `cmd /c mklink /J` creates a directory reparse point that the crate
-    /// treats as a link either way. A platform that refuses both is reported
-    /// rather than swallowed, so a case can skip itself and say why instead
-    /// of passing as if it had covered the shape.
+    /// The mechanics and the failure wording are the shared test-support
+    /// helper's; this wrapper only keeps this suite's local call spelling and
+    /// chooses the mklink fallback it has always used. A platform that refuses
+    /// both is still reported, so a case can skip itself and say why.
     fn dir_link(target: &Path, link: &Path) -> io::Result<()> {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(target, link)
-        }
-        #[cfg(windows)]
-        {
-            let first = match std::os::windows::fs::symlink_dir(target, link) {
-                Ok(()) => return Ok(()),
-                Err(e) => e,
-            };
-            // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
-            // a target like `dst/sub` would fail with "Invalid switch". std
-            // accepts either separator on Windows, so hand it native ones.
-            let native = |p: &Path| {
-                PathBuf::from(girpr_fs_names::native_separator(&p.to_string_lossy(), true))
-            };
-            let created = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
-                .arg(native(link))
-                .arg(native(target))
-                .output();
-            match created {
-                Ok(out) if out.status.success() => Ok(()),
-                Ok(out) => Err(io::Error::other(format!(
-                    "{first}; junction fallback failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ))),
-                Err(e) => Err(io::Error::other(format!(
-                    "{first}; junction fallback failed: {e}"
-                ))),
-            }
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (target, link);
-            Err(io::Error::other("no link API"))
-        }
+        girpr_tempdir::test_support::dir_link_with(
+            target,
+            link,
+            girpr_tempdir::test_support::JunctionFallback::Mklink,
+        )
     }
 
     /// The canonical form of a root, which is what the guards are handed.
