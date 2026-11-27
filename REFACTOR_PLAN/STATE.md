@@ -23,7 +23,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T09 | `tasks/T09-whole-file-verify.md` | completed | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 kept |
 | T10 | `tasks/T10-bounded-byte-io.md` | completed | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 kept; clippy drop fix in review |
 | T11 | `tasks/T11-clear-readonly.md` | completed | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 kept |
-| T12 | `tasks/T12-request-url.md` | todo | — | |
+| T12 | `tasks/T12-request-url.md` | pending review | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 batch |
 | T13 | `tasks/T13-line-and-bom-readers.md` | todo | — | |
 | T14 | `tasks/T14-claim-publish.md` | todo | — | |
 | T15 | `tasks/T15-fs-path-helpers.md` | todo | — | |
@@ -80,6 +80,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | proposed |
 | F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | proposed |
 | F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | proposed |
+| F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | proposed |
+| F25 | T12 | Consider a policy-parameterized HYP URL seam to unify fetch's and capture's HYP builders; deliberately not done because girpr's hardcoded/unencoded language spelling and capture's `needs_channel`/override policy are call-site contracts. | proposed |
 
 ## Persistent context
 
@@ -106,3 +108,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T09 keeper: `src/repair/file/inplace.rs` scanned-verdict reuse digest comparisons remain local `matches_hex` calls by the reuse-guard contract.
 - T10 boundary: `inplace.rs` was not edited — it already calls the `mod.rs` wrappers that delegate to the leaf and downloads through `temp.rs`, so it consumes both mechanics transitively.
 - CP3 done: T08/T09/T10/T11 kept; T10's `drop(rw)` calls removed for clippy; only the out-of-batch chunk-layout `collapsible_if` warning remains when clippy runs with -D warnings.
+- T12 keeper: CAP-06 blob-id shape helpers left local by guardrail — tightening girpr to capture's strict rule risks rejecting real ids.
