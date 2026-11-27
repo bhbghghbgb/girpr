@@ -940,43 +940,15 @@ fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
     Inplace::Repaired(stats.clone())
 }
 
-/// What one `File::metadata()` call said about the in-place target.
-///
-/// Only the length matters at the two sites that stat the handle: before the
-/// eager trim and for the salvage order. Keeping the error as its own state
-/// lets the failure arm be executed with an injected `io::Error`
-/// (`post::classify_stale`'s shape) instead of only being read, without a
-/// trait or an injection seam. [`handle_len`] turns it back into the exact
-/// `io::Result` from `handle.metadata()`, so production still propagates the
-/// error with the site's path context and fails the file (exit `3`).
-#[derive(Debug)]
-enum InplaceLen {
-    /// The handle is open; this is its current length.
-    Present(u64),
-    /// The handle exists but could not be stat'd.
-    Failed(std::io::Error),
-}
-
-/// Classify one in-place `metadata` result.
-///
-/// Split from [`handle_len`] so the error arm is unit-testable without a
-/// permission fixture, matching `util::classify_len` and
-/// `post::classify_stale`.
-fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> InplaceLen {
-    match stat {
-        Ok(m) => InplaceLen::Present(m.len()),
-        Err(e) => InplaceLen::Failed(e),
-    }
-}
-
 /// The handle's current length, with the stat error preserved.
 ///
-/// This is the same `io::Result` the two sites got from `handle.metadata()?`,
-/// so the `?` path — and the failed-file outcome behind it — is unchanged.
+/// The shared classifier keeps both error states' original `io::Error`, so
+/// this is the same `io::Result` the two sites got from `handle.metadata()?`
+/// and the `?` path — and the failed-file outcome behind it — is unchanged.
 fn handle_len(handle: &std::fs::File) -> std::io::Result<u64> {
-    match classify_len(handle.metadata()) {
-        InplaceLen::Present(len) => Ok(len),
-        InplaceLen::Failed(e) => Err(e),
+    match util::classify_metadata(handle.metadata()) {
+        util::MetadataFact::Found { len, .. } => Ok(len),
+        util::MetadataFact::Absent(e) | util::MetadataFact::Unreadable(e) => Err(e),
     }
 }
 
@@ -1124,14 +1096,14 @@ mod tests {
     }
 
     /// P-2: the two in-place stat sites used a bare `handle.metadata()?`, so
-    /// the failure arm could only be read. The classifier keeps the error
-    /// itself, and `handle_len` hands it back to the caller's `?`, which still
-    /// fails the file (exit `3`) with the site's path context.
+    /// the failure arm could only be read. The shared classifier keeps the
+    /// error itself, and `handle_len` hands it back to the caller's `?`, which
+    /// still fails the file (exit `3`) with the site's path context.
     #[test]
     fn a_failed_inplace_stat_preserves_the_error() {
         let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        match classify_len(Err(denied)) {
-            InplaceLen::Failed(e) => {
+        match util::classify_metadata(Err(denied)) {
+            util::MetadataFact::Unreadable(e) => {
                 assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
                 assert_eq!(e.to_string(), "denied");
             }

@@ -536,14 +536,17 @@ enum StaleStat {
     Failed(std::io::Error),
 }
 
-/// Classify the entry's stat result. Split from [`stat_stale`] so the
-/// error-vs-not-a-file distinction is unit-testable without an injection seam.
+/// View the shared stat classification as this delete site's four states.
+///
+/// Split from [`stat_stale`] so the error-vs-not-a-file distinction is
+/// unit-testable without an injection seam. A failed stat stays `Failed`: it
+/// is never folded into `NotAFile` (nor into "already gone").
 fn classify_stale(stat: std::io::Result<std::fs::Metadata>) -> StaleStat {
-    match stat {
-        Ok(m) if m.is_file() => StaleStat::File(m.len()),
-        Ok(_) => StaleStat::NotAFile,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StaleStat::AlreadyGone,
-        Err(e) => StaleStat::Failed(e),
+    match util::classify_metadata(stat) {
+        util::MetadataFact::Found { len, is_file: true } => StaleStat::File(len),
+        util::MetadataFact::Found { .. } => StaleStat::NotAFile,
+        util::MetadataFact::Absent(_) => StaleStat::AlreadyGone,
+        util::MetadataFact::Unreadable(e) => StaleStat::Failed(e),
     }
 }
 

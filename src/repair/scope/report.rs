@@ -112,11 +112,13 @@ impl DiskPlan {
             // the estimate must share with the repair. The length is charged
             // only on the in-place path, where there is no symlink to follow,
             // so reading it from this stat does not change any figure.
-            let (len, in_place) = match std::fs::symlink_metadata(&path) {
-                Ok(m) => (util::FileLen::Present(m.len()), m.is_file()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (util::FileLen::Absent, true),
-                Err(e) => (util::FileLen::Unreadable(e), true),
-            };
+            // This is the one caller that uses `symlink_metadata` rather than
+            // following links, to share `resolve_mode`'s target decision. The
+            // shared classifier answers both facts from that one stat; its
+            // absent/unreadable split is unchanged.
+            let fact = util::classify_metadata(std::fs::symlink_metadata(&path));
+            let in_place = fact.is_file();
+            let len = fact.file_len();
             DiskFigure::Measured(len, in_place, path)
         });
         Self::from_figures(plan, figures, requested, jobs)
