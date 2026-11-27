@@ -23,6 +23,23 @@ use async_trait::async_trait;
 use backoff::ExponentialBackoffBuilder;
 use backoff::backoff::{Backoff, Zero};
 
+/// Whether an HTTP status is worth another attempt.
+///
+/// Retried: `408` (request timeout), `429` (too many requests) and any `5xx`
+/// (`500..=599`) — a server that is overloaded or briefly broken may answer
+/// again on a second try. Everything else is final: a `4xx` means the caller
+/// asked for something a retry cannot conjure, and success never reaches this
+/// predicate.
+///
+/// The parameter is a plain `u16` on purpose: callers pass the raw status they
+/// received, and the rule is decided here with an exact `500..=599` range rather
+/// than a "server error" helper whose acceptance of values outside that range
+/// differs between HTTP libraries. Both tools call this one spelling, so their
+/// published retry counts cannot drift apart.
+pub fn should_retry_status(status: u16) -> bool {
+    matches!(status, 408 | 429) || (500..=599).contains(&status)
+}
+
 /// A caller-parameterised schedule for the waits between attempts.
 ///
 /// A fresh [`DelaySequence`] is built per loop: a `backoff` policy is stateful,
@@ -174,6 +191,37 @@ impl Sleep for RecordingSleep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The retryable-status rule at its boundaries: `408`/`429` and the whole
+    /// `5xx` band retry; `407`, the rest of `4xx`, `600` and values outside the
+    /// HTTP range do not.
+    #[test]
+    fn should_retry_status_pins_the_boundaries() {
+        for s in [408, 429, 500, 502, 503, 504, 599] {
+            assert!(should_retry_status(s), "{s} must be retried");
+        }
+        for s in [
+            0,
+            99,
+            100,
+            200,
+            204,
+            301,
+            400,
+            401,
+            403,
+            404,
+            407,
+            410,
+            451,
+            600,
+            999,
+            1000,
+            u16::MAX,
+        ] {
+            assert!(!should_retry_status(s), "{s} must not be retried");
+        }
+    }
 
     /// The three `Schedule` contract cases, folded into one process so nextest
     /// spawns one test instead of three. Every original assertion and message is
