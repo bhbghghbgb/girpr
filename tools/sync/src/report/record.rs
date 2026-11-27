@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use serde::ser::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use girpr_report_core::{Order, write_json_object};
+use girpr_report_core::{Order, Record as CoreRecord};
 
 use super::{OutputFormat, Report};
 
@@ -41,10 +41,11 @@ enum Layout {
 /// expects them to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
-    /// Text label, e.g. `MISSING`. Lowercased to get the JSON `event`.
-    label: &'static str,
     layout: Layout,
-    fields: Vec<(&'static str, Value)>,
+    /// The ordered field list and text label, shared with the other planes.
+    /// This crate still owns the layout, the `Value` vocabulary, the event
+    /// derivation and the field order.
+    core: CoreRecord<Value>,
 }
 
 impl Record {
@@ -60,9 +61,8 @@ impl Record {
     /// `path` for a directory.
     pub fn positional(label: &'static str, first: &'static str, value: &str) -> Self {
         Self {
-            label,
             layout: Layout::Positional,
-            fields: Vec::new(),
+            core: CoreRecord::new(label),
         }
         .put(first, value)
     }
@@ -77,9 +77,8 @@ impl Record {
         second_value: &str,
     ) -> Self {
         Self {
-            label,
             layout: Layout::Pair(sep),
-            fields: Vec::new(),
+            core: CoreRecord::new(label),
         }
         .put(first, first_value)
         .put(second, second_value)
@@ -88,9 +87,8 @@ impl Record {
     /// A record whose every field is keyed: `SUMMARY missing=0 ...`.
     pub fn keyed(label: &'static str) -> Self {
         Self {
-            label,
             layout: Layout::Keyed,
-            fields: Vec::new(),
+            core: CoreRecord::new(label),
         }
     }
 
@@ -106,16 +104,16 @@ impl Record {
             "`event` is rendered from the label and cannot also be a field"
         );
         debug_assert!(
-            !self.fields.iter().any(|(k, _)| *k == key),
+            !self.core.fields().iter().any(|(k, _)| *k == key),
             "duplicate record field `{key}`"
         );
-        self.fields.push((key, value.into()));
+        self.core.push(key, value.into());
         self
     }
 
     /// The text label, e.g. `MISSING`.
     pub fn label(&self) -> &'static str {
-        self.label
+        self.core.label()
     }
 
     /// The JSON `event` name: the text label lowercased.
@@ -126,7 +124,7 @@ impl Record {
     /// recorded. It is not a path fold: the crate's path folds live in
     /// `crate::util` and answer questions about paths.
     pub fn event(&self) -> String {
-        let mut out = String::with_capacity(self.label.len());
+        let mut out = String::with_capacity(self.core.label().len());
         self.push_event(&mut out);
         out
     }
@@ -137,14 +135,14 @@ impl Record {
     /// into the machine-readable name, and it touches nothing else in the
     /// record — a path field is printed as it stands.
     fn push_event(&self, out: &mut String) {
-        for c in self.label.chars() {
+        for c in self.core.label().chars() {
             out.push(c.to_ascii_lowercase());
         }
     }
 
     /// The fields, in report order, without the `event` name.
     pub fn fields(&self) -> &[(&'static str, Value)] {
-        &self.fields
+        self.core.fields()
     }
 
     /// The JSON object for this record: the `event` name plus every field.
@@ -177,7 +175,7 @@ impl Record {
     /// payload the matching `tracing` event carries.
     pub fn fields_json(&self) -> String {
         let mut m = Map::new();
-        for (k, v) in &self.fields {
+        for (k, v) in self.core.fields() {
             m.insert((*k).to_string(), v.clone());
         }
         Value::Object(m).to_string()
@@ -202,10 +200,10 @@ impl Record {
 
     /// Append the human line for this record.
     fn push_text(&self, out: &mut String) {
-        out.push_str(self.label);
+        out.push_str(self.core.label());
         match self.layout {
             Layout::Positional => {
-                for (i, (k, v)) in self.fields.iter().enumerate() {
+                for (i, (k, v)) in self.core.fields().iter().enumerate() {
                     out.push(' ');
                     if i > 0 {
                         out.push_str(k);
@@ -215,7 +213,7 @@ impl Record {
                 }
             }
             Layout::Keyed => {
-                for (k, v) in &self.fields {
+                for (k, v) in self.core.fields() {
                     out.push(' ');
                     out.push_str(k);
                     out.push('=');
@@ -223,7 +221,7 @@ impl Record {
                 }
             }
             Layout::Pair(sep) => {
-                for (i, v) in self.fields.iter().map(|(_, v)| v).enumerate() {
+                for (i, v) in self.core.fields().iter().map(|(_, v)| v).enumerate() {
                     if i > 0 {
                         out.push(' ');
                         out.push_str(sep);
@@ -249,14 +247,9 @@ impl Serialize for Record {
         // changes a field's value or reuses another tool's vocabulary. The
         // `preserve_order` feature is deliberately NOT enabled — emission order
         // comes from `serialize_entry`, regardless of feature unification.
-        let event = self.label.to_ascii_lowercase();
-        write_json_object(
-            serializer,
-            "event",
-            &event,
-            &self.fields,
-            Order::Alphabetical,
-        )
+        let event = self.core.label().to_ascii_lowercase();
+        self.core
+            .write_json(serializer, "event", &event, Order::Alphabetical)
     }
 }
 

@@ -60,6 +60,7 @@ use crate::hash::HashAlg;
 /// binary publishes in `--help` are its own and are handed to the shared CLI
 /// flag as data.
 pub use girpr_report_core::OutputFormat;
+use girpr_report_core::write_record_line;
 
 /// Where a [`Report`] sends each record it emits.
 ///
@@ -142,12 +143,25 @@ impl Report {
     /// `debug`, and the file layer at the default level — so this cannot later be
     /// read as "logging was dropped".
     pub fn emit(&self, rec: Record) {
-        if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
-            debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
-        }
+        // girsync logs the structured record, not the rendered line, and the
+        // event name is derived here. The sink takes the line; the hook keeps
+        // this plane's payload and runs for both sinks.
+        let log = || {
+            if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
+                debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
+            }
+        };
         match &self.sink {
-            ReportSink::Stdout => println!("{}", self.render(&rec)),
+            ReportSink::Stdout => {
+                let line = self.render(&rec);
+                // Keep `println!`'s broken-pipe policy here: a failed stdout
+                // write panics. The shared sink does not choose a policy.
+                if let Err(e) = write_record_line(&mut std::io::stdout(), &line, |_| log()) {
+                    panic!("failed printing to stdout: {e}");
+                }
+            }
             ReportSink::Capture(records) => {
+                log();
                 records.lock().unwrap_or_else(|e| e.into_inner()).push(rec);
             }
         }
