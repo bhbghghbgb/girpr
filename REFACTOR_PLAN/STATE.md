@@ -26,7 +26,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T12 | `tasks/T12-request-url.md` | completed | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 kept |
 | T13 | `tasks/T13-line-and-bom-readers.md` | completed | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 kept |
 | T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
-| T15 | `tasks/T15-fs-path-helpers.md` | todo | — | |
+| T15 | `tasks/T15-fs-path-helpers.md` | pending review | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 batch |
 | T16 | `tasks/T16-global-cli-and-format.md` | todo | — | before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
 | T18 | `tasks/T18-report-core.md` | todo | — | after T16 |
@@ -88,6 +88,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | proposed |
 | F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | proposed |
 | F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | proposed |
+| F32 | T15 | Consider a std-only home for `native_separator`/`forward_slash`: `girpr-tempdir` and `girpr-filter` now take a `girpr-fs-names` (dunce-backed) edge for a pure string rewrite. | proposed |
+| F33 | T15 | Decide whether `util-path` should keep re-exporting `fold_ascii_case`/`forward_slash`, or `persistent-plan` should depend on `girpr-fs-names` directly. | proposed |
+| F34 | T15 | `MetadataFact::is_file`'s "stat failed → in-place capable" default restates `girpr-repair-policy::resolve_mode`; consider one home for that rule if it ever changes. | proposed |
 
 ## Persistent context
 
@@ -117,3 +120,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T12 keeper: CAP-06 blob-id shape helpers left local by guardrail — tightening girpr to capture's strict rule risks rejecting real ids.
 - T13: BOM-only behavior and trailing-newline contracts remain opposite by explicit parameters; capture's Cargo.toml now states the newline distinction; `game_version_from_text` takes a `value_of` closure to keep anchoring/empty-value/error wording at call sites.
 - CP4 done: T12/T13/T14 kept; no fixes or reverts; workspace 2332 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
+- T15: `Absent` carries the original `NotFound` error; `util-hash`'s `Md5` re-export left intact; prefix helpers imported directly from `girsync_leaves::link` so the disk-question scanner still sees only real disk calls.
