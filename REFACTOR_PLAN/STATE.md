@@ -35,7 +35,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T21 | `tasks/T21-hyp-wire.md` | completed | 3 commits: hyp-wire leaf; fetch envelope/identity adoption; capture identity/envelope adoption | CP8 kept |
 | T22 | `tasks/T22-capture-emit-stores.md` | completed | 4 commits: capture serialize/gzip bodies; bounded-store mechanics; schema-version read; zstd error formatter | CP8 kept |
 | T23 | `tasks/T23-girsync-heartbeat.md` | pending review | 3 commits: heartbeat leaf; scan adoption; effective phase adoption | CP9 batch |
-| T24 | `tasks/T24-workspace-inheritance.md` | todo | — | |
+| T24 | `tasks/T24-workspace-inheritance.md` | pending review | 1 commit: workspace package/dependency inheritance across 53 members | CP9 batch complete |
 
 ## Reviews
 
@@ -121,6 +121,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F62 | T21 | Capture's `Wrapper<T>` alias field `message` changed from `String` to `Option<String>`; no consumer reads it, but it is a public surface change worth an explicit decision. | proposed |
 | F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | proposed |
 | F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | proposed |
+| F65 | T24 | Decide whether the two `tests/scripts/io-profile/*` helper crates (edition 2021, outside the workspace, own `redb` pin) should join inheritance; deliberately left untouched. | proposed |
+| F66 | T24 | Path dependencies remain local (versionless, with call-site comments); centralizing them in `[workspace.dependencies]` is a separate decision. | proposed |
 
 ## Persistent context
 
@@ -163,3 +165,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T22: `bounded_store` lives in `gircap-http` (shared parent dependency) because `error_bodies.rs` is there and `gircap-http` cannot depend on `gircap`; BufWriter construction stayed at call sites.
 - CP8 done: T21/T22 kept; the flagged `Envelope.retcode` default concern was verified unreachable and behavior-equal; workspace 2361 passed / 8 skipped.
 - T23: `Heartbeat<F>` owns only the clock/trigger; `elapsed_s`, wording, fields and levels stay at the three call sites.
+- T24: report's "39 members" is stale — the tree has 53 workspace members; all 58 external dependency versions inherited, lockfile and resolved graph byte-identical; tools' reduced lint tables and `[lib]` sections stayed local.
