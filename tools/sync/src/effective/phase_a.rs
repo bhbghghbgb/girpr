@@ -3,7 +3,10 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Duration;
 use tracing::{info, trace};
+
+use girsync_leaves::heartbeat::Heartbeat;
 
 use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
@@ -383,7 +386,12 @@ pub fn scan_stat_only(
     } else {
         Some(cache.begin_write()?)
     };
-    let mut last_prog = std::time::Instant::now();
+    // The phase's cadence is its own: every hundredth file, or five seconds
+    // since the last event when the files come slowly. The shared heartbeat
+    // owns the gap clock and its reset; this closure is the policy.
+    let mut heartbeat = Heartbeat::new(|count, since_last| {
+        count.is_multiple_of(100) || since_last >= Duration::from_secs(5)
+    });
     // The filter's decision, remembered per directory: an exclude pattern
     // that covers a directory covers everything under it, so a child of a
     // covered directory is covered without a test. The walk yields a
@@ -485,17 +493,16 @@ pub fn scan_stat_only(
             // reader (or a parser) that cannot say which phase an event came
             // from cannot say anything about it. The name says, and it says
             // it the way this phase's start and done events say it.
-            if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
+            if let Some(elapsed) = heartbeat.tick(n_done) {
                 info!(
                     root = %root.display(),
                     done = n_done,
                     total = total_live,
                     hashed = 0,
                     cache_hit = 0,
-                    elapsed_s = t_eff.elapsed().as_secs_f64(),
+                    elapsed_s = elapsed,
                     "effective progress: phase a"
                 );
-                last_prog = std::time::Instant::now();
             }
         }
         // An included entry pulls its ancestor directories back in: the map

@@ -8,7 +8,10 @@
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 use tracing::{debug, info, trace};
+
+use girsync_leaves::heartbeat::Heartbeat;
 
 use crate::cache::{CacheDb, CacheWrite};
 use crate::config::ScanMode;
@@ -104,15 +107,16 @@ pub fn resolve_folder(
     );
 
     // What the workers share: the batch handle, the map they are building, and the
-    // counters that drive the heartbeat. One mutex covers all three because a row
+    // heartbeat that drives progress. One mutex covers all three because a row
     // being on disk and the map holding its `EffRec` is one commit, not two.
-    struct Sink<'a> {
+    struct Sink<'a, F> {
         batch: Option<CacheWrite<'a>>,
         map: HashMap<String, EffRec>,
         hashed: usize,
-        last_prog: std::time::Instant,
+        heartbeat: Heartbeat<F>,
     }
 
+    let total = pending.len();
     let sink = std::sync::Mutex::new(Sink {
         batch: if dry_run {
             None
@@ -121,9 +125,14 @@ pub fn resolve_folder(
         },
         map: HashMap::new(),
         hashed: 0,
-        last_prog: std::time::Instant::now(),
+        // This phase's cadence is its own: every hundredth digest, the final
+        // digest so the run ends on a progress event, or five seconds since
+        // the last one when the pool is slow. The shared heartbeat owns the
+        // gap clock and its reset; this closure is the policy.
+        heartbeat: Heartbeat::new(move |count, since_last| {
+            count.is_multiple_of(100) || count == total || since_last >= Duration::from_secs(5)
+        }),
     });
-    let total = pending.len();
     let pool = rw.pool()?;
     let outcome = pool.install(|| {
         use rayon::prelude::*;
@@ -179,20 +188,20 @@ pub fn resolve_folder(
                 // reader (or a parser) that cannot say which phase an event came
                 // from cannot say anything about it. The name says, and it says
                 // it the way this phase's start and done events say it.
-                if sink.hashed.is_multiple_of(100)
-                    || sink.hashed == total
-                    || sink.last_prog.elapsed().as_secs() >= 5
-                {
+                // Read the count before the tick: the heartbeat borrows the
+                // sink mutably to rearm its clock, and the event below still
+                // reads the sink's other fields.
+                let hashed = sink.hashed;
+                if let Some(elapsed) = sink.heartbeat.tick(hashed) {
                     info!(
                         root = %root.display(),
                         done = sink.hashed,
                         total,
                         hashed = sink.hashed,
                         cache_hit = 0,
-                        elapsed_s = t_eff.elapsed().as_secs_f64(),
+                        elapsed_s = elapsed,
                         "effective progress: phase c"
                     );
-                    sink.last_prog = std::time::Instant::now();
                 }
                 Ok(())
             },
