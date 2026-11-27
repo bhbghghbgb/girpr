@@ -227,6 +227,11 @@ girpr-chunk-identity = { path = "../../crates/chunk-identity" }
 # download and keeps its retention sets, its artifact ranking and every
 # published byte.
 girpr-chunk-cost = { path = "../../crates/chunk-cost" }
+# The half-open range and tiling leaf, shared with the repair binary. A logic-free
+# leaf: gircap keeps its A11 wording, its structure counters and every published
+# byte; it only borrows the range predicates, the cursor rule and the typed
+# range checks.
+girpr-chunk-layout = { path = "../../crates/chunk-layout" }
 # The Windows device-name predicate mechanism, shared with the repair binary.
 # A leaf crate that owns only the mechanism: gircap keeps its exact rule (no
 # `CLOCK$`, raw-stem comparison) by passing the reserved set and trim flag.

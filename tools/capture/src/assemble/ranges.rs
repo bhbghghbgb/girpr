@@ -24,99 +24,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A half-open byte range `[start, end)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Range {
-    /// First byte included.
-    pub start: i64,
-    /// One past the last byte included.
-    pub end: i64,
-}
-
-impl Range {
-    /// A range from explicit bounds.
-    ///
-    /// Accepts `end < start` rather than panicking: a manifest with an inverted
-    /// chunk offset is a finding to record, not a crash. [`Range::is_inverted`]
-    /// names it and the layout check reports it.
-    pub const fn new(start: i64, end: i64) -> Range {
-        Range { start, end }
-    }
-
-    /// The range covering `len` bytes at `offset`.
-    ///
-    /// Saturating rather than `+`: an index or manifest can declare an offset
-    /// near `i64::MAX`, and a range algebra that panics on the document it
-    /// describes is the class `decode_counts` already refuses. [`Layout::of`]
-    /// records the overflow as an A11 violation; this method stays total for
-    /// every caller, including the public ones that never build a `Layout`.
-    pub const fn at(offset: i64, len: i64) -> Range {
-        Range::new(offset, offset.saturating_add(len))
-    }
-
-    /// The empty range at `offset`.
-    pub const fn empty_at(offset: i64) -> Range {
-        Range::new(offset, offset)
-    }
-
-    /// How many bytes this covers. Negative when inverted.
-    ///
-    /// Saturating for the same reason as [`Range::at`]: the bounds are
-    /// untrusted, and the gap/overlap diagnostic must not abort on them.
-    pub const fn len(&self) -> i64 {
-        self.end.saturating_sub(self.start)
-    }
-
-    /// Whether the range covers no bytes.
-    pub const fn is_empty(&self) -> bool {
-        self.end <= self.start
-    }
-
-    /// Whether the bounds are the wrong way round.
-    pub const fn is_inverted(&self) -> bool {
-        self.end < self.start
-    }
-
-    /// Whether `other` lies entirely within this range.
-    pub const fn contains(&self, other: Range) -> bool {
-        self.start <= other.start && other.end <= self.end
-    }
-
-    /// Whether the two share at least one byte.
-    ///
-    /// Empty ranges never overlap anything, including each other: two zero-length
-    /// ranges at the same offset share no bytes, and counting them as an overlap
-    /// would report a conflict in a file full of zero-length chunks.
-    pub const fn overlaps(&self, other: Range) -> bool {
-        !self.is_empty() && !other.is_empty() && self.start < other.end && other.start < self.end
-    }
-
-    /// The bytes between this range's end and `next`'s start, if they do not meet.
-    ///
-    /// Positive for a gap, negative for an overlap, zero when they are adjacent.
-    /// Saturating, so an `i64::MIN` start next to an `i64::MAX` end is a
-    /// diagnosable violation rather than an abort.
-    pub const fn to(&self, next: Range) -> i64 {
-        next.start.saturating_sub(self.end)
-    }
-
-    /// The slice of `bytes` this range names, if it names a valid one.
-    pub fn slice<'a>(&self, bytes: &'a [u8]) -> Option<&'a [u8]> {
-        if self.is_inverted() || self.start < 0 {
-            return None;
-        }
-        let end = self.end.max(self.start) as usize;
-        // A zero-length range at exactly the end of the buffer is legitimate:
-        // the last chunk of a file that ends in an empty chunk.
-        bytes.get(self.start as usize..end)
-    }
-}
-
-impl std::fmt::Display for Range {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}, {})", self.start, self.end)
-    }
-}
+/// The half-open range algebra lives in the shared leaf; this name keeps the
+/// published `start`/`end` keys and every call site in the tool unchanged.
+///
+/// [`Layout::of`] still owns the A11 wording: which of the leaf's facts are
+/// findings, and how each one is spelled, is capture policy.
+pub use girpr_chunk_layout::ByteRange as Range;
 
 /// Where a file's chunks sit, and what is wrong with that if anything is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,7 +116,7 @@ impl Layout {
             }
             if i > 0 {
                 let prev = ranges[i - 1];
-                match prev.to(*r) {
+                match prev.gap_to(*r) {
                     0 => {}
                     gap if gap > 0 => violations.push(format!(
                         "a gap of {gap} B between chunk {} (ends {}) and chunk {} (starts {})",
@@ -262,9 +175,9 @@ mod tests {
     #[test]
     fn adjacent_ranges_meet_at_zero_and_gaps_and_overlaps_are_signed() {
         let a = Range::at(0, 10);
-        assert_eq!(a.to(Range::at(10, 5)), 0, "adjacent");
-        assert_eq!(a.to(Range::at(15, 5)), 5, "a 5 B gap");
-        assert_eq!(a.to(Range::at(8, 5)), -2, "a 2 B overlap");
+        assert_eq!(a.gap_to(Range::at(10, 5)), 0, "adjacent");
+        assert_eq!(a.gap_to(Range::at(15, 5)), 5, "a 5 B gap");
+        assert_eq!(a.gap_to(Range::at(8, 5)), -2, "a 2 B overlap");
     }
 
     #[test]
@@ -469,7 +382,7 @@ mod tests {
         let l = Layout::of([(0, i64::MAX), (i64::MIN, 0)], 0);
         assert!(!l.is_clean());
         assert_eq!(
-            Range::new(0, i64::MAX).to(Range::new(i64::MIN, 0)),
+            Range::new(0, i64::MAX).gap_to(Range::new(i64::MIN, 0)),
             i64::MIN
         );
         assert_eq!(

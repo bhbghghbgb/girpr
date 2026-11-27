@@ -1046,6 +1046,7 @@ dependencies = [
  "girpr-audio-language",
  "girpr-chunk-cost",
  "girpr-chunk-identity",
+ "girpr-chunk-layout",
  "girpr-cli",
  "girpr-digest",
  "girpr-exit",

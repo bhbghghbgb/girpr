@@ -15,6 +15,7 @@
 //! into the leaf.
 
 use girpr_chunk_identity::{ChunkIdentity, normalize_hex};
+use girpr_chunk_layout::{RangeProblem, check_range};
 pub use girpr_proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 
 /// Capture's measurements and validation of one decoded file entry.
@@ -83,17 +84,31 @@ impl SophonChunkFileExt for SophonChunkFile {
                     c.id, c.compressed_size
                 ));
             }
-            if c.uncompressed_size < 0 {
-                return Err(format!(
-                    "chunk {i} ({}): uncompressed_size {} is negative",
-                    c.id, c.uncompressed_size
-                ));
-            }
-            if c.offset.checked_add(c.uncompressed_size).is_none() {
-                return Err(format!(
-                    "chunk {i} ({}): offset {} + uncompressed_size {} overflows i64",
-                    c.id, c.offset, c.uncompressed_size
-                ));
+            // The leaf decides which rule broke; this tool publishes the
+            // wording, including the chunk index and id. Negative offsets and
+            // compressed sizes keep their own order above: they are checked
+            // before any of the leaf's range rules.
+            match check_range(c.offset, c.uncompressed_size) {
+                Ok(_) => {}
+                Err(RangeProblem::NegativeLen(len)) => {
+                    return Err(format!(
+                        "chunk {i} ({}): uncompressed_size {} is negative",
+                        c.id, len
+                    ));
+                }
+                Err(RangeProblem::Overflow { offset, len }) => {
+                    return Err(format!(
+                        "chunk {i} ({}): offset {} + uncompressed_size {} overflows i64",
+                        c.id, offset, len
+                    ));
+                }
+                Err(RangeProblem::NegativeOffset(offset)) => {
+                    return Err(format!(
+                        "chunk {i} ({}): offset {} is negative",
+                        c.id, offset
+                    ));
+                }
+                Err(RangeProblem::PastEnd { .. }) => unreachable!("no bound is supplied here"),
             }
         }
         Ok(())

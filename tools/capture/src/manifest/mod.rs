@@ -21,6 +21,7 @@
 //! decides what they mean.
 
 use girpr_chunk_cost::nonneg;
+use girpr_chunk_layout::tile;
 use serde::Serialize;
 
 use crate::failure::{Failure, assertion};
@@ -720,15 +721,22 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         }
         total_chunks += e.chunks.len() as u64;
 
-        let mut ascending = true;
-        let mut gapless = true;
-        let mut cursor = 0_i64;
+        // One fold owns the gap/overlap/ascending rule. These two booleans are
+        // this tool's published counters, not the leaf's verdict: a short tail
+        // is a size mismatch below, not a hole between chunks.
+        let tiling = tile(
+            e.chunks.iter().map(|c| (c.offset, c.uncompressed_size)),
+            e.size,
+        );
+        let ascending = tiling.ascending;
+        let gapless = tiling.gapless;
         // `Σ uncompressed_size`, which is what `chunk_bytes()` recomputed on a
-        // second walk. For a gapless file it is also `cursor`, so the two agree;
-        // for a gapful one only this sum is meaningful, which is why it is
-        // accumulated rather than read off the cursor.
+        // second walk. It is accumulated rather than read off the fold's cursor:
+        // for a gapful or overlong file only this sum is the declared byte claim.
+        // Saturating because a manifest is a document being measured, not one
+        // being trusted.
         let mut chunk_bytes = 0_i64;
-        for (i, c) in e.chunks.iter().enumerate() {
+        for c in &e.chunks {
             // Same convention as `total_file_bytes` above, and the same reason:
             // this is the number recorded as `max_chunk_compressed_bytes`, the
             // field documented as what bounds the tool's whole-chunk buffering.
@@ -736,26 +744,6 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             if compressed > max_chunk {
                 max_chunk = compressed;
             }
-            if i > 0 && c.offset <= e.chunks[i - 1].offset {
-                ascending = false;
-            }
-            if c.offset != cursor {
-                gapless = false;
-            }
-            // `checked_add`, because this counter is a *measurement* and must not
-            // panic on the thing it measures. A manifest declaring
-            // `offset = i64::MAX` overflowed here: an abort in debug and test
-            // builds — so `cargo nextest run` itself would die — and a silent wrap
-            // in release, which reports a file as tiled when nothing was checked.
-            // An offset that cannot be added to is a file larger than any file,
-            // so the tiling is broken by definition.
-            cursor = match c.offset.checked_add(c.uncompressed_size) {
-                Some(next) => next,
-                None => {
-                    gapless = false;
-                    i64::MAX
-                }
-            };
             chunk_bytes = chunk_bytes.saturating_add(c.uncompressed_size);
         }
         // A folder carries no bytes, so none of the byte-level properties apply
