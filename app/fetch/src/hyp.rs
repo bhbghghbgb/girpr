@@ -3,7 +3,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_aux::field_attributes::deserialize_number_from_string;
+
+use girpr_hyp_wire::{USER_AGENT, deserialize_number_from_string};
+// Kept public at this path: the repair facade and its fixtures import the
+// classifier from `hyp`, even though the definition lives in the wire leaf.
+pub use girpr_hyp_wire::terminal_retcode;
 
 use crate::retry::{BackoffPolicy, Retry, retry};
 use girpr_model::region::Region as Biz;
@@ -56,19 +60,12 @@ pub struct HypClient {
     json_body_idle: Duration,
 }
 
-#[derive(Debug, Deserialize)]
-struct Wrapper<T> {
-    retcode: i64,
-    message: Option<String>,
-    data: Option<T>,
-}
+/// The Sophon JSON envelope. `data` is optional here: a `retcode:0` body with
+/// no data is the API's "nothing here" answer, mapped by the caller below.
+type Wrapper<T> = girpr_hyp_wire::Envelope<Option<T>>;
 
-#[derive(Debug, Deserialize)]
-struct NodeWrapper {
-    retcode: i64,
-    message: Option<String>,
-    data: Option<serde_json::Value>,
-}
+/// The HYP envelope, whose payload is a node object the caller picks apart.
+type NodeWrapper = girpr_hyp_wire::Envelope<Option<serde_json::Value>>;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GameIdRef {
@@ -272,36 +269,6 @@ pub struct DeprecatedFile {
     pub name: String,
 }
 
-/// Whether a `retcode` means the *request* is wrong, so an identical retry will
-/// be answered identically.
-///
-/// Measured against the live endpoints on 2026-10-16:
-///
-/// | retcode | request | what it means |
-/// |---|---|---|
-/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as `SophonNotFound`, which the local-build fallback is built around |
-/// | `-201` | `getBuild` with a bad `package_id` | `invalid params` |
-/// | `-1001` | `getGameConfigs` / `getGameBranches` with a bad `game_ids[]` | `invalid params` |
-///
-/// Retrying any of these costs ~15 s of backoff to learn exactly what the first
-/// response already said.
-///
-/// **What is deliberately not in this table: `retcode: 0` with an empty node.**
-/// `getGameBranches` answers `{"retcode":0,…,"data":{"game_branches":[]}}` for a
-/// game id it does not know. That is a success with nothing in it, not a
-/// failure, and it is handled downstream by `game_branch`'s
-/// `empty game_branches` — which is why this has to stay a retcode check and not
-/// become a "did we get anything" check.
-///
-/// The two route families disagree about what failure looks like: the blob
-/// routes answer `404`, these JSON routes answer `200` and put it in
-/// `retcode`. So the retry policy is written per family — the blob half's
-/// `retryable` status rule uses the same rule as `gircap`'s
-/// `RetryPolicy::should_retry_status`.
-pub fn terminal_retcode(retcode: i64) -> bool {
-    matches!(retcode, -201 | -202 | -1001)
-}
-
 impl HypClient {
     /// The default constructor, kept for callers that do not override the
     /// bases.
@@ -324,7 +291,7 @@ impl HypClient {
         let (_, launcher_id, game_id) = biz.endpoints();
         let (channel, sub_channel, _) = biz.channel_tuple();
         let client = reqwest::Client::builder()
-            .user_agent("UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)")
+            .user_agent(USER_AGENT)
             .pool_max_idle_per_host(16)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
