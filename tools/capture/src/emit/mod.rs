@@ -430,6 +430,39 @@ impl std::io::Write for Counter {
     }
 }
 
+/// Serialise `value` through `sink` as pretty JSON, naming the document on error.
+///
+/// The caller owns the sink — including where the [`std::io::BufWriter`] sits —
+/// because that placement is measured (12 s vs 46 s on a 2 744-entry decode)
+/// and the emitted bytes are pinned. This is only the shared body: the two
+/// writers choose their own driver and their own sink, and a serialisation
+/// failure names the document the same way from either one.
+fn serialize_pretty_to<W: std::io::Write>(
+    sink: W,
+    value: &impl serde::Serialize,
+    what: &str,
+) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(sink, value)
+        .map_err(|e| std::io::Error::other(format!("serialise {what}: {e}")))
+}
+
+/// Gzip bytes from `reader` into `out`, finishing the frame explicitly.
+///
+/// The single-serialisation driver's body: it has a plain file of already
+/// serialised bytes and writes the final document from that. `finish()?` rather
+/// than a bare drop is what surfaces a write failure; the bytes are the same
+/// either way. The count-first driver serialises straight into the encoder and
+/// has no reader to hand here, so it keeps its own (measured) sink placement.
+fn gzip_from_reader<R: std::io::Read, W: std::io::Write>(
+    reader: &mut R,
+    out: W,
+) -> std::io::Result<()> {
+    let mut enc = flate2::write::GzEncoder::new(out, flate2::Compression::default());
+    std::io::copy(reader, &mut enc)?;
+    enc.finish()?;
+    Ok(())
+}
+
 /// How many bytes `value` occupies serialised pretty-printed, without building it.
 ///
 /// **The same bytes the buffered path produces**, so the length this
@@ -438,8 +471,7 @@ impl std::io::Write for Counter {
 /// halfway into a 27 MB decode with no subject is a bad error report.
 pub fn json_len(value: &impl serde::Serialize, what: &str) -> std::io::Result<usize> {
     let mut c = Counter(0);
-    serde_json::to_writer_pretty(&mut c, value)
-        .map_err(|e| std::io::Error::other(format!("serialise {what}: {e}")))?;
+    serialize_pretty_to(&mut c, value, what)?;
     Ok(c.0)
 }
 
@@ -498,8 +530,7 @@ pub fn write_json_gz(
             file,
             flate2::Compression::default(),
         ));
-        serde_json::to_writer_pretty(&mut w, value)
-            .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
+        serialize_pretty_to(&mut w, value, rel)?;
         // `into_inner` flushes the buffer and hands the encoder back; it is where
         // the last partial buffer reaches the encoder.
         let enc = w
@@ -514,8 +545,7 @@ pub fn write_json_gz(
         enc.finish()?;
     } else {
         let mut w = std::io::BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut w, value)
-            .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
+        serialize_pretty_to(&mut w, value, rel)?;
         std::io::Write::flush(&mut w)?;
     }
     Ok(path)
@@ -564,8 +594,7 @@ pub fn write_json_gz_counted(
     let _cleanup = RemoveOnDrop(tmp_path.clone());
     {
         let mut w = std::io::BufWriter::new(tmp);
-        serde_json::to_writer_pretty(&mut w, value)
-            .map_err(|e| std::io::Error::other(format!("serialise {rel_plain}: {e}")))?;
+        serialize_pretty_to(&mut w, value, rel_plain)?;
         std::io::Write::flush(&mut w)?;
     }
     let count = std::fs::metadata(&tmp_path)?.len() as usize;
@@ -578,12 +607,7 @@ pub fn write_json_gz_counted(
     let final_path = root.join(&rel);
     let mut reader = std::fs::File::open(&tmp_path)?;
     if gzipped {
-        let mut enc = flate2::write::GzEncoder::new(
-            std::fs::File::create(&final_path)?,
-            flate2::Compression::default(),
-        );
-        std::io::copy(&mut reader, &mut enc)?;
-        enc.finish()?;
+        gzip_from_reader(&mut reader, std::fs::File::create(&final_path)?)?;
     } else {
         let mut out = std::io::BufWriter::new(std::fs::File::create(&final_path)?);
         std::io::copy(&mut reader, &mut out)?;
