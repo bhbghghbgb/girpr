@@ -19,7 +19,7 @@ workspace = true
 clap = ["dep:clap"]
 
 [dependencies]
-clap = { version = "4.6.9", features = ["derive"], optional = true }
+clap = { version = "4.6.10", features = ["derive"], optional = true }
 # Owns the region id spellings once: `Display`, iteration and the const
 # `as_str` seam all come from the same `serialize` attributes. No serde.
 strum = { version = "0.28.0", features = ["derive"] }

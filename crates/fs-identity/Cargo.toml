@@ -22,7 +22,7 @@ same-file = "1.0.6"
 [dev-dependencies]
 # Test scratch directories get a random name and cleanup in Drop from tempfile;
 # this leaf still depends on nothing but the identity facts it tests.
-tempfile = "3.27"
+tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 # std does not expose a file's link count or stable identity on Windows

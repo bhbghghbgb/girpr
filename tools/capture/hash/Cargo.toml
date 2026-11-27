@@ -37,7 +37,7 @@ md-5 = "0.11.0"
 # Bounded zstd decode and streaming measurement. This crate is the sole owner
 # of zstd for gircap's production path, so an edit to emit/blobs/manifest leaves
 # this crate and the native zstd tree cached.
-zstd = "0.14.4"
+zstd = "0.14.5"
 # The gzip rule's reference/reader path; the streaming writer stays in gircap's
 # emit module. It owns no program policy here.
 flate2 = "1.1.11"

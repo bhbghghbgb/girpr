@@ -30,7 +30,7 @@ girpr-retry = { path = "../../../crates/retry" }
 girpr-digest = { path = "../../../crates/digest" }
 # The zero-copy chunk type reqwest yields. Naming it directly lets the transport
 # hand body bytes to the sinks without copying every chunk into a fresh `Vec`.
-bytes = "1.12"
+bytes = "1.12.2"
 # The transport, the client and header maps. This crate is now the sole owner of
 # reqwest for gircap: the parent package used to take a direct reqwest dep only
 # for `config::validate_base`'s `Url`, which parses with the `url` crate itself.
@@ -45,7 +45,7 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 # in completion order. `futures-util` is already a transitive dependency.
 futures = "0.3.34"
 # Derive `Display`/`Error` for `ApiError` without changing its format strings.
-thiserror = "2"
+thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"
 # The millisecond RFC 3339 spelling in the request log is a named format in the

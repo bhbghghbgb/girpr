@@ -27,10 +27,10 @@ use std::path::Path;
 /// need not exist — the path is stored in the reparse point, which is exactly
 /// the dangling case one of the callers needs.
 ///
-/// An error keeps its raw OS code, so [`junction_skip_reason`] can still tell a
-/// proven host refusal from a broken fixture. An existing link path, for
-/// example, is reported as `AlreadyExists`, not as a refusal, and fails the
-/// case instead of skipping it.
+/// An error keeps its raw OS code, so the private `junction_skip_reason`
+/// classifier can still tell a proven host refusal from a broken fixture.
+/// An existing link path, for example, is reported as `AlreadyExists`, not as
+/// a refusal, and fails the case instead of skipping it.
 pub fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     junction::create(target, link)
 }

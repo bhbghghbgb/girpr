@@ -63,7 +63,7 @@ expect_used = "warn"
 workspace = true
 
 [dependencies]
-clap = { version = "4.6.9", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 # The log-file and log-level policy, shared with the two dev tools so that
 # `--log-file`, the env vars and the default levels mean the same thing in
 # all three.
@@ -203,7 +203,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 # copy fallback): a temp file in the target's directory whose `persist()` is an
 # atomic rename (MoveFileEx + MOVEFILE_REPLACE_EXISTING on Windows). The resume
 # `_tmp` files are deliberately not built on this - see the file writer.
-tempfile = "3.27"
+tempfile = "3.27.0"
 
 [dev-dependencies]
 # Process-level CLI assertions capture stdout, stderr and the exit code and
@@ -274,7 +274,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "toki
 # the production paths do their prost/zstd work in `girpr-fetch`. The root's
 # canned manifest bodies are frozen bytes in manifest.rs, so this crate needs
 # no direct prost dependency.
-zstd = "0.14.4"
+zstd = "0.14.5"
 
 # Debug/test builds are link-bound on low-core HDD hosts: the default of 256
 # codegen units produces hundreds of object files per crate for the linker to

@@ -31,7 +31,7 @@ girpr-fs-names = { path = "../../crates/fs-names" }
 # decisions stay here; the leaf owns only the shape checks and their order.
 girpr-path-shape = { path = "../../crates/path-shape" }
 # Temp-sibling-then-rename publishing for every artifact the product writes.
-tempfile = "3.27"
+tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 # The junction fixture delegates the reparse-point mechanics to this crate.

@@ -137,10 +137,10 @@ gircap-http = { path = "http" }
 # gzip threshold flag, the report bytes and every call site here; it depends on
 # no program crate and invokes no binary (docs/00-spec.md §2).
 gircap-hash = { path = "hash" }
-clap = { version = "4.6.9", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 # Derive `Display`/`Error` for the three error types instead of hand-writing
 # them; the format strings are unchanged. Already in the workspace lockfile.
-thiserror = "2"
+thiserror = "2.0.21"
 # The clamped exponential retry schedule and the sleep hook both come from the
 # leaf; gircap passes `0.0` jitter so capture artifacts stay byte-stable and
 # diffable, and keeps its own side-effectful attempt loop local.
@@ -280,7 +280,7 @@ serde_json = "1.0.154"
 # Only the unit/integration tests build zstd frames to feed the decode helpers.
 # Production zstd lives in `gircap-hash`, which gircap depends on directly, so
 # this native tree is not rebuilt when emit/blobs/manifest change.
-zstd = "0.14.4"
+zstd = "0.14.5"
 # The self-contained offline capture mock and fixture builders, reached through
 # the thin `tests/common/mod.rs` shim so they compile once for all integration
 # binaries. A gircap-only dev library: it depends on this package's public

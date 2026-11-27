@@ -17,4 +17,4 @@ workspace = true
 # usage error. No exit table, no exit code of any program and no process
 # boundary live here: the caller passes in its own usage code and keeps its own
 # way of turning the result into a process status.
-clap = "4.6.9"
+clap = "4.6.10"

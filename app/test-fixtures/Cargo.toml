@@ -45,7 +45,7 @@ prost = "0.14.6"
 # in-workspace dependency rather than going through the product facade.
 girpr-proto = { path = "../../crates/proto" }
 # Manifests and chunk payloads are zstd frames on the wire.
-zstd = "0.14.4"
+zstd = "0.14.5"
 # The mock is a small accept loop on an ephemeral loopback port. `rt` runs the
 # spawned task, `net`/`io-util` serve the socket and `sync` holds the watch the
 # branch/config ordering seam uses.

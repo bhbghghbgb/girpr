@@ -18,7 +18,7 @@ workspace = true
 # `rsa` needs `pkcs1v15` for both the metadata master key and the dispatcher
 # response — the default features alone do not enable decryption.
 rsa = { version = "0.10.0", features = ["pkcs1v15"] }
-brotli = "9.0.0"
+brotli = "9.1.3"
 base64 = "0.23.1"
 prost = "0.14.6"
 # The dispatcher key arrives as .NET `RSAKeyValue` XML; the `serialize`

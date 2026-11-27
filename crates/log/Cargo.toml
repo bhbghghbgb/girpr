@@ -36,7 +36,7 @@ test-support-async = ["test-support", "dep:tokio"]
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }
 # Only the install tests scratch a directory; tempfile supplies the random name
 # and removes the tree when the guard drops.
-tempfile = "3.27"
+tempfile = "3.27.0"
 
 [dependencies]
 # The one compact stamp in a default log file name. The format lives in the

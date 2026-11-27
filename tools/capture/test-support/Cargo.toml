@@ -53,7 +53,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "toki
 # shutdown signal on its own current-thread runtime.
 tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "sync"] }
 # Chunk and manifest bodies are zstd frames on the wire.
-zstd = "0.14.4"
+zstd = "0.14.5"
 # 64-bit FNV-1a for the shared bundle cache key; only change detection matters.
 fnv = "1.0.7"
 # Recursive source/bundle discovery with deterministic per-directory ordering.

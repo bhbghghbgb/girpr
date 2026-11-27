@@ -24,7 +24,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.105"
-clap = { version = "4.6.9", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # The JSON boundary spells digests as hex; this is the same crate the shared
@@ -32,7 +32,7 @@ serde_json = "1.0.154"
 hex = "0.4.3"
 # The import writes into a random sibling of the destination and publishes the
 # whole cache in one rename, so a failed import leaves the old cache intact.
-tempfile = "3.27"
+tempfile = "3.27.0"
 # The clap-error to usage-code mapping, shared with girsync. The
 # leaf decides only help/version -> 0; this binary owns its failure code.
 girpr-cli = { path = "../../../crates/cli" }

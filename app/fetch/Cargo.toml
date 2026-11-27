@@ -38,7 +38,7 @@ percent-encoding = "2.3.2"
 # a client-wide total timeout would abort large streamed bodies instead.
 tokio = { version = "1.54.1", default-features = false, features = ["time"] }
 prost = "0.14.6"
-zstd = "0.14.4"
+zstd = "0.14.5"
 # `StreamExt` combinators and the `Stream` trait the chunk sink is driven with.
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 tracing = "0.1.44"
@@ -62,7 +62,7 @@ girpr-dispatch = { path = "../dispatch" }
 girpr-persistent-plan = { path = "../persistent-plan" }
 girpr-util-hash = { path = "../util-hash" }
 # The downloader writes a verified body to a temp sibling before publishing it.
-tempfile = "3.27"
+tempfile = "3.27.0"
 # The clean-rel spelling used to key the local reuse map. It is a path leaf,
 # not the config writer, so an ini edit leaves this fetch tree cached.
 girpr-util-path = { path = "../util-path" }
