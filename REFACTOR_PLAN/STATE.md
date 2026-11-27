@@ -79,11 +79,11 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | declined |
 | F20 | T11 | Add an injectable seam to force a `set_permissions` failure so the `SetFailed` warning branches can be covered directly. | done |
 | F21 | T11 | Consider relocating the `clear_readonly` leaf to a `std`-only crate; `girpr-util-path` carries dependencies the mutation needs none of. | declined |
-| F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | accepted (B1) |
+| F22 | CP3 | Update the README shared-leaf table for `app/util-io`, `util-path::readonly` and the whole-file gate (the util-counter row was updated in T08). | done |
 | F23 | T10 | A truncated in-file copy now reports the leaf wording ("in-file copy ended after X of Y bytes") instead of `read_exact`'s message; still a hard error and no contract pins the string. | declined |
-| F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | accepted (B1) |
+| F24 | T12 | Add a `girpr-request-url` row to the README shared-leaf table (same class as F22). | done |
 | F25 | T12 | Consider a policy-parameterized HYP URL seam to unify fetch's and capture's HYP builders; deliberately not done because girpr's hardcoded/unencoded language spelling and capture's `needs_channel`/override policy are call-site contracts. | declined |
-| F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | accepted (B1) |
+| F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | done |
 | F27 | T13 | Consider relocating the pure `game_version_from_text` scan into a logic-free leaf so gircap no longer depends on an `app/` crate that also owns the repair config writer. | declined |
 | F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | declined |
 | F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | declined |
@@ -100,7 +100,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F40 | T17 | Consider an explicit `AnsiChoice` enum instead of `Option<bool>` if another program needs "formatter default" semantics. | declined |
 | F41 | T17 | If a third file format appears, a caller-supplied formatter factory would avoid another cfg-gated enum arm in the shared function. | declined |
 | F42 | T17 | `CaptureBuffer` and internal `SharedBytes` remain two byte sinks by design (public feature surface vs crate-private helper); revisit only if the feature surface is intentionally changed. | declined |
-| F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | accepted (B1) |
+| F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | done |
 | F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | declined |
 | F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | declined |
 | F46 | T19 | Production still spells `CACHE_PREFIX`/`has_cache_prefix`/`is_cache_name` itself; adopting the new leaf there was deferred under the tests-only guardrail — worth a dedicated task so the prefix has one home. | done |
@@ -110,9 +110,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F50 | T20 | CAP-15 raw-scripted reply mode deferred: the three raw-socket servers have deliberately different policies; a dedicated task could add a parameterized raw-reply helper and migrate only the malformed shape. | declined |
 | F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | declined |
 | F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | declined |
-| F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | accepted (B1) |
+| F53 | CP7 | Add README shared-leaf table rows for `girpr-cache-names`, `girpr-test-http` and report-core's `test_support` scanner (same class as F22/F24/F26). | done |
 | F54 | T19 | `entry_names_with` uses `filter_map(e.ok())` where the retired local copies used `e.unwrap()`; unreadable entries are now silently skipped — decide whether strictness should be preserved. | done |
-| F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | accepted (B1) |
+| F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | done |
 | F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | declined |
 | F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | declined |
 | F58 | T22 | `bounded_store` is a public module of `gircap-http` solely because two crates need it; reconsider a dedicated gircap-owned mechanics crate if a fourth store appears. | declined |
@@ -120,7 +120,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F60 | T22 | `gzip_from_reader` has one production caller; leave it until a second file-backed gzip path appears rather than changing a driver's measured behaviour. | declined |
 | F61 | T21 | The shared number decoder trims whitespace on string-encoded numbers whereas serde-aux did not — a relaxation; no current field exercises it. Decide whether to pin the stricter behavior. | declined |
 | F62 | T21 | Capture's `Wrapper<T>` alias field `message` changed from `String` to `Option<String>`; no consumer reads it, but it is a public surface change worth an explicit decision. | declined |
-| F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | accepted (B1) |
+| F63 | T23 | Add a `girsync-leaves::heartbeat` row to the README shared-leaf table (same class as F22/F24/F26/F53/F55). | done |
 | F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | declined |
 | F65 | T24 | Decide whether the two `tests/scripts/io-profile/*` helper crates (edition 2021, outside the workspace, own `redb` pin) should join inheritance; deliberately left untouched. | declined |
 | F66 | T24 | Path dependencies remain local (versionless, with call-site comments); centralizing them in `[workspace.dependencies]` is a separate decision. | declined |
@@ -190,3 +190,5 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - B5 done: F20 kept in review; test-only thread-local `set_permissions` failure guard covers SetFailed at the leaf and all three callers; warning/error wording unchanged.
 - B6 done: F46 kept in review; production now uses `girpr-cache-names`; prefix spelling and Windows case fold byte-identical; only two expected Cargo.lock edges added.
 - B7 done: F54 (triaged defect) kept in review; `entry_names_with` restores `unwrap()` fail-loud behavior; workspace 2370 passed / 8 skipped.
+- B1 done: F22/F24/F26/F43/F53/F55/F63 kept in review; root README inventory and report-core description updated; no plan/report references in permanent docs.
+- All 7 accepted batches are complete; no follow-up remains active. Final step: verify no plan/report references, then delete the temporary planning package.
