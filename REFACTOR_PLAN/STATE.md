@@ -72,7 +72,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 | F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | declined |
 | F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | declined |
 | F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | declined |
-| F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | accepted (B4) |
+| F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | done |
 | F16 | T09 | Consider relocating the pure whole-file gate to a lower crate; `app/persistent-plan` now depends on `girpr-chunk-verify` (transitively proto/util-hash) for a gate that needs only `std`. | declined |
 | F17 | T10 | `ChunkFileSink::write` in `temp.rs` is a decoder-fed sink, not a loop; its per-piece ceiling charge stayed local — a shared charge helper would touch the `sophon::ChunkSink` seam and retry/refund tests. | declined |
 | F18 | T10 | Consider relocating `read_up_to`/`reserve_exact` into `util-io` to make the leaf dependency-free (currently `util-io` depends on `util-hash` for one read); moves a public primitive between crates. | declined |
@@ -186,3 +186,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - F59 was omitted from the triage's declined list; declined by the orchestrator by analogy with F60 (unifying the count-first driver needs fresh performance/byte-equality validation, no current need).
 - B2 done: F31 kept in review; `tempfile` moved to dev-dependencies, lockfile unchanged, 464 tests passed.
 - B3 done: F01 kept in review; all named clamp sites now use chunk-cost primitives except those already folded or deliberately not clamps; workspace 2366 passed / 8 skipped.
+- B4 done: F15 kept in review; `promote_tmp` routes through `verify_whole_file` with delete-and-bail and all published strings unchanged; workspace 2366 passed / 8 skipped.
