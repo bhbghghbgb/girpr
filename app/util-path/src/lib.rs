@@ -10,8 +10,11 @@
 //!   clear → set_permissions sequence for one file, with the error policy left
 //!   to the caller.
 //!
-//! The re-exports keep the shared names at the crate root. Nothing here names
-//! a product data model: the crate holds only mechanics.
+//! The re-exports keep the shared names at the crate root. Callers that already
+//! depend on this crate can reach the name-mechanics primitives without taking
+//! a direct edge to the lower leaf; the policy arguments stay at their call
+//! sites. Nothing here names a product data model: the crate holds only
+//! mechanics.
 //!
 //! The junction and symlink fixtures and the refusal seam live here too because
 //! the containment tests are their only users besides the config.ini writer.
@@ -36,6 +39,10 @@ pub mod symlink_support;
 pub use self::path::{
     FileLen, MetadataFact, PathRoot, classify_metadata, clean_rel, contained_join, file_len,
 };
+// The fold and separator mechanics are shared with `persistent-plan`, which
+// already depends on this crate. It passes its own policy flag, so the "when"
+// decision stays there.
+pub use girpr_fs_names::{fold_ascii_case, forward_slash};
 
 /// Test-only helpers shared with the product's test seam.
 ///

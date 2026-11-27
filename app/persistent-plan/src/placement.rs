@@ -51,7 +51,9 @@ pub enum ForceDecision {
 /// whether girpr runs on Windows or elsewhere (unlike `util-path::path_key`,
 /// which folds only on Windows for filesystem identity).
 pub fn rel_key(rel: &str) -> String {
-    rel.to_ascii_lowercase()
+    // The leaf owns the ASCII-fold mechanic; this call site owns the policy:
+    // game paths are Windows paths, so fold on every host.
+    girpr_util_path::fold_ascii_case(rel, true)
 }
 
 /// The three-way force rule over one base MD5 (case-insensitive compare).
@@ -166,7 +168,7 @@ pub fn asset_urls(
     if prefix_primary.is_empty() || prefix_alternate.is_empty() {
         return Err(PlanError::MissingValue("client CDN prefix"));
     }
-    let name = remote_name.replace('\\', "/");
+    let name = girpr_util_path::forward_slash(remote_name, true);
     let build = |prefix: &str| -> Result<String> {
         // `remoteName` uses backslashes; folding them into '/' here lets the
         // leaf's path-segment API own separators and escaping. A trailing slash

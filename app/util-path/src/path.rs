@@ -128,7 +128,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// girpr's rule: the full reserved set (including `CLOCK$`) with trailing
 /// dot/space stripped before comparing. The shared validator owns the shape
 /// checks and their order; this is this program's device rule.
-const DEVICE_NAMES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];
+const DEVICE_NAMES: &[&str] = girpr_fs_names::DEVICE_NAMES_TRIMMING;
 
 /// Validate a server-controlled rel and return the cleaned `/`-spelled form.
 ///

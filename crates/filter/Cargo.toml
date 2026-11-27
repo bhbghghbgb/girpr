@@ -18,3 +18,7 @@ workspace = true
 globset = "0.4.22"
 # Compile-time reporting of the offending user-written glob.
 anyhow = "1.0.105"
+# The backslash→slash spelling is the shared name mechanic. The `Cow` shape is
+# this crate's contract — an escaped glob stays borrowed — so only the owned
+# arm goes through the helper.
+girpr-fs-names = { path = "../fs-names" }

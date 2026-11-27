@@ -236,7 +236,7 @@ pub fn rfile(root: &Path, rel: &str) -> Vec<u8> {
 /// Write `bytes` to `root/rel`, treating `/` in `rel` as the host separator and
 /// creating any missing parent directories.
 pub fn write_game_file(root: &Path, rel: &str, bytes: &[u8]) {
-    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let rel_fs = girpr_fs_names::native_separator(rel, true);
     let p = root.join(rel_fs);
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
@@ -246,7 +246,7 @@ pub fn write_game_file(root: &Path, rel: &str, bytes: &[u8]) {
 
 /// Read `root/rel`, treating `/` in `rel` as the host separator.
 pub fn read_game_file(root: &Path, rel: &str) -> Option<Vec<u8>> {
-    let rel_fs = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let rel_fs = girpr_fs_names::native_separator(rel, true);
     std::fs::read(root.join(rel_fs)).ok()
 }
 

@@ -493,7 +493,7 @@ fn join(game_dir: &Path, rel: &str) -> anyhow::Result<PathBuf> {
 
 fn rel_from(game_dir: &Path, path: &Path) -> anyhow::Result<String> {
     let rel = path.strip_prefix(game_dir)?;
-    let rel = rel.to_string_lossy().replace('\\', "/");
+    let rel = girpr_fs_names::forward_slash(&rel.to_string_lossy(), true);
     util::clean_rel(&rel)
 }
 

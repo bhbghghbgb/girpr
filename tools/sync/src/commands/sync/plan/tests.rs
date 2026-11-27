@@ -533,8 +533,8 @@ fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
 fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
     // `cmd` reads a `/` in an argument as a switch; `Path::join("a/b")`
     // keeps the separator as written, so normalize before handing it over.
-    let link = link.to_string_lossy().replace('/', "\\");
-    let target = target.to_string_lossy().replace('/', "\\");
+    let link = girpr_fs_names::native_separator(&link.to_string_lossy(), true);
+    let target = girpr_fs_names::native_separator(&target.to_string_lossy(), true);
     let out = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(link)

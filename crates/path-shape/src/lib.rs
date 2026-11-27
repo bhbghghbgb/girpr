@@ -185,11 +185,7 @@ pub fn validate(value: &str, policy: &ShapePolicy<'_>) -> Result<String, ShapePr
 #[cfg(test)]
 mod tests {
     use super::{Normalization, ShapePolicy, ShapeProblem, validate};
-
-    // girpr's rule: the full set, including `CLOCK$`, with trailing trim.
-    const TRIMMING: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];
-    // gircap's rule: the set without `CLOCK$`, compared on the raw stem.
-    const RAW: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    use girpr_fs_names::{DEVICE_NAMES_RAW as RAW, DEVICE_NAMES_TRIMMING as TRIMMING};
 
     fn strict() -> ShapePolicy<'static> {
         ShapePolicy {

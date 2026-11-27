@@ -67,7 +67,7 @@ pub fn logical_path_rule(value: &str) -> Option<(&'static str, String)> {
 /// gircap's path rule: no `CLOCK$`, and the raw stem is compared without the
 /// trailing-dot/space trim the repair binary applies. The shared validator owns
 /// the shape checks and their order; these parameters are this tool's rule.
-const DEVICE_NAMES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+const DEVICE_NAMES: &[&str] = girpr_fs_names::DEVICE_NAMES_RAW;
 
 fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> {
     let policy = girpr_path_shape::ShapePolicy {

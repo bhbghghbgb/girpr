@@ -81,7 +81,7 @@ pub fn compile(list: &[String], backslash: Backslash) -> Result<Vec<Compiled>> {
     list.iter()
         .map(|s| {
             let normalized: Cow<'_, str> = match backslash {
-                Backslash::Separator => Cow::Owned(s.replace('\\', "/")),
+                Backslash::Separator => Cow::Owned(girpr_fs_names::forward_slash(s, true)),
                 Backslash::Escape => Cow::Borrowed(s.as_str()),
             };
             let build = |case_sensitive: bool, subtree: bool| -> Result<GlobSet> {

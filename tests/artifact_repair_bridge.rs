@@ -187,7 +187,7 @@ fn gircap_list(root: &Path) -> Option<Vec<PathBuf>> {
             let rel = tail.split_whitespace().next()?;
             // `gircap list` reports `/`-separated paths on every platform;
             // normalize so a printed bundle path does not mix separators.
-            Some(root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            Some(root.join(girpr_fs_names::native_separator(rel, true)))
         })
         .collect();
     found.sort();

@@ -21,6 +21,9 @@ strip-ansi-escapes = "0.2.1"
 # out. tempfile owns the created directories; this crate stays a thin policy
 # wrapper around the shared root and the recognizable name prefix.
 tempfile = "3.27.0"
+# The game-tree fixture helpers spell `/`-separated rels with the host
+# separator. The rewrite is the shared name mechanic rather than a fourth copy.
+girpr-fs-names = { path = "../fs-names" }
 # Deliberately no dependency on girsync (or serde_json): the girsync-coupled
 # option/cache/planner fixtures used to live in `test_support`, which made every
 # program that took this crate as a dev-dependency inherit girsync's rebuilds.

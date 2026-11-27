@@ -12,10 +12,12 @@
 //!
 //! The device-name check splits off the extension, optionally trims, compares
 //! case-insensitively against a caller-supplied set, and applies the
-//! `COM1`–`COM9` / `LPT1`–`LPT9` suffix pattern. The trailing-dot/space check is
-//! host-independent and needs no policy argument. The case-fold and
-//! forward-slash checks take a boolean for the host's rule. None of the four
-//! holds a program's policy.
+//! `COM1`–`COM9` / `LPT1`–`LPT9` suffix pattern. The two sets the programs use
+//! are named here ([`DEVICE_NAMES_TRIMMING`] and [`DEVICE_NAMES_RAW`]) so the
+//! copies do not drift; which one to use, and whether to trim, stays at the
+//! call site. The trailing-dot/space check is host-independent and needs no
+//! policy argument. The case-fold and separator checks take a boolean for the
+//! caller's rule. None of them holds a program's policy.
 //!
 //! In addition to those name predicates, [`canonical_no_verbatim`] is the one
 //! canonical-path spelling shared by the tools: it resolves links but strips
@@ -37,6 +39,21 @@
 pub fn canonical_no_verbatim(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     dunce::canonicalize(path)
 }
+
+/// girpr's reserved set: the full list, including `CLOCK$`.
+///
+/// Paired with `trim_trailing_dot_or_space = true` by the repair binary and
+/// its path-shape validator. The set is only data; the trim decision is
+/// passed separately to [`is_reserved_device_name`].
+pub const DEVICE_NAMES_TRIMMING: &[&str] =
+    &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];
+
+/// gircap's reserved set: the list without `CLOCK$`.
+///
+/// Paired with `trim_trailing_dot_or_space = false` by the capture tool and
+/// its strict path-shape validator. `CLOCK$` and a trailing space in the stem
+/// are ordinary names under that rule.
+pub const DEVICE_NAMES_RAW: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
 
 /// Is one path component a reserved Windows device name under the supplied rule?
 ///
@@ -123,11 +140,25 @@ pub fn forward_slash(value: &str, rewrite_backslash: bool) -> String {
     }
 }
 
+/// Spell `value` with the host's separator, rewriting `/` when asked.
+///
+/// The inverse of [`forward_slash`]: a `/`-separated rel is turned into a
+/// path the host will open when `rewrite_forward_slash` is set. On a host
+/// whose separator is `/` the rewrite is a no-op copy. The caller decides
+/// whether the spelling needs rewriting; this crate never reads `cfg!`.
+pub fn native_separator(value: &str, rewrite_forward_slash: bool) -> String {
+    if rewrite_forward_slash {
+        value.replace('/', std::path::MAIN_SEPARATOR_STR)
+    } else {
+        value.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_no_verbatim, fold_ascii_case, forward_slash, has_trailing_dot_or_space,
-        is_reserved_device_name,
+        DEVICE_NAMES_RAW, DEVICE_NAMES_TRIMMING, canonical_no_verbatim, fold_ascii_case,
+        forward_slash, has_trailing_dot_or_space, is_reserved_device_name, native_separator,
     };
 
     #[test]
@@ -150,11 +181,6 @@ mod tests {
             dunce::canonicalize(std::env::temp_dir()).expect("temp dir resolves")
         );
     }
-
-    // girpr's rule: the full set, including CLOCK$, with trailing trim.
-    const TRIMMING_SET: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"];
-    // gircap's rule: the set without CLOCK$, compared on the raw stem.
-    const RAW_SET: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
 
     /// The five pure policy cases, folded into one process so nextest spawns one
     /// test instead of five. Every original assertion and message is kept; a
@@ -183,13 +209,13 @@ mod tests {
                         "NUL.",
                     ] {
                         assert!(
-                            is_reserved_device_name(name, TRIMMING_SET, true),
+                            is_reserved_device_name(name, DEVICE_NAMES_TRIMMING, true),
                             "{name:?} must be reserved by the trimming rule"
                         );
                     }
                     for name in ["conifer.dat", "nullable.bin", "com10.dat", "lpt", "COM0"] {
                         assert!(
-                            !is_reserved_device_name(name, TRIMMING_SET, true),
+                            !is_reserved_device_name(name, DEVICE_NAMES_TRIMMING, true),
                             "{name:?} must be ordinary under the trimming rule"
                         );
                     }
@@ -211,7 +237,7 @@ mod tests {
                         "LPT3",
                     ] {
                         assert!(
-                            is_reserved_device_name(name, RAW_SET, false),
+                            is_reserved_device_name(name, DEVICE_NAMES_RAW, false),
                             "{name:?} must be reserved by the raw rule"
                         );
                     }
@@ -229,7 +255,7 @@ mod tests {
                         ".con",
                     ] {
                         assert!(
-                            !is_reserved_device_name(name, RAW_SET, false),
+                            !is_reserved_device_name(name, DEVICE_NAMES_RAW, false),
                             "{name:?} must be ordinary under the raw rule"
                         );
                     }
@@ -264,6 +290,20 @@ mod tests {
                 // literal character.
                 assert_eq!(forward_slash("\\lead.txt", true), "/lead.txt");
                 assert_eq!(forward_slash("\\lead.txt", false), "\\lead.txt");
+            }),
+            ("native_separator_is_the_inverse_rewrite", &|| {
+                let sep = std::path::MAIN_SEPARATOR_STR;
+                assert_eq!(
+                    native_separator("dir/sub/f.txt", true),
+                    format!("dir{sep}sub{sep}f.txt")
+                );
+                assert_eq!(native_separator("dir/sub/f.txt", false), "dir/sub/f.txt");
+                // The two rewrites compose back to the caller's spelling on
+                // the host the caller is rewriting for.
+                assert_eq!(
+                    forward_slash(&native_separator("dir/sub/f.txt", true), true),
+                    "dir/sub/f.txt"
+                );
             }),
         ];
         for (label, run) in subcases {

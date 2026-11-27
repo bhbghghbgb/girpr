@@ -1326,6 +1326,7 @@ name = "girpr-filter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "girpr-fs-names",
  "globset",
 ]
 
@@ -1496,6 +1497,7 @@ dependencies = [
 name = "girpr-tempdir"
 version = "0.1.0"
 dependencies = [
+ "girpr-fs-names",
  "junction",
  "strip-ansi-escapes",
  "tempfile",

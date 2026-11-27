@@ -543,7 +543,9 @@ mod tests {
             // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
             // a target like `dst/sub` would fail with "Invalid switch". std
             // accepts either separator on Windows, so hand it native ones.
-            let native = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
+            let native = |p: &Path| {
+                PathBuf::from(girpr_fs_names::native_separator(&p.to_string_lossy(), true))
+            };
             let created = std::process::Command::new("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(native(link))
