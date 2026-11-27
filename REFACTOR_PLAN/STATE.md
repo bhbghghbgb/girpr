@@ -16,7 +16,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T02 | `tasks/T02-chunk-layout.md` | completed | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | CP1 kept |
 | T03 | `tasks/T03-xxh64-hex-boundary.md` | completed | 4 commits: digest XXH64 conversions; persistent-plan/fetch adoption; cache-json hex wrappers; chunk-identity normalize_hex re-export | CP1 kept |
 | T04 | `tasks/T04-digest-internals.md` | completed | 3 commits: restartable sink unification; Md5/Sha256 templating; shared buffered hash/copy loop | CP1 kept |
-| T05 | `tasks/T05-retryable-status.md` | todo | — | |
+| T05 | `tasks/T05-retryable-status.md` | pending review | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | resolves T06 dependency |
 | T06 | `tasks/T06-async-retry-driver.md` | todo | — | depends on T05 |
 | T07 | `tasks/T07-bounded-join.md` | todo | — | |
 | T08 | `tasks/T08-ledger-cas-helpers.md` | todo | — | |
@@ -62,6 +62,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F03 | T02 | Give capture's A11 `Layout::of` a typed-problem adapter: adjacent-previous diagnostic semantics differ from the coverage cursor and its strings are published in `verify/selfcheck.json`, so it stayed local by contract. | proposed |
 | F04 | T02 | Decide explicitly what an unrepresentable signed chunk end means for tiling; the fold clamps at `i64::MAX` (matching capture's old behaviour) and plan-time validation rejects those ranges before layout. | proposed |
 | F05 | T04 | Evaluate composing `tools/capture/hash`'s `HashingFile::write` with the shared sink while keeping write-before-hash ordering at the call site. | proposed |
+| F06 | T05 | Optionally collapse the thin delegating wrappers (`fetch::retryable`, `RetryPolicy::should_retry_status`) into direct `girpr_retry::should_retry_status` calls; kept local to preserve the published `http` module surface and test seams. | proposed |
 
 ## Persistent context
 
@@ -79,3 +80,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T04 implemented and validated; `Sha256::try_parse_hex` is additive and public paths are unchanged.
 - CP1 done: T01–T04 kept; the T01 unused `saturating_nonneg_sum` import was scoped to the test module in review. Follow-ups F01/F03/F04/F05 remain open.
 - CP1 minor observations, no action taken: a redundant `RangeProblem::NegativeOffset` match arm in `manifest/proto.rs`; `hash_file_with_buf` opens the file before the leaf's empty-buffer check, so an empty-buffer-plus-missing-file error reports the open failure.
+- T05 finding: the report's out-of-range-u16 discrepancy claim does not hold in this tree (http 1.5.0 `from_u16` accepts 100..=999 and `is_server_error` is 500..600); the shared 500..=599 rule preserves prior behavior exactly.
