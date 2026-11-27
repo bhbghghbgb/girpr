@@ -18,6 +18,7 @@
 use std::time::SystemTime;
 
 use anyhow::Result;
+use girpr_chunk_cost::nonneg;
 use girpr_proto::SophonChunk;
 use girpr_util_hash::{Md5, Scan, ScanRange};
 
@@ -66,8 +67,8 @@ pub fn scan_ranges<'a>(
         .iter()
         .map(|c| {
             (
-                c.offset.max(0) as u64,
-                c.uncompressed_size.max(0) as u64,
+                nonneg(c.offset),
+                nonneg(c.uncompressed_size),
                 c.uncompressed_md5.as_str(),
             )
         })
@@ -79,7 +80,7 @@ pub fn scan_ranges<'a>(
         source_owner.push(i);
         source_ranges.push((
             *offset,
-            c.uncompressed_size.max(0) as u64,
+            nonneg(c.uncompressed_size),
             c.uncompressed_md5.as_str(),
         ));
     }

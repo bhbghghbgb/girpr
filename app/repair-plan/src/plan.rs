@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use girpr_chunk_cost::projected_download_bytes;
+use girpr_chunk_cost::{checked_end, nonneg, projected_download_bytes};
 use girpr_fetch::sophon::{FileReuse, SophonChunk, SophonChunkFile};
 use girpr_util_path as util;
 use girpr_util_path::path::path_key;
@@ -60,7 +60,7 @@ impl PlannedFile {
     /// ranges are sorted here, so a caller that builds a `PlannedFile` by
     /// hand gets the same verdict as one that came out of `build_plan`.
     pub fn layout(&self) -> Layout {
-        let size = self.size.max(0) as u64;
+        let size = nonneg(self.size);
         let mut out = Layout {
             tiled: true,
             ..Default::default()
@@ -116,7 +116,7 @@ impl PlannedFile {
     /// chunks dropped — and gives the same answer as `layout().tiled` for
     /// that order.
     pub(crate) fn is_tiled(&self) -> bool {
-        let size = self.size.max(0) as u64;
+        let size = nonneg(self.size);
         let mut cursor = 0u64;
         for c in &self.chunks {
             // Same rule as `layout()`: a negative offset or size is not a
@@ -130,7 +130,7 @@ impl PlannedFile {
             if offset != cursor {
                 return false;
             }
-            cursor = cursor.saturating_add(c.uncompressed_size as u64);
+            cursor = cursor.saturating_add(nonneg(c.uncompressed_size));
         }
         cursor == size
     }
@@ -381,7 +381,7 @@ pub fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
                 c.uncompressed_size
             );
         }
-        let end = c.offset.checked_add(c.uncompressed_size).ok_or_else(|| {
+        let end = checked_end(c.offset, c.uncompressed_size).ok_or_else(|| {
             anyhow::anyhow!(
                 "chunk {} range overflows: {} + {}",
                 c.id,
@@ -389,7 +389,7 @@ pub fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
                 c.uncompressed_size
             )
         })?;
-        if end as u64 > file_size {
+        if end > file_size {
             anyhow::bail!(
                 "chunk {} ends at {end}, past the file's size {file_size}",
                 c.id
