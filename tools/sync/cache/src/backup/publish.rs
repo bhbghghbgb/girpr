@@ -19,6 +19,7 @@
 //! a rename, with no new advisory lock added around them.
 
 use anyhow::{Context, Result, bail};
+use girpr_util_path::atomic::ClaimedTemp;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use tracing::{info, trace, warn};
@@ -35,9 +36,10 @@ use super::super::open::{CacheHooks, Claim, PublishHooks};
 /// let alone select it.
 ///
 /// The name is in the tool's own namespace (`girpr-cache*`), so a working
-/// copy is tool state and is never mirrored as content. A working name is a
-/// [`tempfile`] name: unique by atomic creation, with the start stamp folded
-/// into the prefix so two runs still leave distinguishable scratch names.
+/// copy is tool state and is never mirrored as content. A working name is
+/// claimed with atomic creation and a random suffix, with the start stamp
+/// folded into the prefix so two runs still leave distinguishable scratch
+/// names.
 ///
 /// **No bound reclaims a working name.** The bound ranges over the published
 /// copies, and a working name is not one of them: a working name is a copy
@@ -577,10 +579,11 @@ pub(crate) const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 /// used, so a run that collides on the timestamp still leaves a
 /// recognisable sibling.
 ///
-/// Production working names now come from [`tempfile`] (see [`working_name`]),
-/// which folds the same start stamp into its prefix but gets uniqueness from
-/// a random suffix instead of this `_2`, `_3` loop. The primitive is kept for
-/// its tests, which pin the name family the tool has always published under;
+/// Production working names now come from the shared claim primitive (see
+/// [`working_name`]), which folds the same start stamp into its prefix but
+/// gets uniqueness from a random suffix instead of this `_2`, `_3` loop. The
+/// primitive is kept for its tests, which pin the name family the tool has
+/// always published under;
 /// the published name itself is still claimed by [`publish_copy`], once the
 /// copy is complete.
 #[cfg(test)]
@@ -690,22 +693,16 @@ pub(crate) fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Create a unique working name under `parent` for a copy that starts now.
 ///
 /// The start `stamp` is folded into the prefix so the name still says when the
-/// copy began, but uniqueness and atomic creation come from [`tempfile`]
-/// rather than from a hand-rolled `create_new` loop: the library retries a
-/// collision with a fresh random suffix, so two runs cannot share a working
-/// name. The returned path is kept — its removal is the publish's business,
+/// copy began, but uniqueness and atomic creation come from the shared claim
+/// primitive rather than from a hand-rolled `create_new` loop: the library
+/// retries a collision with a fresh random suffix, so two runs cannot share a
+/// working name. The returned path is kept — its removal is the publish's business,
 /// and the working-copy failure seam has to stay under the publisher's
 /// control — so no temporary object is dropped here.
 fn working_name(parent: &Path, stamp: &str) -> Result<PathBuf> {
     let prefix = format!("{WORK_PREFIX}{stamp}");
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(&prefix);
-    builder
-        .tempfile_in(parent)
-        .and_then(|file| {
-            let (_handle, path) = file.into_parts();
-            path.keep().map_err(Into::into)
-        })
+    ClaimedTemp::claim(parent, &prefix, "")
+        .and_then(ClaimedTemp::keep)
         .with_context(|| format!("create working file in {}", parent.display()))
 }
 

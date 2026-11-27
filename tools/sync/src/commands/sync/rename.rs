@@ -5,10 +5,10 @@
 //! exact keys. After this pass the diff can be taken case-sensitively.
 
 use anyhow::{Context, Result, bail};
+use girpr_util_path::atomic::{ClaimedTemp, claim_temp_dir};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tempfile::Builder;
 use tracing::info;
 
 use crate::config::TestHooks;
@@ -191,6 +191,9 @@ fn plan_steps(
     steps
 }
 
+/// The fixed short prefix of a case-fix temporary sibling.
+const CASE_TMP_PREFIX: &str = ".girsync_case_tmp.";
+
 /// A unique sibling path for the two-step rename, claimed before it is used.
 ///
 /// The candidate is a **fixed short prefix**, `.girsync_case_tmp.`, plus a
@@ -213,30 +216,22 @@ fn plan_steps(
 /// step1 removes the file placeholder again.
 fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
     let parent = from.parent().context("case-fix path has no parent")?;
-    let mut builder = Builder::new();
-    builder.prefix(".girsync_case_tmp.");
+    let claim_context = || format!("claim case-fix temporary beside {}", from.display());
     if is_dir {
-        let dir = builder
-            .tempdir_in(parent)
-            .with_context(|| format!("claim case-fix temporary beside {}", from.display()))?;
-        // Disarm tempfile's guard and free the name: step1 renames the source
+        let tmp = claim_temp_dir(parent, CASE_TMP_PREFIX).with_context(claim_context)?;
+        // The directory claim is disarmed and free: step1 renames the source
         // onto it, and Windows cannot rename onto an existing directory.
-        let tmp = dir.keep();
         std::fs::remove_dir(&tmp)
             .with_context(|| format!("remove case-fix placeholder {}", tmp.display()))?;
         Ok(tmp)
     } else {
-        // Keep the empty placeholder in place for step1 to replace. Closing our
-        // handle first keeps the rename portable to Windows.
-        let (file, path) = builder
-            .tempfile_in(parent)
-            .with_context(|| format!("claim case-fix temporary beside {}", from.display()))?
-            .into_parts();
-        drop(file);
-        let tmp = path
+        // Keep the empty placeholder in place for step1 to replace. The claim
+        // closes its handle first, which keeps the rename portable to Windows.
+        let claimed =
+            ClaimedTemp::claim(parent, CASE_TMP_PREFIX, "").with_context(claim_context)?;
+        claimed
             .keep()
-            .with_context(|| format!("keep case-fix placeholder beside {}", from.display()))?;
-        Ok(tmp)
+            .with_context(|| format!("keep case-fix placeholder beside {}", from.display()))
     }
 }
 

@@ -3,8 +3,8 @@
 //!
 //! This is its own crate so the cache, its byte codec and its native dependency
 //! tree are an acyclic leaf below girsync. An edit to girsync's planner,
-//! commands or other subsystems rebuilds only that lib; this crate and `redb`,
-//! `postcard` and `tempfile` stay cached. The hash vocabulary lives here too —
+//! commands or other subsystems rebuilds only that lib; this crate and `redb`
+//! and `postcard` stay cached. The hash vocabulary lives here too —
 //! `FileRec` embeds a [`hash::DigestSet`] and its serde impl *is* the wire
 //! format — so the cache never has to depend back on girsync's lib.
 //!

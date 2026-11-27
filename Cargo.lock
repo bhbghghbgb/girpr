@@ -1603,6 +1603,7 @@ dependencies = [
  "girpr-log",
  "girpr-report-core",
  "girpr-tempdir",
+ "girpr-util-path",
  "girpr-value-ranges",
  "girsync-cache",
  "girsync-leaves",
@@ -1629,11 +1630,11 @@ dependencies = [
  "girpr-fs-identity",
  "girpr-tempdir",
  "girpr-time",
+ "girpr-util-path",
  "postcard",
  "redb",
  "serde",
  "strum",
- "tempfile",
  "tracing",
 ]
 

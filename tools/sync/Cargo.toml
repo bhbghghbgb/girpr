@@ -83,9 +83,10 @@ girpr-filter = { path = "../../crates/filter" }
 # record layouts; the leaf only writes the object in the order asked for.
 girpr-report-core = { path = "../../crates/report-core" }
 rayon = "1.12.0"
-# The case-fix rename claims its short temporary sibling with an exclusive
-# create and random name; tempfile owns that claim in the shipped pass too, so
-# this is a regular dependency rather than a test-only one.
+# The case-fix rename claims its short temporary sibling through the shared
+# atomic claim primitive, so the claim and its cleanup have one home.
+girpr-util-path = { path = "../../app/util-path" }
+# The unit tests build scratch directories with tempfile directly.
 tempfile = "3.27.0"
 # Lexical normalization of junction/symlink target text. `Path::clean()` collapses
 # `.`/`..` without asking the filesystem and keeps a leading `..`, which is what
