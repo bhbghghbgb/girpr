@@ -1,0 +1,22 @@
+[package]
+name = "girpr-hyp-wire"
+version = "0.1.0"
+edition = "2024"
+# Built with the stable Rust toolchain selected at the workspace root.
+description = "The shared HYP/Sophon JSON wire values both programs decode: API identity, envelope DTOs, the number decoder and the terminal retcode rule"
+
+[lib]
+name = "girpr_hyp_wire"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The envelope DTOs and the number-or-string value only need the derive macros;
+# no JSON library, HTTP client or retry state lives in this leaf.
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+# The wire-shape tests parse real JSON text through the shared DTOs.
+serde_json = "1.0.154"
