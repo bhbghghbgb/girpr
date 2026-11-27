@@ -1168,6 +1168,7 @@ dependencies = [
  "girpr-retry",
  "girpr-tempdir",
  "girpr-test-fixtures",
+ "girpr-test-http",
  "girpr-test-support",
  "girpr-util-hash",
  "girpr-util-ini",
@@ -1526,6 +1527,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "zstd",
+]
+
+[[package]]
+name = "girpr-test-http"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
 ]
 
 [[package]]

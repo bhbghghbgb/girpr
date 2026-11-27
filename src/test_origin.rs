@@ -1,9 +1,12 @@
 //! A shared loopback origin for the repair phases' unit tests.
 //!
 //! The caller owns the routing and reply policy; axum owns the listener, HTTP
-//! parsing, keep-alive and response framing. Dropping the server tells every
-//! in-flight handler to stop and aborts the accept loop, so a route that never
-//! answers cannot outlive the test that started it.
+//! parsing, keep-alive and response framing. The ephemeral bind, the stop
+//! signal and the in-flight gate are shared with the other axum test servers
+//! through `girpr-test-http`; this module keeps only the repair phases'
+//! route→reply contract. Dropping the server tells every in-flight handler to
+//! stop and aborts the accept loop, so a route that never answers cannot outlive
+//! the test that started it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,9 +15,11 @@ use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use tokio::net::TcpListener;
-use tokio::sync::{Notify, watch};
-use tokio::task::JoinHandle;
+use tokio::sync::watch;
+
+// The gate and the server handle are mechanics with no reply policy: they live
+// in the shared leaf and are re-exported under the names the phase tests use.
+pub(crate) use girpr_test_http::{InFlight, Server as TestServer};
 
 /// One reply a route can give. Variants that carry a counter or a gate let a
 /// caller hold a request open or let it through once another route was hit,
@@ -47,91 +52,6 @@ impl Reply {
 
 /// The caller-owned routing policy this server drives.
 type Route = Arc<dyn Fn(&str) -> Option<Reply> + Send + Sync>;
-
-/// Requests currently being served, with a gate that holds them until the
-/// test lets go, so a concurrency bound is observed instead of timed.
-pub(crate) struct InFlight {
-    pub(crate) current: AtomicUsize,
-    pub(crate) peak: AtomicUsize,
-    arrived: Notify,
-    pub(crate) release: watch::Sender<bool>,
-}
-
-impl InFlight {
-    pub(crate) fn new() -> Self {
-        let (release, _) = watch::channel(false);
-        Self {
-            current: AtomicUsize::new(0),
-            peak: AtomicUsize::new(0),
-            arrived: Notify::new(),
-            release,
-        }
-    }
-
-    /// Count this request as in flight and wait for the release.
-    ///
-    /// The returned guard owns the slot, so dropping the request future
-    /// (for example when the handler is cancelled mid-wait) always releases
-    /// it, even though the handler never resumes to call `leave` itself.
-    pub(crate) async fn enter(self: &Arc<Self>) -> InFlightGuard {
-        // Own the slot before the first await, so a cancel at any point
-        // releases it through the guard's `Drop`.
-        let guard = InFlightGuard {
-            gate: Arc::clone(self),
-        };
-        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-        self.peak.fetch_max(now, Ordering::SeqCst);
-        self.arrived.notify_waiters();
-        let mut release = self.release.subscribe();
-        while !*release.borrow_and_update() {
-            if release.changed().await.is_err() {
-                break;
-            }
-        }
-        guard
-    }
-
-    /// Wait until `want` requests are in flight, without assuming when.
-    pub(crate) async fn wait_for(&self, want: usize) {
-        loop {
-            let arrived = self.arrived.notified();
-            tokio::pin!(arrived);
-            // Register before reading the count, so a wakeup between the
-            // check and the await cannot be lost on any runtime flavor.
-            arrived.as_mut().enable();
-            if self.current.load(Ordering::SeqCst) >= want {
-                return;
-            }
-            arrived.as_mut().await;
-        }
-    }
-
-    /// Wait until every counted request has been released, without assuming
-    /// when.
-    pub(crate) async fn wait_until_idle(&self) {
-        loop {
-            let arrived = self.arrived.notified();
-            tokio::pin!(arrived);
-            arrived.as_mut().enable();
-            if self.current.load(Ordering::SeqCst) == 0 {
-                return;
-            }
-            arrived.as_mut().await;
-        }
-    }
-}
-
-/// Owns one counted request slot; dropping it always releases the slot.
-pub(crate) struct InFlightGuard {
-    gate: Arc<InFlight>,
-}
-
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        self.gate.current.fetch_sub(1, Ordering::SeqCst);
-        self.gate.arrived.notify_waiters();
-    }
-}
 
 /// Handler state: the caller's route plus the signal that ends the test.
 struct OriginPolicy {
@@ -198,53 +118,20 @@ fn status_code(reason: &'static str) -> StatusCode {
     StatusCode::from_bytes(digits.as_bytes()).expect("scripted status carries a 3-digit code")
 }
 
-/// A running test origin. Dropping it releases every held handler and aborts
-/// the accept loop, so the test never depends on runtime teardown to stop a
-/// route that never answers.
-pub(crate) struct TestServer {
-    base: String,
-    driver: JoinHandle<()>,
-    stopping: watch::Sender<bool>,
-}
-
-impl TestServer {
-    pub(crate) fn base(&self) -> &str {
-        &self.base
-    }
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        // Signal first: axum spawns each connection as a detached task, so
-        // aborting the driver alone would leave gated handlers waiting.
-        let _ = self.stopping.send_replace(true);
-        self.driver.abort();
-    }
-}
-
 /// Serve replies chosen by `route` on an ephemeral loopback port. The caller
-/// owns the routing policy; this module owns the socket and axum writes the
+/// owns the routing policy; the leaf owns the socket and axum writes the
 /// response bytes. `None` is a `404`, the same as an unknown target before the
 /// fold-in.
 pub(crate) async fn serve<F>(route: F) -> TestServer
 where
     F: Fn(&str) -> Option<Reply> + Send + Sync + 'static,
 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let base = format!("http://{}", listener.local_addr().expect("addr"));
-    let (stopping, _) = watch::channel(false);
-    let policy = Arc::new(OriginPolicy {
-        route: Arc::new(route),
-        stopping: stopping.subscribe(),
-    });
-    let router = Router::new().fallback(handle).with_state(policy);
-    let driver = tokio::spawn(async move {
-        axum::serve(listener, router).await.expect("serve");
-    });
-
-    TestServer {
-        base,
-        driver,
-        stopping,
-    }
+    girpr_test_http::serve(move |stopping| {
+        let policy = Arc::new(OriginPolicy {
+            route: Arc::new(route),
+            stopping,
+        });
+        Router::new().fallback(handle).with_state(policy)
+    })
+    .await
 }
