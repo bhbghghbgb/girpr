@@ -21,7 +21,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T07 | `tasks/T07-bounded-join.md` | completed | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 kept |
 | T08 | `tasks/T08-ledger-cas-helpers.md` | pending review | 3 commits: counter CAS primitives; meter charge/refund/settle; RAM reserve/release | CP3 batch |
 | T09 | `tasks/T09-whole-file-verify.md` | pending review | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 batch |
-| T10 | `tasks/T10-bounded-byte-io.md` | todo | — | |
+| T10 | `tasks/T10-bounded-byte-io.md` | pending review | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 batch complete |
 | T11 | `tasks/T11-clear-readonly.md` | todo | — | |
 | T12 | `tasks/T12-request-url.md` | todo | — | |
 | T13 | `tasks/T13-line-and-bom-readers.md` | todo | — | |
@@ -73,6 +73,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | proposed |
 | F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | proposed |
 | F16 | T09 | Consider relocating the pure whole-file gate to a lower crate; `app/persistent-plan` now depends on `girpr-chunk-verify` (transitively proto/util-hash) for a gate that needs only `std`. | proposed |
+| F17 | T10 | `ChunkFileSink::write` in `temp.rs` is a decoder-fed sink, not a loop; its per-piece ceiling charge stayed local — a shared charge helper would touch the `sophon::ChunkSink` seam and retry/refund tests. | proposed |
+| F18 | T10 | Consider relocating `read_up_to`/`reserve_exact` into `util-io` to make the leaf dependency-free (currently `util-io` depends on `util-hash` for one read); moves a public primitive between crates. | proposed |
+| F19 | T10 | `capture_bounded` downcasts `read_up_to`'s `anyhow::Error` back to `io::Error`; an `io::Result`-typed read primitive would remove the downcast but needs an explicit decision on reserve-failure wording. | proposed |
 
 ## Persistent context
 
@@ -97,3 +100,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP2 done: T05–T07 kept; no fixes or reverts; workspace 2297 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
 - T08 keeper: the remaining `stopped_by` CAS in `app/report/src/ledger.rs` is an idempotent first-wins flag, not a saturating tally; routed through no leaf deliberately.
 - T09 keeper: `src/repair/file/inplace.rs` scanned-verdict reuse digest comparisons remain local `matches_hex` calls by the reuse-guard contract.
+- T10 boundary: `inplace.rs` was not edited — it already calls the `mod.rs` wrappers that delegate to the leaf and downloads through `temp.rs`, so it consumes both mechanics transitively.
