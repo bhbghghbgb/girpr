@@ -90,7 +90,10 @@ mod tests {
 
         let outcome = clear_readonly(&path);
 
-        assert!(matches!(outcome, ReadOnlyOutcome::NotReadOnly), "{outcome:?}");
+        assert!(
+            matches!(outcome, ReadOnlyOutcome::NotReadOnly),
+            "{outcome:?}"
+        );
         let after = std::fs::metadata(&path).unwrap().permissions();
         assert_eq!(before.readonly(), after.readonly());
         #[cfg(unix)]
