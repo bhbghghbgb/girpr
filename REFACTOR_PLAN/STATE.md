@@ -29,7 +29,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T15 | `tasks/T15-fs-path-helpers.md` | completed | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 kept |
 | T16 | `tasks/T16-global-cli-and-format.md` | completed | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 kept; clippy bound fix in review; before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | pending review | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 batch |
-| T18 | `tasks/T18-report-core.md` | todo | — | after T16 |
+| T18 | `tasks/T18-report-core.md` | pending review | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 batch complete |
 | T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
 | T20 | `tasks/T20-test-http-servers.md` | todo | — | |
 | T21 | `tasks/T21-hyp-wire.md` | todo | — | |
@@ -99,6 +99,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F40 | T17 | Consider an explicit `AnsiChoice` enum instead of `Option<bool>` if another program needs "formatter default" semantics. | proposed |
 | F41 | T17 | If a third file format appears, a caller-supplied formatter factory would avoid another cfg-gated enum arm in the shared function. | proposed |
 | F42 | T17 | `CaptureBuffer` and internal `SharedBytes` remain two byte sinks by design (public feature surface vs crate-private helper); revisit only if the feature surface is intentionally changed. | proposed |
+| F43 | T18 | Update README.md:469-471 and :564 plus the report-core crate's Cargo.toml description — the crate now owns the record container and emit sink, not just ordered-JSON/line-writing mechanics. | proposed |
+| F44 | T18 | If a fourth report plane appears, decide whether an explicit policy enum in the core is preferable to returning `io::Result`; today's three broken-pipe policies are deliberately unshared. | proposed |
+| F45 | T18 | Consider promoting the core `Record`'s "skip a field named like the event key" rule to a named helper if more than capture relies on it. | proposed |
 
 ## Persistent context
 
@@ -132,3 +135,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T16: shared CLI uses an item-level `global_args!` macro (two arms) rather than a flattened struct to preserve each binary's help order and public struct literals; --help/exit bytes verified identical against the pre-T16 tree.
 - CP5 done: T15 kept; T16 kept after removing redundant parser bounds; workspace 2339 passed / 8 skipped; only one trycmd help golden (`tests/cmd/help.trycmd`, girpr --help) exists; sync/capture assert help semantically.
 - T17: `subscriber_for` takes `ConsoleSpec<W>`, `FileFormat`, `SpanFields` and `open_file`; `FileFormat::Json` behind a new girpr-log `json` feature used by the tools; girpr passes `ansi: None` to preserve its NO_COLOR behavior.
+- T18: broken-pipe policy stays parameterized by the caller via `io::Result`; each plane keeps its own `Val` vocabulary, layout, field order and event derivation.
