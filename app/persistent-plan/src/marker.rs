@@ -78,15 +78,30 @@ pub fn render_markers(
     Ok(out)
 }
 
+/// First eligible item whose key the active path scope hides, if any.
+///
+/// The three public predicates below differ only in how they extract a key
+/// and which items are eligible; the search itself has one home here. The
+/// order is kept: eligibility is asked first, visibility second, so a
+/// non-hotfix asset never consults the scope.
+fn first_hidden<'a, T>(
+    items: &'a [T],
+    visible: &impl Fn(&str) -> bool,
+    key: impl Fn(&T) -> &str,
+    eligible: impl Fn(&T) -> bool,
+) -> Option<&'a str> {
+    items
+        .iter()
+        .find(|item| eligible(*item) && !visible(key(*item)))
+        .map(|item| key(item))
+}
+
 /// First marker the active path scope hides, if any.
 pub fn first_out_of_scope_marker(
     markers: &[MarkerSet],
     visible: impl Fn(&str) -> bool,
 ) -> Option<&str> {
-    markers
-        .iter()
-        .find(|m| !visible(&m.path))
-        .map(|m| m.path.as_str())
+    first_hidden(markers, &visible, |m| m.path.as_str(), |_| true)
 }
 
 /// First **mirror** the active path scope hides, if any.
@@ -97,10 +112,7 @@ pub fn first_out_of_scope_mirror(
     mirrors: &[(String, Vec<u8>)],
     visible: impl Fn(&str) -> bool,
 ) -> Option<&str> {
-    mirrors
-        .iter()
-        .find(|(rel, _)| !visible(rel))
-        .map(|(rel, _)| rel.as_str())
+    first_hidden(mirrors, &visible, |(rel, _)| rel.as_str(), |_| true)
 }
 
 /// First **hotfix** asset the active path scope hides, if any.
@@ -111,10 +123,12 @@ pub fn first_out_of_scope_hotfix(
     assets: &[PersistentAsset],
     visible: impl Fn(&str) -> bool,
 ) -> Option<&str> {
-    assets
-        .iter()
-        .find(|a| a.placement == BaseTree::Persistent && !visible(&a.rel))
-        .map(|a| a.rel.as_str())
+    first_hidden(
+        assets,
+        &visible,
+        |a| a.rel.as_str(),
+        |a| a.placement == BaseTree::Persistent,
+    )
 }
 
 /// A marker or mirror outside the scope is a usage error, because the post

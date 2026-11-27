@@ -1,14 +1,13 @@
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream::Stream};
 use girpr_chunk_verify::digest_matches;
-use girpr_digest::{Algorithms, Sink};
+use girpr_digest::{Algorithms, Md5, Sink};
 use prost::Message;
 use std::io::Write;
 
 use crate::hyp::ChunkManifestMeta;
 use crate::retry::{BackoffPolicy, Retry, RetryState, retry_state};
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
-use girpr_util_hash::Md5;
 
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
