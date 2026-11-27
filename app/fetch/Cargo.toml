@@ -54,6 +54,9 @@ girpr-proto = { path = "../../crates/proto" }
 # view the reuse map's match predicate and the manifest diff share. The leaf
 # holds no index, collision policy or first-match order — those stay here.
 girpr-chunk-identity = { path = "../../crates/chunk-identity" }
+# The half-open range leaf: the reuse map's early range gate borrows its typed
+# range check; the map's own first-match policy stays here.
+girpr-chunk-layout = { path = "../../crates/chunk-layout" }
 girpr-retry = { path = "../../crates/retry" }
 # The persistent plan's value types and pure rules. The manifest descriptors
 # are `girpr_dispatch` values; this crate owns only their fetch and the

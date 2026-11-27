@@ -121,6 +121,9 @@ girpr-proto = { path = "crates/proto" }
 # binary supplies its own chunk selection through the per-entry flag; the leaf
 # holds no reuse decision, collision handling or published-byte shape.
 girpr-chunk-cost = { path = "crates/chunk-cost" }
+# The half-open range and tiling leaf. The repair path borrows its bounds check
+# for reuse sources and its tiling cursor; gap-fill decisions stay here.
+girpr-chunk-layout = { path = "crates/chunk-layout" }
 # The chunk-verification leaf: the verdict a scan produces, the range/owner
 # remap shared by the scan and the in-place writer, and the verify pass that
 # re-derives the finished file from a fresh read. It depends only on the wire

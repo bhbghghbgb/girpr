@@ -23,6 +23,8 @@ use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
+use girpr_chunk_cost::nonneg;
+use girpr_chunk_layout::fits;
 use girpr_chunk_verify::{
     Verified, scan_ranges, source_ok_by_chunk, source_ok_by_range, verify_in_place,
 };
@@ -1006,13 +1008,13 @@ pub(super) fn trim_is_free(
     chunks: &[SophonChunk],
     sources: &[Option<u64>],
 ) -> bool {
-    let size = file.size.max(0) as u64;
+    let size = nonneg(file.size);
     chunks.iter().zip(sources).all(|(c, src)| {
         let Some(r) = *src else { return true };
-        let s = c.uncompressed_size.max(0) as u64;
+        let s = nonneg(c.uncompressed_size);
         // An overflowing end is unrepresentable and therefore certainly past
         // any real target: treat it as outside, never as inside.
-        r.checked_add(s).is_some_and(|end| end <= size)
+        fits(r, s, size)
     })
 }
 

@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
 use girpr_chunk_identity::{ChunkIdentity, IdentityKey};
+use girpr_chunk_layout::check_range;
 use girpr_util_hash::Md5;
 use girpr_util_path as path_util;
 
@@ -184,8 +185,9 @@ pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Fi
                 // still re-check against the file's real length and verify the
                 // bytes before copying. This is an early diagnostic shortcut,
                 // not the only guard — a lying `size` is caught downstream.
-                let end = c.offset.checked_add(c.uncompressed_size);
-                if c.offset < 0 || c.uncompressed_size < 0 || end.is_none_or(|end| end > f.size) {
+                let range_ok = check_range(c.offset, c.uncompressed_size)
+                    .is_ok_and(|end| (end as i64) <= f.size);
+                if !range_ok {
                     tracing::warn!(
                         file = %f.file,
                         chunk = %c.id,

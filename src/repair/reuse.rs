@@ -55,6 +55,9 @@
 //! this one pure function precisely so that it can be swapped without
 //! touching the writer.
 
+use girpr_chunk_cost::nonneg;
+use girpr_chunk_layout::fits;
+
 use crate::sophon::{FileReuse, SophonChunk};
 
 /// The reuse source of each chunk, in the same order as the chunks: the
@@ -132,10 +135,11 @@ fn survives_one(c: &SophonChunk, source: Option<u64>, usable_len: u64, ascending
     let Some(r) = source else {
         return false;
     };
-    let o = c.offset.max(0) as u64;
-    let s = c.uncompressed_size.max(0) as u64;
-    // The source must be inside the file being read from.
-    if r.checked_add(s).is_none_or(|end| end > usable_len) {
+    let o = nonneg(c.offset);
+    let s = nonneg(c.uncompressed_size);
+    // The source must be inside the file being read from. The leaf owns the
+    // bounds check so the same unsigned range rule is used by the writer.
+    if !fits(r, s, usable_len) {
         return false;
     }
     // Ascending: the region already written is `[0, o)`, so the source has
