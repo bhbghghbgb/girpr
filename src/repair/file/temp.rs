@@ -11,9 +11,10 @@ use anyhow::{Context, Result};
 
 use super::{
     COPY_BUF, ChunkStats, FileCtx, FileId, FileWrites, Inplace, Mode, PlannedFile, note_write,
-    reserve_write, reusable_verdict, scratch_slice,
+    reserve_write, reusable_verdict,
 };
 use girpr_chunk_verify::{WholeFileVerdict, digest_matches, verify_whole_file};
+use girpr_util_io::{Capture, CopyEnd, capture_bounded, copy_bounded, scratch as scratch_buf};
 
 use crate::repair::diagnostics;
 use crate::repair::scope::ledger::StoppedBy;
@@ -377,9 +378,9 @@ enum SliceCapture {
 /// The old path hashed the slice with `md5_reader_slice_digest` and then sought
 /// back and read the same bytes again for the copy. Here one read fills the
 /// staging buffer; the digest and the copy both consume those bytes, so a
-/// reused slice costs one source read. The buffer is grown at most to one
-/// chunk's declared length, so the extra RAM is bounded to a single slice and
-/// is released for the next chunk by `clear`.
+/// reused slice costs one source read. The leaf owns the reserved-capacity
+/// capture loop; this wrapper only seeks to the slice start and maps the
+/// outcome into this path's distinct `SliceCapture` vocabulary.
 fn capture_slice<R: Read + Seek>(
     sf: &mut R,
     offset: u64,
@@ -389,42 +390,11 @@ fn capture_slice<R: Read + Seek>(
     if let Err(e) = sf.seek(SeekFrom::Start(offset)) {
         return SliceCapture::Failed(e);
     }
-    let want = match usize::try_from(len) {
-        Ok(n) => n,
-        // An unrepresentable length is a corrupt manifest, not an I/O error:
-        // report it as a short slice so the caller falls back to a download
-        // whose reservation is bounded by the run's ceilings.
-        Err(_) => {
-            return SliceCapture::Short { have: 0, want: len };
-        }
-    };
-    if buf.try_reserve_exact(want).is_err() {
-        return SliceCapture::Short { have: 0, want: len };
+    match capture_bounded(sf, len, buf) {
+        Capture::Complete => SliceCapture::Complete,
+        Capture::Short { have, want } => SliceCapture::Short { have, want },
+        Capture::Failed(e) => SliceCapture::Failed(e),
     }
-    buf.clear();
-    let mut remaining = len;
-    while remaining > 0 {
-        let piece = (remaining as usize).min(COPY_BUF);
-        let start = buf.len();
-        // `read_to_end` over a bounded `Take` appends into the spare capacity
-        // reserved above: only bytes actually read are admitted to `buf`, with
-        // no zero-fill of the piece before the read overwrites it.
-        let n = match (&mut *sf).take(piece as u64).read_to_end(buf) {
-            Ok(n) => n,
-            Err(e) => {
-                buf.truncate(start);
-                return SliceCapture::Failed(e);
-            }
-        };
-        if n == 0 {
-            return SliceCapture::Short {
-                have: len - remaining,
-                want: len,
-            };
-        }
-        remaining -= n as u64;
-    }
-    SliceCapture::Complete
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
@@ -568,10 +538,35 @@ enum ReuseCopy {
     ReadFailed,
 }
 
+/// The staged slice as a reader and the file as a writer, in one object so the
+/// shared copy loop can drive both without two competing borrows of the file.
+struct SliceSink<'a, R: Read, W: Write> {
+    src: &'a mut R,
+    out: &'a mut W,
+}
+
+impl<R: Read, W: Write> Read for SliceSink<'_, R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.src.read(buf)
+    }
+}
+
+impl<R: Read, W: Write> Write for SliceSink<'_, R, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.out.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+}
+
 /// Copy a verified reuse slice into the sink, one piece at a time.
 ///
-/// Each piece is reserved before it lands, so the write ceiling is charged at
-/// the same granularity as the download sink.
+/// The shared leaf reads a piece, charges it, writes it and settles it; the
+/// write ceiling is charged at the same granularity as the download sink.
+/// This call site keeps the distinct `ReuseCopy` vocabulary: a short slice,
+/// a read error and a completed copy each keep their own fallback policy.
 fn copy_reuse_pieces<R: Read, W: Write>(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -580,29 +575,27 @@ fn copy_reuse_pieces<R: Read, W: Write>(
     scratch: &mut Vec<u8>,
     c: &SophonChunk,
 ) -> Result<ReuseCopy> {
-    let mut remaining = c.uncompressed_size as u64;
-    let buf = scratch_slice(scratch, COPY_BUF);
-    while remaining > 0 {
-        let want = (remaining as usize).min(buf.len());
-        let n = match src.read(&mut buf[..want]) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-                return Ok(ReuseCopy::ReadFailed);
-            }
-        };
-        if n == 0 {
+    let buf = scratch_buf(scratch, COPY_BUF);
+    let mut rw = SliceSink { src, out };
+    // The write ceiling counts *this* copy: it goes into `*_tmp` and appears in
+    // neither `download_bytes` nor the plan's estimate.
+    match copy_bounded(
+        &mut rw,
+        c.uncompressed_size as u64,
+        buf,
+        |n| reserve_write(ctx, n),
+        |n| note_write(ctx, writes, n),
+    )? {
+        CopyEnd::Complete => Ok(ReuseCopy::Complete),
+        CopyEnd::Short { .. } => {
             tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
-            return Ok(ReuseCopy::Truncated);
+            Ok(ReuseCopy::Truncated)
         }
-        // The write ceiling counts *this* copy: it goes into `*_tmp` and
-        // appears in neither `download_bytes` nor the plan's estimate.
-        reserve_write(ctx, n as u64)?;
-        out.write_all(&buf[..n])?;
-        note_write(ctx, writes, n as u64)?;
-        remaining -= n as u64;
+        CopyEnd::Failed(e) => {
+            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+            Ok(ReuseCopy::ReadFailed)
+        }
     }
-    Ok(ReuseCopy::Complete)
 }
 
 /// The sink of a streamed chunk: the decoded bytes go straight into the

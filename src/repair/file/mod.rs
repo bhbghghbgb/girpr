@@ -71,10 +71,10 @@
 //! here, so in practice no task is left in flight at drop.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -88,6 +88,7 @@ use crate::retry::{BackoffPolicy, RetryState, retry_state};
 use crate::sophon::SophonChunk;
 use crate::util;
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
+use girpr_util_io::{PIECE, copy_within_bounded, scratch as scratch_buf, zero_bounded};
 
 use crate::repair::scan::ScanReport;
 use girpr_chunk_verify::Verdict;
@@ -105,28 +106,9 @@ use self::inplace::trim_is_free;
 /// Max attempts per file before it is counted as failed.
 const MAX_ATTEMPTS: u32 = 5;
 
-/// Copy buffer for the local-slice reuse path.
-const COPY_BUF: usize = 512 * 1024;
-
-/// The shared zero block for [`zero_fill`]: [`COPY_BUF`] zero bytes, allocated
-/// once and never written, so every hole is filled in the same pieces a local
-/// copy uses.
-fn zero_block() -> &'static [u8] {
-    static ZEROS: OnceLock<Vec<u8>> = OnceLock::new();
-    ZEROS.get_or_init(|| vec![0u8; COPY_BUF])
-}
-
-/// The per-file scratch buffer for [`copy_within`] and the reuse copy, grown to
-/// at least `want` bytes.
-///
-/// A file's chunks are written one at a time, so one buffer per file is enough;
-/// it is never shrunk, so the next piece reuses the same allocation.
-fn scratch_slice(buf: &mut Vec<u8>, want: usize) -> &mut [u8] {
-    if buf.len() < want {
-        buf.resize(want, 0);
-    }
-    &mut buf[..want]
-}
+/// The piece size and the reusable scratch/zero block are owned by the shared
+/// I/O leaf; both repair writers and their tests name `COPY_BUF` here.
+pub(crate) use girpr_util_io::PIECE as COPY_BUF;
 
 /// The widest filesystem timestamp tick the reuse guard accounts for.
 ///
@@ -926,10 +908,10 @@ fn write_at(
 
 /// Copy `len` bytes from `src` to `dst` inside the same file.
 ///
-/// The copy is done in pieces, and each piece is reserved and written before
-/// the next is read, so the source and the destination never have to be
-/// disjoint in the *handle* — only in the *file*, which the write order
-/// guarantees.
+/// The shared leaf reads each piece before it is charged, written and settled,
+/// so a source overlapping the destination in the *file* survives its piece's
+/// write. This call site keeps the ceiling policy: `reserve_write` before the
+/// piece lands and `note_write` after it.
 fn copy_within(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -942,17 +924,16 @@ fn copy_within(
     if len == 0 {
         return Ok(());
     }
-    let buf = scratch_slice(scratch, COPY_BUF.min(len as usize));
-    let mut done = 0u64;
-    while done < len {
-        let n = ((len - done) as usize).min(buf.len());
-        f.seek(SeekFrom::Start(src + done))?;
-        f.read_exact(&mut buf[..n])?;
-        reserve_write(ctx, n as u64)?;
-        write_reserved(ctx, writes, f, dst + done, &buf[..n])?;
-        done += n as u64;
-    }
-    Ok(())
+    let buf = scratch_buf(scratch, PIECE.min(len as usize));
+    copy_within_bounded(
+        f,
+        src,
+        dst,
+        len,
+        buf,
+        |n| reserve_write(ctx, n),
+        |n| note_write(ctx, writes, n),
+    )
 }
 
 /// Write `len` zeros at `offset`.
@@ -961,7 +942,9 @@ fn copy_within(
 /// would ever write it: without this it would keep the old file's bytes.
 ///
 /// The whole length is reserved once, before the first piece lands; the
-/// pieces are then written without touching the ceiling again.
+/// pieces are then written without touching the ceiling again. The leaf owns
+/// the piece loop and the shared zero block; this call site keeps the charge
+/// and settle policy.
 fn zero_fill(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -969,22 +952,15 @@ fn zero_fill(
     offset: u64,
     len: u64,
 ) -> Result<()> {
-    if len == 0 {
-        return Ok(());
-    }
     // The zero-fill is a write like any other: it lands in the install and
     // the write ceiling counts it.
-    reserve_write(ctx, len)?;
-    let zeros = zero_block();
-    let mut left = len;
-    let mut pos = offset;
-    while left > 0 {
-        let n = (left as usize).min(zeros.len());
-        write_reserved(ctx, writes, out, pos, &zeros[..n])?;
-        left -= n as u64;
-        pos += n as u64;
-    }
-    Ok(())
+    zero_bounded(
+        out,
+        offset,
+        len,
+        |n| reserve_write(ctx, n),
+        |n| note_write(ctx, writes, n),
+    )
 }
 
 #[cfg(test)]
