@@ -20,7 +20,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T06 | `tasks/T06-async-retry-driver.md` | completed | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 kept |
 | T07 | `tasks/T07-bounded-join.md` | completed | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 kept |
 | T08 | `tasks/T08-ledger-cas-helpers.md` | pending review | 3 commits: counter CAS primitives; meter charge/refund/settle; RAM reserve/release | CP3 batch |
-| T09 | `tasks/T09-whole-file-verify.md` | todo | — | |
+| T09 | `tasks/T09-whole-file-verify.md` | pending review | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 batch |
 | T10 | `tasks/T10-bounded-byte-io.md` | todo | — | |
 | T11 | `tasks/T11-clear-readonly.md` | todo | — | |
 | T12 | `tasks/T12-request-url.md` | todo | — | |
@@ -71,6 +71,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | proposed |
 | F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | proposed |
 | F14 | T08 | Consider an explicit leaf primitive returning the "within ceiling" verdict so `settle` need not pass the `u64::MAX` sentinel; current form is deliberate to keep the settled-limit rule in `Meter`. | proposed |
+| F15 | T09 | `src/repair/file/temp.rs::promote_tmp` still has a hand-written length+MD5 final gate with its own delete-and-bail policy; could be routed through the shared gate if a single implementation is wanted there. | proposed |
+| F16 | T09 | Consider relocating the pure whole-file gate to a lower crate; `app/persistent-plan` now depends on `girpr-chunk-verify` (transitively proto/util-hash) for a gate that needs only `std`. | proposed |
 
 ## Persistent context
 
@@ -94,3 +96,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T07 guardrails held: capture's buffered-future panics and repair's `Handle::block_on` cancellation remain distinct; dispatcher and `DiagnosticsOwner` survive via the thread-setup hook; published fallback strings unchanged.
 - CP2 done: T05–T07 kept; no fixes or reverts; workspace 2297 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
 - T08 keeper: the remaining `stopped_by` CAS in `app/report/src/ledger.rs` is an idempotent first-wins flag, not a saturating tally; routed through no leaf deliberately.
+- T09 keeper: `src/repair/file/inplace.rs` scanned-verdict reuse digest comparisons remain local `matches_hex` calls by the reuse-guard contract.
