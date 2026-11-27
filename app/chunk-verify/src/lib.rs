@@ -14,6 +14,12 @@
 //! including its `modified` timestamp — and the remaps the scan and the writer
 //! share. The verify pass re-derives the answer from a fresh read; it never
 //! reuses an observation buffer to assert "verified".
+//!
+//! [`verify_whole_file`] is the other shared shape: one presence → length →
+//! digest decision over values the caller supplies. The presence probe and the
+//! digest read are injected, so this crate never opens a file or decides what
+//! a program does with a failure. Every caller maps [`WholeFileVerdict`] to its
+//! own error type and keeps its own next action, warning and exit behaviour.
 
 use std::time::SystemTime;
 
@@ -169,6 +175,88 @@ pub fn verify_in_place(
     })
 }
 
+/// Case-insensitive equality of two hex digest spellings.
+///
+/// This is the one comparison every whole-file gate uses. Both arguments are
+/// hex from the digest leaf (`Md5::to_hex`, `format_xxhash64_hex`), so a spelling
+/// that differs only in case names the same digest. Which algorithm a row
+/// prefers, and how a mismatch is reported, stay with the caller.
+pub fn digest_matches(expected_hex: &str, observed_hex: &str) -> bool {
+    expected_hex.eq_ignore_ascii_case(observed_hex)
+}
+
+/// The result of a whole-file presence → length → digest gate.
+///
+/// `E` is the caller's own "the digest source could not be read" error. Carrying
+/// it in the verdict is what lets each program keep its own error spelling and
+/// decide for itself whether that failure is fatal, a retry, or a repair.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WholeFileVerdict<E> {
+    /// The presence probe found no file; the digest source was not called.
+    Absent,
+    /// The file is present but its length is not the declared one; the digest
+    /// source was not called. A short file and an overlong file share this arm.
+    LengthMismatch { expected: u64, actual: u64 },
+    /// The length passed but the injected digest source failed.
+    DigestUnavailable(E),
+    /// The length passed but the observed digest differs from the declared one.
+    DigestMismatch { expected: String, actual: String },
+    /// Present, declared length, declared digest. `observed` is the spelling
+    /// the source produced, so a caller that logs the checked digest can log
+    /// what it actually read rather than re-formatting the declared one.
+    Match { observed: String },
+}
+
+impl<E> WholeFileVerdict<E> {
+    /// Whether every gate passed.
+    pub fn is_match(&self) -> bool {
+        matches!(self, Self::Match { .. })
+    }
+}
+
+/// Apply the presence → length → digest decision over caller-supplied values.
+///
+/// `observed_size` is the presence and length probe's answer: `None` means the
+/// file is not there, `Some(n)` its current length. `expected_hex` is the
+/// declared digest in whatever spelling this program uses (MD5 or XXH64 hex),
+/// and `source` produces the observed digest spelling. The gate calls `source`
+/// only after an absent file and a wrong length are ruled out, so a file that
+/// fails an earlier gate is never hashed.
+///
+/// The gate performs no I/O and holds no policy: the caller injects the probe
+/// and the digest read, picks the digest algorithm, and maps the verdict to its
+/// own error type and next action.
+pub fn verify_whole_file<E>(
+    expected_size: u64,
+    expected_hex: &str,
+    observed_size: Option<u64>,
+    source: impl FnOnce() -> Result<String, E>,
+) -> WholeFileVerdict<E> {
+    let Some(actual_size) = observed_size else {
+        return WholeFileVerdict::Absent;
+    };
+    if actual_size != expected_size {
+        return WholeFileVerdict::LengthMismatch {
+            expected: expected_size,
+            actual: actual_size,
+        };
+    }
+    let observed_hex = match source() {
+        Ok(hex) => hex,
+        Err(e) => return WholeFileVerdict::DigestUnavailable(e),
+    };
+    if digest_matches(expected_hex, &observed_hex) {
+        WholeFileVerdict::Match {
+            observed: observed_hex,
+        }
+    } else {
+        WholeFileVerdict::DigestMismatch {
+            expected: expected_hex.to_owned(),
+            actual: observed_hex,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Seek, SeekFrom};
@@ -317,5 +405,102 @@ mod tests {
             reads, 2,
             "a mismatch reads once more to name the chunks, not on the success path"
         );
+    }
+
+    /// An absent file stops at presence: the injected digest source must never
+    /// run. That is what keeps a missing file's empty digest from matching an
+    /// empty file's manifest entry.
+    #[test]
+    fn an_absent_file_stops_before_the_digest_source() {
+        let verdict = verify_whole_file(4, "abcd", None, || -> Result<String, ()> {
+            panic!("an absent file is never hashed")
+        });
+        assert_eq!(verdict, WholeFileVerdict::Absent);
+        assert!(!verdict.is_match());
+    }
+
+    /// A short body and an overlong body are both length failures; neither is
+    /// hashed, even when the digest the source would return agrees. Presence is
+    /// not "a length of zero" — it is its own gate.
+    #[test]
+    fn a_short_and_an_overlong_file_are_length_mismatches() {
+        let expected = "d41d8cd98f00b204e9800998ecf8427e";
+        let short = verify_whole_file(4, expected, Some(3), || -> Result<String, ()> {
+            panic!("a short file is never hashed")
+        });
+        assert_eq!(
+            short,
+            WholeFileVerdict::LengthMismatch {
+                expected: 4,
+                actual: 3
+            }
+        );
+        let long = verify_whole_file(4, expected, Some(5), || -> Result<String, ()> {
+            panic!("an overlong file is never hashed")
+        });
+        assert_eq!(
+            long,
+            WholeFileVerdict::LengthMismatch {
+                expected: 4,
+                actual: 5
+            }
+        );
+    }
+
+    /// A failing digest source is its own verdict: the caller sees its error
+    /// value back and can spell it and classify it however it needs to.
+    #[test]
+    fn a_failed_digest_source_reaches_the_caller_unchanged() {
+        let verdict = verify_whole_file(4, "abcd", Some(4), || {
+            Err("the digest read failed".to_string())
+        });
+        assert_eq!(
+            verdict,
+            WholeFileVerdict::DigestUnavailable("the digest read failed".to_string())
+        );
+        assert!(!verdict.is_match());
+    }
+
+    /// The comparison is case-insensitive, and a mismatch carries both the
+    /// declared and the observed spelling for the caller's error message.
+    #[test]
+    fn digest_spellings_are_case_insensitive_and_a_mismatch_carries_both() {
+        let lower = "d41d8cd98f00b204e9800998ecf8427e";
+        let upper = "D41D8CD98F00B204E9800998ECF8427E";
+        assert_eq!(
+            verify_whole_file(0, upper, Some(0), || Ok::<_, ()>(lower.to_string())),
+            WholeFileVerdict::Match {
+                observed: lower.to_string()
+            }
+        );
+        assert!(verify_whole_file(0, upper, Some(0), || Ok::<_, ()>(lower.to_string())).is_match());
+        assert_eq!(
+            verify_whole_file(0, lower, Some(0), || Ok::<_, ()>(upper.to_string())),
+            WholeFileVerdict::Match {
+                observed: lower.to_string()
+            }
+        );
+        assert_eq!(
+            verify_whole_file(0, lower, Some(0), || {
+                Ok::<_, ()>("00000000000000000000000000000000".to_string())
+            }),
+            WholeFileVerdict::DigestMismatch {
+                expected: lower.to_string(),
+                actual: "00000000000000000000000000000000".to_string(),
+            }
+        );
+    }
+
+    /// The comparison primitive the gate uses is also the one digest-only
+    /// callers use: case folds, but a different digest or a malformed spelling
+    /// never matches.
+    #[test]
+    fn digest_matches_ignores_case_but_not_content_or_spelling() {
+        let lower = "d41d8cd98f00b204e9800998ecf8427e";
+        assert!(digest_matches(lower, &lower.to_ascii_uppercase()));
+        assert!(digest_matches(&lower.to_ascii_uppercase(), lower));
+        assert!(!digest_matches(lower, "d41d8cd98f00b204e9800998ecf8427f"));
+        assert!(!digest_matches("", lower));
+        assert!(!digest_matches("not a digest", lower));
     }
 }
