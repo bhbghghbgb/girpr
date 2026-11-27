@@ -473,25 +473,14 @@ impl Summary {
     /// much was staged at once.
     pub fn reserve_ram_bytes(&self, n: u64) -> bool {
         let limit = self.ram_limit.load(Ordering::Relaxed);
-        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_add(n);
-            if next > limit {
-                return false;
-            }
-            match self.ram_reserved.compare_exchange_weak(
-                cur,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    self.ram_bytes.fetch_max(next, Ordering::Relaxed);
-                    return true;
-                }
-                Err(actual) => cur = actual,
-            }
+        let outcome = try_charge(&self.ram_reserved, n, limit);
+        if outcome.committed {
+            // The peak is a meter-local fact, not part of the charge: it keeps
+            // the most that was ever staged, while `ram_reserved` comes back
+            // down on release.
+            self.ram_bytes.fetch_max(outcome.next, Ordering::Relaxed);
         }
+        outcome.committed
     }
 
     /// Give a reservation back: the file that held it is done.
@@ -502,27 +491,13 @@ impl Summary {
     /// reservation for the rest of the run. The warning keeps the caller's
     /// logic error visible without panicking a release run.
     pub fn release_ram_bytes(&self, n: u64) {
-        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_sub(n);
-            match self.ram_reserved.compare_exchange_weak(
-                cur,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    if cur < n {
-                        tracing::warn!(
-                            release = n,
-                            reserved = cur,
-                            "release exceeds the staged RAM figure; saturating at zero"
-                        );
-                    }
-                    return;
-                }
-                Err(actual) => cur = actual,
-            }
+        let outcome = try_refund(&self.ram_reserved, n);
+        if outcome.saturated {
+            tracing::warn!(
+                release = n,
+                reserved = outcome.previous,
+                "release exceeds the staged RAM figure; saturating at zero"
+            );
         }
     }
 
