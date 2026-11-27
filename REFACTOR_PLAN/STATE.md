@@ -59,7 +59,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 
 | ID | Source task | Recommendation | Status |
 | --- | --- | --- | --- |
-| F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | accepted (B3) |
+| F01 | T01 | Fold remaining i64→u64 clamps in `src/repair/reuse.rs`, `src/repair/file/{mod,temp,inplace}.rs` (incl. `staged_payload` total) and `tools/capture/src/{select/mod,select/tests,blobs/props,assemble/assembly}.rs` through chunk-cost primitives; overlaps other task boundaries. | done |
 | F03 | T02 | Give capture's A11 `Layout::of` a typed-problem adapter: adjacent-previous diagnostic semantics differ from the coverage cursor and its strings are published in `verify/selfcheck.json`, so it stayed local by contract. | declined |
 | F04 | T02 | Decide explicitly what an unrepresentable signed chunk end means for tiling; the fold clamps at `i64::MAX` (matching capture's old behaviour) and plan-time validation rejects those ranges before layout. | declined |
 | F05 | T04 | Evaluate composing `tools/capture/hash`'s `HashingFile::write` with the shared sink while keeping write-before-hash ordering at the call site. | declined |
@@ -185,3 +185,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`. Accepted items are gr
 - F54 is the only triaged defect: `entry_names_with` silently skips unreadable directory entries where the retired local copies failed loud; accepted as B7. All other accepted items are enhancements/hygiene.
 - F59 was omitted from the triage's declined list; declined by the orchestrator by analogy with F60 (unifying the count-first driver needs fresh performance/byte-equality validation, no current need).
 - B2 done: F31 kept in review; `tempfile` moved to dev-dependencies, lockfile unchanged, 464 tests passed.
+- B3 done: F01 kept in review; all named clamp sites now use chunk-cost primitives except those already folded or deliberately not clamps; workspace 2366 passed / 8 skipped.
