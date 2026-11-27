@@ -1,15 +1,14 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use percent_encoding::utf8_percent_encode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_aux::field_attributes::deserialize_number_from_string;
 
 use crate::retry::{BackoffPolicy, Retry, retry};
-use girpr_model::query::QUERY_VALUE_SET;
 use girpr_model::region::Region as Biz;
 use girpr_model::region::{CHANNEL_ENDPOINT, Host};
+use girpr_request_url::build_query_url;
 
 /// How long to wait for a TCP/TLS connection to a HYP or Sophon endpoint.
 ///
@@ -637,16 +636,15 @@ impl std::error::Error for SophonNotFound {}
 /// `Some(tag)` asks for that exact version (the server answers `retcode -202`
 /// for a tag it no longer serves, which the caller treats as "no local build").
 fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> String {
-    let mut url = format!(
-        "{base}/getBuild?branch={}&package_id={}&password={}",
-        urlencode(&pkg.branch),
-        urlencode(&pkg.package_id),
-        urlencode(&pkg.password)
-    );
+    let mut pairs = vec![
+        ("branch", pkg.branch.as_str()),
+        ("package_id", pkg.package_id.as_str()),
+        ("password", pkg.password.as_str()),
+    ];
     if let Some(t) = tag {
-        url.push_str(&format!("&tag={}", urlencode(t)));
+        pairs.push(("tag", t));
     }
-    url
+    build_query_url(base, "getBuild", &pairs)
 }
 
 /// Build the Sophon `getPatchBuild` URL. Query-only, like `getBuild`, but with
@@ -654,11 +652,14 @@ fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> S
 /// selection this endpoint does not make. Percent-encoding is the same as for
 /// `getBuild`, so a package id or password with spaces/special chars survives.
 fn patch_build_url(base: &str, pkg: &GameBranchPackage) -> String {
-    format!(
-        "{base}/getPatchBuild?branch={}&package_id={}&password={}",
-        urlencode(&pkg.branch),
-        urlencode(&pkg.package_id),
-        urlencode(&pkg.password)
+    build_query_url(
+        base,
+        "getPatchBuild",
+        &[
+            ("branch", pkg.branch.as_str()),
+            ("package_id", pkg.package_id.as_str()),
+            ("password", pkg.password.as_str()),
+        ],
     )
 }
 
@@ -681,13 +682,6 @@ pub fn production_bases(host: &str) -> (String, String) {
         family.hyp_base().to_string(),
         family.sophon_base().to_string(),
     )
-}
-
-/// Uses the byte table from `girpr-model`, so fetch and capture cannot re-spell
-/// a query value differently. The set stays an exact `AsciiSet` rather than
-/// `Url`'s form serializer: spaces must be `%20` and brackets in values `%XX`.
-fn urlencode(s: &str) -> String {
-    utf8_percent_encode(s, QUERY_VALUE_SET).to_string()
 }
 
 #[cfg(test)]

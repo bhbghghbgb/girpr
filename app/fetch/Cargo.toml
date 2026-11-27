@@ -30,10 +30,10 @@ serde-aux = { version = "4.7.0", default-features = false }
 # heavy dependencies this crate isolates: an edit to the repair, report or CLI
 # modules above leaves this crate (and its reqwest/zstd/prost tree) cached.
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
-# Query values are escaped with a byte table and an exact AsciiSet, not the
-# form serializer: the recorded request URLs use literal brackets and `%20`
-# for spaces, and `Url`'s query_pairs_mut() would rewrite both.
-percent-encoding = "2.3.2"
+# The shared query grammar: pair/encoding/URL-build mechanics spelled exactly
+# as the recorded requests. This crate keeps its HYP spelling (hardcoded
+# language, unencoded ids) and its request policy at its own call sites.
+girpr-request-url = { path = "../../crates/request-url" }
 # The idle window on the two buffered JSON body reads uses the timer directly;
 # a client-wide total timeout would abort large streamed bodies instead.
 tokio = { version = "1.54.1", default-features = false, features = ["time"] }
