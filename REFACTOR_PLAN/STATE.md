@@ -25,7 +25,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T11 | `tasks/T11-clear-readonly.md` | completed | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 kept |
 | T12 | `tasks/T12-request-url.md` | pending review | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 batch |
 | T13 | `tasks/T13-line-and-bom-readers.md` | pending review | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 batch |
-| T14 | `tasks/T14-claim-publish.md` | todo | — | |
+| T14 | `tasks/T14-claim-publish.md` | pending review | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 batch complete |
 | T15 | `tasks/T15-fs-path-helpers.md` | todo | — | |
 | T16 | `tasks/T16-global-cli-and-format.md` | todo | — | before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
@@ -85,6 +85,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F26 | T13 | Add a `girpr-line-reader` row (and note the new audio-language/util-ini helpers) to the README shared-leaf table, alongside F22/F24. | proposed |
 | F27 | T13 | Consider relocating the pure `game_version_from_text` scan into a logic-free leaf so gircap no longer depends on an `app/` crate that also owns the repair config writer. | proposed |
 | F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | proposed |
+| F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | proposed |
+| F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | proposed |
 
 ## Persistent context
 
