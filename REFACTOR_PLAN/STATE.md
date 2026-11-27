@@ -31,7 +31,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | completed | 7 commits: log subscriber_for; sync/capture/girpr adoption; log internals; ANSI default fix; docs | CP6 kept |
 | T18 | `tasks/T18-report-core.md` | completed | 4 commits: report-core record/sink; sync/report/capture plane adoption | CP6 kept |
 | T19 | `tasks/T19-test-fixture-helpers.md` | pending review | 1 commit: fixture helper consolidation and cache-names leaf | CP7 batch |
-| T20 | `tasks/T20-test-http-servers.md` | todo | — | |
+| T20 | `tasks/T20-test-http-servers.md` | pending review | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 batch complete |
 | T21 | `tasks/T21-hyp-wire.md` | todo | — | |
 | T22 | `tasks/T22-capture-emit-stores.md` | todo | — | |
 | T23 | `tasks/T23-girsync-heartbeat.md` | todo | — | |
@@ -106,6 +106,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F47 | T19 | `app/lock::field` stays local (scans whole `key=value` lines, unlike whitespace-token `field_token`); consolidation needs an explicit decision on values containing spaces. | proposed |
 | F48 | T19 | Capture-side `read_json`/`write_json` helpers use generic deserialization and different error policies; left local by contract. | proposed |
 | F49 | T19 | `ctx_default` bakes `jobs = 1` and `backoff = none()`; a parameterized variant is only worth adding if a third fixture needs different defaults. | proposed |
+| F50 | T20 | CAP-15 raw-scripted reply mode deferred: the three raw-socket servers have deliberately different policies; a dedicated task could add a parameterized raw-reply helper and migrate only the malformed shape. | proposed |
+| F51 | T20 | CAP-16/test-fixture axum scaffolds deferred: capture's synchronous `Mock::start` and the artifact replay's custom accept loop need a base-aware router factory and blocking-serve variant; byte-exact body/length pins at risk. | proposed |
+| F52 | T20 | Consider re-exporting `girpr-test-http` from a shared test-support surface if a third axum server adopts it. | proposed |
 
 ## Persistent context
 
@@ -142,3 +145,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T18: broken-pipe policy stays parameterized by the caller via `io::Result`; each plane keeps its own `Val` vocabulary, layout, field order and event derivation.
 - CP6 done: T17/T18 kept; no fixes or reverts; workspace 2345 passed / 8 skipped; clippy clean when allowing the out-of-batch chunk-layout warning.
 - T19: `girpr-cache-names` owns the Windows ASCII-case-fold rule; `entry_names_with` parameterizes the `girpr-cache*` predicate; `CARGO_BIN_EXE_girpr` remains integration-only; test roots unchanged.
+- T20 boundary: only axum socket/stop/gate mechanics moved; the three server contracts and per-test reply policies stayed distinct; `argv_with_program` takes the sentinel as a parameter and the binary runner stayed in integration roots.
