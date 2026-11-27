@@ -170,7 +170,7 @@ where
         .buffer_unordered(jobs.max(1))
 }
 
-/// [`window`] over `0..n`.
+/// A sliding `window` over `0..n`.
 pub fn join_stream<R, E, F, Fut>(
     n: usize,
     jobs: usize,
@@ -186,7 +186,7 @@ where
     window(0..n, jobs, wording, f)
 }
 
-/// [`window`] over a caller-supplied index iterator.
+/// A sliding `window` over a caller-supplied index iterator.
 ///
 /// An iterator that stops early (for example on fail-fast) lets a caller keep
 /// starting no further work once it has seen a failure.

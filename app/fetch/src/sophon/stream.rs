@@ -331,7 +331,7 @@ impl<W: Write> Write for HashingWriter<W> {
 /// next attempt must not append to it. [`stream_chunk_to`] therefore asks the
 /// sink to restart before it tries again.
 ///
-/// That restart contract is the shared [`RestartableWrite`] trait in the digest
+/// That restart contract is the shared [`ChunkSink`] trait in the digest
 /// leaf: the same byte-sink method is used for file bodies elsewhere, so the
 /// trait and its `Vec<u8>` / `&mut T` implementations live in one place instead
 /// of two. The name stays here as a re-export so callers keep the fetch-side

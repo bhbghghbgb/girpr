@@ -92,6 +92,6 @@ pub use girpr_hyp_wire::{USER_AGENT, user_agent};
 /// the owner implement it without depending on this crate (and rebuilding when
 /// this crate changes); it is re-exported here so fetcher call sites keep one
 /// name. This crate writes through [`std::io::Write`] and calls
-/// [`BodyFile::restart`] before a retry; the owner keeps the path, the digests
-/// and the rename. The byte path is unchanged.
+/// [`girpr_digest::RestartableWrite::restart`] before a retry; the owner keeps
+/// the path, the digests and the rename. The byte path is unchanged.
 pub use girpr_digest::BodyFile;

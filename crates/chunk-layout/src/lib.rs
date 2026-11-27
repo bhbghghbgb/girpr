@@ -12,7 +12,7 @@
 //!
 //! Ranges carry signed `i64` bounds because that is the wire type both programs
 //! decode. An end is derived from a signed cursor with
-//! [`checked_end`](girpr_chunk_cost::checked_end): a negative result clamps to
+//! [`girpr_chunk_cost::checked_end`]: a negative result clamps to
 //! zero and an addition the signed type cannot represent is refused rather
 //! than wrapped into a plausible-looking `u64`. Byte totals that merely sum
 //! declarations use `girpr_chunk_cost::saturating_nonneg_sum` instead.
@@ -286,11 +286,11 @@ impl TileCursor {
                 i64::MAX
             }
         };
-        if let Some(previous) = self.last_offset {
-            if offset <= previous {
-                step.not_ascending = Some((previous, offset));
-                self.ascending = false;
-            }
+        if let Some(previous) = self.last_offset
+            && offset <= previous
+        {
+            step.not_ascending = Some((previous, offset));
+            self.ascending = false;
         }
         self.last_offset = Some(offset);
         if offset > self.covered {
