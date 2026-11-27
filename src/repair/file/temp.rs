@@ -867,33 +867,45 @@ fn promote_tmp(
     stats: &ChunkStats,
     writes: &FileWrites,
 ) -> Result<ChunkStats> {
+    // A stat failure is an I/O error, not absence. The shared gate only has a
+    // present/absent answer, so keep this call site's own "stat tmp" cause.
     let len = std::fs::metadata(tmp_path)
         .with_context(|| format!("stat tmp {}", tmp_path.display()))?
         .len();
-    if len != file.size as u64 {
-        anyhow::bail!("tmp length {} != expected {}", len, file.size);
-    }
-    let h = util::md5::md5_file_digest(tmp_path)?;
-    tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
-    if !h.matches_hex(&file.md5) {
-        if let Err(e) = std::fs::remove_file(tmp_path) {
-            // The next attempt resumes by length, so a `_tmp` that cannot be
-            // deleted only costs work: the final MD5 gate refuses it again.
-            tracing::warn!(
-                tmp = %tmp_path.display(),
-                error = %e,
-                "cannot delete the corrupt temp file; the next attempt will re-check it"
+    let verdict = verify_whole_file(file.size as u64, &file.md5, Some(len), || {
+        let h = util::md5::md5_file_digest(tmp_path)?;
+        tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
+        Ok(h.to_hex())
+    });
+    // The next action, error spelling and cleanup stay here; only the
+    // presence → length → digest decision is shared.
+    let observed = match verdict {
+        WholeFileVerdict::Match { observed } => observed,
+        WholeFileVerdict::LengthMismatch { .. } => {
+            anyhow::bail!("tmp length {} != expected {}", len, file.size);
+        }
+        WholeFileVerdict::DigestUnavailable(e) => return Err(e),
+        WholeFileVerdict::DigestMismatch { actual, .. } => {
+            if let Err(e) = std::fs::remove_file(tmp_path) {
+                // The next attempt resumes by length, so a `_tmp` that cannot be
+                // deleted only costs work: the final MD5 gate refuses it again.
+                tracing::warn!(
+                    tmp = %tmp_path.display(),
+                    error = %e,
+                    "cannot delete the corrupt temp file; the next attempt will re-check it"
+                );
+            }
+            anyhow::bail!(
+                "final md5 mismatch for {}: expect {} got {}",
+                file.rel,
+                file.md5,
+                actual
             );
         }
-        anyhow::bail!(
-            "final md5 mismatch for {}: expect {} got {}",
-            file.rel,
-            file.md5,
-            h
-        );
-    }
+        WholeFileVerdict::Absent => unreachable!("the tmp was just statted"),
+    };
     std::fs::rename(tmp_path, final_path).with_context(|| format!("promote {}", file.rel))?;
-    tracing::info!(chunks_total = stats.chunks_total, chunks_reused = stats.chunks_reused, chunks_downloaded = stats.chunks_downloaded, chunks_resumed = stats.chunks_resumed, download_bytes = stats.download_bytes, final_md5 = %h, "repaired");
+    tracing::info!(chunks_total = stats.chunks_total, chunks_reused = stats.chunks_reused, chunks_downloaded = stats.chunks_downloaded, chunks_resumed = stats.chunks_resumed, download_bytes = stats.download_bytes, final_md5 = %observed, "repaired");
     Ok(ChunkStats {
         download_bytes: stats.download_bytes,
         chunks_total: stats.chunks_total,
