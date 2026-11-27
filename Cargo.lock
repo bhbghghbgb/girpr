@@ -1210,6 +1210,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-chunk-layout"
+version = "0.1.0"
+dependencies = [
+ "girpr-chunk-cost",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "girpr-chunk-verify"
 version = "0.1.0"
 dependencies = [
