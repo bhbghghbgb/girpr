@@ -743,11 +743,10 @@ pub fn join_url(prefix: &str, id: &str) -> Result<reqwest::Url> {
 /// "ask again in a second". The same id under the *other* build's prefix is also
 /// a 404, which is what makes the build id part of a chunk's address.
 ///
-/// Same rule as `gircap`'s `RetryPolicy::should_retry_status`. Two tools in one
-/// repository disagreeing about the same status code is itself a defect.
+/// The rule itself lives in `girpr_retry::should_retry_status`, shared with
+/// capture so the two tools' published retry counts cannot drift apart.
 pub fn retryable(status: u16) -> bool {
-    matches!(status, 408 | 429)
-        || reqwest::StatusCode::from_u16(status).is_ok_and(|s| s.is_server_error())
+    girpr_retry::should_retry_status(status)
 }
 
 #[cfg(test)]
