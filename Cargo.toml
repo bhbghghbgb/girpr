@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crates/chunk-cost", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
+members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crates/chunk-cost", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-io", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -201,6 +201,11 @@ girpr-persistent-plan = { path = "app/persistent-plan" }
 # unit-test-only fixtures and scan helpers stay out of shipped builds.
 girpr-util-path = { path = "app/util-path" }
 girpr-util-hash = { path = "app/util-hash" }
+# The bounded byte-copy/zero-fill and reserved-capacity capture mechanics the
+# two correctness-critical repair writers share. The leaf composes util-hash's
+# bounded read; the ceiling charges and failure classifications stay at the
+# call sites.
+girpr-util-io = { path = "app/util-io" }
 girpr-util-ini = { path = "app/util-ini" }
 # Only the `Stream`/`StreamExt` traits and `stream::iter` are used, never the
 # `join!`/`select!`-style macros, so the default `async-await-macro` feature

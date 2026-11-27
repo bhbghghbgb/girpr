@@ -1169,6 +1169,7 @@ dependencies = [
  "girpr-test-support",
  "girpr-util-hash",
  "girpr-util-ini",
+ "girpr-util-io",
  "girpr-util-path",
  "girpr-value-ranges",
  "predicates",
@@ -1542,6 +1543,14 @@ dependencies = [
  "rust-ini",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "girpr-util-io"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "girpr-util-hash",
 ]
 
 [[package]]
