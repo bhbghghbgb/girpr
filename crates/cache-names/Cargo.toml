@@ -13,5 +13,5 @@ path = "src/lib.rs"
 workspace = true
 
 # Deliberately std-only. `girpr-tempdir` is a girsync-free leaf and cannot
-# depend on `girsync-cache`, so the one spelling of the cache reservation this
-# its test helpers need lives here rather than in a crate that pulls in redb.
+# depend on `girsync-cache`, so the one spelling of the cache reservation its
+# test helpers need lives here rather than in a crate that pulls in redb.
