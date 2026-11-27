@@ -9,6 +9,24 @@ use std::str::FromStr;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Directive;
 
+/// Try a spec once, warning with the caller's fallback description on failure.
+///
+/// Both callers build a filter from a spec that might be a typo in `RUST_LOG`.
+/// The wording is shared — including the `{spec:?}` and `{using:?}` quoting —
+/// because it is asserted in both paths; the *kind* of fallback is not, so the
+/// caller decides what to do with `None`. `filter` builds a fresh filter from
+/// its literal fallback, while `console_filter` starts from an empty filter
+/// and re-adds its fixed directives.
+fn parse_or_warn(spec: &str, using: &str) -> Option<EnvFilter> {
+    match EnvFilter::try_new(spec) {
+        Ok(filter) => Some(filter),
+        Err(e) => {
+            eprintln!("WARN ignoring the log filter {spec:?}: {e}; using {using:?}");
+            None
+        }
+    }
+}
+
 /// Build a filter from `spec`, falling back to `fallback` when it does not
 /// parse.
 ///
@@ -18,13 +36,7 @@ use tracing_subscriber::filter::Directive;
 /// that silently became something else is a filter the user does not know
 /// about.
 pub fn filter(spec: &str, fallback: &str) -> EnvFilter {
-    match EnvFilter::try_new(spec) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("WARN ignoring the log filter {spec:?}: {e}; using {fallback:?}");
-            EnvFilter::new(fallback)
-        }
-    }
+    parse_or_warn(spec, fallback).unwrap_or_else(|| EnvFilter::new(fallback))
 }
 
 /// Build a **console** filter from `RUST_LOG` and the directives that must
@@ -45,16 +57,7 @@ pub fn filter(spec: &str, fallback: &str) -> EnvFilter {
 pub fn console_filter(rust_log: Option<&str>, fixed: &[&str]) -> EnvFilter {
     let mut filter = match rust_log {
         None => EnvFilter::default(),
-        Some(spec) => match EnvFilter::try_new(spec) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!(
-                    "WARN ignoring the log filter {spec:?}: {e}; using {:?}",
-                    fixed.join(",")
-                );
-                EnvFilter::default()
-            }
-        },
+        Some(spec) => parse_or_warn(spec, &fixed.join(",")).unwrap_or_default(),
     };
     for directive in fixed {
         match Directive::from_str(directive) {
@@ -68,36 +71,12 @@ pub fn console_filter(rust_log: Option<&str>, fixed: &[&str]) -> EnvFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use tracing::{Event, Subscriber};
-    use tracing_subscriber::Layer;
-    use tracing_subscriber::layer::{Context, SubscriberExt as _};
-    use tracing_subscriber::registry::LookupSpan;
-
-    /// Collects the targets of the events that reach it.
-    #[derive(Clone, Default)]
-    struct Targets(Arc<Mutex<Vec<&'static str>>>);
-
-    impl Targets {
-        fn seen(&self) -> Vec<&'static str> {
-            self.0.lock().expect("the lock is not poisoned").clone()
-        }
-    }
-
-    impl<S> Layer<S> for Targets
-    where
-        S: Subscriber + for<'a> LookupSpan<'a>,
-    {
-        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-            self.0
-                .lock()
-                .expect("the lock is not poisoned")
-                .push(event.metadata().target());
-        }
-    }
+    use crate::test_util::Targets;
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
 
     /// The targets of the events that `filter` lets through.
-    fn targets_of_filter(filter: EnvFilter) -> Vec<&'static str> {
+    fn targets_of_filter(filter: EnvFilter) -> Vec<String> {
         let targets = Targets::default();
         let subscriber = tracing_subscriber::registry().with(targets.clone().with_filter(filter));
         tracing::subscriber::with_default(subscriber, || {
@@ -108,7 +87,7 @@ mod tests {
     }
 
     /// The targets of the events that `spec` lets through.
-    fn targets_of(spec: &str) -> Vec<&'static str> {
+    fn targets_of(spec: &str) -> Vec<String> {
         targets_of_filter(EnvFilter::new(spec))
     }
 
@@ -141,19 +120,25 @@ mod tests {
         // own level stands and the global directive applies to the rest.
         assert_eq!(
             targets_of("girpr=info,debug"),
-            vec!["reqwest::x"],
+            vec!["reqwest::x".to_string()],
             "the project's own level is not widened by a global directive"
         );
         // The order in the spec does not change that.
-        assert_eq!(targets_of("debug,girpr=info"), vec!["reqwest::x"]);
+        assert_eq!(
+            targets_of("debug,girpr=info"),
+            vec!["reqwest::x".to_string()]
+        );
     }
 
     #[test]
     fn a_tie_on_the_same_target_goes_to_the_last_directive() {
         // Two directives for the same target: the later one wins. That is
         // why the policy puts the flag's own directive last.
-        assert_eq!(targets_of("girpr=info,girpr=trace"), vec!["girpr::x"]);
-        assert_eq!(targets_of("girpr=trace,girpr=info"), Vec::<&str>::new());
+        assert_eq!(
+            targets_of("girpr=info,girpr=trace"),
+            vec!["girpr::x".to_string()]
+        );
+        assert_eq!(targets_of("girpr=trace,girpr=info"), Vec::<String>::new());
     }
 
     /// `console_filter` appends the project's own directive after `RUST_LOG`,
@@ -184,12 +169,12 @@ mod tests {
         // specific target directive wins, so only the other crate shows up.
         assert_eq!(
             targets_of_filter(console_filter(Some("debug"), &["girpr=info"])),
-            vec!["reqwest::x"]
+            vec!["reqwest::x".to_string()]
         );
         // The appended directive wins a tie on the same target ("last wins").
         assert_eq!(
             targets_of_filter(console_filter(Some("girpr=error"), &["girpr=trace"])),
-            vec!["girpr::x"]
+            vec!["girpr::x".to_string()]
         );
     }
 }

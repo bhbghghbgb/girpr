@@ -242,8 +242,8 @@ pub fn warn_subscriber_install(out: &mut dyn Write, error: impl std::fmt::Displa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{SharedBytes, Targets};
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
 
     /// A scratch directory under the system temp dir, unique per test.
     /// tempfile supplies the random name and its guard removes the tree when
@@ -255,39 +255,11 @@ mod tests {
             .expect("create scratch directory")
     }
 
-    #[derive(Clone, Default)]
-    struct SharedVec(Arc<Mutex<Vec<u8>>>);
-
-    impl SharedVec {
-        fn snapshot(&self) -> Vec<u8> {
-            self.0.lock().expect("not poisoned").clone()
-        }
-    }
-
-    impl Write for SharedVec {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("not poisoned").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> fmt::MakeWriter<'a> for SharedVec {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// The console layer obeys the filter the caller chose, and a plan with no
     /// file never asks the caller to open one or returns a guard to own.
     #[test]
     fn subscriber_for_scopes_the_console_and_skips_a_fileless_plan() {
-        let console = SharedVec::default();
+        let console = SharedBytes::default();
         let plan = crate::LogPlan::resolve(
             "girpr",
             crate::LogOptions {
@@ -322,7 +294,7 @@ mod tests {
     /// stack stays a working console-only one, with nothing to flush.
     #[test]
     fn subscriber_for_degrades_to_console_only() {
-        let console = SharedVec::default();
+        let console = SharedBytes::default();
         let named = std::path::PathBuf::from("unopenable.log");
         let plan = crate::LogPlan::resolve(
             "girpr",
@@ -388,7 +360,7 @@ mod tests {
         let (subscriber, worker) = subscriber_for(
             &plan,
             ConsoleSpec {
-                writer: SharedVec::default(),
+                writer: SharedBytes::default(),
                 filter: plan.console_filter(),
                 ansi: false,
             },
@@ -399,7 +371,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "girpr::logging", "log file: {}", path.display());
         });
-        worker.expect("the opened file owns a guard");
+        drop(worker.expect("the opened file owns a guard"));
 
         let body = std::fs::read_to_string(&path).expect("the file was written");
         assert!(
@@ -426,7 +398,7 @@ mod tests {
         let (subscriber, worker) = subscriber_for(
             &plan,
             ConsoleSpec {
-                writer: SharedVec::default(),
+                writer: SharedBytes::default(),
                 filter: plan.console_filter(),
                 ansi: false,
             },
@@ -437,7 +409,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "girsync::logging", "a json line");
         });
-        worker.expect("the opened file owns a guard");
+        drop(worker.expect("the opened file owns a guard"));
 
         let body = std::fs::read_to_string(&path).expect("the file was written");
         assert!(body.contains("\"level\":\"INFO\""), "{body}");
@@ -448,20 +420,19 @@ mod tests {
     /// reaches the writer, with no silent drop-counter to go with it.
     #[test]
     fn file_sink_preserves_every_queued_line_on_flush() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let bytes = SharedBytes::default();
         let plan = crate::LogPlan::resolve(
             "girpr",
             crate::LogOptions::default(),
             crate::EnvOptions::default(),
         );
-        let (mut writer, guard, _filter) = file_sink(SharedVec(Arc::clone(&bytes)), &plan);
+        let (mut writer, guard, _filter) = file_sink(bytes.clone(), &plan);
         for i in 0..32 {
             writeln!(writer, "line {i}").expect("queue the line");
         }
         drop(guard);
 
-        let written = String::from_utf8(bytes.lock().expect("not poisoned").clone())
-            .expect("the lines are utf-8");
+        let written = String::from_utf8(bytes.snapshot()).expect("the lines are utf-8");
         assert_eq!(written.lines().count(), 32, "no line is dropped: {written}");
     }
 
@@ -489,26 +460,7 @@ mod tests {
     /// this crate's target would be filtered out of stderr entirely.
     #[test]
     fn the_announcement_keeps_the_callers_target() {
-        use std::sync::{Arc, Mutex};
-        use tracing::{Event, Subscriber};
-        use tracing_subscriber::Layer;
-        use tracing_subscriber::layer::{Context, SubscriberExt as _};
-        use tracing_subscriber::registry::LookupSpan;
-
-        #[derive(Clone, Default)]
-        struct Targets(Arc<Mutex<Vec<String>>>);
-
-        impl<S> Layer<S> for Targets
-        where
-            S: Subscriber + for<'a> LookupSpan<'a>,
-        {
-            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-                self.0
-                    .lock()
-                    .expect("not poisoned")
-                    .push(event.metadata().target().to_string());
-            }
-        }
+        use tracing_subscriber::layer::SubscriberExt as _;
 
         let plan = crate::LogPlan::resolve(
             "girpr",
@@ -520,7 +472,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             crate::announce_log_file!(plan, "girpr::logging");
         });
-        assert_eq!(&*seen.0.lock().expect("not poisoned"), &["girpr::logging"]);
+        assert_eq!(seen.seen(), ["girpr::logging"]);
     }
 
     #[test]

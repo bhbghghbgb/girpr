@@ -65,6 +65,10 @@ pub mod install;
 pub mod level;
 pub mod plan;
 
+/// Internal mechanics shared by this crate's own unit tests.
+#[cfg(test)]
+mod test_util;
+
 /// Test-only log-capture helpers (the shared `logs_of` implementation and its
 /// JSON-formatted counterpart).
 ///
