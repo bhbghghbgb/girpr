@@ -92,8 +92,6 @@ rayon = { workspace = true }
 # The case-fix rename claims its short temporary sibling through the shared
 # atomic claim primitive, so the claim and its cleanup have one home.
 girpr-util-path = { path = "../../app/util-path" }
-# The unit tests build scratch directories with tempfile directly.
-tempfile = { workspace = true }
 # Lexical normalization of junction/symlink target text. `Path::clean()` collapses
 # `.`/`..` without asking the filesystem and keeps a leading `..`, which is what
 # lets the plan refuse a target that escapes the root. Dependency-free.
@@ -126,6 +124,8 @@ clap = { workspace = true, features = ["derive"] }
 # workspace. A dev-dependency, because nothing that ships creates a scratch
 # directory.
 girpr-tempdir = { path = "../../crates/tempdir" }
+# The unit tests build scratch directories with tempfile directly.
+tempfile = { workspace = true }
 # The girsync-coupled test fixtures (option/cache/planner builders) that used to
 # live in `girpr-tempdir::test_support`. This crate already depends on girsync,
 # so it is the right place for them; the scratch-directory crate stays free of
