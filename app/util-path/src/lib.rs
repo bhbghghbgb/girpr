@@ -5,6 +5,9 @@
 //!   lexical + filesystem checks and `/`-form rel spellings.
 //! - [`atomic`] — `write_atomic`: temp-sibling-then-rename publishing for every
 //!   artifact girpr writes.
+//! - [`readonly`] — `clear_readonly` and `ReadOnlyOutcome`: the stat → check →
+//!   clear → set_permissions sequence for one file, with the error policy left
+//!   to the caller.
 //!
 //! The re-exports keep the shared names at the crate root. Nothing here names
 //! a product data model: the crate holds only mechanics.
@@ -16,6 +19,7 @@
 
 pub mod atomic;
 pub mod path;
+pub mod readonly;
 
 // Unit-test-only junction fixture and classifier. Only this crate's tests and
 // the tests that enable `test-support` reach it, so it stays out of shipped
