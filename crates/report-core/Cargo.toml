@@ -3,7 +3,7 @@ name = "girpr-report-core"
 version.workspace = true
 edition.workspace = true
 # Built with the stable Rust toolchain selected at the workspace root.
-description = "The shared ordered-JSON, line-writing and output-format mechanics used by the three report planes"
+description = "The shared ordered record container, JSON writer, emit sink and output-format mechanics used by the three report planes"
 
 [lib]
 name = "girpr_report_core"
