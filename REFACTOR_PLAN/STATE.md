@@ -16,9 +16,9 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T02 | `tasks/T02-chunk-layout.md` | completed | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | CP1 kept |
 | T03 | `tasks/T03-xxh64-hex-boundary.md` | completed | 4 commits: digest XXH64 conversions; persistent-plan/fetch adoption; cache-json hex wrappers; chunk-identity normalize_hex re-export | CP1 kept |
 | T04 | `tasks/T04-digest-internals.md` | completed | 3 commits: restartable sink unification; Md5/Sha256 templating; shared buffered hash/copy loop | CP1 kept |
-| T05 | `tasks/T05-retryable-status.md` | pending review | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | resolves T06 dependency |
-| T06 | `tasks/T06-async-retry-driver.md` | pending review | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 batch complete |
-| T07 | `tasks/T07-bounded-join.md` | pending review | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 batch complete |
+| T05 | `tasks/T05-retryable-status.md` | completed | 3 commits: shared retry predicate; fetch adoption; capture-http adoption | CP2 kept |
+| T06 | `tasks/T06-async-retry-driver.md` | completed | 3 commits: retry-driver leaf; fetch loop adoption; capture-http loop adoption | CP2 kept |
+| T07 | `tasks/T07-bounded-join.md` | completed | 4 commits: async-join leaf; capture-http ordered join; repair adoptions; test-helper downcast | CP2 kept |
 | T08 | `tasks/T08-ledger-cas-helpers.md` | todo | — | |
 | T09 | `tasks/T09-whole-file-verify.md` | todo | — | |
 | T10 | `tasks/T10-bounded-byte-io.md` | todo | — | |
@@ -42,7 +42,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | Checkpoint | Reviews | Status | Outcome |
 | --- | --- | --- | --- |
 | CP1 | T01–T04 | done | all kept; T01 unused-import defect fixed in review |
-| CP2 | T05–T07 | open | |
+| CP2 | T05–T07 | done | all kept; no fixes or reverts |
 | CP3 | T08–T11 | open | |
 | CP4 | T12–T14 | open | |
 | CP5 | T15–T16 | open | |
@@ -68,6 +68,8 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F09 | T07 | Repair phases still render `Failed(JoinError)` with their own `Display` templates; switching to the payload-aware `join_failure` would change published error text and needs an explicit wording decision. | proposed |
 | F10 | T07 | `inplace.rs::bounded_window` stays local: an ordered buffered window with no index or panic recovery and file-local reservation semantics. | proposed |
 | F11 | T07 | Collapsing `spawn_blocking_traced` and the file driver's setup wrappers further would bury the load-bearing "capture at spawn time" documentation and the diagnostics-owner hook. | proposed |
+| F12 | T07 | `LocalRead::join_failure` in `src/repair/phases/metadata.rs` changed its cancellation wording to "the {label} task was cancelled: {JoinError}"; no test/golden asserts the old text — decide explicitly if stderr wording is a published contract (with F09). | proposed |
+| F13 | T07 | `src/repair/persistent_exec.rs` now gives a lost task a policy (`files_failed += 1`, fail-fast abort) where the old loop discarded results; confirm this deliberate behavior addition, covered by tests. | proposed |
 
 ## Persistent context
 
@@ -89,3 +91,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T06 note: the report's 897-898 "retry drivers stay local" note does not block the task — the new leaf holds no classification or side effects, and jitter/logging/error types stayed in the products.
 - T06 observation: clippy reports one warning in `crates/chunk-layout` (T02's crate, already reviewed at CP1); not re-opened.
 - T07 guardrails held: capture's buffered-future panics and repair's `Handle::block_on` cancellation remain distinct; dispatcher and `DiagnosticsOwner` survive via the thread-setup hook; published fallback strings unchanged.
+- CP2 done: T05–T07 kept; no fixes or reverts; workspace 2297 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
