@@ -2,7 +2,9 @@
 //!
 //! - [`md5`] — one read, every answer: `scan_file`, `scan_reader`,
 //!   `read_range`, `md5_file`, `md5_file_slice`, plus `Scan`, `Md5` and
-//!   `EMPTY_MD5`.
+//!   `EMPTY_MD5`;
+//! - `read_up_to` / `reserve_exact` — the reserved-capacity bounded read the
+//!   file writers compose for their capture staging.
 //!
 //! The re-exports keep the shared names at the crate root. The MD5 file
 //! wrappers stayed in [`md5`] rather than moving to the root: `md5_file` and
@@ -13,4 +15,6 @@
 
 pub mod md5;
 
-pub use self::md5::{EMPTY_MD5, Md5, Scan, ScanRange, read_range, scan_file, scan_reader};
+pub use self::md5::{
+    EMPTY_MD5, Md5, Scan, ScanRange, read_range, read_up_to, reserve_exact, scan_file, scan_reader,
+};

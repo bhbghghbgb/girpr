@@ -34,6 +34,21 @@ fn with_md5_scratch<R>(f: impl FnOnce(&mut [u8]) -> R) -> R {
     })
 }
 
+/// Reserve spare capacity in `buf` for at least `want` more bytes.
+///
+/// The buffer keeps its allocation across calls, so the common case reserves
+/// nothing: only the shortfall over the existing spare capacity is claimed.
+/// The fallible reservation is what lets a corrupt, server-supplied length
+/// become an error instead of an abort.
+pub fn reserve_exact(buf: &mut Vec<u8>, want: usize) -> Result<()> {
+    let have = buf.capacity() - buf.len();
+    if have < want {
+        buf.try_reserve_exact(want - have)
+            .with_context(|| format!("reserve {want} bytes for a file read"))?;
+    }
+    Ok(())
+}
+
 /// Read up to `want` bytes from `f` into `buf`'s spare capacity, without a
 /// zero-fill pass first.
 ///
@@ -42,13 +57,10 @@ fn with_md5_scratch<R>(f: impl FnOnce(&mut [u8]) -> R) -> R {
 /// reserved scratch buffer is refilled without ever memsetting bytes the read
 /// immediately overwrites. `buf` keeps its allocation across calls. The `Take`
 /// limit makes a short source end the read exactly as a failed `read_exact`
-/// would; the caller checks the byte count.
-fn read_into_vec(f: &mut File, buf: &mut Vec<u8>, want: usize) -> Result<usize> {
-    let have = buf.capacity() - buf.len();
-    if have < want {
-        buf.try_reserve_exact(want - have)
-            .with_context(|| format!("reserve {want} bytes for a file read"))?;
-    }
+/// would; the caller checks the byte count. This is the one implementation of
+/// the reserved-capacity bounded read shared with the capture path.
+pub fn read_up_to<R: Read>(f: &mut R, buf: &mut Vec<u8>, want: usize) -> Result<usize> {
+    reserve_exact(buf, want)?;
     let n = (&mut *f).take(want as u64).read_to_end(buf)?;
     Ok(n)
 }
@@ -326,7 +338,7 @@ pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.try_reserve_exact(len)
         .with_context(|| format!("reserve {len} bytes for a file range"))?;
-    let n = read_into_vec(f, &mut out, len)?;
+    let n = read_up_to(f, &mut out, len)?;
     if n != len {
         anyhow::bail!("short read: wanted {len} bytes, got {n}");
     }
@@ -416,10 +428,10 @@ pub fn md5_reader_slice_digest(
     while remaining > 0 {
         let want = (remaining as usize).min(MD5_BUF);
         // `buf` is a reusable scratch: clear it so each read fills the same
-        // capacity from index 0, and let `read_into_vec` append only the bytes
+        // capacity from index 0, and let `read_up_to` append only the bytes
         // that were actually initialized. No zero-fill, no per-call allocation.
         buf.clear();
-        let n = read_into_vec(f, buf, want)?;
+        let n = read_up_to(f, buf, want)?;
         if n == 0 {
             break;
         }
