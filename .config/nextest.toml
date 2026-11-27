@@ -1,7 +1,7 @@
 # The workspace's test runner.
 #
 # Every crate here runs its tests with `cargo nextest run`: `girpr`,
-# `girpr-fetch`, `girpr-lock`, `girpr-audio`, `girpr-chunk-cost`, `girpr-chunk-identity`, `girpr-util-path`,
+# `girpr-async-join`, `girpr-fetch`, `girpr-lock`, `girpr-audio`, `girpr-chunk-cost`, `girpr-chunk-identity`, `girpr-util-path`,
 # `girpr-path-shape`,
 # `girpr-util-hash`, `girpr-util-ini`, `girpr-util-counter`, `girpr-log`,
 # `girpr-report`, `girpr-tempdir`, `girsync-cache`, `girsync-leaves`,

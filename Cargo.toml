@@ -38,7 +38,7 @@ name = "contracts"
 path = "tests/contracts.rs"
 
 [workspace]
-members = [".", "app/audio", "crates/audio-language", "crates/chunk-cost", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
+members = [".", "app/audio", "crates/async-join", "crates/audio-language", "crates/chunk-cost", "crates/chunk-layout", "crates/chunk-identity", "app/chunk-verify", "crates/cli", "crates/digest", "app/dispatch", "app/persistent-plan", "crates/exit", "app/fetch", "crates/filter", "crates/fs-identity", "crates/fs-names", "app/lock", "crates/log", "crates/loopback-mock", "crates/model", "crates/path-shape", "crates/proto", "app/report", "crates/report-core", "app/repair-plan", "app/repair-policy", "crates/retry", "crates/retry-driver", "crates/tempdir", "app/test-fixtures", "app/test-support", "crates/time", "app/util-counter", "app/util-hash", "app/util-ini", "app/util-path", "crates/value-ranges", "tools/sync", "tools/sync/cache", "tools/sync/cache-json", "tools/sync/leaves", "tools/sync/test-support", "tools/capture", "tools/capture/hash", "tools/capture/http", "tools/capture/test-support"]
 # A root `cargo build`/`cargo test` means the product, not its dev tools.
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
@@ -158,6 +158,11 @@ anyhow = "1.0.105"
 # `backoff` and the ±50 % jitter is this program's choice, passed in as a
 # parameter, so its retry waits stay exactly as before.
 girpr-retry = { path = "crates/retry" }
+# The indexed bounded join window and the one panic-payload rule. The leaf owns
+# the concurrency bound, slot restoration, payload recovery and the
+# `spawn_blocking` entry point; every repair phase keeps its own failure policy
+# and its own thread-setup (dispatcher, diagnostics owner) at the call site.
+girpr-async-join = { path = "crates/async-join" }
 walkdir = "2.5.1"
 # Owns the purge stage's bounded parallel stat/delete: rayon's indexed collect
 # returns one result per candidate in input order, so the caller still emits

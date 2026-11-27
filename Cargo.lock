@@ -1097,6 +1097,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures",
+ "girpr-async-join",
  "girpr-digest",
  "girpr-loopback-mock",
  "girpr-retry",
@@ -1139,6 +1140,7 @@ dependencies = [
  "axum",
  "clap",
  "futures-util",
+ "girpr-async-join",
  "girpr-audio",
  "girpr-audio-language",
  "girpr-chunk-cost",
@@ -1183,6 +1185,16 @@ dependencies = [
  "trycmd",
  "walkdir",
  "zstd",
+]
+
+[[package]]
+name = "girpr-async-join"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "futures-util",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1535,6 +1547,7 @@ name = "girpr-util-path"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "girpr-async-join",
  "girpr-fs-names",
  "girpr-path-shape",
  "girpr-tempdir",
