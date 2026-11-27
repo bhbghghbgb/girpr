@@ -13,6 +13,8 @@ use super::{
     COPY_BUF, ChunkStats, FileCtx, FileId, FileWrites, Inplace, Mode, PlannedFile, note_write,
     reserve_write, reusable_verdict, scratch_slice,
 };
+use girpr_chunk_verify::{WholeFileVerdict, digest_matches, verify_whole_file};
+
 use crate::repair::diagnostics;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::sophon::{self, FileReuse, SophonChunk};
@@ -44,33 +46,49 @@ pub(super) async fn attempt_temp(
     // start and is refused by the guard, so it is read again rather than
     // skipped from a stale verdict.
     if let Some(verdict) = reusable_verdict(ctx, file_id, file, std::fs::metadata(final_path)) {
-        if verdict.file_md5.matches_hex(&file.md5) {
+        if digest_matches(&file.md5, &verdict.file_md5.to_hex()) {
             tracing::debug!(actual_md5 = %verdict.file_md5, "check: md5 match -> skip");
             diagnostics::record_plan_scan_reused();
             return Ok(Inplace::Skipped);
         }
         tracing::debug!(actual_md5 = %verdict.file_md5, "check: md5 mismatch -> needs repair");
     } else {
-        match util::file_len(final_path) {
+        // An unreadable stat is neither "there" nor "not there" and already has
+        // its own warning; it is not handed to a gate that has no place for it.
+        let observed_size = match util::file_len(final_path) {
             util::FileLen::Absent => {
                 tracing::debug!(path = %final_path.display(), "check: missing local file");
+                None
             }
-            util::FileLen::Unreadable(e) => tracing::warn!(
-                path = %final_path.display(),
-                error = %e,
-                "check: cannot stat the local file -> needs repair"
-            ),
-            util::FileLen::Present(n) if n != file.size as u64 => {
-                tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
+            util::FileLen::Unreadable(e) => {
+                tracing::warn!(
+                    path = %final_path.display(),
+                    error = %e,
+                    "check: cannot stat the local file -> needs repair"
+                );
+                None
             }
-            util::FileLen::Present(_) => match util::md5::md5_file_digest(final_path) {
-                Ok(h) if h.matches_hex(&file.md5) => {
-                    tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
-                    return Ok(Inplace::Skipped);
-                }
-                Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
-                Err(e) => tracing::debug!("check: unreadable ({e:#}) -> needs repair"),
-            },
+            util::FileLen::Present(n) => Some(n),
+        };
+        let verdict = verify_whole_file(file.size as u64, &file.md5, observed_size, || {
+            util::md5::md5_file_digest(final_path).map(|h| h.to_hex())
+        });
+        match verdict {
+            WholeFileVerdict::Match { observed } => {
+                tracing::debug!(actual_md5 = %observed, "check: md5 match -> skip");
+                return Ok(Inplace::Skipped);
+            }
+            WholeFileVerdict::LengthMismatch { actual, .. } => {
+                tracing::debug!(actual_size = actual, "check: size mismatch -> needs repair");
+            }
+            WholeFileVerdict::DigestMismatch { actual, .. } => {
+                tracing::debug!(actual_md5 = %actual, "check: md5 mismatch -> needs repair");
+            }
+            WholeFileVerdict::DigestUnavailable(e) => {
+                tracing::debug!("check: unreadable ({e:#}) -> needs repair");
+            }
+            // Both "not there" shapes were logged above, with their own wording.
+            WholeFileVerdict::Absent => {}
         }
     }
     if ctx.dry_run {

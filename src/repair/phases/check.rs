@@ -34,7 +34,7 @@ use crate::util;
 
 use crate::repair::persistent::{self, PersistentState};
 use crate::repair::scan::ScanReport;
-use girpr_chunk_verify::Verdict;
+use girpr_chunk_verify::{Verdict, WholeFileVerdict, verify_whole_file};
 use girpr_fetch::persistent::{hotfix_is_intact, verify_manifest_bytes};
 use girpr_persistent_plan::PersistentRow;
 use girpr_repair_plan::{FileId, PlannedFile, RepairPlan};
@@ -514,34 +514,47 @@ fn check_one_with(
             return CheckOutcome::failed(CheckFailure::PathEscaped(format!("{e:#}")));
         }
     };
-    let actual_size = match (io.file_len)(path) {
-        util::FileLen::Present(n) => n,
+    // A stat that fails for a reason other than absence is a diagnostic, not a
+    // presence answer. It stays here: the gate knows only "there" and "not
+    // there", and this phase keeps its own wording for the third case.
+    let observed_size = match (io.file_len)(path) {
+        util::FileLen::Present(n) => Some(n),
         util::FileLen::Unreadable(e) => {
             return CheckOutcome::failed(CheckFailure::Unreadable(e.to_string()));
         }
-        util::FileLen::Absent => return CheckOutcome::failed(CheckFailure::Absent),
+        util::FileLen::Absent => None,
     };
-    if actual_size != f.size as u64 {
-        return CheckOutcome::failed(CheckFailure::Size(actual_size));
+    // The digest source is injected: the scan's verdict needs no read, while a
+    // fresh check hashes only after presence and length pass. Both flow through
+    // the one gate; the next action and warning stay in this caller's arms.
+    let verdict = match digest {
+        DigestSource::Scanned(v) => verify_whole_file(f.size as u64, &f.md5, observed_size, || {
+            Ok::<_, anyhow::Error>(v.file_md5.to_hex())
+        }),
+        DigestSource::Read => verify_whole_file(f.size as u64, &f.md5, observed_size, || {
+            (io.md5_file)(path).map(|digest| digest.to_hex())
+        }),
+    };
+    match verdict {
+        WholeFileVerdict::Absent => CheckOutcome::failed(CheckFailure::Absent),
+        WholeFileVerdict::LengthMismatch { actual, .. } => {
+            CheckOutcome::failed(CheckFailure::Size(actual))
+        }
+        WholeFileVerdict::DigestUnavailable(e) => {
+            CheckOutcome::failed(CheckFailure::Read(format!("{e:#}")))
+        }
+        WholeFileVerdict::DigestMismatch { actual, .. } => {
+            let damaged_chunks = match digest {
+                DigestSource::Scanned(v) => Some(v.damaged_chunks()),
+                DigestSource::Read => None,
+            };
+            CheckOutcome::failed(CheckFailure::Md5 {
+                actual,
+                damaged_chunks,
+            })
+        }
+        WholeFileVerdict::Match { .. } => CheckOutcome::clean(),
     }
-    let actual = match digest {
-        DigestSource::Scanned(v) => v.file_md5,
-        DigestSource::Read => match (io.md5_file)(path) {
-            Ok(digest) => digest,
-            Err(e) => return CheckOutcome::failed(CheckFailure::Read(format!("{e:#}"))),
-        },
-    };
-    if actual.matches_hex(&f.md5) {
-        return CheckOutcome::clean();
-    }
-    let damaged_chunks = match digest {
-        DigestSource::Scanned(v) => Some(v.damaged_chunks()),
-        DigestSource::Read => None,
-    };
-    CheckOutcome::failed(CheckFailure::Md5 {
-        actual: actual.to_hex(),
-        damaged_chunks,
-    })
 }
 
 #[cfg(test)]
