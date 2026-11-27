@@ -156,7 +156,9 @@ girpr-retry = { path = "../../crates/retry" }
 # programs, so sharing it couples nothing that matters (see docs/00-spec.md
 # §2, "no shared contracts": the flag *names* and defaults are shared on
 # purpose now, the behaviour is not).
-girpr-log = { path = "../../crates/log" }
+# `json` supplies the file layer's formatter in the shared subscriber stack;
+# this tool already enables the same feature on its own tracing-subscriber dep.
+girpr-log = { path = "../../crates/log", features = ["json"] }
 # The named UTC timestamp formats. The compact stamp names capture and manifest
 # ids; gircap keeps its own artifact bytes and the other formats stay distinct.
 girpr-time = { path = "../../crates/time" }

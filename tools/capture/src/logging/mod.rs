@@ -31,13 +31,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use girpr_log::install::{
-    emit_env_warnings, file_sink, open_log_file as open_shared_log_file, warn_subscriber_install,
+    ConsoleSpec, FileFormat, SpanFields, emit_env_warnings, open_log_file as open_shared_log_file,
+    warn_subscriber_install,
 };
 use girpr_log::{LogOptions, LogPlan};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt::writer::MakeWriter;
-use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 /// The verbosity names, re-exported so that `crate::logging::Level` is the one
@@ -120,8 +119,6 @@ pub fn init(
     log_file: Option<&Path>,
     no_log_file: bool,
 ) -> LogGuard {
-    use tracing_subscriber::fmt::layer;
-
     let env = girpr_log::env_options(PROJECT);
     emit_env_warnings(&mut std::io::stderr(), "gircap:", &env);
     let plan = LogPlan::resolve(
@@ -139,55 +136,37 @@ pub fn init(
     // Kept as text for the start-up event below; the filter itself is moved
     // into the subscriber layer.
     let console_filter_text = console_filter.to_string();
-    let stderr_layer = layer()
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
-        .with_target(true);
 
-    // The file sink. A plan with no file has no sink at all: a debug build
-    // that was not asked for a file, or any build that was told
-    // `--no-log-file`. A log file that cannot be opened is reported and then
-    // skipped: the capture is the thing that was asked for, and losing its
-    // narration is a lesser harm than losing it. Everything before this point
-    // happens with no subscriber installed, so the failure is a raw stderr
-    // write.
-    let file = match plan.file_path() {
-        None => None,
-        Some(path) => match open_log_file(path) {
+    // The shared stack owns the layer assembly, the JSON file format and the
+    // non-blocking sink. What stays here is capture's side of it: colour only
+    // when stderr is a terminal, and the `gircap:` wording when a file cannot
+    // be opened (the capture itself is the thing that was asked for, so a lost
+    // narration is a lesser harm than a failed run). Both happen before a
+    // subscriber exists, so the warning is a raw stderr write.
+    let (subscriber, worker) = girpr_log::install::subscriber_for(
+        &plan,
+        ConsoleSpec {
+            writer: std::io::stderr,
+            filter: console_filter,
+            ansi: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        },
+        FileFormat::Json,
+        SpanFields::ALL,
+        |path| match open_log_file(path) {
             Err(e) => {
                 eprintln!("gircap: cannot open the log file {}: {e}", path.display());
                 None
             }
             Ok(writer) => Some(writer),
         },
-    };
-
-    let mut worker = None;
-    let file_layer = file.map(|w| {
-        // JSON lines, not the human format: this file is the evidence for why a
-        // version pair was chosen and what each request cost, and a reader parsing
-        // it should not have to strip a timestamp and a target off the front of
-        // every line.
-        let (non_blocking, guard, filter) = file_sink(w, &plan);
-        worker = Some(guard);
-        layer()
-            .json()
-            .with_ansi(false)
-            .with_target(true)
-            .with_writer(non_blocking)
-            .with_filter(filter)
-    });
+    );
 
     // A subscriber that is already installed would swallow the file layer
     // whole: the events would go to somebody else's subscriber and the log file
     // would stay empty, with nothing to say so. It cannot happen in this
     // binary's own `main`, and if it ever does, the run says so rather than
     // pretending to have logged.
-    if let Err(e) = tracing_subscriber::registry()
-        .with(stderr_layer.with_filter(console_filter))
-        .with(file_layer)
-        .try_init()
-    {
+    if let Err(e) = subscriber.try_init() {
         warn_subscriber_install(&mut std::io::stderr(), e);
     }
 
