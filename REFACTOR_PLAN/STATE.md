@@ -23,9 +23,9 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T09 | `tasks/T09-whole-file-verify.md` | completed | 3 commits: shared whole-file gate; repair check/temp adoption; persistent-plan/fetch/sophon adoption | CP3 kept |
 | T10 | `tasks/T10-bounded-byte-io.md` | completed | 3 commits: util-hash bounded read promotion; util-io leaf; repair file writer adoption | CP3 kept; clippy drop fix in review |
 | T11 | `tasks/T11-clear-readonly.md` | completed | 4 commits: util-path readonly leaf; fetch/persistent-exec adoption; file/mode propagation; leaf test formatting | CP3 kept |
-| T12 | `tasks/T12-request-url.md` | pending review | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 batch |
-| T13 | `tasks/T13-line-and-bom-readers.md` | pending review | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 batch |
-| T14 | `tasks/T14-claim-publish.md` | pending review | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 batch complete |
+| T12 | `tasks/T12-request-url.md` | completed | 5 commits: request-url grammar leaf; fetch Sophon URLs; capture biz/probes; dispatch/persistent-plan path append; fixture query lookups | CP4 kept |
+| T13 | `tasks/T13-line-and-bom-readers.md` | completed | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 kept |
+| T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
 | T15 | `tasks/T15-fs-path-helpers.md` | todo | — | |
 | T16 | `tasks/T16-global-cli-and-format.md` | todo | — | before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
@@ -44,7 +44,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | CP1 | T01–T04 | done | all kept; T01 unused-import defect fixed in review |
 | CP2 | T05–T07 | done | all kept; no fixes or reverts |
 | CP3 | T08–T11 | done | all kept; T10 clippy drop fix in review |
-| CP4 | T12–T14 | open | |
+| CP4 | T12–T14 | done | all kept; no fixes or reverts |
 | CP5 | T15–T16 | open | |
 | CP6 | T17–T18 | open | |
 | CP7 | T19–T20 | open | |
@@ -87,6 +87,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F28 | T13 | Consider an explicit policy type for the two alias spellings if a third scan-file reader appears; today `app/audio` owns them as a local const. | proposed |
 | F29 | T14 | Consider relocating the claim primitive from `app/util-path` to a lower-level `crates/` leaf; three `tools/sync` crates now depend on it (and its Windows `junction` dependency) for a small wrapper. | proposed |
 | F30 | T14 | `girsync-cache`'s `#[cfg(test)] claim_sibling` still spells the published `_2`/`_3` name family by hand — a deliberately different family from the temp sibling; decide explicitly whether consolidation is wanted. | proposed |
+| F31 | T14 | `tools/sync/Cargo.toml`'s updated `tempfile` comment says it is only for unit tests, but the dependency stays in `[dependencies]` (pre-existing placement); consider moving it to `[dev-dependencies]`. | proposed |
 
 ## Persistent context
 
@@ -115,3 +116,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP3 done: T08/T09/T10/T11 kept; T10's `drop(rw)` calls removed for clippy; only the out-of-batch chunk-layout `collapsible_if` warning remains when clippy runs with -D warnings.
 - T12 keeper: CAP-06 blob-id shape helpers left local by guardrail — tightening girpr to capture's strict rule risks rejecting real ids.
 - T13: BOM-only behavior and trailing-newline contracts remain opposite by explicit parameters; capture's Cargo.toml now states the newline distinction; `game_version_from_text` takes a `value_of` closure to keep anchoring/empty-value/error wording at call sites.
+- CP4 done: T12/T13/T14 kept; no fixes or reverts; workspace 2332 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
