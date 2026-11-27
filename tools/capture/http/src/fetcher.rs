@@ -9,6 +9,8 @@ use super::{
     Sleep, Transport, header_map, now_rfc3339, user_agent,
 };
 
+use girpr_retry_driver::{Driver, Failure, Step};
+
 /// A fetched body and the record of how it arrived.
 #[derive(Debug)]
 pub struct Fetched {
@@ -786,78 +788,79 @@ impl Fetcher {
     }
 
     /// The retry loop, the status check and the record — for both destinations.
+    ///
+    /// The loop mechanics (attempt count, first/last-attempt wait rule, injected
+    /// sleep, immediate fatal stop, last-error retention) live in the shared
+    /// driver. What stays here is this tool's policy: the no-jitter schedule,
+    /// the status/variant classification, the request log, the debug journal and
+    /// the typed `FetchFailure` that carries the final attempt's `seq`.
     async fn run(
         &self,
         url: &str,
         kind: Kind,
         range: Option<&str>,
-        mut dest: Destination<'_>,
+        dest: Destination<'_>,
     ) -> Result<Run, FetchFailure> {
         let started = Instant::now();
-        let mut backoff = self.policy.backoff();
-        let mut attempts: u32 = 0;
-        let mut last: Option<FetchFailure> = None;
-
-        while attempts < self.policy.attempts {
-            attempts += 1;
-            // The first attempt goes out immediately. Every later one waits on
-            // the next slice of the no-jitter exponential schedule; the sleep
-            // itself stays injected so tests count delays instead of spending
-            // them, and a `--jobs` worker yields instead of blocking.
-            if attempts > 1 {
-                let waiting = backoff
-                    .next_delay()
-                    .expect("no elapsed-time cap: every retry has a delay");
-                tracing::debug!(url, ?waiting, attempts, "retry backoff");
-                self.sleeper.sleep(waiting).await;
-            }
-
-            match self
-                .attempt(url, kind, range, attempts, started, &mut dest)
-                .await
-            {
-                Ok((body, record)) => {
-                    // Only the sequence number and the byte count are read off
-                    // `record` once it is logged -- by `blobs` and `manifest`, to
-                    // call `set_stored_as` -- so the log is the owner and this
-                    // returns a borrow-free view instead of a second deep copy
-                    // of a record carrying two `BTreeMap`s, a `String` URL and
-                    // up to ~2 KB of response headers. Once per chunk.
-                    let run = Run {
-                        body,
-                        seq: record.seq,
-                        status: record.status,
-                        bytes_in: record.bytes_in,
-                    };
-                    self.log.push(record);
-                    return Ok(run);
-                }
-                Err((err, record)) => {
-                    // The failed attempt is logged too: a run that hit a CDN
-                    // throttle and recovered must show the 429, or `attempts`
-                    // is a claim nobody can check.
-                    let seq = record.seq;
-                    self.log.push(record);
-                    let retryable = match &err {
-                        ApiError::Transport { .. } => true,
-                        ApiError::Status { status, .. } => {
-                            RetryPolicy::should_retry_status(*status)
+        let mut delays = self.policy.backoff();
+        Driver::new(self.policy.attempts, &mut delays, self.sleeper.as_ref())
+            .drive(
+                dest,
+                |attempts, waiting| {
+                    tracing::debug!(url, ?waiting, attempts, "retry backoff");
+                },
+                move |dest: Destination<'_>, attempts| {
+                    let fut = self.attempt(url, kind, range, attempts, started, dest);
+                    async move {
+                        match fut.await {
+                            Ok((body, record, _dest)) => {
+                                // Only the sequence number and the byte count are
+                                // read off `record` once it is logged -- by `blobs`
+                                // and `manifest`, to call `set_stored_as` -- so the
+                                // log is the owner and this returns a borrow-free
+                                // view instead of a second deep copy of a record
+                                // carrying two `BTreeMap`s, a `String` URL and up
+                                // to ~2 KB of response headers. Once per chunk.
+                                let run = Run {
+                                    body,
+                                    seq: record.seq,
+                                    status: record.status,
+                                    bytes_in: record.bytes_in,
+                                };
+                                self.log.push(record);
+                                Step::Done(run)
+                            }
+                            Err((err, record, dest)) => {
+                                // The failed attempt is logged too: a run that
+                                // hit a CDN throttle and recovered must show the
+                                // 429, or `attempts` is a claim nobody can check.
+                                let seq = record.seq;
+                                self.log.push(record);
+                                let retryable = match &err {
+                                    ApiError::Transport { .. } => true,
+                                    ApiError::Status { status, .. } => {
+                                        RetryPolicy::should_retry_status(*status)
+                                    }
+                                    ApiError::Shape { .. } => false,
+                                };
+                                if !retryable {
+                                    return Step::Fatal(FetchFailure { error: err, seq });
+                                }
+                                tracing::debug!(url, attempts, error = %err, "retryable failure");
+                                Step::Retry(dest, FetchFailure { error: err, seq })
+                            }
                         }
-                        ApiError::Shape { .. } => false,
-                    };
-                    if !retryable {
-                        return Err(FetchFailure { error: err, seq });
                     }
-                    tracing::debug!(url, attempts, error = %err, "retryable failure");
-                    last = Some(FetchFailure { error: err, seq });
-                }
-            }
-        }
-
-        Err(last.unwrap_or_else(|| FetchFailure {
-            error: ApiError::shape(url, "no attempt was made"),
-            seq: 0,
-        }))
+                },
+            )
+            .await
+            .map_err(|failure| match failure {
+                Failure::Fatal(e) | Failure::Exhausted(e) => e,
+                Failure::NoAttempts => FetchFailure {
+                    error: ApiError::shape(url, "no attempt was made"),
+                    seq: 0,
+                },
+            })
     }
 
     /// Fetch and parse as JSON, checking that the wrapper says `retcode == 0`.
@@ -907,16 +910,25 @@ impl Fetcher {
     /// The error arm carries a full record by design: a failure that is not
     /// recorded is a failure nobody can debug. Boxing it would allocate on every
     /// failed attempt to save a stack copy of something consumed immediately.
+    ///
+    /// The destination is taken and returned by value so each attempt future
+    /// owns it while it runs and hands it back on failure, where the shared loop
+    /// carries it into the next attempt. A write failure leaves the file exactly
+    /// where `HashingFile::restart` can discard the partial body before the next
+    /// write.
     #[allow(clippy::result_large_err)]
-    async fn attempt(
+    async fn attempt<'a>(
         &self,
         url: &str,
         kind: Kind,
         range: Option<&str>,
         attempts: u32,
         started: Instant,
-        dest: &mut Destination<'_>,
-    ) -> Result<(Option<Vec<u8>>, RequestRecord), (ApiError, RequestRecord)> {
+        mut dest: Destination<'a>,
+    ) -> Result<
+        (Option<Vec<u8>>, RequestRecord, Destination<'a>),
+        (ApiError, RequestRecord, Destination<'a>),
+    > {
         let seq = self.log.reserve();
         tracing::debug!(seq, url, kind = kind.as_str(), ?range, attempts, "GET");
 
@@ -948,7 +960,7 @@ impl Fetcher {
                     attempts,
                     started,
                 );
-                return Err((err, record));
+                return Err((err, record, dest));
             }
         };
 
@@ -1017,7 +1029,7 @@ impl Fetcher {
                 attempts,
                 started,
             );
-            return Err((err, record));
+            return Err((err, record, dest));
         }
 
         // **The body, and where it goes.** `Memory` collects the whole thing as
@@ -1048,7 +1060,7 @@ impl Fetcher {
             (err, record)
         };
         let bytes_in: u64;
-        let body: Option<Vec<u8>> = match dest {
+        let body: Option<Vec<u8>> = match &mut dest {
             Destination::Memory => {
                 let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
                     resp.content_length,
@@ -1059,7 +1071,10 @@ impl Fetcher {
                         bytes_in = n;
                         Some(buf)
                     }
-                    Err((e, seen)) => return Err(fail(e, seen)),
+                    Err((e, seen)) => {
+                        let (e, record) = fail(e, seen);
+                        return Err((e, record, dest));
+                    }
                 }
             }
             Destination::File(out) => {
@@ -1070,7 +1085,7 @@ impl Fetcher {
                     // Not retryable, and not a transport failure: a disk that will
                     // not truncate is a disk that will not write either. No body
                     // byte of this attempt has been read, so its cost is zero.
-                    return Err(fail(
+                    let (e, record) = fail(
                         body_failure(
                             url,
                             attempts,
@@ -1078,11 +1093,15 @@ impl Fetcher {
                             format!("preparing the body file: {e}"),
                         ),
                         0,
-                    ));
+                    );
+                    return Err((e, record, dest));
                 }
                 match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
                     Ok(n) => bytes_in = n,
-                    Err((e, seen)) => return Err(fail(e, seen)),
+                    Err((e, seen)) => {
+                        let (e, record) = fail(e, seen);
+                        return Err((e, record, dest));
+                    }
                 }
                 None
             }
@@ -1101,7 +1120,7 @@ impl Fetcher {
             attempts,
             started,
         );
-        Ok((body, record))
+        Ok((body, record, dest))
     }
 
     /// Assemble a row. Every path through [`Fetcher::attempt`] builds one, which

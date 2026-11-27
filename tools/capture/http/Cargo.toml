@@ -22,9 +22,11 @@ all = "warn"
 
 [dependencies]
 # The clamped exponential retry schedule and the injectable sleep driver are the
-# shared mechanics leaf; gircap-http passes its own zero-jitter schedule and keeps
-# the attempt loop here.
+# shared mechanics leaf; gircap-http passes its own zero-jitter schedule. The
+# attempt loop itself is the policy-free leaf directly above it, so both tools
+# drive the same waits and stop rules while keeping their own jitter and policy.
 girpr-retry = { path = "../../../crates/retry" }
+girpr-retry-driver = { path = "../../../crates/retry-driver" }
 # Hex spelling of bytes for the request log's header digests. Logic-free leaf:
 # no flag, no exit code, no published shape.
 girpr-digest = { path = "../../../crates/digest" }

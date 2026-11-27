@@ -1100,6 +1100,7 @@ dependencies = [
  "girpr-digest",
  "girpr-loopback-mock",
  "girpr-retry",
+ "girpr-retry-driver",
  "girpr-tempdir",
  "girpr-time",
  "reqwest",
@@ -1286,6 +1287,7 @@ dependencies = [
  "girpr-persistent-plan",
  "girpr-proto",
  "girpr-retry",
+ "girpr-retry-driver",
  "girpr-tempdir",
  "girpr-util-hash",
  "girpr-util-path",
@@ -1446,6 +1448,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "backoff",
+ "tokio",
+]
+
+[[package]]
+name = "girpr-retry-driver"
+version = "0.1.0"
+dependencies = [
+ "girpr-retry",
  "tokio",
 ]
 
