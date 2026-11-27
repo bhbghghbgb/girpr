@@ -14,7 +14,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | --- | --- | --- | --- | --- |
 | T01 | `tasks/T01-chunk-cost-arithmetic.md` | pending review | 4 commits: chunk-cost primitives; repair-plan/chunk-verify adoption; gircap manifest totals; repair scan/plan | resolves T02 dependency |
 | T02 | `tasks/T02-chunk-layout.md` | pending review | 4 commits: chunk-layout leaf; repair-plan tiling adoption; gircap range/tiling adoption; repair/fetch reuse checks | resolves T04 dependency |
-| T03 | `tasks/T03-xxh64-hex-boundary.md` | todo | — | |
+| T03 | `tasks/T03-xxh64-hex-boundary.md` | pending review | 4 commits: digest XXH64 conversions; persistent-plan/fetch adoption; cache-json hex wrappers; chunk-identity normalize_hex re-export | resolves T04 dependency |
 | T04 | `tasks/T04-digest-internals.md` | todo | — | depends on T03 |
 | T05 | `tasks/T05-retryable-status.md` | todo | — | |
 | T06 | `tasks/T06-async-retry-driver.md` | todo | — | depends on T05 |
@@ -74,3 +74,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T01 and T02 implemented and validated (see task table); awaiting CP1 review.
 - CP1 note: T02 reports a leftover unused `saturating_nonneg_sum` import in `src/repair/scan.rs` from T01; reviewer should fix it as a T01 defect.
 - T02's tiling leaf consumes T01's `checked_end` (F02 done) and clamps unrepresentable signed ends at `i64::MAX`, matching capture's prior behaviour.
+- T03 implemented and validated; no follow-ups proposed. Remaining `{:016x}` sites in gircap are opaque manifest-id prefixes, not hashes.
