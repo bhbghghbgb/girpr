@@ -33,7 +33,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T19 | `tasks/T19-test-fixture-helpers.md` | completed | 1 commit: fixture helper consolidation and cache-names leaf | CP7 kept; comment fix in review |
 | T20 | `tasks/T20-test-http-servers.md` | completed | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 kept; deferrals F50/F51 accepted; comment fix in review |
 | T21 | `tasks/T21-hyp-wire.md` | pending review | 3 commits: hyp-wire leaf; fetch envelope/identity adoption; capture identity/envelope adoption | CP8 batch |
-| T22 | `tasks/T22-capture-emit-stores.md` | todo | — | |
+| T22 | `tasks/T22-capture-emit-stores.md` | pending review | 4 commits: capture serialize/gzip bodies; bounded-store mechanics; schema-version read; zstd error formatter | CP8 batch complete |
 | T23 | `tasks/T23-girsync-heartbeat.md` | todo | — | |
 | T24 | `tasks/T24-workspace-inheritance.md` | todo | — | |
 
@@ -114,6 +114,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F55 | T21 | Add a `girpr-hyp-wire` row to the README shared-leaf table (same class as F22/F24/F26/F53). | proposed |
 | F56 | T21 | Consider routing capture's `Fetcher::get_json` retcode/message extraction through a shared head helper; it reads `serde_json::Value` directly because returning the full `Value` is part of the published contract. | proposed |
 | F57 | T21 | Consider moving fetch's `ManifestFile` sizes to the leaf's `IntOrStr` if a preserve-form consumer appears; deliberately not done because downstream sizes are `i64`. | proposed |
+| F58 | T22 | `bounded_store` is a public module of `gircap-http` solely because two crates need it; reconsider a dedicated gircap-owned mechanics crate if a fourth store appears. | proposed |
+| F59 | T22 | The count-first driver still walks the document twice (`json_len` then write); unifying it with the counted driver needs fresh performance and byte-equality validation. | proposed |
+| F60 | T22 | `gzip_from_reader` has one production caller; leave it until a second file-backed gzip path appears rather than changing a driver's measured behaviour. | proposed |
 
 ## Persistent context
 
@@ -153,3 +156,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T20 boundary: only axum socket/stop/gate mechanics moved; the three server contracts and per-test reply policies stayed distinct; `argv_with_program` takes the sentinel as a parameter and the binary runner stayed in integration roots.
 - CP7 done: T19/T20 kept; two stale comments fixed; workspace 2348 passed / 8 skipped; T20 deferrals F50/F51 accepted as justified follow-ups.
 - T21: chose a new `girpr-hyp-wire` leaf over extending `crates/proto` (protobuf tags and JSON envelopes are different wire contracts); shared `Envelope.retcode` is required as fetch's was — capture's former `#[serde(default)]` was unreachable because `get_json` rejects a body with no retcode first, and no test/golden covers it (flag for CP8).
+- T22: `bounded_store` lives in `gircap-http` (shared parent dependency) because `error_bodies.rs` is there and `gircap-http` cannot depend on `gircap`; BufWriter construction stayed at call sites.
