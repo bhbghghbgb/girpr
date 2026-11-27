@@ -16,13 +16,89 @@
 //! `persist` does not create the parent and does not sync, so both the
 //! `create_dir_all` and the sync remain here.
 
+use std::fs::File;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 
 use super::path::any_component_has_windows_trailing_dot_or_space;
+
+/// The prefix `tempfile` uses for its default temp name.
+const DEFAULT_TEMP_PREFIX: &str = ".tmp";
+
+/// A unique temporary sibling claimed beside a target and held across a write.
+///
+/// This is the claim/cleanup half of a crash-safe publish. `tempfile` owns the
+/// name: its exclusive create retries a collision, and dropping the guard
+/// removes the file. Publishing consumes the guard, so a failed publish removes
+/// the temp too; [`ClaimedTemp::keep`] disarms it for callers that own a
+/// different publish protocol and must clean up themselves.
+///
+/// The prefix, suffix, publish mechanism and error context all stay at the call
+/// site: this type only claims the sibling and owns its cleanup.
+pub struct ClaimedTemp(NamedTempFile);
+
+impl ClaimedTemp {
+    /// Claim a unique temp sibling in `parent` with the caller's `prefix` and
+    /// `suffix`. The raw I/O error is returned so the caller adds its own
+    /// context to the claim.
+    pub fn claim(parent: &Path, prefix: &str, suffix: &str) -> io::Result<Self> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(prefix).suffix(suffix);
+        builder.tempfile_in(parent).map(Self)
+    }
+
+    /// The claimed path.
+    pub fn path(&self) -> &Path {
+        self.0.path()
+    }
+
+    /// Borrow the claimed file.
+    pub fn as_file(&self) -> &File {
+        self.0.as_file()
+    }
+
+    /// Mutably borrow the claimed file, so a caller can write into it.
+    pub fn as_file_mut(&mut self) -> &mut File {
+        self.0.as_file_mut()
+    }
+
+    /// Disarm the cleanup guard and hand the claimed path to the caller.
+    ///
+    /// The file handle is closed first so the path can be renamed portably.
+    /// From here on the caller owns removing the path on failure.
+    pub fn keep(self) -> io::Result<PathBuf> {
+        let (file, path) = self.0.into_parts();
+        drop(file);
+        path.keep().map_err(|e| e.error)
+    }
+
+    /// Publish over `dst`, replacing anything already there.
+    pub fn persist(self, dst: &Path) -> io::Result<()> {
+        self.0.persist(dst).map(|_| ()).map_err(|e| e.error)
+    }
+
+    /// Publish to `dst` only if nothing is there yet.
+    pub fn persist_noclobber(self, dst: &Path) -> io::Result<()> {
+        self.0
+            .persist_noclobber(dst)
+            .map(|_| ())
+            .map_err(|e| e.error)
+    }
+}
+
+/// Claim a unique temporary **directory** sibling in `parent` with `prefix`.
+///
+/// The parallel of [`ClaimedTemp::claim`] for a caller whose claim starts as a
+/// directory. The guard is disarmed because the caller needs a bare path to
+/// rename; removing that path on failure is the caller's business.
+pub fn claim_temp_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    Ok(builder.tempdir_in(parent)?.keep())
+}
 
 /// Publish `bytes` to `path` through a temp file in the target's directory.
 ///
@@ -89,14 +165,12 @@ pub fn write_atomic_with(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    let mut tmp = match parent {
-        Some(parent) => NamedTempFile::new_in(parent),
-        None => NamedTempFile::new_in("."),
-    }
-    .with_context(|| format!("create temp file for {}", path.display()))?;
+    let dir = parent.unwrap_or_else(|| Path::new("."));
+    let mut tmp = ClaimedTemp::claim(dir, DEFAULT_TEMP_PREFIX, "")
+        .with_context(|| format!("create temp file for {}", path.display()))?;
 
     {
-        let mut writer = io::BufWriter::new(&mut tmp);
+        let mut writer = io::BufWriter::new(tmp.as_file_mut());
         write(&mut writer).with_context(|| format!("write temp file for {}", path.display()))?;
         writer
             .flush()
@@ -109,10 +183,9 @@ pub fn write_atomic_with(
             .sync_all()
             .with_context(|| format!("sync temp file for {}", path.display()))?;
     }
-    // Dropping the `PersistError` drops the temp with it, so a failed publish
-    // removes the temp just like a failed write does.
+    // A failed publish consumes the claim and removes the temp, just like a
+    // failed write does when the guard is dropped.
     tmp.persist(path)
-        .map_err(|e| e.error)
         .with_context(|| format!("publish {}", path.display()))?;
     if durable {
         sync_parent(path);
@@ -184,6 +257,98 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// A claim uses the caller's prefix and suffix, is unique, and removes its
+    /// file when the guard is dropped without publishing.
+    #[test]
+    fn a_claim_uses_the_prefix_and_suffix_and_cleans_up_on_drop() {
+        let d = dir("claim_shape");
+        let a = ClaimedTemp::claim(&d, "girpr-test-", ".part").unwrap();
+        let b = ClaimedTemp::claim(&d, "girpr-test-", ".part").unwrap();
+        assert_ne!(a.path(), b.path(), "two claims never share a name");
+        for claim in [&a, &b] {
+            let name = claim.path().file_name().unwrap().to_string_lossy();
+            assert!(name.starts_with("girpr-test-"), "prefix: {name}");
+            assert!(name.ends_with(".part"), "suffix: {name}");
+        }
+        let claimed: Vec<_> = [&a, &b].iter().map(|c| c.path().to_path_buf()).collect();
+        drop(a);
+        drop(b);
+        assert!(
+            claimed.iter().all(|p| !p.exists()),
+            "dropping a claim removes it"
+        );
+        assert!(entries(&d).is_empty(), "no residue survives the claim");
+    }
+
+    /// Disarming a claim leaves the path for a caller that owns its own publish
+    /// protocol and cleanup; nothing is removed behind its back.
+    #[test]
+    fn keep_leaves_the_path_for_the_caller_to_clean() {
+        let d = dir("claim_keep");
+        let path = ClaimedTemp::claim(&d, "held-", ".tmp")
+            .unwrap()
+            .keep()
+            .unwrap();
+        assert!(path.is_file(), "the claimed file stays at its name");
+        assert_eq!(entries(&d).len(), 1);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// Both publish choices move the claimed file onto the target and leave no
+    /// temp behind. A no-clobber publish that fails also removes its temp.
+    #[test]
+    fn publish_choices_publish_and_clean_up() {
+        for noclobber in [false, true] {
+            let d = dir("claim_publish");
+            let target = d.join("artifact.bin");
+            let mut claim = ClaimedTemp::claim(&d, "out-", ".tmp").unwrap();
+            claim.as_file_mut().write_all(b"payload").unwrap();
+            if noclobber {
+                claim.persist_noclobber(&target).unwrap();
+            } else {
+                claim.persist(&target).unwrap();
+            }
+            assert_eq!(std::fs::read(&target).unwrap(), b"payload");
+            assert_eq!(entries(&d), ["artifact.bin"], "noclobber={noclobber}");
+        }
+
+        // A target that already exists makes the no-clobber publish fail; the
+        // claim must still be removed.
+        let d = dir("claim_publish_fail");
+        let target = d.join("taken.bin");
+        std::fs::write(&target, b"old").unwrap();
+        let claim = ClaimedTemp::claim(&d, "out-", ".tmp").unwrap();
+        assert!(claim.persist_noclobber(&target).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        assert_eq!(
+            entries(&d),
+            ["taken.bin"],
+            "the failed publish left no temp"
+        );
+    }
+
+    /// The directory claim mirrors the file claim: unique, caller-prefixed,
+    /// and disarmed into a bare path for the caller to rename and clean up.
+    #[test]
+    fn a_directory_claim_is_unique_and_prefixed() {
+        let d = dir("claim_dir");
+        let a = claim_temp_dir(&d, "dir-").unwrap();
+        let b = claim_temp_dir(&d, "dir-").unwrap();
+        assert_ne!(a, b);
+        for path in [&a, &b] {
+            assert!(path.is_dir(), "the claim is a directory");
+            assert!(
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("dir-"),
+                "prefix"
+            );
+            std::fs::remove_dir(path).unwrap();
+        }
+        assert!(entries(&d).is_empty());
     }
 
     /// A successful publish creates its parent, writes the bytes, and leaves
