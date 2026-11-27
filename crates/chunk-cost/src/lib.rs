@@ -28,6 +28,71 @@
 //! turn a zero estimate into a full download, and both ceiling checks remain
 //! the runtime enforcement, not this figure.
 
+/// Widen a signed byte quantity to `u64`, treating a negative declaration as
+/// no bytes at all.
+///
+/// Manifest sizes and offsets are server-controlled `i64`. A negative value is
+/// not a transfer and not a length, so casting it straight to `u64` would turn
+/// `-1` into eighteen quintillion bytes. This is the clamp-then-widen step every
+/// byte fold in the two programs has to agree on.
+///
+/// ```
+/// use girpr_chunk_cost::nonneg;
+///
+/// assert_eq!(nonneg(7), 7);
+/// assert_eq!(nonneg(0), 0);
+/// assert_eq!(nonneg(-1), 0);
+/// assert_eq!(nonneg(i64::MIN), 0);
+/// ```
+pub fn nonneg(value: i64) -> u64 {
+    value.max(0) as u64
+}
+
+/// Fold signed byte quantities into one saturating `u64` total.
+///
+/// Each term is clamped with [`nonneg`] before it is added, so a negative
+/// declaration contributes nothing and a hostile declaration cannot overflow
+/// the accumulator. Adding non-negative terms in any order yields the same
+/// result, so callers may stream their own order.
+///
+/// The terms are `i64` because that is the type the wire declarations use; a
+/// total that is already `u64` is none of this leaf's business.
+///
+/// ```
+/// use girpr_chunk_cost::saturating_nonneg_sum;
+///
+/// assert_eq!(saturating_nonneg_sum([10, -5, 7, 0]), 17);
+/// assert_eq!(saturating_nonneg_sum([i64::MAX, i64::MAX, 1]), u64::MAX);
+/// ```
+pub fn saturating_nonneg_sum<I>(values: I) -> u64
+where
+    I: IntoIterator<Item = i64>,
+{
+    values
+        .into_iter()
+        .fold(0u64, |total, value| total.saturating_add(nonneg(value)))
+}
+
+/// The exclusive end of a signed `[offset, offset + len)` range as a `u64`.
+///
+/// This is for *signed cursors*: the addition is checked in `i64` first, so an
+/// end the signed type cannot represent is reported as `None` instead of being
+/// saturated or wrapped into a plausible-looking `u64`. A negative result
+/// clamps to zero, the same as [`nonneg`]. Byte totals that merely sum
+/// declarations should use [`saturating_nonneg_sum`] instead — saturation is
+/// their honest answer, but it would hide a broken cursor.
+///
+/// ```
+/// use girpr_chunk_cost::checked_end;
+///
+/// assert_eq!(checked_end(10, 5), Some(15));
+/// assert_eq!(checked_end(-10, 5), Some(0));
+/// assert_eq!(checked_end(i64::MAX, 1), None);
+/// ```
+pub fn checked_end(offset: i64, len: i64) -> Option<u64> {
+    offset.checked_add(len).map(nonneg)
+}
+
 /// Sum the transfer cost of the chunks a caller marked as downloads.
 ///
 /// Each entry is `(compressed_size, downloads)`: the first half is the
@@ -51,7 +116,7 @@ where
 {
     entries.into_iter().fold(0u64, |total, (size, downloads)| {
         if downloads {
-            total.saturating_add(size.max(0) as u64)
+            total.saturating_add(nonneg(size))
         } else {
             total
         }
@@ -61,6 +126,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The clamp is exact at zero and at both signed extremes: a negative
+    /// declaration is no bytes, not a huge `u64` through a sign cast.
+    #[test]
+    fn nonneg_clamps_every_negative_and_widens_the_rest() {
+        assert_eq!(nonneg(0), 0);
+        assert_eq!(nonneg(1), 1);
+        assert_eq!(nonneg(10), 10);
+        assert_eq!(nonneg(-1), 0);
+        assert_eq!(nonneg(-10), 0);
+        assert_eq!(nonneg(i64::MIN), 0);
+        assert_eq!(nonneg(i64::MAX), i64::MAX as u64);
+    }
+
+    /// The sum skips negatives, keeps zeros, saturates on overflow, and is
+    /// empty-fold-zero. Order cannot change the answer: every term that reaches
+    /// the accumulator is non-negative.
+    #[test]
+    fn saturating_nonneg_sum_folds_signed_terms_without_wrapping() {
+        assert_eq!(saturating_nonneg_sum([]), 0);
+        assert_eq!(saturating_nonneg_sum([3, -4, 0, 5]), 8);
+        assert_eq!(saturating_nonneg_sum([-1, i64::MIN]), 0);
+        assert_eq!(
+            saturating_nonneg_sum([i64::MAX, 1, -7]),
+            i64::MAX as u64 + 1
+        );
+        assert_eq!(
+            saturating_nonneg_sum([i64::MAX, i64::MAX]),
+            (i64::MAX as u64) * 2
+        );
+        assert_eq!(saturating_nonneg_sum([i64::MAX, i64::MAX, 1]), u64::MAX);
+        assert_eq!(
+            saturating_nonneg_sum([7, i64::MAX, 9]),
+            saturating_nonneg_sum([9, 7, i64::MAX])
+        );
+    }
+
+    /// A signed cursor end is checked before widening: a negative offset
+    /// clamps, a negative result is zero, and a signed overflow is refused
+    /// rather than saturated into a believable `u64`.
+    #[test]
+    fn checked_end_reports_signed_overflow_and_clamps_negatives() {
+        assert_eq!(checked_end(0, 0), Some(0));
+        assert_eq!(checked_end(10, 5), Some(15));
+        assert_eq!(checked_end(-10, 5), Some(0));
+        assert_eq!(checked_end(i64::MIN, 5), Some(0));
+        assert_eq!(checked_end(i64::MIN, i64::MAX), Some(0));
+        assert_eq!(checked_end(-1, 1), Some(0));
+        assert_eq!(checked_end(i64::MAX - 1, 1), Some(i64::MAX as u64));
+        assert_eq!(checked_end(i64::MAX, 1), None);
+        assert_eq!(checked_end(i64::MAX, i64::MAX), None);
+        assert_eq!(checked_end(i64::MIN, -1), None);
+    }
 
     /// Only the entries the caller marks as downloads are charged.
     #[test]
