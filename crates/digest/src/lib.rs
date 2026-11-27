@@ -81,9 +81,36 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     encode_hex(&sha2::Sha256::digest(bytes))
 }
 
+/// One-shot numeric XXH64 (seed 0) of `bytes`.
+///
+/// The value [`xxhash64_hex`] spells, exposed so a caller that compares
+/// numbers need not hash bytes and then parse its own hex back out.
+pub fn xxhash64_u64(bytes: &[u8]) -> u64 {
+    xxhash_rust::xxh64::xxh64(bytes, 0)
+}
+
+/// Spell an XXH64 value as 16 lowercase hex digits: big-endian bytes.
+///
+/// The leaf owns the conversion; whether this is the spelling an artifact
+/// needs stays with the caller.
+pub fn format_xxhash64_hex(value: u64) -> String {
+    encode_hex(&value.to_be_bytes())
+}
+
 /// One-shot lowercase-hex XXH64 (seed 0) of `bytes`, big-endian bytes.
 pub fn xxhash64_hex(bytes: &[u8]) -> String {
-    encode_hex(&xxhash_rust::xxh64::xxh64(bytes, 0).to_be_bytes())
+    format_xxhash64_hex(xxhash64_u64(bytes))
+}
+
+/// Parse the 16-digit XXH64 hex spelling into its numeric value.
+///
+/// Either case is accepted, and the byte width is enforced, so a string that
+/// is not exactly 16 hex digits is an error. The caller keeps its own wording
+/// for that error.
+pub fn parse_xxhash64_hex(text: &str) -> Result<u64, hex::FromHexError> {
+    let mut bytes = [0u8; 8];
+    hex::decode_to_slice(text, &mut bytes)?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 /// A 16-byte MD5 digest.
@@ -360,6 +387,88 @@ mod tests {
     #[test]
     fn xxhash64_matches_the_shared_vectors() {
         vectors::assert_xxhash64_vectors(xxhash64_hex);
+    }
+
+    /// The numeric hash, the one-shot hex and the streaming sink agree,
+    /// including across the algorithm's block boundaries and chunk splits.
+    #[test]
+    fn xxhash64_numeric_hex_and_stream_agree() {
+        use std::hash::Hasher as _;
+        for len in [0, 1, 16, 31, 32, 33, 63, 64, 65, 1_000] {
+            let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let value = xxhash64_u64(&bytes);
+            assert_eq!(xxhash64_hex(&bytes), format_xxhash64_hex(value), "{len}");
+
+            let mut hasher = xxhash_rust::xxh64::Xxh64::new(0);
+            hasher.update(&bytes);
+            assert_eq!(value, hasher.finish(), "{len}");
+
+            let mut sink = Sink::new(Algorithms::XXHASH64);
+            for chunk in bytes.chunks(7) {
+                sink.update(chunk);
+            }
+            let out = sink.finish();
+            assert_eq!(out.xxhash64_u64(), Some(value), "{len}");
+            assert_eq!(
+                out.xxhash64_hex().as_deref(),
+                Some(xxhash64_hex(&bytes).as_str()),
+                "{len}"
+            );
+        }
+    }
+
+    /// The formatter emits exactly the 16 lowercase digits callers publish.
+    #[test]
+    fn format_xxhash64_hex_is_the_published_spelling() {
+        for value in [0, 1, 0xf7c6_7301_db67_13f0, u64::MAX] {
+            assert_eq!(format_xxhash64_hex(value), format!("{value:016x}"));
+        }
+        assert_eq!(format_xxhash64_hex(0), "0000000000000000");
+        assert_eq!(
+            parse_xxhash64_hex(EMPTY_XXHASH64).unwrap(),
+            0xef46_db37_51d8_e999
+        );
+    }
+
+    /// Parsing accepts either case, enforces the width, and round-trips the
+    /// value through the formatter.
+    #[test]
+    fn parse_xxhash64_hex_round_trips_and_checks_width() {
+        for value in [0, 1, 0xef46_db37_51d8_e999, u64::MAX] {
+            let hex = format_xxhash64_hex(value);
+            assert_eq!(parse_xxhash64_hex(&hex).unwrap(), value);
+            assert_eq!(
+                parse_xxhash64_hex(&hex.to_ascii_uppercase()).unwrap(),
+                value
+            );
+        }
+        let short = "0".repeat(15);
+        let long = "0".repeat(17);
+        let non_hex = "g".repeat(16);
+        for text in ["", "123", &short, &long, &non_hex] {
+            assert!(parse_xxhash64_hex(text).is_err(), "{text:?}");
+        }
+    }
+
+    /// The numeric accessor agrees with the byte and hex accessors and makes
+    /// "not requested" explicit.
+    #[test]
+    fn digest_bytes_numeric_accessor_agrees_with_its_bytes_and_hex() {
+        let value = 0x44bc_2cf5_ad77_0999u64;
+        let out = DigestBytes {
+            bytes: 3,
+            md5: None,
+            sha256: None,
+            xxhash64: Some(value.to_be_bytes()),
+        };
+        assert_eq!(out.xxhash64_u64(), Some(value));
+        assert_eq!(out.xxhash64_bytes(), Some(value.to_be_bytes()));
+        assert_eq!(out.xxhash64_hex().as_deref(), Some("44bc2cf5ad770999"));
+
+        let none = DigestBytes::default();
+        assert_eq!(none.xxhash64_u64(), None);
+        assert_eq!(none.xxhash64_bytes(), None);
+        assert_eq!(none.xxhash64_hex(), None);
     }
 
     #[test]

@@ -123,6 +123,11 @@ impl DigestBytes {
         self.xxhash64
     }
 
+    /// The XXH64 as its 64-bit value (big-endian bytes), when requested.
+    pub fn xxhash64_u64(&self) -> Option<u64> {
+        self.xxhash64.map(u64::from_be_bytes)
+    }
+
     /// The XXH64 as lowercase hex, when requested.
     pub fn xxhash64_hex(&self) -> Option<String> {
         self.xxhash64.map(|d| super::encode_hex(&d))
