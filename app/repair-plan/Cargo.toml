@@ -15,6 +15,9 @@ workspace = true
 anyhow = "1.0.105"
 tracing = "0.1.44"
 girpr-chunk-cost = { path = "../../crates/chunk-cost" }
+# The half-open range and tiling leaf: the plan keeps its gap records and its
+# plan-time error wording, and the leaf owns the cursor arithmetic.
+girpr-chunk-layout = { path = "../../crates/chunk-layout" }
 girpr-fetch = { path = "../fetch" }
 girpr-filter = { path = "../../crates/filter" }
 girpr-util-path = { path = "../util-path" }

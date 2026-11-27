@@ -1403,6 +1403,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "girpr-chunk-cost",
+ "girpr-chunk-layout",
  "girpr-fetch",
  "girpr-filter",
  "girpr-util-path",

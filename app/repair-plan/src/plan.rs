@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use girpr_chunk_cost::{checked_end, nonneg, projected_download_bytes};
+use girpr_chunk_cost::{nonneg, projected_download_bytes};
+use girpr_chunk_layout::{LayoutProblem, RangeProblem, TileCursor, check_range_within, tile};
 use girpr_fetch::sophon::{FileReuse, SophonChunk, SophonChunkFile};
 use girpr_util_path as util;
 use girpr_util_path::path::path_key;
@@ -60,12 +61,8 @@ impl PlannedFile {
     /// ranges are sorted here, so a caller that builds a `PlannedFile` by
     /// hand gets the same verdict as one that came out of `build_plan`.
     pub fn layout(&self) -> Layout {
-        let size = nonneg(self.size);
-        let mut out = Layout {
-            tiled: true,
-            ..Default::default()
-        };
-        let mut ranges: Vec<(u64, u64)> = self
+        let size = nonneg(self.size) as i64;
+        let mut ranges: Vec<(i64, i64)> = self
             .chunks
             .iter()
             .filter_map(|c| {
@@ -74,34 +71,29 @@ impl PlannedFile {
                 if c.offset < 0 || c.uncompressed_size < 0 {
                     return None;
                 }
-                Some((c.offset as u64, c.uncompressed_size as u64))
+                Some((c.offset, c.uncompressed_size))
             })
             .collect();
+        // The leaf owns the cursor rule; sorting remains this caller's choice
+        // because `layout()` promises an order-independent verdict.
         ranges.sort_unstable();
-        // `cursor` is the end of the coverage so far: everything below it is
-        // claimed, everything above it is not.
-        let mut cursor = 0u64;
-        let mut prev_offset = 0u64;
-        for (offset, len) in ranges {
-            if offset > cursor {
-                out.gaps.push((cursor, offset - cursor));
-                out.tiled = false;
-            } else if offset < cursor {
-                out.overlaps.push((prev_offset, offset));
-                out.tiled = false;
+        let tiling = tile(ranges, size);
+        let mut out = Layout {
+            tiled: tiling.tiled,
+            ..Default::default()
+        };
+        for problem in tiling.problems {
+            match problem {
+                // A leading hole and the uncovered tail are both gaps the
+                // writer has to zero-fill, so they share one record shape.
+                LayoutProblem::Gap { from, to } | LayoutProblem::Short { from, to } => {
+                    out.gaps.push((from as u64, (to - from) as u64));
+                }
+                LayoutProblem::Overlap { from, to } => {
+                    out.overlaps.push((from as u64, to as u64));
+                }
+                _ => {}
             }
-            if offset + len > cursor {
-                cursor = offset + len;
-                prev_offset = offset;
-            }
-        }
-        if cursor < size {
-            // The tail of the file that no chunk covers.
-            out.gaps.push((cursor, size - cursor));
-            out.tiled = false;
-        } else if cursor > size {
-            // The chunks claim more bytes than the file has.
-            out.tiled = false;
         }
         out
     }
@@ -116,23 +108,20 @@ impl PlannedFile {
     /// chunks dropped — and gives the same answer as `layout().tiled` for
     /// that order.
     pub(crate) fn is_tiled(&self) -> bool {
-        let size = nonneg(self.size);
-        let mut cursor = 0u64;
+        let size = nonneg(self.size) as i64;
+        // The same cursor as `layout()`, pushed one chunk at a time: this half
+        // allocates nothing, so the common tiled case never builds the
+        // `gaps`/`overlaps` lists it does not need.
+        let mut cursor = TileCursor::new();
         for c in &self.chunks {
             // Same rule as `layout()`: a negative offset or size is not a
             // range at all, so it cannot tile anything.
             if c.offset < 0 || c.uncompressed_size < 0 {
                 continue;
             }
-            let offset = c.offset as u64;
-            // `cursor` is the end of the coverage so far. A chunk above it
-            // leaves a hole; one below it claims bytes already covered.
-            if offset != cursor {
-                return false;
-            }
-            cursor = cursor.saturating_add(nonneg(c.uncompressed_size));
+            cursor.push(c.offset, c.uncompressed_size);
         }
-        cursor == size
+        cursor.is_tiled(size)
     }
 }
 
@@ -371,29 +360,22 @@ pub fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
     }
     let file_size = file.size as u64;
     for c in &file.chunks {
-        if c.offset < 0 {
-            anyhow::bail!("chunk {} has a negative offset: {}", c.id, c.offset);
-        }
-        if c.uncompressed_size < 0 {
-            anyhow::bail!(
-                "chunk {} has a negative size: {}",
-                c.id,
-                c.uncompressed_size
-            );
-        }
-        let end = checked_end(c.offset, c.uncompressed_size).ok_or_else(|| {
-            anyhow::anyhow!(
-                "chunk {} range overflows: {} + {}",
-                c.id,
-                c.offset,
-                c.uncompressed_size
-            )
-        })?;
-        if end > file_size {
-            anyhow::bail!(
-                "chunk {} ends at {end}, past the file's size {file_size}",
-                c.id
-            );
+        // The leaf decides which rule broke; this caller publishes the
+        // plan-time wording, including the chunk id.
+        match check_range_within(c.offset, c.uncompressed_size, file_size) {
+            Ok(_) => {}
+            Err(RangeProblem::NegativeOffset(offset)) => {
+                anyhow::bail!("chunk {} has a negative offset: {}", c.id, offset);
+            }
+            Err(RangeProblem::NegativeLen(len)) => {
+                anyhow::bail!("chunk {} has a negative size: {}", c.id, len);
+            }
+            Err(RangeProblem::Overflow { offset, len }) => {
+                anyhow::bail!("chunk {} range overflows: {} + {}", c.id, offset, len);
+            }
+            Err(RangeProblem::PastEnd { end, bound }) => {
+                anyhow::bail!("chunk {} ends at {end}, past the file's size {bound}", c.id);
+            }
         }
     }
     Ok(())
