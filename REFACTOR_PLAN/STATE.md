@@ -34,8 +34,8 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T20 | `tasks/T20-test-http-servers.md` | completed | 4 commits: test-http axum mechanics; cli argv helper; integration binary runner; junction fallback helper | CP7 kept; deferrals F50/F51 accepted; comment fix in review |
 | T21 | `tasks/T21-hyp-wire.md` | completed | 3 commits: hyp-wire leaf; fetch envelope/identity adoption; capture identity/envelope adoption | CP8 kept |
 | T22 | `tasks/T22-capture-emit-stores.md` | completed | 4 commits: capture serialize/gzip bodies; bounded-store mechanics; schema-version read; zstd error formatter | CP8 kept |
-| T23 | `tasks/T23-girsync-heartbeat.md` | pending review | 3 commits: heartbeat leaf; scan adoption; effective phase adoption | CP9 batch |
-| T24 | `tasks/T24-workspace-inheritance.md` | pending review | 1 commit: workspace package/dependency inheritance across 53 members | CP9 batch complete |
+| T23 | `tasks/T23-girsync-heartbeat.md` | completed | 3 commits: heartbeat leaf; scan adoption; effective phase adoption | CP9 kept |
+| T24 | `tasks/T24-workspace-inheritance.md` | completed | 1 commit: workspace package/dependency inheritance across 53 members | CP9 kept |
 
 ## Reviews
 
@@ -49,7 +49,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | CP6 | T17–T18 | done | all kept; no fixes or reverts |
 | CP7 | T19–T20 | done | both kept; stale comments fixed; T20 deferrals accepted |
 | CP8 | T21–T22 | done | all kept; retcode default concern verified behavior-equal |
-| CP9 | T23–T24 | open | |
+| CP9 | T23–T24 | done | all kept; no fixes or reverts |
 
 ## Follow-ups
 
@@ -123,6 +123,7 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F64 | T23 | Re-export `heartbeat` from the girsync lib facade only if an external consumer needs it; today all three callers import the leaf directly. | proposed |
 | F65 | T24 | Decide whether the two `tests/scripts/io-profile/*` helper crates (edition 2021, outside the workspace, own `redb` pin) should join inheritance; deliberately left untouched. | proposed |
 | F66 | T24 | Path dependencies remain local (versionless, with call-site comments); centralizing them in `[workspace.dependencies]` is a separate decision. | proposed |
+| F67 | T23 | Progress events' `elapsed_s` now originates at `Heartbeat` construction rather than the earlier `t_eff`/`t0`, making it marginally smaller and not sharing the phase's "done" zero; no test/golden asserts the value — consider a caller-supplied start `Instant` if strict parity is wanted. | proposed |
 
 ## Persistent context
 
@@ -166,3 +167,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - CP8 done: T21/T22 kept; the flagged `Envelope.retcode` default concern was verified unreachable and behavior-equal; workspace 2361 passed / 8 skipped.
 - T23: `Heartbeat<F>` owns only the clock/trigger; `elapsed_s`, wording, fields and levels stay at the three call sites.
 - T24: report's "39 members" is stale — the tree has 53 workspace members; all 58 external dependency versions inherited, lockfile and resolved graph byte-identical; tools' reduced lint tables and `[lib]` sections stayed local.
+- CP9 done: T23/T24 kept; no fixes or reverts; all 24 tasks are now terminal; workspace 2366 passed / 8 skipped. Next: follow-up batching review.
