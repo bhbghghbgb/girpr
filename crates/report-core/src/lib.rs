@@ -1,12 +1,14 @@
-//! The ordered-JSON and line-writing mechanics below the three report planes.
+//! The ordered record, JSON and line-emission mechanics below the three report
+//! planes.
 //!
 //! `girpr` writes an event-first object in declaration order, `girsync` writes
 //! an alphabetically sorted object with `event` in its sorted place, and
 //! `gircap` writes an event-first object whose `event` value is a real field.
 //! The field orders, value vocabularies, escaping and boolean spellings are
 //! deliberately different and stay in each tool. What is common is only the
-//! *mechanic*: write an ordered JSON object from a list of `(key, value)`
-//! pairs supplied by the caller, and write one rendered line plus its newline.
+//! *mechanic*: hold an ordered field list under a label, write it as an ordered
+//! JSON object, mirror one rendered line to the log, and write that line plus
+//! its newline.
 //!
 //! Nothing here names a field, a value, a flag or a program. Values arrive as
 //! `Serialize` implementors owned by the caller, so this crate neither defines
@@ -144,6 +146,96 @@ where
     }
 }
 
+/// One label and an ordered field list: the part of a report record that every
+/// plane shares.
+///
+/// `V` is the plane's own value vocabulary. The core stores it and writes it
+/// verbatim; it never inspects, folds or normalises a value, so girpr's `1`/`0`
+/// flags, capture's native booleans and girsync's JSON values keep their own
+/// spellings. The label is stored but never folded — each plane derives its
+/// `event` value at its own call site — and the field order is exactly the
+/// order values are pushed. A plane chooses its own [`Order`] when it writes
+/// the object.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record<V> {
+    label: &'static str,
+    fields: Vec<(&'static str, V)>,
+}
+
+impl<V> Record<V> {
+    /// An empty record with `label`.
+    pub fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            fields: Vec::new(),
+        }
+    }
+
+    /// A record from a field list already in report order.
+    pub fn with_fields(label: &'static str, fields: Vec<(&'static str, V)>) -> Self {
+        Self { label, fields }
+    }
+
+    /// Append one field in report order.
+    pub fn push(&mut self, key: &'static str, value: V) -> &mut Self {
+        self.fields.push((key, value));
+        self
+    }
+
+    /// Append one field in report order, returning the record for chaining.
+    pub fn put(mut self, key: &'static str, value: V) -> Self {
+        self.push(key, value);
+        self
+    }
+
+    /// Append many fields at once, in the order given.
+    pub fn extend<I>(&mut self, fields: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (&'static str, V)>,
+    {
+        self.fields.extend(fields);
+        self
+    }
+
+    /// The text label, e.g. `SUMMARY`. Never folded: that is a call-site
+    /// decision, because the three planes derive `event` differently.
+    pub fn label(&self) -> &'static str {
+        self.label
+    }
+
+    /// The fields in report order, without any `event` member.
+    pub fn fields(&self) -> &[(&'static str, V)] {
+        &self.fields
+    }
+
+    /// Write this record's field list as one JSON object through `serializer`.
+    ///
+    /// `event` supplies the named member's value; a field with the same key is
+    /// skipped so that member is not written twice. Beyond that, values and
+    /// their order are the caller's: they pass straight to [`write_json_object`],
+    /// which applies `order` without changing any value.
+    pub fn write_json<E, S>(
+        &self,
+        serializer: S,
+        event_key: &str,
+        event: &E,
+        order: Order,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        E: Serialize,
+        V: Serialize,
+    {
+        let fields: Vec<(&str, &V)> = self
+            .fields
+            .iter()
+            .filter(|(key, _)| *key != event_key)
+            .map(|(key, value)| (*key, value))
+            .collect();
+        write_json_object(serializer, event_key, event, &fields, order)
+    }
+}
+
 /// Write one already-rendered line plus its newline.
 ///
 /// The line is opaque: any quoting, percent-encoding or case is the caller's.
@@ -161,6 +253,28 @@ pub fn write_line(out: &mut impl Write, line: &str) -> std::io::Result<()> {
     out.write_all(&buf)
 }
 
+/// Mirror a rendered line to the log, then write it to `out`.
+///
+/// This is the one "render → log → write one line" step shared by the three
+/// report planes. The line arrives already rendered, so text/JSON shapes,
+/// quoting and field order stay at the call site; `log_hook` runs *before* the
+/// write so a consumer that closed stdout cannot cost the record its log copy.
+///
+/// The write error is returned rather than handled here. Stdout locking and
+/// the broken-pipe policy are each program's published contract — one prints
+/// through `println!` and keeps its panic, one downgrades a closed stdout to a
+/// debug line, one writes under a lock and ignores the result — so the caller
+/// passes its own writer and decides what an error means. Nothing here locks
+/// stdout, derives an event name or interprets the line.
+pub fn write_record_line<W: Write>(
+    out: &mut W,
+    line: &str,
+    log_hook: impl FnOnce(&str),
+) -> std::io::Result<()> {
+    log_hook(line);
+    write_line(out, line)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -168,11 +282,12 @@ mod tests {
     use serde::ser::{Serialize, Serializer};
     use serde_json::json;
 
-    use super::{Order, OutputFormat, write_json_object, write_line};
+    use super::{Order, OutputFormat, Record, write_json_object, write_line, write_record_line};
 
     /// A stand-in for a tool's own value vocabulary, with a quote that forces
     /// escaping and a boolean that would change bytes if this crate rendered
     /// either itself. The core must pass both straight to `serde`.
+    #[derive(Clone)]
     enum Probe {
         Str(&'static str),
         Num(i64),
@@ -263,18 +378,6 @@ mod tests {
                         "write_line appends exactly one newline"
                     );
 
-                    struct Fail;
-                    impl Write for Fail {
-                        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::BrokenPipe,
-                                "closed",
-                            ))
-                        }
-                        fn flush(&mut self) -> std::io::Result<()> {
-                            Ok(())
-                        }
-                    }
                     assert_eq!(
                         write_line(&mut Fail, "x").expect_err("propagated").kind(),
                         std::io::ErrorKind::BrokenPipe,
@@ -304,6 +407,109 @@ mod tests {
             "xml".parse::<OutputFormat>().expect_err("unknown format"),
             "unknown output format \"xml\"; expected text or json"
         );
+    }
+
+    /// The field list is held once, in push order, and written as one object in
+    /// whichever order the plane asked for. A field named like the event member
+    /// is skipped so it cannot be written twice — capture relies on this for
+    /// its real `event` field, while girpr/girsync never have one.
+    #[test]
+    fn record_holds_push_order_and_writes_one_object() {
+        let subcases: &[(&str, &dyn Fn())] = &[
+            ("push_order_and_accessors", &|| {
+                let mut rec = Record::new("SUMMARY");
+                rec.push("renamed", Probe::Num(2))
+                    .push("delta", Probe::Num(-1));
+                rec.extend([("total", Probe::Num(1))]);
+                assert_eq!(rec.label(), "SUMMARY");
+                assert_eq!(
+                    rec.fields().iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+                    vec!["renamed", "delta", "total"]
+                );
+                assert_eq!(rec.clone().put("last", Probe::Flag(true)).fields().len(), 4);
+            }),
+            ("event_first_keeps_the_callers_order", &|| {
+                let rec = Record::new("SUMMARY")
+                    .put("zulu", Probe::Flag(true))
+                    .put("alpha", Probe::Str("a \"quoted\" path"));
+                let line = serde_json::to_string(&RecordProbe(&rec, "summary", Order::EventFirst))
+                    .expect("one object");
+                assert_eq!(
+                    line,
+                    r#"{"event":"summary","zulu":true,"alpha":"a \"quoted\" path"}"#
+                );
+            }),
+            ("alphabetical_places_event_among_the_fields", &|| {
+                let rec = Record::new("SUMMARY")
+                    .put("zulu", Probe::Flag(true))
+                    .put("alpha", Probe::Str("plain"));
+                let line =
+                    serde_json::to_string(&RecordProbe(&rec, "summary", Order::Alphabetical))
+                        .expect("one object");
+                assert_eq!(line, r#"{"alpha":"plain","event":"summary","zulu":true}"#);
+            }),
+            ("a_real_event_field_value_replaces_the_derived_one", &|| {
+                let rec = Record::with_fields(
+                    "SUMMARY",
+                    vec![
+                        ("event", Probe::Str("capture")),
+                        ("tool", Probe::Str("gircap")),
+                    ],
+                );
+                let line = serde_json::to_string(&RecordProbe(&rec, "capture", Order::EventFirst))
+                    .expect("one object");
+                assert_eq!(line, r#"{"event":"capture","tool":"gircap"}"#);
+            }),
+        ];
+        for (label, run) in subcases {
+            println!("subcase: {label}");
+            run();
+        }
+    }
+
+    /// The sink logs before it writes, writes exactly one newline, and leaves
+    /// the broken-pipe decision to the caller by returning the error.
+    #[test]
+    fn write_record_line_logs_then_writes_and_propagates_errors() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let mut out = Vec::new();
+        write_record_line(&mut out, "SUMMARY total=1", |line| {
+            events.borrow_mut().push(line.to_string());
+        })
+        .expect("write");
+        assert_eq!(out, b"SUMMARY total=1\n");
+        assert_eq!(*events.borrow(), vec!["SUMMARY total=1".to_string()]);
+
+        let err = write_record_line(&mut Fail, "x", |_| {}).expect_err("propagated");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    /// A caller-supplied `event` value and order, as a `Serialize` adapter for
+    /// a core record — exactly how a report plane renders one.
+    struct RecordProbe<'a, V>(&'a Record<V>, &'a str, Order);
+
+    impl<V: Serialize> serde::Serialize for RecordProbe<'_, V> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.0.write_json(serializer, "event", &self.1, self.2)
+        }
+    }
+
+    /// A writer whose reader has gone away, for the broken-pipe assertion.
+    struct Fail;
+
+    impl Write for Fail {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     struct EventFirstProbe<'a>(&'a str, Vec<(&'static str, Probe)>);
