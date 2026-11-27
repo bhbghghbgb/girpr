@@ -51,11 +51,13 @@ impl RetryPolicy {
 
     /// Whether a status is worth another attempt.
     ///
-    /// The split is the whole retry policy in miniature: a server that is
-    /// overloaded or briefly broken may answer again, and a server that has
-    /// decided this URL does not exist will not.
+    /// The rule lives in `girpr_retry::should_retry_status`, shared with fetch so
+    /// both tools' published retry counts stay in step. The split is the whole
+    /// retry policy in miniature: a server that is overloaded or briefly broken
+    /// may answer again, and a server that has decided this URL does not exist
+    /// will not.
     pub fn should_retry_status(status: u16) -> bool {
-        matches!(status, 408 | 429) || (500..=599).contains(&status)
+        girpr_retry::should_retry_status(status)
     }
 }
 
