@@ -1117,6 +1117,7 @@ dependencies = [
  "fnv",
  "fs2",
  "gircap",
+ "girpr-chunk-cost",
  "girpr-tempdir",
  "prost",
  "serde",
@@ -1213,6 +1214,7 @@ name = "girpr-chunk-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "girpr-chunk-cost",
  "girpr-proto",
  "girpr-tempdir",
  "girpr-util-hash",

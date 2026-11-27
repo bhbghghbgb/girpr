@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use girpr_chunk_cost::{nonneg, saturating_nonneg_sum};
 use girpr_chunk_identity::ChunkIdentity;
 use serde::Serialize;
 
@@ -421,7 +422,7 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
         sources.entry(c.identity()).or_insert(c.offset);
         // A total, so saturation is the meaning-preserving choice: a hostile
         // `compressed_size` must not abort a diff that is only measuring it.
-        compressed_bytes = compressed_bytes.saturating_add(c.compressed_size.max(0) as u64);
+        compressed_bytes = compressed_bytes.saturating_add(nonneg(c.compressed_size));
     }
     OldFileIndex {
         sources,
@@ -436,9 +437,7 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
 /// `compressed_size` cannot abort a diff that is only measuring it. An empty
 /// chunk list sums to zero: a file with no chunks downloads nothing.
 fn download_bytes(chunks: &[SophonChunk]) -> u64 {
-    chunks.iter().fold(0_u64, |total, c| {
-        total.saturating_add(c.compressed_size.max(0) as u64)
-    })
+    saturating_nonneg_sum(chunks.iter().map(|c| c.compressed_size))
 }
 
 /// Old manifest-wide set of MD5s that appear anywhere.
@@ -481,14 +480,14 @@ pub fn score(
     let mut patch_bytes = 0_u64;
     let mut new_bytes = 0_u64;
     for c in &new.chunks {
-        new_bytes = new_bytes.saturating_add(c.compressed_size.max(0) as u64);
+        new_bytes = new_bytes.saturating_add(nonneg(c.compressed_size));
         match old_index.sources.get(&c.identity()) {
             Some(&src) => {
                 reused += 1;
                 // The source's end: the input to the trim test. Only the
                 // *sources* count, because only a source the trim would delete
                 // is a source that is gone.
-                let end = (src.max(0) as u64).saturating_add(c.uncompressed_size.max(0) as u64);
+                let end = saturating_nonneg_sum([src, c.uncompressed_size]);
                 if end > old_max_end {
                     old_max_end = end;
                 }
@@ -504,7 +503,7 @@ pub fn score(
                     }
                 }
             }
-            None => patch_bytes = patch_bytes.saturating_add(c.compressed_size.max(0) as u64),
+            None => patch_bytes = patch_bytes.saturating_add(nonneg(c.compressed_size)),
         }
     }
     // Taken from the index build rather than walked again. `old` is still named
@@ -574,7 +573,7 @@ fn reuse_pool<'a>(
                 pool.cross_file_only_chunks += 1;
                 pool.cross_file_only_bytes_forgone = pool
                     .cross_file_only_bytes_forgone
-                    .saturating_add(c.compressed_size.max(0) as u64);
+                    .saturating_add(nonneg(c.compressed_size));
                 file_has_cross = true;
             }
         }
@@ -606,13 +605,12 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
             match row.state {
                 State::Added => {
                     counts.added += 1;
-                    byte_counts.added = byte_counts.added.saturating_add(row.size.max(0) as u64);
+                    byte_counts.added = byte_counts.added.saturating_add(nonneg(row.size));
                     added.push(format!("{}:{}", f.field, row.path));
                 }
                 State::Removed => {
                     counts.removed += 1;
-                    byte_counts.removed =
-                        byte_counts.removed.saturating_add(row.size.max(0) as u64);
+                    byte_counts.removed = byte_counts.removed.saturating_add(nonneg(row.size));
                     removed.push(format!("{}:{}", f.field, row.path));
                 }
                 State::Identical | State::Changed => {}

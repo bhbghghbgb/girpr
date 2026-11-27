@@ -69,6 +69,7 @@ use gircap::config::{capture_plan, materialize_plan, verify_plan};
 use gircap::http::{HttpRequest, HttpResponse, HttpTransport, SendFuture};
 use gircap::report::Record;
 use gircap::run::{self, Failure, Outcome};
+use girpr_chunk_cost::{nonneg, saturating_nonneg_sum};
 use girpr_tempdir::TempDir;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
@@ -1127,15 +1128,13 @@ impl World {
             // saturate. A5 compares these against the decoder's totals, so a
             // mock that summed the raw signed values would fail the capture for
             // a fixture bug rather than for a tool bug.
-            uncompressed_size: files.iter().fold(0_u64, |total, f| {
-                total.saturating_add(f.size().max(0) as u64)
-            }),
-            compressed_size: files
-                .iter()
-                .flat_map(|f| &f.chunks)
-                .fold(0_u64, |total, c| {
-                    total.saturating_add(c.compressed_size.max(0) as u64)
-                }),
+            uncompressed_size: saturating_nonneg_sum(files.iter().map(|f| f.size())),
+            compressed_size: saturating_nonneg_sum(
+                files
+                    .iter()
+                    .flat_map(|f| &f.chunks)
+                    .map(|c| c.compressed_size),
+            ),
         })
     }
 
@@ -1155,7 +1154,7 @@ impl World {
                             c.id.clone(),
                             (
                                 c.uncompressed_md5.clone(),
-                                c.declared_uncompressed_size().max(0) as u64,
+                                nonneg(c.declared_uncompressed_size()),
                             ),
                         );
                     }

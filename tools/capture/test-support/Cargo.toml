@@ -26,6 +26,9 @@ all = "warn"
 # agrees with the code under test by construction, never by borrowing the repair
 # binary's mock (docs/00-spec.md §2: no shared fixtures, no coupling).
 gircap = { path = ".." }
+# The shared clamp-then-widen byte arithmetic, so a fixture's declared totals
+# are folded by the same rule the manifest decoder applies to them.
+girpr-chunk-cost = { path = "../../../crates/chunk-cost" }
 # The scratch-directory policy, shared with the other two programs' tests only
 # as a naming/cleanup leaf; no program logic crosses with it.
 girpr-tempdir = { path = "../../../crates/tempdir" }

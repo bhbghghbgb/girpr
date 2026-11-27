@@ -20,6 +20,7 @@
 //! or out-of-order chunk list. The counters are measured and stored, and M8
 //! decides what they mean.
 
+use girpr_chunk_cost::nonneg;
 use serde::Serialize;
 
 use crate::failure::{Failure, assertion};
@@ -715,7 +716,7 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             // file of -1 bytes, and `as u64` alone turns that into 18.4
             // quintillion — which then lands in `total_file_bytes` in the
             // artifact and in `reconcile` as a mismatch against the chunk sum.
-            total_file_bytes = total_file_bytes.saturating_add(e.size.max(0) as u64);
+            total_file_bytes = total_file_bytes.saturating_add(nonneg(e.size));
         }
         total_chunks += e.chunks.len() as u64;
 
@@ -731,7 +732,7 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             // Same convention as `total_file_bytes` above, and the same reason:
             // this is the number recorded as `max_chunk_compressed_bytes`, the
             // field documented as what bounds the tool's whole-chunk buffering.
-            let compressed = c.compressed_size.max(0) as u64;
+            let compressed = nonneg(c.compressed_size);
             if compressed > max_chunk {
                 max_chunk = compressed;
             }
