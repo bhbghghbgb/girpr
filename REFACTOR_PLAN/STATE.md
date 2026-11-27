@@ -27,7 +27,7 @@ Status values: `todo`, `in progress`, `pending review`, `completed`, `reverted`,
 | T13 | `tasks/T13-line-and-bom-readers.md` | completed | 1 commit: line-reader leaf and parameterized audio/ini renderings | CP4 kept |
 | T14 | `tasks/T14-claim-publish.md` | completed | 3 commits: util-path claim primitive; cache-json import adoption; sync backup/case-rename adoption | CP4 kept |
 | T15 | `tasks/T15-fs-path-helpers.md` | pending review | 7 commits: metadata classification; repair stat-site adoption; fs-names device/separator helpers; persistent-plan scope/Md5; girsync prefix helpers; clippy cleanup; disk-question seam | CP5 batch |
-| T16 | `tasks/T16-global-cli-and-format.md` | todo | — | before T18 |
+| T16 | `tasks/T16-global-cli-and-format.md` | pending review | 2 commits: report-core OutputFormat; cli global flags and process shims | CP5 batch complete; before T18 |
 | T17 | `tasks/T17-subscriber-and-log-internals.md` | todo | — | |
 | T18 | `tasks/T18-report-core.md` | todo | — | after T16 |
 | T19 | `tasks/T19-test-fixture-helpers.md` | todo | — | |
@@ -91,6 +91,9 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 | F32 | T15 | Consider a std-only home for `native_separator`/`forward_slash`: `girpr-tempdir` and `girpr-filter` now take a `girpr-fs-names` (dunce-backed) edge for a pure string rewrite. | proposed |
 | F33 | T15 | Decide whether `util-path` should keep re-exporting `fold_ascii_case`/`forward_slash`, or `persistent-plan` should depend on `girpr-fs-names` directly. | proposed |
 | F34 | T15 | `MetadataFact::is_file`'s "stat failed → in-place capable" default restates `girpr-repair-policy::resolve_mode`; consider one home for that rule if it ever changes. | proposed |
+| F35 | T16 | `global_args!` has two arms duplicating the five field declarations; a tt-muncher could reduce this to one textual declaration if strictly required. | proposed |
+| F36 | T16 | Capture's `FromStr` wording is now byte-identical but defined in `girpr-report-core`; if strict locality is wanted, replace it with a capture-local parse helper. | proposed |
+| F37 | T16 | `girpr-cli` now links `girpr-log` and `girpr-report-core`; consider whether re-exporting `Level`/`OutputFormat` from it is the preferred seam versus direct imports. | proposed |
 
 ## Persistent context
 
@@ -121,3 +124,4 @@ Status values: `proposed`, `accepted`, `declined`, `done`.
 - T13: BOM-only behavior and trailing-newline contracts remain opposite by explicit parameters; capture's Cargo.toml now states the newline distinction; `game_version_from_text` takes a `value_of` closure to keep anchoring/empty-value/error wording at call sites.
 - CP4 done: T12/T13/T14 kept; no fixes or reverts; workspace 2332 passed / 8 skipped; only the out-of-batch chunk-layout clippy warning remains.
 - T15: `Absent` carries the original `NotFound` error; `util-hash`'s `Md5` re-export left intact; prefix helpers imported directly from `girsync_leaves::link` so the disk-question scanner still sees only real disk calls.
+- T16: shared CLI uses an item-level `global_args!` macro (two arms) rather than a flattened struct to preserve each binary's help order and public struct literals; --help/exit bytes verified identical against the pre-T16 tree.
