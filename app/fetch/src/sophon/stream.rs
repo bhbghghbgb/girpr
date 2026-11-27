@@ -325,31 +325,17 @@ impl<W: Write> Write for HashingWriter<W> {
 
 /// Where a streamed blob's decoded bytes land.
 ///
-/// The trait exists for one requirement: **a retry has to start the blob over.** A streamed body is written as it decodes, so a failed attempt can leave half a chunk in the sink, and the next attempt must not append to it. [`stream_chunk_to`] therefore asks the sink to restart before it tries again.
+/// **A retry has to start the blob over.** A streamed body is written as it
+/// decodes, so a failed attempt can leave half a chunk in the sink, and the
+/// next attempt must not append to it. [`stream_chunk_to`] therefore asks the
+/// sink to restart before it tries again.
 ///
-/// The methods here are called synchronously from the streaming decode, on
-/// the thread that polls the stream's future. An implementation backed by
-/// blocking I/O — the file sink in the repair path — therefore relies on the
-/// caller honouring [`stream_chunk_to`]'s blocking-context contract.
-pub trait ChunkSink: Write {
-    /// Throw away what the failed attempt wrote and start the blob again.
-    fn restart(&mut self) -> std::io::Result<()>;
-}
-
-impl ChunkSink for Vec<u8> {
-    fn restart(&mut self) -> std::io::Result<()> {
-        // `clear` keeps the capacity, so a retried blob does not pay for the
-        // buffer twice.
-        self.clear();
-        Ok(())
-    }
-}
-
-impl<T: ChunkSink + ?Sized> ChunkSink for &mut T {
-    fn restart(&mut self) -> std::io::Result<()> {
-        (**self).restart()
-    }
-}
+/// That restart contract is the shared [`RestartableWrite`] trait in the digest
+/// leaf: the same byte-sink method is used for file bodies elsewhere, so the
+/// trait and its `Vec<u8>` / `&mut T` implementations live in one place instead
+/// of two. The name stays here as a re-export so callers keep the fetch-side
+/// vocabulary and the root crate's public path stays unchanged.
+pub use girpr_digest::RestartableWrite as ChunkSink;
 
 /// Why a streamed body could not be delivered.
 ///

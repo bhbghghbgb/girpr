@@ -21,20 +21,54 @@ pub use stream::{Algorithms, DigestBytes, Sink, hash_reader};
 
 use std::fmt;
 
-/// The narrow view of a caller-owned file that an HTTP fetcher streams a body
-/// into.
+/// A byte sink whose content can be thrown away between attempts.
 ///
-/// The owner keeps the file, the path and its digests; a fetcher only writes
-/// bytes through [`std::io::Write`] and calls [`BodyFile::restart`] before a
-/// retry. The trait lives in this logic-free leaf because both the fetcher and
-/// the digesting-file owner already depend on it: keeping it in either of those
-/// crates would make the other depend on it and rebuild whenever it changes. No
-/// program policy crosses the boundary — this is one byte-sink method, not a
-/// repair-path type.
-pub trait BodyFile: std::io::Write + Send {
-    /// Discard everything written so far before the next attempt starts.
+/// A streamed body is written as it decodes, so a failed attempt can leave half
+/// a body in the sink and the next attempt must not append to it. The one
+/// requirement this trait adds to [`std::io::Write`] is that reset: [`Self::restart`]
+/// is called before a retry starts over. Nothing here decides *when* to restart
+/// — that policy stays with the owner.
+///
+/// The methods are called synchronously from the streaming decode, on the
+/// thread that polls the stream's future. An implementation backed by blocking
+/// I/O therefore relies on the caller honouring its blocking-context contract.
+pub trait RestartableWrite: std::io::Write {
+    /// Discard everything written so far and start the body again.
     fn restart(&mut self) -> std::io::Result<()>;
 }
+
+impl RestartableWrite for Vec<u8> {
+    fn restart(&mut self) -> std::io::Result<()> {
+        // `clear` keeps the capacity, so a retried body does not pay for the
+        // buffer twice.
+        self.clear();
+        Ok(())
+    }
+}
+
+impl<T: RestartableWrite + ?Sized> RestartableWrite for &mut T {
+    fn restart(&mut self) -> std::io::Result<()> {
+        (**self).restart()
+    }
+}
+
+/// The narrow view of a caller-owned file that an HTTP fetcher streams a body
+/// into: a restartable byte sink that is safe to hand across threads.
+///
+/// The owner keeps the file, the path and its digests; a fetcher only writes
+/// bytes through [`std::io::Write`] and calls [`RestartableWrite::restart`]
+/// before a retry. The trait lives in this logic-free leaf because both the
+/// fetcher and the digesting-file owner already depend on it: keeping it in
+/// either of those crates would make the other depend on it and rebuild
+/// whenever it changes. No program policy crosses the boundary — this is one
+/// byte-sink method plus `Send` for the `dyn` use, not a repair-path type.
+///
+/// `BodyFile` adds no methods of its own: every restartable, `Send` byte sink is
+/// one, so a concrete owner implements [`RestartableWrite`] once and gets this
+/// view automatically.
+pub trait BodyFile: RestartableWrite + Send {}
+
+impl<T: RestartableWrite + Send + ?Sized> BodyFile for T {}
 
 use anyhow::{Result, anyhow, bail};
 // md-5 and sha2 re-export the same `digest::Digest` trait, so one import

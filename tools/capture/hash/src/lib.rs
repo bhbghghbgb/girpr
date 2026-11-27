@@ -234,9 +234,10 @@ impl std::io::Write for HashingFile {
 
 // The narrow seam the fetcher streams through: this crate keeps the file, the
 // path and the digests; the HTTP fetcher only writes bytes and restarts on
-// retry. The trait lives in the shared digest leaf, so this crate no longer
-// depends on gircap-http. The byte path (and the retry-discard rule) is unchanged.
-impl girpr_digest::BodyFile for HashingFile {
+// retry. The restart method lives on the shared leaf trait — `BodyFile` is the
+// `RestartableWrite + Send` view a fetcher holds — so the byte path and the
+// retry-discard rule are unchanged.
+impl girpr_digest::RestartableWrite for HashingFile {
     fn restart(&mut self) -> std::io::Result<()> {
         HashingFile::restart(self)
     }
