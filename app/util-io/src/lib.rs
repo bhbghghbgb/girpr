@@ -388,7 +388,6 @@ mod tests {
             )
             .unwrap();
             assert!(matches!(end, CopyEnd::Complete));
-            drop(rw);
             assert!(out.calls > 2, "write_all drains a partial writer");
             assert_eq!(out.data, source);
         }
@@ -420,7 +419,6 @@ mod tests {
             noop,
         );
         assert!(refused.is_err());
-        drop(rw);
         assert_eq!(
             out.data,
             source[..4],
