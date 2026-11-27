@@ -28,7 +28,7 @@ use std::time::SystemTime;
 
 use futures_util::StreamExt;
 
-use girpr_chunk_cost::{projected_download_bytes, saturating_nonneg_sum};
+use girpr_chunk_cost::projected_download_bytes;
 use girpr_chunk_verify::{Verdict, scan_ranges, source_ok_by_chunk};
 use girpr_repair_policy::{Mode, RepairMode, resolve_mode};
 
@@ -461,6 +461,7 @@ fn scan_one(
 mod tests {
     use super::*;
     use crate::sophon::SophonChunk;
+    use girpr_chunk_cost::saturating_nonneg_sum;
 
     fn chunk(id: &str, md5: &str, size: i64) -> SophonChunk {
         chunk_at(id, md5, 0, size)
