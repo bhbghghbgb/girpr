@@ -310,7 +310,7 @@ pub fn read_game_file(root: &Path, rel: &str) -> Option<Vec<u8>> {
 pub fn entry_names_with(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .map(|e| e.unwrap())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| keep(n))
         .collect();
